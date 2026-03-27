@@ -1065,7 +1065,7 @@ async function sendMessages() {
     const recipName = el.closest('label').querySelector('div div').textContent;
     const msg = body.replace(/{שם}/g, recipName).replace(/{בניין}/g, recipName);
 
-    if (currentChannel === 'wa' && phone) {
+    if (currentChannel === 'wa') {
       try {
         const bridgeTenantId = document.getElementById('waBridgeSel').value;
         const recipTenantId = el.dataset.tenant;
