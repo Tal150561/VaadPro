@@ -1045,7 +1045,7 @@ function selectChannel(ch) {
   document.getElementById('chanEmail').classList.toggle('active', ch==='email');
   document.getElementById('emailSubjectRow').style.display = ch==='email' ? 'block' : 'none';
   document.getElementById('waBridgeRow').style.display = ch==='wa' ? 'block' : 'none';
-  document.getElementById('manualPhoneRow').style.display = ch==='wa' ? 'block' : 'none';
+  document.getElementById('manualPhoneRow').style.display = 'block';
 }
 
 async function sendMessages() {
