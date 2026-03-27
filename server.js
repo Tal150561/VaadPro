@@ -556,7 +556,7 @@ app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
   if (!phone || !message) return res.json({ ok: false, error: 'חסר טלפון או הודעה' });
   const targetTenantId = tenantId || Object.keys(waClients).find(id => {
     const wa = waClients[id];
-    return wa && wa.status === 'connected';
+    return wa && (wa.status === 'connected' || wa.status === 'ready');
   });
   if (!targetTenantId) return res.json({ ok: false, error: 'אין Bridge מחובר. חבר WA תחילה.' });
   try {
@@ -574,7 +574,7 @@ app.get('/api/admin/bridges', adminAuthMiddleware, (req, res) => {
     const users = loadUsers();
     const user = users.find(u => u.tenantId === tenantId);
     return { tenantId, status: wa.status, phone: wa.phone, email: user ? user.email : tenantId, buildingName: user ? user.buildingName : '' };
-  }).filter(b => b.status === 'connected');
+  }).filter(b => b.status === 'connected' || b.status === 'ready');
   res.json({ bridges });
 });
 
