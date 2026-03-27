@@ -289,7 +289,7 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
 
 // הרשמה
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, buildingName, address, phone } = req.body;
+  const { email, password, buildingName, address, phone, fullName } = req.body;
   if (!email || !password || !buildingName) return res.json({ ok: false, error: 'יש למלא את כל השדות' });
   if (password.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
 
@@ -300,7 +300,7 @@ app.post('/api/auth/register', async (req, res) => {
   const passHash  = await bcrypt.hash(password, 10);
   const trialEnd  = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 יום
 
-  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName, address: address||'', phone: phone||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
+  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName, address: address||'', phone: phone||'', fullName: fullName||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
   users.push(user);
   saveUsers(users);
 
@@ -504,8 +504,9 @@ app.post('/api/admin/login', async (req, res) => {
 app.get('/api/admin/tenants', adminAuthMiddleware, (req, res) => {
   const users = loadUsers().map(u => ({
     email: u.email, buildingName: u.buildingName, address: u.address,
+    fullName: u.fullName||'', phone: u.phone||'',
     plan: u.plan, trialEnd: u.trialEnd, createdAt: u.createdAt,
-    tenantId: u.tenantId, phone: u.phone || ''
+    tenantId: u.tenantId
   }));
   res.json({ count: users.length, users });
 });

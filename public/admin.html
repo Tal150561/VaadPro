@@ -452,7 +452,7 @@
         <div class="table-header"><h3>הצטרפו לאחרונה</h3></div>
         <table>
           <thead><tr>
-            <th>אימייל</th><th>בניין</th><th>Plan</th><th>תאריך הצטרפות</th>
+            <th>שם</th><th>אימייל</th><th>בניין</th><th>Plan</th><th>תאריך הצטרפות</th>
           </tr></thead>
           <tbody id="recentSignups"></tbody>
         </table>
@@ -472,7 +472,7 @@
         </div>
         <table>
           <thead><tr>
-            <th>אימייל</th><th>בניין</th><th>טלפון</th><th>Plan</th><th>הצטרף</th><th>תוקף</th><th>פעולות</th>
+            <th>שם</th><th>אימייל</th><th>בניין</th><th>טלפון</th><th>Plan</th><th>הצטרף</th><th>תוקף</th><th>פעולות</th>
           </tr></thead>
           <tbody id="customersBody"></tbody>
         </table>
@@ -704,7 +704,6 @@ function showApp() {
   loadBridges();
   renderLeads();
   renderRecipients();
-  selectChannel('wa');  // ← הוסף שורה זו
 }
 
 async function loadBridges() {
@@ -775,12 +774,13 @@ async function loadDashboard() {
   const recent = [...users].sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,8);
   document.getElementById('recentSignups').innerHTML = recent.map(u => `
     <tr>
-      <td>${u.email}</td>
+      <td><b>${u.fullName||'—'}</b></td>
+      <td style="font-size:12px">${u.email}</td>
       <td>${u.buildingName||'—'}</td>
       <td><span class="badge badge-${u.plan}">${planLabel(u.plan)}</span></td>
       <td>${formatDate(u.createdAt)}</td>
     </tr>
-  `).join('') || '<tr><td colspan="4" class="empty-state">אין נרשמים</td></tr>';
+  `).join('') || '<tr><td colspan="5" class="empty-state">אין נרשמים</td></tr>';
 }
 
 // ════════════════════════════════════════════
@@ -801,9 +801,10 @@ function renderCustomers(users) {
     const planBadge = isExpired ? 'expired' : u.plan;
     return `
     <tr>
-      <td>${u.email}</td>
+      <td><b>${u.fullName||'—'}</b></td>
+      <td style="font-size:12px">${u.email}</td>
       <td>${u.buildingName||'—'}</td>
-      <td style="color:var(--text2);font-size:12px">${u.address||'—'}</td>
+      <td style="color:var(--text2);font-size:12px">${u.phone||'—'}</td>
       <td><span class="badge badge-${planBadge}">${planLabel(planBadge)}</span></td>
       <td style="font-size:12px">${formatDate(u.createdAt)}</td>
       <td style="font-size:12px">${u.plan==='trial' ? formatDate(u.trialEnd) : '∞'}</td>
@@ -814,7 +815,7 @@ function renderCustomers(users) {
         </div>
       </td>
     </tr>`;
-  }).join('') || '<tr><td colspan="7"><div class="empty-state"><div class="icon">👥</div>אין לקוחות עדיין</div></td></tr>';
+  }).join('') || '<tr><td colspan="8"><div class="empty-state"><div class="icon">👥</div>אין לקוחות עדיין</div></td></tr>';
 }
 
 function filterCustomers() {
@@ -1065,7 +1066,7 @@ async function sendMessages() {
     const recipName = el.closest('label').querySelector('div div').textContent;
     const msg = body.replace(/{שם}/g, recipName).replace(/{בניין}/g, recipName);
 
-    if (currentChannel === 'wa') {
+    if (currentChannel === 'wa' && phone) {
       try {
         const bridgeTenantId = document.getElementById('waBridgeSel').value;
         const recipTenantId = el.dataset.tenant;
