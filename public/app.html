@@ -478,34 +478,89 @@ function vpLogout() {
       </div>
       <div class="card-body">
         <div class="wa-setup-card">
-          <h3>📦 שלב 1 — הורד והתקן Node.js</h3>
+          <h3>📦 שלב 1 — התקנת Node.js (פעם אחת בלבד)</h3>
           <div class="wa-setup-step">
             <div class="wa-setup-num">1</div>
-            <div style="font-size:0.84rem;color:var(--text2);">עבור ל-<a href="https://nodejs.org" target="_blank" style="color:var(--accent);">nodejs.org</a> ← הורד גרסה LTS ← התקן</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              עבור לאתר: <a href="https://nodejs.org" target="_blank" style="color:var(--accent);">nodejs.org</a>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.85;">📌 לחץ על הכפתור הירוק הגדול שכתוב עליו <strong>"LTS"</strong> — יורד קובץ התקנה</div>
+            </div>
           </div>
-        </div>
-        <div class="wa-setup-card">
-          <h3>📥 שלב 2 — הורד את Bridge</h3>
           <div class="wa-setup-step">
             <div class="wa-setup-num">2</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <a href="#" onclick="downloadBridge()" style="color:var(--accent);">לחץ כאן להורדת חבילת ה-Bridge</a>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">קובץ ZIP — חלץ לתיקייה נוחה במחשב</div>
+              פתח את הקובץ שהורד ← לחץ <strong>Next</strong> בכל המסכים ← לחץ <strong>Install</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ההתקנה לוקחת כ-2 דקות — אל תסגור את החלון</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">3</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              לחץ <strong>Finish</strong> — Node.js מותקן ✅
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">✔️ צריך לעשות את זה פעם אחת בלבד</div>
             </div>
           </div>
         </div>
+
         <div class="wa-setup-card">
-          <h3>▶️ שלב 3 — הפעל</h3>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">3</div>
-            <div style="font-size:0.84rem;color:var(--text2);">לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">install.bat</code> ← המתן להתקנה</div>
-          </div>
+          <h3>📥 שלב 2 — הורד את תוכנת ה-Bridge</h3>
           <div class="wa-setup-step">
             <div class="wa-setup-num">4</div>
-            <div style="font-size:0.84rem;color:var(--text2);">לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">start.bat</code> ← סרוק QR בווטסאפ</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              <a href="#" onclick="downloadBridge()" style="color:var(--accent);font-weight:600;">לחץ כאן להורדת קובץ ההגדרות האישי שלך (config.json)</a>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📁 הקובץ יורד לתיקיית ה-Downloads שלך</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">5</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              צור תיקייה חדשה בשולחן העבודה בשם <strong>VaadPro-Bridge</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📌 לחץ ימני על שולחן העבודה ← חדש ← תיקייה ← תן שם: VaadPro-Bridge</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">6</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              העתק את קובץ ה-<strong>config.json</strong> שהורדת לתוך תיקיית VaadPro-Bridge
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📌 פתח את Downloads ← גרור את config.json לתוך התיקייה</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">7</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              שלח לנו בווטסאפ שהורדת config.json — נשלח לך את קובץ ה-Bridge
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📦 תקבל קובץ ZIP — חלץ אותו לאותה תיקיית VaadPro-Bridge</div>
+            </div>
           </div>
         </div>
-        <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;">💡 כל יום: הפעל את <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">start.bat</code> לפני שליחת הודעות</div>
+
+        <div class="wa-setup-card">
+          <h3>▶️ שלב 3 — הפעלה (פעם אחת)</h3>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">8</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              פתח את תיקיית VaadPro-Bridge ← לחץ <strong>פעמיים</strong> על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">install.bat</code>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ יפתח חלון שחור ויריץ התקנה — ממתין כ-2 דקות עד שנסגר לבד</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">9</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              לחץ <strong>פעמיים</strong> על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">start.bat</code>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⚠️ יפתח חלון שחור — <strong>אל תסגור אותו!</strong> הוא צריך להישאר פתוח</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">10</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק את הברקוד עם הטלפון
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📱 פתח ווטסאפ בטלפון ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</div>
+            </div>
+          </div>
+        </div>
+        <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(59,130,246,.08);padding:10px;border-radius:8px;border:1px solid rgba(59,130,246,.2);">
+          💡 <strong>כל יום שרוצים לשלוח הודעות:</strong> פתח את תיקיית VaadPro-Bridge ← לחץ פעמיים על <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">start.bat</code> ← השאר את החלון פתוח
+        </div>
       </div>
     </div>
 
