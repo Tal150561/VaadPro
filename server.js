@@ -455,42 +455,113 @@ app.get('/api/bridge/config', authMiddleware, (req, res) => {
 });
 
 // ════════════════════════════════════════════════════════════════
-// ADMIN ROUTES (לניהול פנימי שלך)
 // ════════════════════════════════════════════════════════════════
-const ADMIN_KEY = process.env.ADMIN_KEY || 'vaadpro-admin-2025';
+// ADMIN SYSTEM v1.4
+// ════════════════════════════════════════════════════════════════
+const ADMIN_USERS_FILE = path.join(DATA_DIR, '_admins.json');
+const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + '-admin';
 
-app.get('/api/admin/tenants', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'אסור' });
+function loadAdmins() {
+  if (!fs.existsSync(ADMIN_USERS_FILE)) {
+    // צור admin ברירת מחדל אם לא קיים
+    const defaultAdmin = [{
+      email: process.env.ADMIN_EMAIL || 'admin@vaadpro.co.il',
+      passHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'VaadPro2025!', 10)
+    }];
+    fs.writeFileSync(ADMIN_USERS_FILE, JSON.stringify(defaultAdmin, null, 2));
+    return defaultAdmin;
+  }
+  try { return JSON.parse(fs.readFileSync(ADMIN_USERS_FILE, 'utf8')); } catch(e) { return []; }
+}
+
+function adminAuthMiddleware(req, res, next) {
+  const token = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'לא מחובר' });
+  try {
+    const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+    if (!decoded.isAdmin) return res.status(403).json({ error: 'אסור' });
+    req.adminUser = decoded;
+    next();
+  } catch(e) {
+    res.status(401).json({ error: 'פג תוקף החיבור' });
+  }
+}
+
+// ── Admin Login ──────────────────────────────────────────────────
+app.post('/api/admin/login', async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) return res.json({ ok: false, error: 'יש למלא אימייל וסיסמה' });
+  const admins = loadAdmins();
+  const admin = admins.find(a => a.email === email.toLowerCase());
+  if (!admin) return res.json({ ok: false, error: 'אימייל או סיסמה שגויים' });
+  const ok = await bcrypt.compare(password, admin.passHash);
+  if (!ok) return res.json({ ok: false, error: 'אימייל או סיסמה שגויים' });
+  const token = jwt.sign({ email: admin.email, isAdmin: true }, ADMIN_JWT_SECRET, { expiresIn: '7d' });
+  res.json({ ok: true, token, email: admin.email });
+});
+
+// ── Admin: רשימת לקוחות ─────────────────────────────────────────
+app.get('/api/admin/tenants', adminAuthMiddleware, (req, res) => {
   const users = loadUsers().map(u => ({
-    email: u.email, buildingName: u.buildingName, plan: u.plan,
-    trialEnd: u.trialEnd, createdAt: u.createdAt, tenantId: u.tenantId
+    email: u.email, buildingName: u.buildingName, address: u.address,
+    plan: u.plan, trialEnd: u.trialEnd, createdAt: u.createdAt,
+    tenantId: u.tenantId, phone: u.phone || ''
   }));
   res.json({ count: users.length, users });
 });
 
-// שינוי plan ידני (לאחר קבלת תשלום)
-app.post('/api/admin/set-plan', (req, res) => {
-  if (req.headers['x-admin-key'] !== ADMIN_KEY) return res.status(403).json({ error: 'אסור' });
+// ── Admin: שינוי plan ───────────────────────────────────────────
+app.post('/api/admin/set-plan', adminAuthMiddleware, (req, res) => {
   const { email, plan } = req.body;
   const users = loadUsers();
-  const user  = users.find(u => u.email === email.toLowerCase());
+  const user = users.find(u => u.email === email.toLowerCase());
   if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
   user.plan = plan;
-  if (plan !== 'trial') delete user.trialEnd;
+  if (plan === 'trial') {
+    user.trialEnd = new Date(Date.now() + 30*24*60*60*1000).toISOString();
+  } else {
+    delete user.trialEnd;
+  }
+  if (plan === 'suspended') user.suspended = true;
+  else delete user.suspended;
   saveUsers(users);
   res.json({ ok: true, email, plan });
+});
+
+// ── Admin: שליחת מייל ───────────────────────────────────────────
+app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
+  const { to, subject, body } = req.body;
+  if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים שדות' });
+  if (!SMTP_HOST || !SMTP_USER) return res.json({ ok: false, error: 'SMTP לא מוגדר' });
+  try {
+    const nodemailer = require('nodemailer');
+    const transporter = nodemailer.createTransport({
+      host: SMTP_HOST, port: SMTP_PORT,
+      secure: SMTP_PORT === 465,
+      auth: { user: SMTP_USER, pass: SMTP_PASS }
+    });
+    await transporter.sendMail({ from: SMTP_FROM, to, subject, text: body });
+    res.json({ ok: true });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// ── Admin: שרת קובץ admin.html ──────────────────────────────────
+app.get('/admin', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'admin.html'));
 });
 
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v1.1 – SaaS Server         ║');
+  console.log('║   VaadPro v1.4 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
   console.log('Mode:      ', WA_MODE === 'cloud' ? '☁️  Cloud (WA Bridge)' : '💻 Local (direct WA)');
-  console.log('Admin key: ', ADMIN_KEY);
+  console.log('Admin URL:  /admin');
   console.log('');
   if (WA_MODE === 'local') {
     console.log('WhatsApp: local mode – WA will init on first login');

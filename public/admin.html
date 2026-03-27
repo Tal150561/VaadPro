@@ -1,0 +1,1106 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VaadPro Admin</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0e1a;
+    --surface: #111827;
+    --surface2: #1a2236;
+    --border: #1f2d45;
+    --accent: #3b82f6;
+    --accent2: #06b6d4;
+    --green: #10b981;
+    --red: #ef4444;
+    --yellow: #f59e0b;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #4b6382;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: 'Heebo', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    direction: rtl;
+  }
+
+  /* ── LOGIN ── */
+  #loginScreen {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: radial-gradient(ellipse at 30% 50%, #0d1f3c 0%, var(--bg) 70%);
+  }
+  .login-box {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 48px 40px;
+    width: 380px;
+    box-shadow: 0 25px 60px rgba(0,0,0,0.5);
+  }
+  .login-box h1 { font-size: 28px; font-weight: 800; margin-bottom: 4px; }
+  .login-box h1 span { color: var(--accent); }
+  .login-box p { color: var(--text2); font-size: 14px; margin-bottom: 32px; }
+  .field { margin-bottom: 16px; }
+  .field label { display: block; font-size: 13px; color: var(--text2); margin-bottom: 6px; font-weight: 500; }
+  .field input {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'Heebo', sans-serif;
+    transition: border-color .2s;
+    direction: ltr;
+  }
+  .field input:focus { outline: none; border-color: var(--accent); }
+  .btn-primary {
+    width: 100%;
+    background: var(--accent);
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 13px;
+    font-size: 15px;
+    font-weight: 600;
+    font-family: 'Heebo', sans-serif;
+    cursor: pointer;
+    transition: background .2s, transform .1s;
+    margin-top: 8px;
+  }
+  .btn-primary:hover { background: #2563eb; }
+  .btn-primary:active { transform: scale(.98); }
+  #loginError { color: var(--red); font-size: 13px; margin-top: 12px; text-align: center; display: none; }
+
+  /* ── LAYOUT ── */
+  #app { display: none; min-height: 100vh; }
+  .sidebar {
+    position: fixed;
+    right: 0; top: 0; bottom: 0;
+    width: 230px;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    z-index: 100;
+  }
+  .sidebar-logo {
+    padding: 24px 20px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .sidebar-logo h2 { font-size: 20px; font-weight: 800; }
+  .sidebar-logo h2 span { color: var(--accent); }
+  .sidebar-logo p { font-size: 11px; color: var(--text3); margin-top: 2px; }
+  .nav { flex: 1; padding: 12px 0; }
+  .nav-item {
+    display: flex; align-items: center; gap: 10px;
+    padding: 11px 20px;
+    cursor: pointer;
+    color: var(--text2);
+    font-size: 14px;
+    font-weight: 500;
+    transition: all .15s;
+    border-right: 3px solid transparent;
+  }
+  .nav-item:hover { background: var(--surface2); color: var(--text); }
+  .nav-item.active { color: var(--accent); background: rgba(59,130,246,.08); border-right-color: var(--accent); }
+  .nav-item .icon { font-size: 18px; width: 22px; text-align: center; }
+  .sidebar-footer {
+    padding: 16px 20px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text3);
+  }
+  .logout-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--text2); border-radius: 6px;
+    padding: 7px 14px; font-size: 13px;
+    font-family: 'Heebo', sans-serif;
+    cursor: pointer; width: 100%; margin-top: 8px;
+    transition: all .2s;
+  }
+  .logout-btn:hover { border-color: var(--red); color: var(--red); }
+
+  .main { margin-right: 230px; padding: 32px; min-height: 100vh; }
+
+  /* ── PAGES ── */
+  .page { display: none; }
+  .page.active { display: block; }
+  .page-header { margin-bottom: 28px; }
+  .page-header h1 { font-size: 24px; font-weight: 800; }
+  .page-header p { color: var(--text2); font-size: 14px; margin-top: 4px; }
+
+  /* ── CARDS ── */
+  .cards-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 28px; }
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+  }
+  .card-label { font-size: 12px; color: var(--text3); font-weight: 500; text-transform: uppercase; letter-spacing: .5px; }
+  .card-value { font-size: 32px; font-weight: 800; margin: 6px 0 2px; }
+  .card-sub { font-size: 12px; color: var(--text2); }
+  .card.blue .card-value { color: var(--accent); }
+  .card.green .card-value { color: var(--green); }
+  .card.yellow .card-value { color: var(--yellow); }
+  .card.red .card-value { color: var(--red); }
+
+  /* ── TABLE ── */
+  .table-wrap {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+  }
+  .table-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .table-header h3 { font-size: 15px; font-weight: 700; }
+  .search-input {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: var(--text);
+    font-size: 13px;
+    font-family: 'Heebo', sans-serif;
+    width: 220px;
+    direction: rtl;
+  }
+  .search-input:focus { outline: none; border-color: var(--accent); }
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: right;
+    padding: 10px 16px;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: .5px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface2);
+  }
+  td {
+    padding: 13px 16px;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: rgba(255,255,255,.02); }
+
+  /* ── BADGES ── */
+  .badge {
+    display: inline-block;
+    padding: 3px 9px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .badge-trial { background: rgba(245,158,11,.15); color: var(--yellow); }
+  .badge-basic { background: rgba(59,130,246,.15); color: var(--accent); }
+  .badge-advanced { background: rgba(6,182,212,.15); color: var(--accent2); }
+  .badge-premium { background: rgba(16,185,129,.15); color: var(--green); }
+  .badge-expired { background: rgba(239,68,68,.15); color: var(--red); }
+  .badge-lead { background: rgba(148,163,184,.1); color: var(--text2); }
+
+  /* ── BUTTONS ── */
+  .btn { padding: 6px 12px; border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: 'Heebo', sans-serif; border: none; transition: all .15s; }
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-blue { background: rgba(59,130,246,.15); color: var(--accent); }
+  .btn-blue:hover { background: var(--accent); color: white; }
+  .btn-green { background: rgba(16,185,129,.15); color: var(--green); }
+  .btn-green:hover { background: var(--green); color: white; }
+  .btn-red { background: rgba(239,68,68,.1); color: var(--red); }
+  .btn-red:hover { background: var(--red); color: white; }
+  .btn-yellow { background: rgba(245,158,11,.15); color: var(--yellow); }
+  .btn-yellow:hover { background: var(--yellow); color: #000; }
+  .btn-ghost { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+  .btn-ghost:hover { color: var(--text); border-color: var(--text3); }
+
+  /* ── MODAL ── */
+  .modal-bg {
+    display: none;
+    position: fixed; inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 200;
+    align-items: center;
+    justify-content: center;
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 32px;
+    width: 480px;
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
+  }
+  .modal h2 { font-size: 18px; font-weight: 700; margin-bottom: 20px; }
+  .modal-footer { display: flex; gap: 10px; margin-top: 24px; justify-content: flex-end; }
+  .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .field select {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'Heebo', sans-serif;
+  }
+  .field select:focus { outline: none; border-color: var(--accent); }
+  .field textarea {
+    width: 100%;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 14px;
+    color: var(--text);
+    font-size: 14px;
+    font-family: 'Heebo', sans-serif;
+    resize: vertical;
+    min-height: 100px;
+    direction: rtl;
+  }
+  .field textarea:focus { outline: none; border-color: var(--accent); }
+
+  /* ── MESSAGING ── */
+  .msg-layout { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  .msg-panel { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .msg-panel h3 { font-size: 14px; font-weight: 700; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+  .recipients-list { max-height: 220px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+  .recipients-list label {
+    display: flex; align-items: center; gap: 10px;
+    padding: 9px 12px;
+    cursor: pointer;
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+    transition: background .1s;
+  }
+  .recipients-list label:last-child { border-bottom: none; }
+  .recipients-list label:hover { background: var(--surface2); }
+  .recipients-list input[type=checkbox] { accent-color: var(--accent); }
+  .channel-btns { display: flex; gap: 8px; margin-bottom: 14px; }
+  .channel-btn {
+    flex: 1; padding: 10px; border-radius: 8px; border: 2px solid var(--border);
+    background: var(--surface2); color: var(--text2);
+    font-family: 'Heebo', sans-serif; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: all .15s;
+  }
+  .channel-btn.active { border-color: var(--accent); color: var(--accent); background: rgba(59,130,246,.08); }
+  .send-result { margin-top: 12px; font-size: 13px; padding: 10px; border-radius: 8px; display: none; }
+  .send-result.ok { background: rgba(16,185,129,.1); color: var(--green); display: block; }
+  .send-result.err { background: rgba(239,68,68,.1); color: var(--red); display: block; }
+
+  /* ── TOAST ── */
+  #toast {
+    position: fixed; bottom: 24px; left: 24px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 13px 20px;
+    font-size: 13px;
+    z-index: 999;
+    transform: translateY(80px);
+    opacity: 0;
+    transition: all .3s;
+    max-width: 300px;
+  }
+  #toast.show { transform: translateY(0); opacity: 1; }
+  #toast.ok { border-color: var(--green); color: var(--green); }
+  #toast.err { border-color: var(--red); color: var(--red); }
+
+  .divider { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
+  .empty-state { text-align: center; padding: 48px; color: var(--text3); font-size: 14px; }
+  .empty-state .icon { font-size: 40px; margin-bottom: 12px; }
+
+  /* Leads section */
+  .tabs { display: flex; gap: 0; border-bottom: 1px solid var(--border); margin-bottom: 20px; }
+  .tab {
+    padding: 10px 20px; font-size: 13px; font-weight: 600;
+    cursor: pointer; color: var(--text2);
+    border-bottom: 2px solid transparent; margin-bottom: -1px;
+    transition: all .15s;
+  }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .select-all-bar {
+    padding: 10px 12px;
+    background: var(--surface2);
+    border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    font-size: 12px; color: var(--text2);
+  }
+  .select-all-bar input[type=checkbox] { accent-color: var(--accent); }
+
+  @media (max-width: 900px) {
+    .cards-grid { grid-template-columns: 1fr 1fr; }
+    .msg-layout { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ LOGIN ═══════════════ -->
+<div id="loginScreen">
+  <div class="login-box">
+    <h1>Vaad<span>Pro</span></h1>
+    <p>ממשק ניהול מערכת</p>
+    <div class="field">
+      <label>אימייל מנהל</label>
+      <input type="email" id="adminEmail" placeholder="admin@vaadpro.co.il" />
+    </div>
+    <div class="field">
+      <label>סיסמה</label>
+      <input type="password" id="adminPass" placeholder="••••••••" />
+    </div>
+    <button class="btn-primary" onclick="adminLogin()">כניסה</button>
+    <div id="loginError">אימייל או סיסמה שגויים</div>
+  </div>
+</div>
+
+<!-- ═══════════════ APP ═══════════════ -->
+<div id="app">
+  <!-- Sidebar -->
+  <div class="sidebar">
+    <div class="sidebar-logo">
+      <h2>Vaad<span>Pro</span></h2>
+      <p>Admin Panel</p>
+    </div>
+    <nav class="nav">
+      <div class="nav-item active" onclick="showPage('dashboard')">
+        <span class="icon">📊</span> דשבורד
+      </div>
+      <div class="nav-item" onclick="showPage('customers')">
+        <span class="icon">👥</span> לקוחות
+      </div>
+      <div class="nav-item" onclick="showPage('leads')">
+        <span class="icon">📋</span> לידים
+      </div>
+      <div class="nav-item" onclick="showPage('messaging')">
+        <span class="icon">📨</span> שליחת הודעות
+      </div>
+    </nav>
+    <div class="sidebar-footer">
+      <div id="adminEmailDisplay" style="margin-bottom:4px"></div>
+      <button class="logout-btn" onclick="logout()">התנתק</button>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- ── DASHBOARD ── -->
+    <div class="page active" id="page-dashboard">
+      <div class="page-header">
+        <h1>דשבורד</h1>
+        <p id="dashDate"></p>
+      </div>
+      <div class="cards-grid">
+        <div class="card blue">
+          <div class="card-label">סה"כ נרשמים</div>
+          <div class="card-value" id="statTotal">—</div>
+          <div class="card-sub">כל הזמנים</div>
+        </div>
+        <div class="card green">
+          <div class="card-label">פעילים</div>
+          <div class="card-value" id="statActive">—</div>
+          <div class="card-sub">trial + paid</div>
+        </div>
+        <div class="card red">
+          <div class="card-label">פג תוקף</div>
+          <div class="card-value" id="statExpired">—</div>
+          <div class="card-sub">ממתינים לחידוש</div>
+        </div>
+        <div class="card yellow">
+          <div class="card-label">לידים</div>
+          <div class="card-value" id="statLeads">—</div>
+          <div class="card-sub">פוטנציאלים</div>
+        </div>
+      </div>
+
+      <!-- Plans breakdown -->
+      <div class="table-wrap" style="margin-bottom:20px">
+        <div class="table-header"><h3>פילוח מנויים</h3></div>
+        <table>
+          <thead><tr>
+            <th>Plan</th><th>כמות</th><th>אחוז</th>
+          </tr></thead>
+          <tbody id="planBreakdown"></tbody>
+        </table>
+      </div>
+
+      <!-- Recent signups -->
+      <div class="table-wrap">
+        <div class="table-header"><h3>הצטרפו לאחרונה</h3></div>
+        <table>
+          <thead><tr>
+            <th>אימייל</th><th>בניין</th><th>Plan</th><th>תאריך הצטרפות</th>
+          </tr></thead>
+          <tbody id="recentSignups"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── CUSTOMERS ── -->
+    <div class="page" id="page-customers">
+      <div class="page-header">
+        <h1>לקוחות</h1>
+        <p>ניהול חשבונות, תשלומים והפעלה/ניתוק</p>
+      </div>
+      <div class="table-wrap">
+        <div class="table-header">
+          <h3 id="customersCount">לקוחות</h3>
+          <input class="search-input" id="customerSearch" placeholder="🔍 חיפוש לפי אימייל / בניין..." oninput="filterCustomers()" />
+        </div>
+        <table>
+          <thead><tr>
+            <th>אימייל</th><th>בניין</th><th>כתובת</th><th>Plan</th><th>הצטרף</th><th>תוקף</th><th>פעולות</th>
+          </tr></thead>
+          <tbody id="customersBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── LEADS ── -->
+    <div class="page" id="page-leads">
+      <div class="page-header">
+        <h1>לידים</h1>
+        <p>ניהול לקוחות פוטנציאלים</p>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:16px">
+        <button class="btn btn-blue" onclick="openAddLead()">+ הוסף ליד</button>
+        <label class="btn btn-ghost" style="cursor:pointer">
+          📥 ייבוא CSV
+          <input type="file" accept=".csv" style="display:none" onchange="importCSV(event)" />
+        </label>
+        <button class="btn btn-ghost" onclick="exportLeadsCSV()">📤 ייצוא CSV</button>
+      </div>
+      <div class="table-wrap">
+        <div class="table-header">
+          <h3 id="leadsCount">לידים</h3>
+          <input class="search-input" id="leadsSearch" placeholder="🔍 חיפוש..." oninput="filterLeads()" />
+        </div>
+        <table>
+          <thead><tr>
+            <th><input type="checkbox" id="selectAllLeads" onchange="toggleSelectAll()"></th>
+            <th>שם</th><th>אימייל</th><th>טלפון</th><th>מקור</th><th>סטטוס</th><th>הערות</th><th>פעולות</th>
+          </tr></thead>
+          <tbody id="leadsBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ── MESSAGING ── -->
+    <div class="page" id="page-messaging">
+      <div class="page-header">
+        <h1>שליחת הודעות</h1>
+        <p>שלח WA / מייל ללקוחות ולידים</p>
+      </div>
+
+      <div class="msg-layout">
+        <!-- Recipients -->
+        <div class="msg-panel">
+          <h3>👥 נמענים</h3>
+          <div class="tabs">
+            <div class="tab active" onclick="switchRecipTab('customers',this)">לקוחות</div>
+            <div class="tab" onclick="switchRecipTab('leads',this)">לידים</div>
+          </div>
+          <div class="select-all-bar">
+            <input type="checkbox" id="selectAllMsg" onchange="toggleSelectAllMsg()">
+            <span>בחר הכל</span>
+            <span id="selectedCount" style="margin-right:auto;color:var(--accent);font-weight:600"></span>
+          </div>
+          <div class="recipients-list" id="recipientsList"></div>
+        </div>
+
+        <!-- Compose -->
+        <div class="msg-panel">
+          <h3>✍️ הודעה</h3>
+          <div style="margin-bottom:14px">
+            <div class="field"><label>ערוץ שליחה</label></div>
+            <div class="channel-btns">
+              <button class="channel-btn active" id="chanWA" onclick="selectChannel('wa')">📱 WhatsApp</button>
+              <button class="channel-btn" id="chanEmail" onclick="selectChannel('email')">📧 מייל</button>
+            </div>
+          </div>
+
+          <div id="emailSubjectRow" class="field" style="display:none">
+            <label>נושא מייל</label>
+            <input type="text" id="emailSubject" placeholder="נושא ההודעה..." />
+          </div>
+
+          <div class="field">
+            <label>תוכן ההודעה</label>
+            <textarea id="msgBody" placeholder="כתוב את ההודעה כאן...&#10;&#10;ניתן להשתמש ב:&#10;{שם} — שם הנמען&#10;{בניין} — שם הבניין"></textarea>
+          </div>
+
+          <div id="waBridgeRow" class="field">
+            <label>Bridge לשליחה</label>
+            <select id="waBridgeSel">
+              <option value="mine">Bridge שלי</option>
+            </select>
+          </div>
+
+          <button class="btn-primary" onclick="sendMessages()" style="margin-top:4px">
+            שלח הודעות
+          </button>
+          <div id="sendResult" class="send-result"></div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- /main -->
+</div><!-- /app -->
+
+<!-- ═══════════════ MODALS ═══════════════ -->
+
+<!-- Plan Modal -->
+<div class="modal-bg" id="planModal">
+  <div class="modal">
+    <h2>✏️ שינוי Plan</h2>
+    <div class="field">
+      <label>לקוח</label>
+      <input type="text" id="planEmail" readonly style="opacity:.6" />
+    </div>
+    <div class="field">
+      <label>Plan חדש</label>
+      <select id="planSelect">
+        <option value="trial">Trial (30 יום)</option>
+        <option value="basic">Basic</option>
+        <option value="advanced">Advanced</option>
+        <option value="premium">Premium</option>
+        <option value="suspended">מושהה</option>
+      </select>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('planModal')">ביטול</button>
+      <button class="btn btn-blue" onclick="savePlan()">שמור</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Lead Modal -->
+<div class="modal-bg" id="addLeadModal">
+  <div class="modal">
+    <h2>➕ הוסף ליד</h2>
+    <div class="form-row">
+      <div class="field"><label>שם מלא *</label><input type="text" id="leadName" /></div>
+      <div class="field"><label>טלפון</label><input type="text" id="leadPhone" /></div>
+    </div>
+    <div class="field"><label>אימייל</label><input type="email" id="leadEmail" /></div>
+    <div class="form-row">
+      <div class="field">
+        <label>מקור</label>
+        <select id="leadSource">
+          <option value="">לא ידוע</option>
+          <option value="ידנית">ידנית</option>
+          <option value="ווטסאפ">ווטסאפ</option>
+          <option value="מפה לאוזן">מפה לאוזן</option>
+          <option value="פייסבוק">פייסבוק</option>
+          <option value="גוגל">גוגל</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>סטטוס</label>
+        <select id="leadStatus">
+          <option value="חדש">חדש</option>
+          <option value="ביצירת קשר">ביצירת קשר</option>
+          <option value="מעוניין">מעוניין</option>
+          <option value="לא רלוונטי">לא רלוונטי</option>
+        </select>
+      </div>
+    </div>
+    <div class="field"><label>הערות</label><textarea id="leadNotes" style="min-height:70px"></textarea></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('addLeadModal')">ביטול</button>
+      <button class="btn btn-green" onclick="saveLead()">שמור ליד</button>
+    </div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+// ════════════════════════════════════════════
+// CONFIG
+// ════════════════════════════════════════════
+const API = ''; // same origin
+let adminToken = localStorage.getItem('vaadpro_admin_token');
+let adminEmailGlobal = localStorage.getItem('vaadpro_admin_email');
+let allCustomers = [];
+let allLeads = JSON.parse(localStorage.getItem('vaadpro_leads') || '[]');
+let currentChannel = 'wa';
+let currentRecipTab = 'customers';
+let editingLeadId = null;
+
+// ════════════════════════════════════════════
+// INIT
+// ════════════════════════════════════════════
+window.onload = () => {
+  document.getElementById('dashDate').textContent = new Date().toLocaleDateString('he-IL', { weekday:'long', year:'numeric', month:'long', day:'numeric' });
+  if (adminToken) {
+    showApp();
+  }
+  document.getElementById('adminPass').addEventListener('keydown', e => { if (e.key === 'Enter') adminLogin(); });
+};
+
+// ════════════════════════════════════════════
+// AUTH
+// ════════════════════════════════════════════
+async function adminLogin() {
+  const email = document.getElementById('adminEmail').value.trim();
+  const pass  = document.getElementById('adminPass').value;
+
+  const res = await fetch('/api/admin/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password: pass })
+  });
+  const data = await res.json();
+
+  if (data.ok) {
+    adminToken = data.token;
+    adminEmailGlobal = email;
+    localStorage.setItem('vaadpro_admin_token', adminToken);
+    localStorage.setItem('vaadpro_admin_email', email);
+    document.getElementById('loginError').style.display = 'none';
+    showApp();
+  } else {
+    document.getElementById('loginError').style.display = 'block';
+    document.getElementById('loginError').textContent = data.error || 'אימייל או סיסמה שגויים';
+  }
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('app').style.display = 'block';
+  document.getElementById('adminEmailDisplay').textContent = adminEmailGlobal || '';
+  loadDashboard();
+  loadCustomers();
+  renderLeads();
+  renderRecipients();
+}
+
+function logout() {
+  localStorage.removeItem('vaadpro_admin_token');
+  localStorage.removeItem('vaadpro_admin_email');
+  location.reload();
+}
+
+function adminHeaders() {
+  return { 'Content-Type': 'application/json', 'x-admin-token': adminToken };
+}
+
+// ════════════════════════════════════════════
+// NAVIGATION
+// ════════════════════════════════════════════
+function showPage(name) {
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+  document.getElementById('page-' + name).classList.add('active');
+  event.currentTarget.classList.add('active');
+}
+
+// ════════════════════════════════════════════
+// DASHBOARD
+// ════════════════════════════════════════════
+async function loadDashboard() {
+  const res = await fetch('/api/admin/tenants', { headers: adminHeaders() });
+  if (res.status === 401 || res.status === 403) { logout(); return; }
+  const data = await res.json();
+  const users = data.users || [];
+  allCustomers = users;
+
+  const now = new Date();
+  const active = users.filter(u => u.plan !== 'suspended' && !(u.plan === 'trial' && new Date(u.trialEnd) < now));
+  const expired = users.filter(u => u.plan === 'trial' && new Date(u.trialEnd) < now);
+
+  document.getElementById('statTotal').textContent = users.length;
+  document.getElementById('statActive').textContent = active.length;
+  document.getElementById('statExpired').textContent = expired.length;
+  document.getElementById('statLeads').textContent = allLeads.length;
+
+  // Plan breakdown
+  const plans = {};
+  users.forEach(u => { const p = u.plan === 'trial' && new Date(u.trialEnd) < now ? 'expired' : u.plan; plans[p] = (plans[p]||0)+1; });
+  const pb = document.getElementById('planBreakdown');
+  pb.innerHTML = Object.entries(plans).map(([p,c]) => `
+    <tr><td><span class="badge badge-${p}">${planLabel(p)}</span></td><td><b>${c}</b></td><td>${users.length ? Math.round(c/users.length*100) : 0}%</td></tr>
+  `).join('') || '<tr><td colspan="3" class="empty-state">אין נתונים</td></tr>';
+
+  // Recent signups
+  const recent = [...users].sort((a,b) => new Date(b.createdAt)-new Date(a.createdAt)).slice(0,8);
+  document.getElementById('recentSignups').innerHTML = recent.map(u => `
+    <tr>
+      <td>${u.email}</td>
+      <td>${u.buildingName||'—'}</td>
+      <td><span class="badge badge-${u.plan}">${planLabel(u.plan)}</span></td>
+      <td>${formatDate(u.createdAt)}</td>
+    </tr>
+  `).join('') || '<tr><td colspan="4" class="empty-state">אין נרשמים</td></tr>';
+}
+
+// ════════════════════════════════════════════
+// CUSTOMERS
+// ════════════════════════════════════════════
+async function loadCustomers() {
+  const res = await fetch('/api/admin/tenants', { headers: adminHeaders() });
+  const data = await res.json();
+  allCustomers = data.users || [];
+  renderCustomers(allCustomers);
+}
+
+function renderCustomers(users) {
+  document.getElementById('customersCount').textContent = `לקוחות (${users.length})`;
+  const now = new Date();
+  document.getElementById('customersBody').innerHTML = users.map(u => {
+    const isExpired = u.plan === 'trial' && new Date(u.trialEnd) < now;
+    const planBadge = isExpired ? 'expired' : u.plan;
+    return `
+    <tr>
+      <td>${u.email}</td>
+      <td>${u.buildingName||'—'}</td>
+      <td style="color:var(--text2);font-size:12px">${u.address||'—'}</td>
+      <td><span class="badge badge-${planBadge}">${planLabel(planBadge)}</span></td>
+      <td style="font-size:12px">${formatDate(u.createdAt)}</td>
+      <td style="font-size:12px">${u.plan==='trial' ? formatDate(u.trialEnd) : '∞'}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")'>Plan</button>
+          <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")'>📨</button>
+        </div>
+      </td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="7"><div class="empty-state"><div class="icon">👥</div>אין לקוחות עדיין</div></td></tr>';
+}
+
+function filterCustomers() {
+  const q = document.getElementById('customerSearch').value.toLowerCase();
+  renderCustomers(allCustomers.filter(u =>
+    u.email.toLowerCase().includes(q) || (u.buildingName||'').toLowerCase().includes(q)
+  ));
+}
+
+// ════════════════════════════════════════════
+// PLAN MODAL
+// ════════════════════════════════════════════
+function openPlanModal(email, plan) {
+  document.getElementById('planEmail').value = email;
+  document.getElementById('planSelect').value = plan;
+  openModal('planModal');
+}
+
+async function savePlan() {
+  const email = document.getElementById('planEmail').value;
+  const plan  = document.getElementById('planSelect').value;
+  const res = await fetch('/api/admin/set-plan', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ email, plan })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('Plan עודכן בהצלחה ✓', 'ok');
+    closeModal('planModal');
+    loadCustomers();
+    loadDashboard();
+  } else {
+    toast(data.error || 'שגיאה', 'err');
+  }
+}
+
+// ════════════════════════════════════════════
+// LEADS
+// ════════════════════════════════════════════
+function saveLeads() { localStorage.setItem('vaadpro_leads', JSON.stringify(allLeads)); }
+
+function renderLeads(filter = '') {
+  const leads = filter ? allLeads.filter(l =>
+    (l.name||'').includes(filter) || (l.email||'').includes(filter) || (l.phone||'').includes(filter)
+  ) : allLeads;
+  document.getElementById('leadsCount').textContent = `לידים (${leads.length})`;
+  document.getElementById('leadsBody').innerHTML = leads.map(l => `
+    <tr>
+      <td><input type="checkbox" class="lead-check" value="${l.id}"></td>
+      <td><b>${l.name||'—'}</b></td>
+      <td style="font-size:12px">${l.email||'—'}</td>
+      <td style="font-size:12px">${l.phone||'—'}</td>
+      <td style="font-size:12px">${l.source||'—'}</td>
+      <td><span class="badge badge-lead">${l.status||'חדש'}</span></td>
+      <td style="font-size:12px;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l.notes||'—'}</td>
+      <td>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-sm btn-blue" onclick='editLead("${l.id}")'>✏️</button>
+          <button class="btn btn-sm btn-red" onclick='deleteLead("${l.id}")'>🗑</button>
+        </div>
+      </td>
+    </tr>
+  `).join('') || '<tr><td colspan="8"><div class="empty-state"><div class="icon">📋</div>אין לידים עדיין</div></td></tr>';
+  document.getElementById('statLeads').textContent = allLeads.length;
+}
+
+function filterLeads() {
+  renderLeads(document.getElementById('leadsSearch').value);
+}
+
+function openAddLead() {
+  editingLeadId = null;
+  ['leadName','leadPhone','leadEmail','leadNotes'].forEach(id => document.getElementById(id).value = '');
+  document.getElementById('leadSource').value = '';
+  document.getElementById('leadStatus').value = 'חדש';
+  document.querySelector('#addLeadModal h2').textContent = '➕ הוסף ליד';
+  openModal('addLeadModal');
+}
+
+function editLead(id) {
+  const l = allLeads.find(x => x.id === id);
+  if (!l) return;
+  editingLeadId = id;
+  document.getElementById('leadName').value = l.name||'';
+  document.getElementById('leadPhone').value = l.phone||'';
+  document.getElementById('leadEmail').value = l.email||'';
+  document.getElementById('leadSource').value = l.source||'';
+  document.getElementById('leadStatus').value = l.status||'חדש';
+  document.getElementById('leadNotes').value = l.notes||'';
+  document.querySelector('#addLeadModal h2').textContent = '✏️ עריכת ליד';
+  openModal('addLeadModal');
+}
+
+function saveLead() {
+  const name = document.getElementById('leadName').value.trim();
+  if (!name) { toast('שם הוא שדה חובה', 'err'); return; }
+  const lead = {
+    id: editingLeadId || Date.now().toString(),
+    name,
+    phone: document.getElementById('leadPhone').value.trim(),
+    email: document.getElementById('leadEmail').value.trim(),
+    source: document.getElementById('leadSource').value,
+    status: document.getElementById('leadStatus').value,
+    notes: document.getElementById('leadNotes').value.trim(),
+    createdAt: editingLeadId ? (allLeads.find(l=>l.id===editingLeadId)||{}).createdAt : new Date().toISOString()
+  };
+  if (editingLeadId) {
+    const idx = allLeads.findIndex(l => l.id === editingLeadId);
+    allLeads[idx] = lead;
+  } else {
+    allLeads.unshift(lead);
+  }
+  saveLeads();
+  renderLeads();
+  renderRecipients();
+  closeModal('addLeadModal');
+  toast(editingLeadId ? 'ליד עודכן ✓' : 'ליד נוסף ✓', 'ok');
+}
+
+function deleteLead(id) {
+  if (!confirm('למחוק ליד זה?')) return;
+  allLeads = allLeads.filter(l => l.id !== id);
+  saveLeads();
+  renderLeads();
+  renderRecipients();
+  toast('ליד נמחק', 'ok');
+}
+
+function toggleSelectAll() {
+  const checked = document.getElementById('selectAllLeads').checked;
+  document.querySelectorAll('.lead-check').forEach(c => c.checked = checked);
+}
+
+function importCSV(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    const lines = e.target.result.split('\n').filter(l => l.trim());
+    const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
+    let added = 0;
+    for (let i = 1; i < lines.length; i++) {
+      const cols = lines[i].split(',').map(c => c.trim().replace(/"/g,''));
+      const obj = {};
+      headers.forEach((h,idx) => obj[h] = cols[idx]||'');
+      if (obj['שם'] || obj['name']) {
+        allLeads.push({
+          id: Date.now().toString() + i,
+          name: obj['שם']||obj['name']||'',
+          phone: obj['טלפון']||obj['phone']||'',
+          email: obj['אימייל']||obj['email']||'',
+          source: 'CSV',
+          status: 'חדש',
+          notes: obj['הערות']||obj['notes']||'',
+          createdAt: new Date().toISOString()
+        });
+        added++;
+      }
+    }
+    saveLeads();
+    renderLeads();
+    renderRecipients();
+    toast(`יובאו ${added} לידים ✓`, 'ok');
+  };
+  reader.readAsText(file, 'utf-8');
+  event.target.value = '';
+}
+
+function exportLeadsCSV() {
+  const headers = ['שם','אימייל','טלפון','מקור','סטטוס','הערות'];
+  const rows = allLeads.map(l => [l.name,l.email,l.phone,l.source,l.status,l.notes].map(v => `"${v||''}"`).join(','));
+  const csv = [headers.join(','), ...rows].join('\n');
+  const blob = new Blob(['\ufeff'+csv], {type:'text/csv;charset=utf-8'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'leads.csv';
+  a.click();
+}
+
+// ════════════════════════════════════════════
+// MESSAGING
+// ════════════════════════════════════════════
+function switchRecipTab(tab, el) {
+  currentRecipTab = tab;
+  document.querySelectorAll('.tabs .tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('selectAllMsg').checked = false;
+  renderRecipients();
+}
+
+function renderRecipients() {
+  const list = document.getElementById('recipientsList');
+  let items = [];
+  if (currentRecipTab === 'customers') {
+    items = allCustomers.map(u => ({ id: u.email, label: u.buildingName||u.email, sub: u.email, phone: u.phone }));
+  } else {
+    items = allLeads.map(l => ({ id: l.id, label: l.name, sub: l.phone||l.email, phone: l.phone }));
+  }
+  list.innerHTML = items.length ? items.map(i => `
+    <label>
+      <input type="checkbox" class="recip-check" value="${i.id}" data-phone="${i.phone||''}" data-email="${i.sub||''}">
+      <div>
+        <div style="font-weight:600;font-size:13px">${i.label}</div>
+        <div style="font-size:11px;color:var(--text3)">${i.sub}</div>
+      </div>
+    </label>
+  `).join('') : '<div class="empty-state" style="padding:24px">אין נמענים</div>';
+  list.querySelectorAll('.recip-check').forEach(c => c.addEventListener('change', updateSelectedCount));
+  updateSelectedCount();
+}
+
+function toggleSelectAllMsg() {
+  const checked = document.getElementById('selectAllMsg').checked;
+  document.querySelectorAll('.recip-check').forEach(c => c.checked = checked);
+  updateSelectedCount();
+}
+
+function updateSelectedCount() {
+  const n = document.querySelectorAll('.recip-check:checked').length;
+  document.getElementById('selectedCount').textContent = n ? `${n} נבחרו` : '';
+}
+
+function selectChannel(ch) {
+  currentChannel = ch;
+  document.getElementById('chanWA').classList.toggle('active', ch==='wa');
+  document.getElementById('chanEmail').classList.toggle('active', ch==='email');
+  document.getElementById('emailSubjectRow').style.display = ch==='email' ? 'block' : 'none';
+  document.getElementById('waBridgeRow').style.display = ch==='wa' ? 'block' : 'none';
+}
+
+async function sendMessages() {
+  const selected = [...document.querySelectorAll('.recip-check:checked')];
+  if (!selected.length) { toast('לא נבחרו נמענים', 'err'); return; }
+  const body = document.getElementById('msgBody').value.trim();
+  if (!body) { toast('הודעה ריקה', 'err'); return; }
+
+  const resultEl = document.getElementById('sendResult');
+  resultEl.className = 'send-result';
+  resultEl.style.display = 'none';
+
+  let sent = 0, failed = 0;
+
+  for (const el of selected) {
+    const phone = el.dataset.phone;
+    const emailAddr = el.dataset.email;
+    const recipName = el.closest('label').querySelector('div div').textContent;
+    const msg = body.replace(/{שם}/g, recipName).replace(/{בניין}/g, recipName);
+
+    if (currentChannel === 'wa' && phone) {
+      try {
+        const r = await fetch('/api/send-message', {
+          method: 'POST',
+          headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + adminToken },
+          body: JSON.stringify({ phone, message: msg })
+        });
+        const d = await r.json();
+        if (d.ok) sent++; else failed++;
+      } catch { failed++; }
+    } else if (currentChannel === 'email' && emailAddr && emailAddr.includes('@')) {
+      const subject = document.getElementById('emailSubject').value || 'הודעה מ-VaadPro';
+      try {
+        const r = await fetch('/api/admin/send-email', {
+          method: 'POST',
+          headers: adminHeaders(),
+          body: JSON.stringify({ to: emailAddr, subject, body: msg })
+        });
+        const d = await r.json();
+        if (d.ok) sent++; else failed++;
+      } catch { failed++; }
+    } else {
+      failed++;
+    }
+  }
+
+  resultEl.textContent = `נשלח: ${sent} ✓${ failed ? `  |  נכשל: ${failed}` : ''}`;
+  resultEl.className = 'send-result ' + (failed > sent ? 'err' : 'ok');
+}
+
+function msgCustomer(email, building) {
+  showPage('messaging');
+  document.querySelectorAll('.nav-item').forEach((n,i) => n.classList.toggle('active', i===3));
+  setTimeout(() => {
+    document.getElementById('msgBody').value = `שלום ${building},\n\n`;
+  }, 100);
+}
+
+// ════════════════════════════════════════════
+// UTILS
+// ════════════════════════════════════════════
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); }));
+
+function toast(msg, type='ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  setTimeout(() => el.className = '', 3000);
+}
+
+function planLabel(plan) {
+  const map = { trial:'Trial', basic:'Basic', advanced:'Advanced', premium:'Premium', suspended:'מושהה', expired:'פג תוקף' };
+  return map[plan] || plan;
+}
+
+function formatDate(iso) {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('he-IL');
+}
+</script>
+</body>
+</html>
