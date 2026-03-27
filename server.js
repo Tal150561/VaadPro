@@ -244,10 +244,42 @@ const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 const SMTP_USER = process.env.SMTP_USER || '';
 const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || 'VaadPro <noreply@vaadpro.co.il>';
+const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
+
+async function sendEmailResend(to, subject, body) {
+  const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ from: fromAddr, to, subject, text: body })
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.message || JSON.stringify(data));
+  return data;
+}
 
 async function sendWelcomeEmail(email, buildingName, tenantId) {
-  if (!SMTP_HOST || !SMTP_USER) {
-    console.log('[Email] SMTP not configured — skipping welcome email');
+  if (!RESEND_API_KEY && (!SMTP_HOST || !SMTP_USER)) {
+    console.log('[Email] Email not configured — skipping welcome email');
+    return;
+  }
+  if (RESEND_API_KEY) {
+    try {
+      await sendEmailResend(email, `ברוך הבא ל-VaadPro! 🏢`, `שלום!
+
+החשבון שלך ל-${buildingName} נוצר בהצלחה.
+
+כניסה:
+https://web-production-f2db5.up.railway.app
+
+30 יום ניסיון חינם!
+
+צוות VaadPro`);
+      console.log(\`[Email] welcome sent via Resend to \${email}\`);
+    } catch(e) { console.error('[Email] Resend welcome failed:', e.message); }
     return;
   }
   try {
@@ -529,21 +561,26 @@ app.post('/api/admin/set-plan', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true, email, plan });
 });
 
-// ── Admin: שליחת מייל (עם תמיכת Gmail) ────────────────────────
+// ── Admin: שליחת מייל (Resend / SMTP fallback) ─────────────────
 app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
   const { to, subject, body } = req.body;
   if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים שדות' });
-  if (!SMTP_USER) return res.json({ ok: false, error: 'SMTP_USER לא מוגדר ב-Railway Variables' });
   try {
-    const nodemailer = require('nodemailer');
-    let transportConfig;
-    if (!SMTP_HOST || SMTP_HOST.includes('gmail') || SMTP_USER.includes('gmail.com')) {
-      transportConfig = { service: 'gmail', auth: { user: SMTP_USER, pass: SMTP_PASS } };
+    if (RESEND_API_KEY) {
+      await sendEmailResend(to, subject, body);
+    } else if (SMTP_USER) {
+      const nodemailer = require('nodemailer');
+      let transportConfig;
+      if (!SMTP_HOST || SMTP_HOST.includes('gmail') || SMTP_USER.includes('gmail.com')) {
+        transportConfig = { service: 'gmail', auth: { user: SMTP_USER, pass: SMTP_PASS } };
+      } else {
+        transportConfig = { host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } };
+      }
+      const transporter = require('nodemailer').createTransport(transportConfig);
+      await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: body });
     } else {
-      transportConfig = { host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } };
+      return res.json({ ok: false, error: 'לא מוגדר שירות מייל (RESEND_API_KEY או SMTP_USER)' });
     }
-    const transporter = nodemailer.createTransport(transportConfig);
-    await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: body });
     res.json({ ok: true });
   } catch(e) {
     console.error('[Admin:send-email]', e.message);
