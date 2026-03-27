@@ -528,23 +528,54 @@ app.post('/api/admin/set-plan', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true, email, plan });
 });
 
-// ── Admin: שליחת מייל ───────────────────────────────────────────
+// ── Admin: שליחת מייל (עם תמיכת Gmail) ────────────────────────
 app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
   const { to, subject, body } = req.body;
   if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים שדות' });
-  if (!SMTP_HOST || !SMTP_USER) return res.json({ ok: false, error: 'SMTP לא מוגדר' });
+  if (!SMTP_USER) return res.json({ ok: false, error: 'SMTP_USER לא מוגדר ב-Railway Variables' });
   try {
     const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST, port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS }
-    });
-    await transporter.sendMail({ from: SMTP_FROM, to, subject, text: body });
+    let transportConfig;
+    if (!SMTP_HOST || SMTP_HOST.includes('gmail') || SMTP_USER.includes('gmail.com')) {
+      transportConfig = { service: 'gmail', auth: { user: SMTP_USER, pass: SMTP_PASS } };
+    } else {
+      transportConfig = { host: SMTP_HOST, port: SMTP_PORT, secure: SMTP_PORT === 465, auth: { user: SMTP_USER, pass: SMTP_PASS } };
+    }
+    const transporter = nodemailer.createTransport(transportConfig);
+    await transporter.sendMail({ from: SMTP_FROM || SMTP_USER, to, subject, text: body });
     res.json({ ok: true });
   } catch(e) {
+    console.error('[Admin:send-email]', e.message);
     res.json({ ok: false, error: e.message });
   }
+});
+
+// ── Admin: שליחת WA ─────────────────────────────────────────────
+app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
+  const { phone, message, tenantId } = req.body;
+  if (!phone || !message) return res.json({ ok: false, error: 'חסר טלפון או הודעה' });
+  const targetTenantId = tenantId || Object.keys(waClients).find(id => {
+    const wa = waClients[id];
+    return wa && wa.status === 'connected';
+  });
+  if (!targetTenantId) return res.json({ ok: false, error: 'אין Bridge מחובר. חבר WA תחילה.' });
+  try {
+    await sendWaMsg(targetTenantId, phone, message);
+    res.json({ ok: true });
+  } catch(e) {
+    console.error('[Admin:send-wa]', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// ── Admin: רשימת Bridges פעילים ────────────────────────────────
+app.get('/api/admin/bridges', adminAuthMiddleware, (req, res) => {
+  const bridges = Object.entries(waClients).map(([tenantId, wa]) => {
+    const users = loadUsers();
+    const user = users.find(u => u.tenantId === tenantId);
+    return { tenantId, status: wa.status, phone: wa.phone, email: user ? user.email : tenantId, buildingName: user ? user.buildingName : '' };
+  }).filter(b => b.status === 'connected');
+  res.json({ bridges });
 });
 
 // ── Admin: שרת קובץ admin.html ──────────────────────────────────

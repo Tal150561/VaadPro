@@ -555,7 +555,7 @@
           <div id="waBridgeRow" class="field">
             <label>Bridge לשליחה</label>
             <select id="waBridgeSel">
-              <option value="mine">Bridge שלי</option>
+              <option value="">⏳ טוען bridges...</option>
             </select>
           </div>
 
@@ -696,8 +696,26 @@ function showApp() {
   document.getElementById('adminEmailDisplay').textContent = adminEmailGlobal || '';
   loadDashboard();
   loadCustomers();
+  loadBridges();
   renderLeads();
   renderRecipients();
+}
+
+async function loadBridges() {
+  try {
+    const res = await fetch('/api/admin/bridges', { headers: adminHeaders() });
+    const data = await res.json();
+    const sel = document.getElementById('waBridgeSel');
+    if (data.bridges && data.bridges.length > 0) {
+      sel.innerHTML = data.bridges.map(b =>
+        `<option value="${b.tenantId}">${b.buildingName || b.email} (${b.phone || 'מחובר'})</option>`
+      ).join('');
+    } else {
+      sel.innerHTML = '<option value="">⚠️ אין Bridge מחובר</option>';
+    }
+  } catch(e) {
+    document.getElementById('waBridgeSel').innerHTML = '<option value="">שגיאה בטעינת Bridges</option>';
+  }
 }
 
 function logout() {
@@ -1042,10 +1060,11 @@ async function sendMessages() {
 
     if (currentChannel === 'wa' && phone) {
       try {
-        const r = await fetch('/api/send-message', {
+        const bridgeTenantId = document.getElementById('waBridgeSel').value;
+        const r = await fetch('/api/admin/send-wa', {
           method: 'POST',
-          headers: { 'Content-Type':'application/json', 'Authorization': 'Bearer ' + adminToken },
-          body: JSON.stringify({ phone, message: msg })
+          headers: adminHeaders(),
+          body: JSON.stringify({ phone, message: msg, tenantId: bridgeTenantId || undefined })
         });
         const d = await r.json();
         if (d.ok) sent++; else failed++;
