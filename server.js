@@ -289,7 +289,7 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
 
 // הרשמה
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, buildingName, address } = req.body;
+  const { email, password, buildingName, address, phone } = req.body;
   if (!email || !password || !buildingName) return res.json({ ok: false, error: 'יש למלא את כל השדות' });
   if (password.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
 
@@ -300,7 +300,7 @@ app.post('/api/auth/register', async (req, res) => {
   const passHash  = await bcrypt.hash(password, 10);
   const trialEnd  = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 יום
 
-  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName, address: address||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
+  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName, address: address||'', phone: phone||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
   users.push(user);
   saveUsers(users);
 
@@ -552,20 +552,47 @@ app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
 
 // ── Admin: שליחת WA ─────────────────────────────────────────────
 app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
-  const { phone, message, tenantId } = req.body;
-  if (!phone || !message) return res.json({ ok: false, error: 'חסר טלפון או הודעה' });
-  const targetTenantId = tenantId || Object.keys(waClients).find(id => {
+  const { phone, message, tenantId, sendToOwner } = req.body;
+  if (!message) return res.json({ ok: false, error: 'חסרה הודעה' });
+
+  // בחר bridge לשליחה — כל bridge פעיל
+  const bridgeTenantId = Object.keys(waClients).find(id => {
     const wa = waClients[id];
     return wa && (wa.status === 'connected' || wa.status === 'ready');
   });
-  if (!targetTenantId) return res.json({ ok: false, error: 'אין Bridge מחובר. חבר WA תחילה.' });
+  if (!bridgeTenantId) return res.json({ ok: false, error: 'אין Bridge מחובר. חבר WA תחילה.' });
+
+  // אם sendToOwner — שלח לטלפון של בעל ה-tenantId
+  let targetPhone = phone;
+  if (sendToOwner && tenantId) {
+    const users = loadUsers();
+    const user = users.find(u => u.tenantId === tenantId);
+    if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+    if (!user.phone) return res.json({ ok: false, error: `ללקוח ${user.email} אין מספר טלפון בפרופיל` });
+    targetPhone = user.phone;
+  }
+
+  if (!targetPhone) return res.json({ ok: false, error: 'חסר מספר טלפון' });
+
   try {
-    await sendWaMsg(targetTenantId, phone, message);
+    await sendWaMsg(bridgeTenantId, targetPhone, message);
     res.json({ ok: true });
   } catch(e) {
     console.error('[Admin:send-wa]', e.message);
     res.json({ ok: false, error: e.message });
   }
+});
+
+// ── Admin: עדכון טלפון לקוח ────────────────────────────────────
+app.post('/api/admin/set-phone', adminAuthMiddleware, (req, res) => {
+  const { email, phone } = req.body;
+  if (!email || !phone) return res.json({ ok: false, error: 'חסרים שדות' });
+  const users = loadUsers();
+  const user = users.find(u => u.email === email.toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
+  user.phone = phone;
+  saveUsers(users);
+  res.json({ ok: true });
 });
 
 // ── Admin: רשימת Bridges פעילים ────────────────────────────────

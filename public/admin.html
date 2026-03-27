@@ -552,6 +552,11 @@
             <textarea id="msgBody" placeholder="כתוב את ההודעה כאן...&#10;&#10;ניתן להשתמש ב:&#10;{שם} — שם הנמען&#10;{בניין} — שם הבניין"></textarea>
           </div>
 
+          <div id="manualPhoneRow" class="field" style="display:none">
+            <label>📱 מספר טלפון ידני (לנמענים בלי טלפון)</label>
+            <input type="text" id="manualPhone" placeholder="0501234567 / 972501234567" />
+          </div>
+
           <div id="waBridgeRow" class="field">
             <label>Bridge לשליחה</label>
             <select id="waBridgeSel">
@@ -1004,13 +1009,13 @@ function renderRecipients() {
   const list = document.getElementById('recipientsList');
   let items = [];
   if (currentRecipTab === 'customers') {
-    items = allCustomers.map(u => ({ id: u.email, label: u.buildingName||u.email, sub: u.email, phone: u.phone }));
+    items = allCustomers.map(u => ({ id: u.email, label: u.buildingName||u.email, sub: u.email, phone: u.phone, tenantId: u.tenantId }));
   } else {
     items = allLeads.map(l => ({ id: l.id, label: l.name, sub: l.phone||l.email, phone: l.phone }));
   }
   list.innerHTML = items.length ? items.map(i => `
     <label>
-      <input type="checkbox" class="recip-check" value="${i.id}" data-phone="${i.phone||''}" data-email="${i.sub||''}">
+      <input type="checkbox" class="recip-check" value="${i.id}" data-phone="${i.phone||''}" data-email="${i.sub||''}" data-tenant="${i.tenantId||''}">
       <div>
         <div style="font-weight:600;font-size:13px">${i.label}</div>
         <div style="font-size:11px;color:var(--text3)">${i.sub}</div>
@@ -1038,6 +1043,7 @@ function selectChannel(ch) {
   document.getElementById('chanEmail').classList.toggle('active', ch==='email');
   document.getElementById('emailSubjectRow').style.display = ch==='email' ? 'block' : 'none';
   document.getElementById('waBridgeRow').style.display = ch==='wa' ? 'block' : 'none';
+  document.getElementById('manualPhoneRow').style.display = ch==='wa' ? 'block' : 'none';
 }
 
 async function sendMessages() {
@@ -1061,10 +1067,22 @@ async function sendMessages() {
     if (currentChannel === 'wa' && phone) {
       try {
         const bridgeTenantId = document.getElementById('waBridgeSel').value;
+        const recipTenantId = el.dataset.tenant;
+        let waPhone = phone;
+        // אם אין טלפון — נסה מספר ידני
+        if (!waPhone) {
+          waPhone = document.getElementById('manualPhone').value.trim();
+        }
+        if (!waPhone && !recipTenantId) { failed++; continue; }
+        const waPayload = { phone: waPhone, message: msg, tenantId: bridgeTenantId || undefined };
+        if (recipTenantId && !waPhone) {
+          waPayload.sendToOwner = true;
+          waPayload.tenantId = recipTenantId;
+        }
         const r = await fetch('/api/admin/send-wa', {
           method: 'POST',
           headers: adminHeaders(),
-          body: JSON.stringify({ phone, message: msg, tenantId: bridgeTenantId || undefined })
+          body: JSON.stringify(waPayload)
         });
         const d = await r.json();
         if (d.ok) sent++; else failed++;

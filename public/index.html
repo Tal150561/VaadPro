@@ -187,6 +187,7 @@
       <div class="trial-badge">🎉 30 יום ניסיון חינם — ללא כרטיס אשראי</div>
       <div class="form-error" id="registerError"></div>
       <div class="form-group"><label>שם הבניין / כתובת</label><input type="text" id="regBuilding" placeholder='לדוגמה: בית משותף רחוב הרצל 5'></div>
+      <div class="form-group"><label>טלפון <span style="color:#ef4444">*</span></label><input type="tel" id="regPhone" placeholder='0501234567' required></div>
       <div class="form-group"><label>אימייל</label><input type="email" id="regEmail" placeholder="your@email.com" style="direction:ltr;"></div>
       <div class="form-group"><label>סיסמה (לפחות 6 תווים)</label><input type="password" id="regPass" placeholder="••••••" onkeydown="if(event.key==='Enter')doRegister()"></div>
       <button class="btn btn-green" style="width:100%;justify-content:center;padding:12px;" onclick="doRegister()">צור חשבון חינם 🚀</button>
@@ -245,7 +246,13 @@ async function doRegister() {
   errEl.classList.remove('show');
   if (!building || !email || !pass) { errEl.textContent='יש למלא את כל השדות'; errEl.classList.add('show'); return; }
   try {
-    const r = await fetch('/api/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password:pass,buildingName:building}) });
+    const phoneVal = (document.getElementById('regPhone')||{}).value||'';
+    const phoneDigits = phoneVal.replace(/\D/g,'');
+    if (!phoneDigits || phoneDigits.length < 9 || phoneDigits.length > 15) {
+      showRegError('יש להזין מספר טלפון תקין (לדוגמה: 0501234567)');
+      return;
+    }
+    const r = await fetch('/api/auth/register', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({email,password:pass,buildingName:building,phone:phoneDigits}) });
     const d = await r.json();
     if (!d.ok) { errEl.textContent=d.error; errEl.classList.add('show'); return; }
     localStorage.setItem('vp_token', d.token);
