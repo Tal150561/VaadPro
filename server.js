@@ -278,7 +278,7 @@ https://web-production-f2db5.up.railway.app
 30 יום ניסיון חינם!
 
 צוות VaadPro`);
-      console.log(\`[Email] welcome sent via Resend to \${email}\`);
+      console.log('[Email] welcome sent via Resend to ' + email);
     } catch(e) { console.error('[Email] Resend welcome failed:', e.message); }
     return;
   }
