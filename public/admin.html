@@ -734,6 +734,61 @@
   </div>
 </div>
 
+<!-- CRM Modal -->
+<div class="modal-bg" id="crmModal" style="align-items:flex-start;padding:20px;overflow-y:auto;">
+  <div class="modal" style="width:620px;max-width:98vw;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <div>
+        <h2 style="margin:0" id="crmTitle">כרטיית לקוח</h2>
+        <div id="crmSubtitle" style="font-size:12px;color:var(--text3);margin-top:2px"></div>
+      </div>
+      <div style="display:flex;gap:8px;align-items:center">
+        <div id="crmStatusBadge"></div>
+        <select id="crmStatus" onchange="saveCRMStatus()" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:12px;">
+          <option value="">סטטוס ליד</option>
+          <option value="חם">🔴 חם</option>
+          <option value="פושר">🟡 פושר</option>
+          <option value="קר">🔵 קר</option>
+          <option value="נסגר">✅ נסגר</option>
+          <option value="לא רלוונטי">❌ לא רלוונטי</option>
+        </select>
+        <button class="btn btn-ghost" onclick="closeModal('crmModal')">✕</button>
+      </div>
+    </div>
+
+    <!-- Tabs -->
+    <div class="tabs" style="margin-bottom:16px">
+      <div class="tab active" id="crmTab1" onclick="switchCRMTab('calls',this)">📞 שיחות</div>
+      <div class="tab" id="crmTab2" onclick="switchCRMTab('tasks',this)">✅ משימות</div>
+      <div class="tab" id="crmTab3" onclick="switchCRMTab('history',this)">📨 היסטוריה</div>
+    </div>
+
+    <!-- Calls Tab -->
+    <div id="crmTabCalls">
+      <div style="display:flex;gap:8px;margin-bottom:12px">
+        <textarea id="newCallSummary" placeholder="סיכום שיחה טלפונית..." style="flex:1;min-height:70px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;resize:vertical;direction:rtl;"></textarea>
+        <button class="btn btn-blue" onclick="addCall()" style="align-self:flex-end;padding:10px 16px;">+ הוסף</button>
+      </div>
+      <div id="crmCallsList"></div>
+    </div>
+
+    <!-- Tasks Tab -->
+    <div id="crmTabTasks" style="display:none">
+      <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <input type="text" id="newTaskText" placeholder="משימה..." style="flex:2;min-width:160px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+        <input type="date" id="newTaskDate" style="flex:1;min-width:130px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+        <button class="btn btn-green" onclick="addTask()">+ הוסף</button>
+      </div>
+      <div id="crmTasksList"></div>
+    </div>
+
+    <!-- History Tab -->
+    <div id="crmTabHistory" style="display:none">
+      <div id="crmHistoryList"></div>
+    </div>
+  </div>
+</div>
+
 <!-- Toast -->
 <div id="toast"></div>
 
@@ -938,6 +993,7 @@ function renderCustomers(users) {
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")'>Plan</button>
           <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")'>📨</button>
+          <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")'>📋</button>
         </div>
       </td>
     </tr>`;
@@ -1001,6 +1057,7 @@ function renderLeads(filter = '') {
       <td>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-blue" onclick='editLead("${l.id}")'>✏️</button>
+          <button class="btn btn-sm btn-ghost" onclick='openCRM("${l.id}","${l.name}","lead")'>📋</button>
           <button class="btn btn-sm btn-red" onclick='deleteLead("${l.id}")'>🗑</button>
         </div>
       </td>
@@ -1347,6 +1404,133 @@ function formatDateTime(iso) {
   if (!iso) return '—';
   const d = new Date(iso);
   return d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
+}
+
+// ════════════════════════════════════════════
+// CRM
+// ════════════════════════════════════════════
+let crmCurrentId = '';
+let crmCurrentType = '';
+
+async function openCRM(id, name, type) {
+  crmCurrentId = id;
+  crmCurrentType = type;
+  document.getElementById('crmTitle').textContent = name;
+  document.getElementById('crmSubtitle').textContent = type === 'customer' ? 'לקוח' : 'ליד';
+  document.getElementById('newCallSummary').value = '';
+  document.getElementById('newTaskText').value = '';
+  document.getElementById('newTaskDate').value = '';
+  switchCRMTab('calls', document.getElementById('crmTab1'));
+  openModal('crmModal');
+  await loadCRMCard();
+}
+
+async function loadCRMCard() {
+  try {
+    const res = await fetch('/api/admin/crm/' + crmCurrentId, { headers: adminHeaders() });
+    const data = await res.json();
+    const card = data.card || {};
+    // Status
+    document.getElementById('crmStatus').value = card.status || '';
+    // Calls
+    renderCRMCalls(card.calls || []);
+    // Tasks
+    renderCRMTasks(card.tasks || []);
+    // History
+    renderCRMHistory(data.msgHistory || []);
+  } catch(e) { toast('שגיאה בטעינת כרטייה', 'err'); }
+}
+
+function renderCRMCalls(calls) {
+  document.getElementById('crmCallsList').innerHTML = calls.length ?
+    calls.map(c => '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+      '<span style="font-size:11px;color:var(--text3)">' + formatDateTime(c.ts) + '</span>' +
+      '<button class="btn btn-sm btn-red" onclick="deleteCRMItem('call','' + c.id + '')">🗑</button>' +
+      '</div><div style="font-size:13px;white-space:pre-wrap;direction:rtl">' + c.summary + '</div></div>'
+    ).join('') :
+    '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין סיכומי שיחות עדיין</div>';
+}
+
+function renderCRMTasks(tasks) {
+  document.getElementById('crmTasksList').innerHTML = tasks.length ?
+    tasks.map(t => '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
+      '<input type="checkbox" ' + (t.done?'checked':'') + ' onchange="toggleTask('' + t.id + '',this.checked)" style="accent-color:var(--accent);width:16px;height:16px">' +
+      '<div style="flex:1">' +
+      '<div style="font-size:13px;' + (t.done?'text-decoration:line-through;color:var(--text3)':'') + '">' + t.text + '</div>' +
+      (t.dueDate ? '<div style="font-size:11px;color:' + (new Date(t.dueDate) < new Date() && !t.done ? 'var(--red)':'var(--text3)') + '">' + formatDate(t.dueDate) + '</div>' : '') +
+      '</div>' +
+      '<button class="btn btn-sm btn-red" onclick="deleteCRMItem('task','' + t.id + '')">🗑</button>' +
+      '</div>'
+    ).join('') :
+    '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין משימות עדיין</div>';
+}
+
+function renderCRMHistory(history) {
+  document.getElementById('crmHistoryList').innerHTML = history.length ?
+    history.map(l => '<div style="padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
+      '<div style="display:flex;justify-content:space-between;margin-bottom:4px">' +
+      '<span style="font-size:11px;color:var(--text3)">' + formatDateTime(l.ts) + ' · ' + (l.channel==='wa'?'📱 WA':'📧 מייל') + '</span>' +
+      '<span class="badge ' + (l.status==='sent'?'badge-basic':'badge-expired') + '">' + (l.status==='sent'?'נשלח':'נכשל') + '</span>' +
+      '</div><div style="font-size:13px;white-space:pre-wrap;direction:rtl">' + (l.message||'') + '</div>' +
+      '</div>'
+    ).join('') :
+    '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין היסטוריית הודעות</div>';
+}
+
+async function saveCRMStatus() {
+  const status = document.getElementById('crmStatus').value;
+  await fetch('/api/admin/crm/' + crmCurrentId, {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ status })
+  });
+  toast('סטטוס עודכן ✓', 'ok');
+}
+
+async function addCall() {
+  const summary = document.getElementById('newCallSummary').value.trim();
+  if (!summary) { toast('יש לכתוב סיכום', 'err'); return; }
+  const res = await fetch('/api/admin/crm/' + crmCurrentId + '/call', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ summary })
+  });
+  const data = await res.json();
+  if (data.ok) { document.getElementById('newCallSummary').value = ''; await loadCRMCard(); toast('סיכום נוסף ✓', 'ok'); }
+}
+
+async function addTask() {
+  const text = document.getElementById('newTaskText').value.trim();
+  const dueDate = document.getElementById('newTaskDate').value;
+  if (!text) { toast('יש לכתוב משימה', 'err'); return; }
+  const res = await fetch('/api/admin/crm/' + crmCurrentId + '/task', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ text, dueDate })
+  });
+  const data = await res.json();
+  if (data.ok) { document.getElementById('newTaskText').value = ''; document.getElementById('newTaskDate').value = ''; await loadCRMCard(); toast('משימה נוספה ✓', 'ok'); }
+}
+
+async function toggleTask(taskId, done) {
+  await fetch('/api/admin/crm/' + crmCurrentId + '/task/' + taskId, {
+    method: 'PATCH', headers: adminHeaders(),
+    body: JSON.stringify({ done })
+  });
+  await loadCRMCard();
+}
+
+async function deleteCRMItem(type, itemId) {
+  if (!confirm('למחוק?')) return;
+  await fetch('/api/admin/crm/' + crmCurrentId + '/' + type + '/' + itemId, { method: 'DELETE', headers: adminHeaders() });
+  await loadCRMCard();
+  toast('נמחק ✓', 'ok');
+}
+
+function switchCRMTab(tab, el) {
+  document.querySelectorAll('#crmModal .tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('crmTabCalls').style.display = tab === 'calls' ? 'block' : 'none';
+  document.getElementById('crmTabTasks').style.display = tab === 'tasks' ? 'block' : 'none';
+  document.getElementById('crmTabHistory').style.display = tab === 'history' ? 'block' : 'none';
 }
 
 // ════════════════════════════════════════════

@@ -492,6 +492,15 @@ app.get('/api/bridge/config', authMiddleware, (req, res) => {
 // ════════════════════════════════════════════════════════════════
 const ADMIN_USERS_FILE = path.join(DATA_DIR, '_admins.json');
 const TEMPLATES_FILE = path.join(DATA_DIR, '_templates.json');
+const CRM_FILE = path.join(DATA_DIR, '_crm.json');
+
+function loadCRM() {
+  if (!fs.existsSync(CRM_FILE)) return {};
+  try { return JSON.parse(fs.readFileSync(CRM_FILE, 'utf8')); } catch(e) { return {}; }
+}
+function saveCRM(data) { fs.writeFileSync(CRM_FILE, JSON.stringify(data, null, 2)); }
+function getCRMCard(id) { const c = loadCRM(); return c[id] || { notes: [], tasks: [], status: '', calls: [] }; }
+function saveCRMCard(id, card) { const c = loadCRM(); c[id] = card; saveCRM(c); }
 const MSG_LOG_FILE = path.join(DATA_DIR, '_msglog.json');
 
 function loadTemplates() {
@@ -635,7 +644,7 @@ app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
 
   try {
     await sendWaMsg(bridgeTenantId, targetPhone, message);
-    addMsgLog({ channel: 'wa', to: targetPhone, message, status: 'sent' });
+    addMsgLog({ channel: 'wa', to: targetPhone, message, status: 'sent', contactId: tenantId||'' });
     res.json({ ok: true });
   } catch(e) {
     console.error('[Admin:send-wa]', e.message);
@@ -664,6 +673,65 @@ app.get('/api/admin/bridges', adminAuthMiddleware, (req, res) => {
     return { tenantId, status: wa.status, phone: wa.phone, email: user ? user.email : tenantId, buildingName: user ? user.buildingName : '' };
   }).filter(b => b.status === 'connected' || b.status === 'ready');
   res.json({ bridges });
+});
+
+// ── Admin: CRM ──────────────────────────────────────────────────
+
+// קבל כרטיית לקוח/ליד
+app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
+  const card = getCRMCard(req.params.id);
+  // הוסף היסטוריית הודעות מהלוג
+  const log = loadMsgLog().filter(l => l.contactId === req.params.id);
+  res.json({ ok: true, card, msgHistory: log });
+});
+
+// שמור כרטיית לקוח/ליד
+app.post('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
+  const card = getCRMCard(req.params.id);
+  const updated = Object.assign(card, req.body);
+  saveCRMCard(req.params.id, updated);
+  res.json({ ok: true });
+});
+
+// הוסף סיכום שיחה
+app.post('/api/admin/crm/:id/call', adminAuthMiddleware, (req, res) => {
+  const { summary } = req.body;
+  if (!summary) return res.json({ ok: false, error: 'חסר סיכום' });
+  const card = getCRMCard(req.params.id);
+  if (!card.calls) card.calls = [];
+  card.calls.unshift({ id: uuidv4(), summary, ts: new Date().toISOString() });
+  saveCRMCard(req.params.id, card);
+  res.json({ ok: true });
+});
+
+// הוסף משימה
+app.post('/api/admin/crm/:id/task', adminAuthMiddleware, (req, res) => {
+  const { text, dueDate } = req.body;
+  if (!text) return res.json({ ok: false, error: 'חסר טקסט' });
+  const card = getCRMCard(req.params.id);
+  if (!card.tasks) card.tasks = [];
+  card.tasks.unshift({ id: uuidv4(), text, dueDate: dueDate||'', done: false, ts: new Date().toISOString() });
+  saveCRMCard(req.params.id, card);
+  res.json({ ok: true });
+});
+
+// עדכן סטטוס משימה
+app.patch('/api/admin/crm/:id/task/:taskId', adminAuthMiddleware, (req, res) => {
+  const card = getCRMCard(req.params.id);
+  const task = (card.tasks||[]).find(t => t.id === req.params.taskId);
+  if (!task) return res.json({ ok: false, error: 'משימה לא נמצאה' });
+  task.done = req.body.done;
+  saveCRMCard(req.params.id, card);
+  res.json({ ok: true });
+});
+
+// מחק פריט (שיחה/משימה)
+app.delete('/api/admin/crm/:id/:type/:itemId', adminAuthMiddleware, (req, res) => {
+  const card = getCRMCard(req.params.id);
+  const key = req.params.type === 'call' ? 'calls' : 'tasks';
+  card[key] = (card[key]||[]).filter(x => x.id !== req.params.itemId);
+  saveCRMCard(req.params.id, card);
+  res.json({ ok: true });
 });
 
 // ── Admin: תבניות הודעות ────────────────────────────────────────
