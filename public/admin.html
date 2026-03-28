@@ -350,9 +350,53 @@
   }
   .select-all-bar input[type=checkbox] { accent-color: var(--accent); }
 
+  /* ── MOBILE SIDEBAR ── */
+  .hamburger {
+    display: none;
+    position: fixed;
+    top: 14px;
+    right: 14px;
+    z-index: 300;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    width: 42px; height: 42px;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 20px;
+    box-shadow: 0 2px 12px rgba(0,0,0,.4);
+  }
+  .sidebar-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    z-index: 149;
+  }
+  .sidebar-overlay.open { display: block; }
+  .pin-btn {
+    background: none; border: 1px solid var(--border);
+    color: var(--text3); border-radius: 6px;
+    padding: 5px 10px; font-size: 11px;
+    font-family: 'Heebo', sans-serif;
+    cursor: pointer; width: 100%; margin-top: 6px;
+    transition: all .2s;
+  }
+  .pin-btn.pinned { border-color: var(--accent); color: var(--accent); }
+
   @media (max-width: 900px) {
     .cards-grid { grid-template-columns: 1fr 1fr; }
     .msg-layout { grid-template-columns: 1fr; }
+    .hamburger { display: flex; }
+    .sidebar {
+      transform: translateX(100%);
+      transition: transform .25s ease;
+      z-index: 150;
+    }
+    .sidebar.open { transform: translateX(0); }
+    .sidebar.pinned { transform: translateX(0) !important; }
+    .main { margin-right: 0 !important; padding: 16px; padding-top: 60px; }
   }
 </style>
 </head>
@@ -378,8 +422,12 @@
 
 <!-- ═══════════════ APP ═══════════════ -->
 <div id="app">
+  <!-- Hamburger -->
+  <div class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()">☰</div>
+  <!-- Overlay -->
+  <div class="sidebar-overlay" id="sidebarOverlay" onclick="closeSidebar()"></div>
   <!-- Sidebar -->
-  <div class="sidebar">
+  <div class="sidebar" id="mainSidebar">
     <div class="sidebar-logo">
       <h2>Vaad<span>Pro</span></h2>
       <p>Admin Panel</p>
@@ -398,8 +446,12 @@
         <span class="icon">📨</span> שליחת הודעות
       </div>
     </nav>
+    <div class="sidebar-pin">
+      <button class="pin-btn" id="pinBtn" onclick="togglePin()" title="קבע תפריט">📌</button>
+    </div>
     <div class="sidebar-footer">
       <div id="adminEmailDisplay" style="margin-bottom:4px"></div>
+      <button class="pin-btn" id="pinBtn" onclick="togglePin()">📌 קבע תפריט</button>
       <button class="logout-btn" onclick="logout()">התנתק</button>
     </div>
   </div>
@@ -646,6 +698,43 @@
 
 <script>
 // ════════════════════════════════════════════
+// MOBILE SIDEBAR
+// ════════════════════════════════════════════
+let sidebarPinned = localStorage.getItem('sidebar_pinned') === 'true';
+
+function toggleSidebar() {
+  const s = document.getElementById('mainSidebar');
+  const o = document.getElementById('sidebarOverlay');
+  s.classList.toggle('open');
+  o.classList.toggle('open');
+}
+
+function closeSidebar() {
+  if (sidebarPinned) return;
+  document.getElementById('mainSidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+function togglePin() {
+  sidebarPinned = !sidebarPinned;
+  localStorage.setItem('sidebar_pinned', sidebarPinned);
+  const s = document.getElementById('mainSidebar');
+  const btn = document.getElementById('pinBtn');
+  s.classList.toggle('pinned', sidebarPinned);
+  btn.classList.toggle('pinned', sidebarPinned);
+  btn.textContent = sidebarPinned ? '📌 תפריט קבוע' : '📌 קבע תפריט';
+  if (sidebarPinned) document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+function initSidebar() {
+  if (sidebarPinned) {
+    document.getElementById('mainSidebar').classList.add('pinned');
+    const btn = document.getElementById('pinBtn');
+    if (btn) { btn.classList.add('pinned'); btn.textContent = '📌 תפריט קבוע'; }
+  }
+}
+
+// ════════════════════════════════════════════
 // CONFIG
 // ════════════════════════════════════════════
 const API = ''; // same origin
@@ -699,6 +788,7 @@ function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   document.getElementById('adminEmailDisplay').textContent = adminEmailGlobal || '';
+  initSidebar();
   loadDashboard();
   loadCustomers();
   loadBridges();
@@ -723,6 +813,36 @@ async function loadBridges() {
   }
 }
 
+// ── Mobile menu ─────────────────────────────────────────────────
+let sidebarPinned = localStorage.getItem('sidebarPinned') === 'true';
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('mainSidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  sidebar.classList.toggle('open');
+  overlay.classList.toggle('open');
+}
+
+function closeSidebar() {
+  if (sidebarPinned) return;
+  document.getElementById('mainSidebar').classList.remove('open');
+  document.getElementById('sidebarOverlay').classList.remove('open');
+}
+
+function togglePin() {
+  sidebarPinned = !sidebarPinned;
+  localStorage.setItem('sidebarPinned', sidebarPinned);
+  document.getElementById('pinBtn').classList.toggle('pinned', sidebarPinned);
+  document.getElementById('pinBtn').title = sidebarPinned ? 'בטל קיבוע' : 'קבע תפריט';
+}
+
+// Close sidebar after nav click on mobile
+document.querySelectorAll('.nav-item').forEach(item => {
+  item.addEventListener('click', () => {
+    if (window.innerWidth <= 900 && !sidebarPinned) closeSidebar();
+  });
+});
+
 function logout() {
   localStorage.removeItem('vaadpro_admin_token');
   localStorage.removeItem('vaadpro_admin_email');
@@ -741,6 +861,7 @@ function showPage(name) {
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
   event.currentTarget.classList.add('active');
+  if (window.innerWidth <= 900 && !sidebarPinned) closeSidebar();
 }
 
 // ════════════════════════════════════════════
@@ -1067,20 +1188,24 @@ async function sendMessages() {
     const recipName = el.closest('label').querySelector('div div').textContent;
     const msg = body.replace(/{שם}/g, recipName).replace(/{בניין}/g, recipName);
 
-    if (currentChannel === 'wa' && phone) {
+    if (currentChannel === 'wa') {
       try {
         const bridgeTenantId = document.getElementById('waBridgeSel').value;
         const recipTenantId = el.dataset.tenant;
-        let waPhone = phone;
-        // אם אין טלפון — נסה מספר ידני
-        if (!waPhone) {
-          waPhone = document.getElementById('manualPhone').value.trim();
-        }
+        // קבל טלפון — מהפרופיל או מהשדה הידני
+        let waPhone = phone || document.getElementById('manualPhone').value.trim();
+        // אם אין טלפון בכלל — דלג
         if (!waPhone && !recipTenantId) { failed++; continue; }
-        const waPayload = { phone: waPhone, message: msg, tenantId: bridgeTenantId || undefined };
-        if (recipTenantId && !waPhone) {
+        // בנה payload
+        const waPayload = { message: msg };
+        if (waPhone) {
+          waPayload.phone = waPhone;
+          waPayload.tenantId = bridgeTenantId || undefined;
+        } else {
+          // שלח לבעל ה-tenant
           waPayload.sendToOwner = true;
           waPayload.tenantId = recipTenantId;
+          waPayload.phone = 'owner';
         }
         const r = await fetch('/api/admin/send-wa', {
           method: 'POST',
@@ -1088,8 +1213,8 @@ async function sendMessages() {
           body: JSON.stringify(waPayload)
         });
         const d = await r.json();
-        if (d.ok) sent++; else failed++;
-      } catch { failed++; }
+        if (d.ok) sent++; else { console.error('WA failed:', d.error); failed++; }
+      } catch(e) { console.error('WA error:', e); failed++; }
     } else if (currentChannel === 'email' && emailAddr && emailAddr.includes('@')) {
       const subject = document.getElementById('emailSubject').value || 'הודעה מ-VaadPro';
       try {
