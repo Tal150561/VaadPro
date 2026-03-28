@@ -1350,10 +1350,10 @@ function analyzeBankRows(rows,fileName){
   });
 
   fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})}).catch(function(){});
-  render();showBankResult(matched,unmatched,mr.length,ta,fileName);resetDropZone();
+  render();showBankResult(matched,unmatched,mr.length,ta,fileName,filterByAmount);resetDropZone();
 }
 
-function showBankResult(matched,unmatched,total,ta,fn){
+function showBankResult(matched,unmatched,total,ta,fn,filterByAmount){
   const rd=document.getElementById('bankResult');
   let h='<div class="match-result">';
   const amountDesc = filterByAmount ? ta+'₪ (±'+(parseFloat(document.getElementById('bankTolerance').value)||5)+')' : 'כל הסכומים';
