@@ -698,43 +698,6 @@
 
 <script>
 // ════════════════════════════════════════════
-// MOBILE SIDEBAR
-// ════════════════════════════════════════════
-let sidebarPinned = localStorage.getItem('sidebar_pinned') === 'true';
-
-function toggleSidebar() {
-  const s = document.getElementById('mainSidebar');
-  const o = document.getElementById('sidebarOverlay');
-  s.classList.toggle('open');
-  o.classList.toggle('open');
-}
-
-function closeSidebar() {
-  if (sidebarPinned) return;
-  document.getElementById('mainSidebar').classList.remove('open');
-  document.getElementById('sidebarOverlay').classList.remove('open');
-}
-
-function togglePin() {
-  sidebarPinned = !sidebarPinned;
-  localStorage.setItem('sidebar_pinned', sidebarPinned);
-  const s = document.getElementById('mainSidebar');
-  const btn = document.getElementById('pinBtn');
-  s.classList.toggle('pinned', sidebarPinned);
-  btn.classList.toggle('pinned', sidebarPinned);
-  btn.textContent = sidebarPinned ? '📌 תפריט קבוע' : '📌 קבע תפריט';
-  if (sidebarPinned) document.getElementById('sidebarOverlay').classList.remove('open');
-}
-
-function initSidebar() {
-  if (sidebarPinned) {
-    document.getElementById('mainSidebar').classList.add('pinned');
-    const btn = document.getElementById('pinBtn');
-    if (btn) { btn.classList.add('pinned'); btn.textContent = '📌 תפריט קבוע'; }
-  }
-}
-
-// ════════════════════════════════════════════
 // CONFIG
 // ════════════════════════════════════════════
 const API = ''; // same origin
@@ -788,7 +751,6 @@ function showApp() {
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('app').style.display = 'block';
   document.getElementById('adminEmailDisplay').textContent = adminEmailGlobal || '';
-  initSidebar();
   loadDashboard();
   loadCustomers();
   loadBridges();
