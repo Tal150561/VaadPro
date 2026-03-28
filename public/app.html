@@ -490,47 +490,26 @@ function vpLogout() {
           <div class="wa-setup-step">
             <div class="wa-setup-num">2</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              פתח את הקובץ שהורד ← לחץ <strong>Next</strong> בכל המסכים ← לחץ <strong>Install</strong>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ההתקנה לוקחת כ-2 דקות — אל תסגור את החלון</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">3</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              לחץ <strong>Finish</strong> — Node.js מותקן ✅
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">✔️ צריך לעשות את זה פעם אחת בלבד</div>
+              פתח את הקובץ שהורד ← לחץ <strong>Next</strong> בכל המסכים ← לחץ <strong>Install</strong> ← לחץ <strong>Finish</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ההתקנה לוקחת כ-2 דקות — אל תסגור את החלון ✔️ פעם אחת בלבד</div>
             </div>
           </div>
         </div>
 
         <div class="wa-setup-card">
-          <h3>📥 שלב 2 — הורד את תוכנת ה-Bridge</h3>
+          <h3>📥 שלב 2 — הורד את חבילת ה-Bridge</h3>
+          <div class="wa-setup-step">
+            <div class="wa-setup-num">3</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              <a href="#" onclick="downloadBridgeZip()" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת חבילת VaadPro-Bridge המלאה</a>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Bridge.zip</strong> — כולל הכל: הגדרות אישיות + תוכנת חיבור</div>
+            </div>
+          </div>
           <div class="wa-setup-step">
             <div class="wa-setup-num">4</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <a href="#" onclick="downloadBridge()" style="color:var(--accent);font-weight:600;">לחץ כאן להורדת קובץ ההגדרות האישי שלך (config.json)</a>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📁 הקובץ יורד לתיקיית ה-Downloads שלך</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">5</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              צור תיקייה חדשה בשולחן העבודה בשם <strong>VaadPro-Bridge</strong>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📌 לחץ ימני על שולחן העבודה ← חדש ← תיקייה ← תן שם: VaadPro-Bridge</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">6</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              העתק את קובץ ה-<strong>config.json</strong> שהורדת לתוך תיקיית VaadPro-Bridge
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📌 פתח את Downloads ← גרור את config.json לתוך התיקייה</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">7</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              שלח לנו בווטסאפ שהורדת config.json — נשלח לך את קובץ ה-Bridge
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📦 תקבל קובץ ZIP — חלץ אותו לאותה תיקיית VaadPro-Bridge</div>
+              פתח את תיקיית <strong>Downloads</strong> ← לחץ ימני על <strong>VaadPro-Bridge.zip</strong> ← <strong>חלץ הכל</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📁 תיצור תיקייה בשם VaadPro-Bridge — לא תצטרך להזיז כלום</div>
             </div>
           </div>
         </div>
@@ -538,21 +517,21 @@ function vpLogout() {
         <div class="wa-setup-card">
           <h3>▶️ שלב 3 — הפעלה (פעם אחת)</h3>
           <div class="wa-setup-step">
-            <div class="wa-setup-num">8</div>
+            <div class="wa-setup-num">5</div>
             <div style="font-size:0.84rem;color:var(--text2);">
               פתח את תיקיית VaadPro-Bridge ← לחץ <strong>פעמיים</strong> על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">install.bat</code>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ יפתח חלון שחור ויריץ התקנה — ממתין כ-2 דקות עד שנסגר לבד</div>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ יפתח חלון שחור — ממתין כ-2 דקות עד שנסגר לבד</div>
             </div>
           </div>
           <div class="wa-setup-step">
-            <div class="wa-setup-num">9</div>
+            <div class="wa-setup-num">6</div>
             <div style="font-size:0.84rem;color:var(--text2);">
               לחץ <strong>פעמיים</strong> על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">start.bat</code>
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⚠️ יפתח חלון שחור — <strong>אל תסגור אותו!</strong> הוא צריך להישאר פתוח</div>
             </div>
           </div>
           <div class="wa-setup-step">
-            <div class="wa-setup-num">10</div>
+            <div class="wa-setup-num">7</div>
             <div style="font-size:0.84rem;color:var(--text2);">
               חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק את הברקוד עם הטלפון
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📱 פתח ווטסאפ בטלפון ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</div>
@@ -2822,6 +2801,26 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 // ── הורדת Bridge ─────────────────────────────────────────────────
+async function downloadBridgeZip() {
+  try {
+    const token = localStorage.getItem('vp_token');
+    const res = await fetch('/api/bridge/download', {
+      headers: { 'Authorization': 'Bearer ' + token }
+    });
+    if (!res.ok) throw new Error('שגיאה בהורדה');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'VaadPro-Bridge.zip';
+    a.click();
+    URL.revokeObjectURL(url);
+    toast('✅ חבילת Bridge הורדה בהצלחה!', 'success');
+  } catch(e) {
+    toast('שגיאה: ' + e.message, 'error');
+  }
+}
+
 async function downloadBridge() {
   try {
     // הורד config.json מותאם אישית
