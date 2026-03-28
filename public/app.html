@@ -217,6 +217,7 @@
   .wa-setup-step{display:flex;gap:10px;align-items:flex-start;padding:6px 0;}
   .wa-setup-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#000;font-size:0.72rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
 </style>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzExMTgyNyIvPjxyZWN0IHg9IjQiIHk9IjE2IiB3aWR0aD0iMTgiIGhlaWdodD0iMTQiIHJ4PSIyIiBmaWxsPSIjM2I4MmY2Ii8+PHBvbHlnb24gcG9pbnRzPSIxMyw0IDIyLDE2IDQsMTYiIGZpbGw9IiMyNTYzZWIiLz48cmVjdCB4PSI4IiB5PSIyMiIgd2lkdGg9IjYiIGhlaWdodD0iOCIgcng9IjEiIGZpbGw9IiMxZTNhNWYiLz48cGF0aCBkPSJNMjQgMjIgUTI4IDE4IDMyIDIyIiBmaWxsPSJub25lIiBzdHJva2U9IiMwNmI2ZDQiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTI1IDE4IFEyOCAxNCAzMSAxOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDZiNmQ0IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxjaXJjbGUgY3g9IjI4IiBjeT0iMjQiIHI9IjIiIGZpbGw9IiMwNmI2ZDQiLz48L3N2Zz4=">
 </head>
 <body>
 
@@ -261,8 +262,8 @@ function vpLogout() {
 <header>
   <div class="header-inner">
     <div class="logo-area">
-      <div class="logo">🏢</div>
-      <div><h1>VaadPro</h1><p id="buildingNameHeader">טוען...</p></div>
+      <div class="logo" style="line-height:0"><svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40"><rect x="0" y="20" width="30" height="20" rx="3" fill="#3b82f6"/><polygon points="15,4 30,20 0,20" fill="#2563eb"/><rect x="10" y="28" width="10" height="12" rx="1" fill="#1e3a5f"/><path d="M34 28 Q40 22 46 28" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round"/><path d="M36 23 Q40 17 44 23" fill="none" stroke="#06b6d4" stroke-width="2" stroke-linecap="round"/><circle cx="40" cy="30" r="2.5" fill="#06b6d4"/></svg></div>
+      <div><h1 style="font-size:18px;font-weight:800;">Vaad<span style="color:#3b82f6">Pro</span></h1><p id="buildingNameHeader">טוען...</p></div>
     </div>
     <div id="connBadge" class="conn-badge" onclick="handleConnClick()">
       <div class="conn-dot"></div><span id="connText">מתחבר...</span>
