@@ -1443,26 +1443,31 @@ async function loadCRMCard() {
 
 function renderCRMCalls(calls) {
   document.getElementById('crmCallsList').innerHTML = calls.length ?
-    calls.map(c => '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">' +
-      '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
-      '<span style="font-size:11px;color:var(--text3)">' + formatDateTime(c.ts) + '</span>' +
-      '<button class="btn btn-sm btn-red" onclick="deleteCRMItem('call','' + c.id + '')">🗑</button>' +
-      '</div><div style="font-size:13px;white-space:pre-wrap;direction:rtl">' + c.summary + '</div></div>'
-    ).join('') :
+    calls.map(c => {
+      const id = c.id;
+      return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px;margin-bottom:8px;">' +
+        '<div style="display:flex;justify-content:space-between;margin-bottom:6px">' +
+        '<span style="font-size:11px;color:var(--text3)">' + formatDateTime(c.ts) + '</span>' +
+        '<button class="btn btn-sm btn-red" onclick="deleteCRMItem(&quot;call&quot;,&quot;' + id + '&quot;)">🗑</button>' +
+        '</div><div style="font-size:13px;white-space:pre-wrap;direction:rtl">' + c.summary + '</div></div>';
+    }).join('') :
     '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין סיכומי שיחות עדיין</div>';
 }
 
 function renderCRMTasks(tasks) {
   document.getElementById('crmTasksList').innerHTML = tasks.length ?
-    tasks.map(t => '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
-      '<input type="checkbox" ' + (t.done?'checked':'') + ' onchange="toggleTask('' + t.id + '',this.checked)" style="accent-color:var(--accent);width:16px;height:16px">' +
-      '<div style="flex:1">' +
-      '<div style="font-size:13px;' + (t.done?'text-decoration:line-through;color:var(--text3)':'') + '">' + t.text + '</div>' +
-      (t.dueDate ? '<div style="font-size:11px;color:' + (new Date(t.dueDate) < new Date() && !t.done ? 'var(--red)':'var(--text3)') + '">' + formatDate(t.dueDate) + '</div>' : '') +
-      '</div>' +
-      '<button class="btn btn-sm btn-red" onclick="deleteCRMItem('task','' + t.id + '')">🗑</button>' +
-      '</div>'
-    ).join('') :
+    tasks.map(t => {
+      const id = t.id;
+      const overdue = t.dueDate && new Date(t.dueDate) < new Date() && !t.done;
+      return '<div style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;margin-bottom:6px;">' +
+        '<input type="checkbox" ' + (t.done?'checked':'') + ' onchange="toggleTask(&quot;' + id + '&quot;,this.checked)" style="accent-color:var(--accent);width:16px;height:16px">' +
+        '<div style="flex:1">' +
+        '<div style="font-size:13px;' + (t.done?'text-decoration:line-through;color:var(--text3)':'') + '">' + t.text + '</div>' +
+        (t.dueDate ? '<div style="font-size:11px;color:' + (overdue?'var(--red)':'var(--text3)') + '">' + formatDate(t.dueDate) + '</div>' : '') +
+        '</div>' +
+        '<button class="btn btn-sm btn-red" onclick="deleteCRMItem(&quot;task&quot;,&quot;' + id + '&quot;)">🗑</button>' +
+        '</div>';
+    }).join('') :
     '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין משימות עדיין</div>';
 }
 
