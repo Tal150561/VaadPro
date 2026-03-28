@@ -491,6 +491,25 @@ app.get('/api/bridge/config', authMiddleware, (req, res) => {
 // ADMIN SYSTEM v1.4
 // ════════════════════════════════════════════════════════════════
 const ADMIN_USERS_FILE = path.join(DATA_DIR, '_admins.json');
+const TEMPLATES_FILE = path.join(DATA_DIR, '_templates.json');
+const MSG_LOG_FILE = path.join(DATA_DIR, '_msglog.json');
+
+function loadTemplates() {
+  if (!fs.existsSync(TEMPLATES_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8')); } catch(e) { return []; }
+}
+function saveTemplates(t) { fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(t, null, 2)); }
+
+function loadMsgLog() {
+  if (!fs.existsSync(MSG_LOG_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(MSG_LOG_FILE, 'utf8')); } catch(e) { return []; }
+}
+function addMsgLog(entry) {
+  const log = loadMsgLog();
+  log.unshift({ ...entry, ts: new Date().toISOString() });
+  if (log.length > 500) log.splice(500); // שמור 500 אחרונים
+  fs.writeFileSync(MSG_LOG_FILE, JSON.stringify(log, null, 2));
+}
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + '-admin';
 
 function loadAdmins() {
@@ -581,9 +600,11 @@ app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
     } else {
       return res.json({ ok: false, error: 'לא מוגדר שירות מייל (RESEND_API_KEY או SMTP_USER)' });
     }
+    addMsgLog({ channel: 'email', to, subject, message: body, status: 'sent' });
     res.json({ ok: true });
   } catch(e) {
     console.error('[Admin:send-email]', e.message);
+    addMsgLog({ channel: 'email', to, subject, message: body, status: 'failed', error: e.message });
     res.json({ ok: false, error: e.message });
   }
 });
@@ -614,9 +635,11 @@ app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
 
   try {
     await sendWaMsg(bridgeTenantId, targetPhone, message);
+    addMsgLog({ channel: 'wa', to: targetPhone, message, status: 'sent' });
     res.json({ ok: true });
   } catch(e) {
     console.error('[Admin:send-wa]', e.message);
+    addMsgLog({ channel: 'wa', to: targetPhone, message, status: 'failed', error: e.message });
     res.json({ ok: false, error: e.message });
   }
 });
@@ -641,6 +664,36 @@ app.get('/api/admin/bridges', adminAuthMiddleware, (req, res) => {
     return { tenantId, status: wa.status, phone: wa.phone, email: user ? user.email : tenantId, buildingName: user ? user.buildingName : '' };
   }).filter(b => b.status === 'connected' || b.status === 'ready');
   res.json({ bridges });
+});
+
+// ── Admin: תבניות הודעות ────────────────────────────────────────
+app.get('/api/admin/templates', adminAuthMiddleware, (req, res) => {
+  res.json({ templates: loadTemplates() });
+});
+
+app.post('/api/admin/templates', adminAuthMiddleware, (req, res) => {
+  const { name, channel, subject, body } = req.body;
+  if (!name || !body) return res.json({ ok: false, error: 'חסרים שדות' });
+  const templates = loadTemplates();
+  const existing = templates.findIndex(t => t.id === req.body.id);
+  const template = { id: req.body.id || uuidv4(), name, channel: channel||'wa', subject: subject||'', body, updatedAt: new Date().toISOString() };
+  if (existing >= 0) templates[existing] = template;
+  else templates.unshift(template);
+  saveTemplates(templates);
+  res.json({ ok: true, template });
+});
+
+app.delete('/api/admin/templates/:id', adminAuthMiddleware, (req, res) => {
+  const templates = loadTemplates().filter(t => t.id !== req.params.id);
+  saveTemplates(templates);
+  res.json({ ok: true });
+});
+
+// ── Admin: לוג שליחות ───────────────────────────────────────────
+app.get('/api/admin/msglog', adminAuthMiddleware, (req, res) => {
+  const limit = parseInt(req.query.limit) || 100;
+  const log = loadMsgLog().slice(0, limit);
+  res.json({ log });
 });
 
 // ── Admin: שרת קובץ admin.html ──────────────────────────────────

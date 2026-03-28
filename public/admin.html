@@ -445,6 +445,9 @@
       <div class="nav-item" onclick="showPage('messaging')">
         <span class="icon">📨</span> שליחת הודעות
       </div>
+      <div class="nav-item" onclick="showPage('msglog')">
+        <span class="icon">📋</span> לוג שליחות
+      </div>
     </nav>
     <div class="sidebar-pin">
       <button class="pin-btn" id="pinBtn" onclick="togglePin()" title="קבע תפריט">📌</button>
@@ -600,6 +603,18 @@
           </div>
 
           <div class="field">
+            <label>תבניות שמורות</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <select id="templatesSel" onchange="loadTemplate()" style="flex:1;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
+                <option value="">-- בחר תבנית --</option>
+              </select>
+              <button class="btn btn-green btn-sm" onclick="saveTemplate()">💾 שמור</button>
+              <button class="btn btn-red btn-sm" onclick="deleteTemplate()">🗑</button>
+            </div>
+            <input type="text" id="templateName" placeholder="שם התבנית לשמירה..." style="margin-top:8px;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+
+          <div class="field">
             <label>תוכן ההודעה</label>
             <textarea id="msgBody" placeholder="כתוב את ההודעה כאן...&#10;&#10;ניתן להשתמש ב:&#10;{שם} — שם הנמען&#10;{בניין} — שם הבניין"></textarea>
           </div>
@@ -621,6 +636,32 @@
           </button>
           <div id="sendResult" class="send-result"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- ── MSG LOG ── -->
+    <div class="page" id="page-msglog">
+      <div class="page-header">
+        <h1>לוג שליחות</h1>
+        <p>היסטוריית הודעות WA ומיילים</p>
+      </div>
+      <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+        <select id="logFilter" onchange="filterLog()" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
+          <option value="">הכל</option>
+          <option value="wa">WhatsApp</option>
+          <option value="email">מייל</option>
+          <option value="sent">נשלח</option>
+          <option value="failed">נכשל</option>
+        </select>
+        <button class="btn btn-ghost" onclick="loadMsgLog()">🔄 רענן</button>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>תאריך ושעה</th><th>ערוץ</th><th>נמען</th><th>נושא/תחילת הודעה</th><th>סטטוס</th>
+          </tr></thead>
+          <tbody id="msgLogBody"></tbody>
+        </table>
       </div>
     </div>
 
@@ -754,6 +795,8 @@ function showApp() {
   loadDashboard();
   loadCustomers();
   loadBridges();
+  loadTemplates();
+  loadMsgLog();
   renderLeads();
   renderRecipients();
 }
@@ -1203,6 +1246,107 @@ function msgCustomer(email, building) {
   setTimeout(() => {
     document.getElementById('msgBody').value = `שלום ${building},\n\n`;
   }, 100);
+}
+
+// ════════════════════════════════════════════
+// TEMPLATES
+// ════════════════════════════════════════════
+let allTemplates = [];
+
+async function loadTemplates() {
+  try {
+    const res = await fetch('/api/admin/templates', { headers: adminHeaders() });
+    const data = await res.json();
+    allTemplates = data.templates || [];
+    renderTemplatesSel();
+  } catch(e) {}
+}
+
+function renderTemplatesSel() {
+  const sel = document.getElementById('templatesSel');
+  if (!sel) return;
+  sel.innerHTML = '<option value="">-- בחר תבנית --</option>' +
+    allTemplates.map(t => '<option value="' + t.id + '">' + t.name + ' (' + (t.channel==='wa'?'📱':'📧') + ')</option>').join('');
+}
+
+function loadTemplate() {
+  const id = document.getElementById('templatesSel').value;
+  if (!id) return;
+  const t = allTemplates.find(x => x.id === id);
+  if (!t) return;
+  document.getElementById('msgBody').value = t.body;
+  document.getElementById('templateName').value = t.name;
+  if (t.channel === 'email') {
+    selectChannel('email');
+    if (t.subject) document.getElementById('emailSubject').value = t.subject;
+  } else {
+    selectChannel('wa');
+  }
+  toast('תבנית נטענה', 'ok');
+}
+
+async function saveTemplate() {
+  const name = document.getElementById('templateName').value.trim();
+  const body = document.getElementById('msgBody').value.trim();
+  if (!name) { toast('יש לתת שם לתבנית', 'err'); return; }
+  if (!body) { toast('הודעה ריקה', 'err'); return; }
+  const existing = allTemplates.find(t => t.name === name);
+  const subject = currentChannel === 'email' ? document.getElementById('emailSubject').value : '';
+  const res = await fetch('/api/admin/templates', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ id: existing ? existing.id : undefined, name, channel: currentChannel, subject, body })
+  });
+  const data = await res.json();
+  if (data.ok) { await loadTemplates(); toast('תבנית נשמרה', 'ok'); }
+  else toast(data.error || 'שגיאה', 'err');
+}
+
+async function deleteTemplate() {
+  const id = document.getElementById('templatesSel').value;
+  if (!id) { toast('בחר תבנית למחיקה', 'err'); return; }
+  if (!confirm('למחוק תבנית זו?')) return;
+  await fetch('/api/admin/templates/' + id, { method: 'DELETE', headers: adminHeaders() });
+  await loadTemplates();
+  toast('תבנית נמחקה', 'ok');
+}
+
+// ════════════════════════════════════════════
+// MSG LOG
+// ════════════════════════════════════════════
+let allMsgLog = [];
+
+async function loadMsgLog() {
+  try {
+    const res = await fetch('/api/admin/msglog?limit=200', { headers: adminHeaders() });
+    const data = await res.json();
+    allMsgLog = data.log || [];
+    renderMsgLog(allMsgLog);
+  } catch(e) {}
+}
+
+function renderMsgLog(log) {
+  const tbody = document.getElementById('msgLogBody');
+  if (!tbody) return;
+  tbody.innerHTML = log.length ? log.map(l => '<tr>' +
+    '<td style="font-size:12px;white-space:nowrap">' + formatDateTime(l.ts) + '</td>' +
+    '<td>' + (l.channel === 'wa' ? '📱 WA' : '📧 מייל') + '</td>' +
+    '<td style="font-size:12px">' + (l.to||'—') + '</td>' +
+    '<td style="font-size:12px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">' + (l.subject || (l.message||'').slice(0,60)) + '</td>' +
+    '<td><span class="badge ' + (l.status==='sent'?'badge-basic':'badge-expired') + '">' + (l.status==='sent'?'נשלח ✓':'נכשל ✗') + '</span></td>' +
+    '</tr>').join('') :
+    '<tr><td colspan="5"><div class="empty-state"><div class="icon">📋</div>אין שליחות עדיין</div></td></tr>';
+}
+
+function filterLog() {
+  const f = document.getElementById('logFilter').value;
+  renderMsgLog(f ? allMsgLog.filter(l => l.channel === f || l.status === f) : allMsgLog);
+}
+
+function formatDateTime(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  return d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL', {hour:'2-digit',minute:'2-digit'});
 }
 
 // ════════════════════════════════════════════
