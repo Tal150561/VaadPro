@@ -552,7 +552,7 @@
             <textarea id="msgBody" placeholder="כתוב את ההודעה כאן...&#10;&#10;ניתן להשתמש ב:&#10;{שם} — שם הנמען&#10;{בניין} — שם הבניין"></textarea>
           </div>
 
-          <div id="manualPhoneRow" class="field" style="display:none">
+          <div id="manualPhoneRow" class="field">
             <label>📱 מספר טלפון ידני (לנמענים בלי טלפון)</label>
             <input type="text" id="manualPhone" placeholder="0501234567 / 972501234567" />
           </div>
@@ -1045,7 +1045,8 @@ function selectChannel(ch) {
   document.getElementById('chanEmail').classList.toggle('active', ch==='email');
   document.getElementById('emailSubjectRow').style.display = ch==='email' ? 'block' : 'none';
   document.getElementById('waBridgeRow').style.display = ch==='wa' ? 'block' : 'none';
-  document.getElementById('manualPhoneRow').style.display = 'block';
+  document.getElementById('manualPhoneRow').style.display = ch==='wa' ? 'block' : 'none';
+  // always visible on WA
 }
 
 async function sendMessages() {
