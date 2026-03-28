@@ -353,16 +353,45 @@ function vpLogout() {
     <div class="card">
       <div class="card-header">🏦 ייבוא קובץ בנק – זיהוי מי שילם <button class="help-btn" onclick="showHelp('payments')">?</button></div>
       <div class="card-body">
-        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הורד קובץ Excel/CSV של תנועות מהבנק וגרור לכאן. האפליקציה תזהה מי שילם לפי הסכום ומילות החיפוש.</p>
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הורד קובץ Excel/CSV של תנועות מהבנק וגרור לכאן. האפליקציה תזהה מי שילם לפי עמודות שתבחר.</p>
+
+        <!-- Drop Zone -->
         <div class="drop-zone" id="dropZone" onclick="document.getElementById('bankFile').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
           <div class="dz-icon">📂</div><p>לחץ לבחירת קובץ בנק או גרור לכאן</p><small>Excel (.xlsx, .xls) או CSV</small>
         </div>
         <input type="file" id="bankFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleBankFile(event)">
-        <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;">
-          <div style="flex:1;min-width:140px;"><label>סכום לחיפוש (₪)</label><input type="number" id="bankAmount" placeholder="ריק = כל הסכומים" style="margin-top:4px;"><div class="hint">השאר ריק לזיהוי לפי שם בלבד</div></div>
-          <div style="flex:1;min-width:140px;"><label>סבילות (±₪)</label><input type="number" id="bankTolerance" value="5" min="0" style="margin-top:4px;"><div class="hint">לגמישות בסכומים</div></div>
+
+        <!-- Column Mapping (shown after file load) -->
+        <div id="bankMappingPanel" style="display:none;margin-top:14px;background:var(--surface2);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+            <strong style="font-size:0.9rem;">🗂️ מיפוי עמודות</strong>
+            <button class="btn btn-secondary btn-sm" onclick="saveBankMapping()" style="font-size:0.75rem;">💾 שמור מבנה לעתיד</button>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+            <div><label style="font-size:0.8rem;">עמודת שם / תיאור</label>
+              <select id="colName" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
+            <div><label style="font-size:0.8rem;">עמודת סכום</label>
+              <select id="colAmount" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
+            <div><label style="font-size:0.8rem;">עמודת תאריך</label>
+              <select id="colDate" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
+            <div><label style="font-size:0.8rem;">עמודת הערות (אופציונלי)</label>
+              <select id="colNote" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
+          </div>
+          <!-- Preview rows -->
+          <div style="font-size:0.75rem;color:var(--text2);margin-bottom:8px;">תצוגה מקדימה (3 שורות ראשונות):</div>
+          <div id="bankPreview" style="overflow-x:auto;font-size:0.75rem;"></div>
+          <!-- Amount filter -->
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap;">
+            <div style="flex:1;min-width:120px;"><label style="font-size:0.8rem;">סכום לחיפוש (₪)</label>
+              <input type="number" id="bankAmount" placeholder="ריק = כל הסכומים" style="margin-top:3px;font-size:0.82rem;">
+              <div class="hint">ריק = כל הסכומים</div></div>
+            <div style="flex:1;min-width:120px;"><label style="font-size:0.8rem;">סבילות (±₪)</label>
+              <input type="number" id="bankTolerance" value="5" min="0" style="margin-top:3px;font-size:0.82rem;"></div>
+          </div>
+          <button class="btn btn-accent" onclick="runBankAnalysis()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
         </div>
-        <div id="bankResult" style="display:none;"></div>
+
+        <div id="bankResult" style="display:none;margin-top:12px;"></div>
       </div>
     </div>
 
@@ -1247,41 +1276,164 @@ function handleDragLeave(){document.getElementById('dropZone').classList.remove(
 function handleDrop(e){e.preventDefault();document.getElementById('dropZone').classList.remove('drag-over');const f=e.dataTransfer.files[0];if(f)processBankFile(f);}
 function handleBankFile(e){const f=e.target.files[0];if(f)processBankFile(f);e.target.value='';}
 
+// ── Bank mapping state ───────────────────────────────────────────
+let bankRows = [], bankFileName = '';
+
 function processBankFile(file){
   document.getElementById('bankResult').style.display='none';
-  document.getElementById('dropZone').innerHTML='<div class="dz-icon"><span class="spin">⏳</span></div><p>מנתח...</p>';
+  document.getElementById('bankMappingPanel').style.display='none';
+  document.getElementById('dropZone').innerHTML='<div class="dz-icon"><span class="spin">⏳</span></div><p>טוען...</p>';
   const reader=new FileReader();
   reader.onload=function(e){
     try{
       let rows=[];
       if(file.name.toLowerCase().endsWith('.csv')){ rows=e.target.result.split('\n').map(function(l){return l.split(',').map(function(c){return c.replace(/"/g,'').trim();}); }); }
       else{ const wb=XLSX.read(new Uint8Array(e.target.result),{type:'array'}); rows=XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]],{header:1,defval:''}); }
-      analyzeBankRows(rows,file.name);
+      // סנן שורות ריקות
+      rows = rows.filter(function(r){ return r.some(function(c){ return c!==null&&c!==''&&c!==undefined; }); });
+      bankRows = rows;
+      bankFileName = file.name;
+      resetDropZone();
+      showMappingPanel(rows, file.name);
     }catch(err){resetDropZone();toast('❌ שגיאה: '+err.message,'error');}
   };
   if(file.name.toLowerCase().endsWith('.csv')) reader.readAsText(file,'windows-1255');
   else reader.readAsArrayBuffer(file);
 }
 
+function showMappingPanel(rows, fileName){
+  if(!rows||rows.length<2){ toast('הקובץ ריק','error'); return; }
+  const headers = rows[0].map(function(h,i){ return h||('עמודה '+(i+1)); });
+
+  // בנה options לכל select
+  const noneOpt = '<option value="-1">-- לא רלוונטי --</option>';
+  const opts = headers.map(function(h,i){ return '<option value="'+i+'">'+h+'</option>'; }).join('');
+
+  ['colName','colAmount','colDate','colNote'].forEach(function(id){
+    document.getElementById(id).innerHTML = noneOpt + opts;
+  });
+
+  // טען מיפוי שמור אם קיים
+  const saved = loadBankMapping();
+  if(saved){
+    ['colName','colAmount','colDate','colNote'].forEach(function(id){
+      if(saved[id]!==undefined) document.getElementById(id).value=saved[id];
+    });
+    if(saved.bankAmount) document.getElementById('bankAmount').value=saved.bankAmount;
+    if(saved.bankTolerance) document.getElementById('bankTolerance').value=saved.bankTolerance;
+  } else {
+    // ניחוש אוטומטי לפי שם עמודה
+    headers.forEach(function(h,i){
+      const hl=h.toString().toLowerCase();
+      if(/(תיאור|שם|מוטב|זיכוי|חיוב.*שם|פרטים|beneficiary|description|name)/i.test(hl)) document.getElementById('colName').value=i;
+      else if(/(סכום|amount|credit|debit|זיכוי|חיוב)/i.test(hl) && /(sum|סכום|amount)/i.test(hl)) document.getElementById('colAmount').value=i;
+      else if(/(תאריך|date|value)/i.test(hl)) document.getElementById('colDate').value=i;
+      else if(/(הערה|note|ref|אסמכתא)/i.test(hl)) document.getElementById('colNote').value=i;
+    });
+    // fallback — try to detect by content
+    if(document.getElementById('colAmount').value==='-1'){
+      headers.forEach(function(h,i){
+        const vals=rows.slice(1,6).map(function(r){ return parseFloat(String(r[i]||'').replace(/[,\s₪]/g,'')); }).filter(function(n){ return !isNaN(n)&&n>50&&n<100000; });
+        if(vals.length>=2) { document.getElementById('colAmount').value=i; }
+      });
+    }
+    if(document.getElementById('colName').value==='-1'){
+      headers.forEach(function(h,i){
+        if(document.getElementById('colName').value!=='-1') return;
+        const vals=rows.slice(1,6).map(function(r){ return String(r[i]||''); }).filter(function(s){ return s.length>2&&isNaN(parseFloat(s)); });
+        if(vals.length>=2) document.getElementById('colName').value=i;
+      });
+    }
+  }
+
+  // תצוגה מקדימה
+  renderBankPreview(rows, headers);
+  document.getElementById('bankMappingPanel').style.display='block';
+}
+
+function renderBankPreview(rows, headers){
+  const preview = rows.slice(1,4);
+  let t='<table style="border-collapse:collapse;width:100%">';
+  t+='<tr>'+headers.map(function(h){ return '<th style="border:1px solid var(--border);padding:3px 6px;background:var(--surface);font-size:0.72rem;white-space:nowrap">'+h+'</th>'; }).join('')+'</tr>';
+  preview.forEach(function(row){
+    t+='<tr>'+row.map(function(c){ return '<td style="border:1px solid var(--border);padding:3px 6px;font-size:0.72rem;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis">'+c+'</td>'; }).join('')+'</tr>';
+  });
+  t+='</table>';
+  document.getElementById('bankPreview').innerHTML=t;
+}
+
+function saveBankMapping(){
+  const mapping={
+    colName: document.getElementById('colName').value,
+    colAmount: document.getElementById('colAmount').value,
+    colDate: document.getElementById('colDate').value,
+    colNote: document.getElementById('colNote').value,
+    bankAmount: document.getElementById('bankAmount').value,
+    bankTolerance: document.getElementById('bankTolerance').value
+  };
+  try{ localStorage.setItem('vp_bank_mapping', JSON.stringify(mapping)); toast('✅ מבנה נשמר','success'); }
+  catch(e){ toast('שגיאה בשמירה','error'); }
+}
+
+function loadBankMapping(){
+  try{ const s=localStorage.getItem('vp_bank_mapping'); return s?JSON.parse(s):null; }
+  catch(e){ return null; }
+}
+
+function runBankAnalysis(){
+  if(!bankRows||bankRows.length<2){ toast('טען קובץ בנק תחילה','error'); return; }
+  analyzeBankRows(bankRows, bankFileName);
+}
+
 function analyzeBankRows(rows,fileName){
   const taRaw = document.getElementById('bankAmount').value.trim();
-  const ta = taRaw !== '' ? parseFloat(taRaw) : null; // null = כל הסכומים
+  const ta = taRaw !== '' ? parseFloat(taRaw) : null;
   const tol = parseFloat(document.getElementById('bankTolerance').value)||5;
   const filterByAmount = ta !== null && !isNaN(ta) && ta > 0;
   const min = filterByAmount ? ta-tol : -Infinity;
   const max = filterByAmount ? ta+tol :  Infinity;
 
-  // כל שורת בנק שיש בה לפחות תא אחד עם מספר (ולפי סכום אם הוגדר)
+  // קבל אינדקסי עמודות ממיפוי
+  const iName   = parseInt(document.getElementById('colName').value);
+  const iAmount = parseInt(document.getElementById('colAmount').value);
+  const iDate   = parseInt(document.getElementById('colDate').value);
+  const iNote   = parseInt(document.getElementById('colNote').value);
+
+  const dataRows = rows.slice(1); // דלג על כותרות
+
   const mr=[];
-  rows.forEach(function(row,rowIdx){
+  dataRows.forEach(function(row,rowIdx){
+    // קבל סכום מעמודה ספציפית אם מוגדרת
     let matchAmount=null;
-    row.forEach(function(cell){
-      if(matchAmount!==null)return;
-      if(!cell&&cell!==0)return;
-      const n=parseFloat(String(cell).replace(/[,\s₪]/g,''));
-      if(!isNaN(n)&&n>0&&n>=min&&n<=max) matchAmount=n;
-    });
-    if(matchAmount!==null) mr.push({row:row,amount:matchAmount,rowIdx:rowIdx});
+    if(iAmount>=0){
+      const cell = row[iAmount];
+      if(cell!==null&&cell!==''&&cell!==undefined){
+        const n=parseFloat(String(cell).replace(/[,\s₪]/g,''));
+        if(!isNaN(n)&&n>0){
+          if(filterByAmount){ if(n>=min&&n<=max) matchAmount=n; }
+          else matchAmount=n;
+        }
+      }
+    } else {
+      // ללא עמודת סכום — חפש בכל העמודות (עם סינון)
+      row.forEach(function(cell){
+        if(matchAmount!==null)return;
+        if(!cell&&cell!==0)return;
+        const n=parseFloat(String(cell).replace(/[,\s₪]/g,''));
+        if(isNaN(n)||n<=0)return;
+        if(n<10||n>500000)return;
+        if(n>=1900&&n<=2100)return;
+        if(Number.isInteger(n)&&n<=31)return;
+        if(filterByAmount){ if(n>=min&&n<=max) matchAmount=n; }
+        else matchAmount=n;
+      });
+    }
+    if(matchAmount!==null){
+      const nameVal = iName>=0 ? String(row[iName]||'') : row.join(' ');
+      const dateVal = iDate>=0 ? String(row[iDate]||'') : '';
+      const noteVal = iNote>=0 ? String(row[iNote]||'') : '';
+      mr.push({row:row,amount:matchAmount,rowIdx:rowIdx,nameVal:nameVal,dateVal:dateVal,noteVal:noteVal});
+    }
   });
 
   const em=getEffectiveMonth();
@@ -1314,13 +1466,16 @@ function analyzeBankRows(rows,fileName){
 
     mr.forEach(function(m){
       if(seenRowIdx.has(m.rowIdx)) return;
-      const rt=m.row.join(' ').toLowerCase();
+      // אם יש עמודת שם ממופה — חפש רק בה. אחרת חפש בכל השורה
+      const searchText = m.nameVal ? m.nameVal.toLowerCase() : m.row.join(' ').toLowerCase();
+      const rt = searchText;
+      const rtFull = m.row.join(' ').toLowerCase();
       let type=null;
 
       if(kw.length && kwMatches(kw, rt)) type='keyword';
 
       // עדיפות 2: טלפון
-      if(!type && ps && m.row.join(' ').replace(/\D/g,'').includes(ps)){
+      if(!type && ps && rtFull.replace(/\D/g,'').includes(ps)){
         type='phone';
       }
       // עדיפות 3: שם מלא (שם + שם משפחה יחד)
@@ -1330,7 +1485,12 @@ function analyzeBankRows(rows,fileName){
 
       if(type){
         seenRowIdx.add(m.rowIdx);
-        tenantMatches.push({amount:m.amount,matchType:type});
+        tenantMatches.push({
+          amount:m.amount,
+          matchType:type,
+          date:m.dateVal||'',
+          note:m.noteVal||''
+        });
       }
     });
 
