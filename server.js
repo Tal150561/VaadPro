@@ -71,7 +71,16 @@ function authMiddleware(req, res, next) {
   if (!token) return res.status(401).json({ error: 'לא מחובר' });
   try {
     const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = decoded; // { userId, tenantId, email, buildingName }
+    // בדיקת trial בכל request — חוסם גם token קיים
+    const users = loadUsers();
+    const user  = users.find(u => u.id === decoded.userId);
+    if (user && user.plan === 'trial' && user.plan !== 'unlimited' && new Date(user.trialEnd) < new Date()) {
+      return res.status(402).json({ error: 'תקופת הניסיון הסתיימה – צור קשר לחידוש המנוי', expired: true });
+    }
+    if (user && user.suspended) {
+      return res.status(403).json({ error: 'החשבון מושהה – צור קשר עם התמיכה', suspended: true });
+    }
+    req.user = decoded;
     next();
   } catch(e) {
     res.status(401).json({ error: 'פג תוקף החיבור – התחבר מחדש' });
@@ -702,13 +711,40 @@ app.post('/api/admin/set-plan', adminAuthMiddleware, (req, res) => {
   user.plan = plan;
   if (plan === 'trial') {
     user.trialEnd = new Date(Date.now() + 30*24*60*60*1000).toISOString();
+    delete user.suspended;
+  } else if (plan === 'unlimited') {
+    delete user.trialEnd;
+    delete user.suspended;
+  } else if (plan === 'suspended') {
+    user.suspended = true;
+    delete user.trialEnd;
   } else {
     delete user.trialEnd;
+    delete user.suspended;
   }
-  if (plan === 'suspended') user.suspended = true;
-  else delete user.suspended;
+  // Reset trial email flags when plan changes
+  delete user._trialEmailSent;
   saveUsers(users);
   res.json({ ok: true, email, plan });
+});
+
+// ── Admin: הארכת מנוי ───────────────────────────────────────────
+app.post('/api/admin/extend-trial', adminAuthMiddleware, (req, res) => {
+  const { email, days } = req.body;
+  if (!email || !days || days < 1) return res.json({ ok: false, error: 'פרמטרים חסרים' });
+  const users = loadUsers();
+  const user = users.find(u => u.email === email.toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
+  // אם אין trialEnd — קבע מהיום
+  const base = user.trialEnd && new Date(user.trialEnd) > new Date()
+    ? new Date(user.trialEnd)
+    : new Date();
+  user.trialEnd = new Date(base.getTime() + days * 24 * 60 * 60 * 1000).toISOString();
+  if (user.plan !== 'trial') user.plan = 'trial';
+  delete user.suspended;
+  delete user._trialEmailSent;
+  saveUsers(users);
+  res.json({ ok: true, email, trialEnd: user.trialEnd, days });
 });
 
 // ── Admin: שליחת מייל (Resend / SMTP fallback) ─────────────────
@@ -889,6 +925,108 @@ app.get('/api/admin/msglog', adminAuthMiddleware, (req, res) => {
 // ── Admin: שרת קובץ admin.html ──────────────────────────────────
 app.get('/admin', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'admin.html'));
+});
+
+// ════════════════════════════════════════════════════════════════
+// TRIAL MANAGEMENT
+// ════════════════════════════════════════════════════════════════
+
+async function sendTrialEmail(user, type) {
+  if (!RESEND_API_KEY && !SMTP_USER) return;
+  const daysLeft = type === 'warning' ? 3 : 0;
+  const subject = type === 'warning'
+    ? 'VaadPro — נותרו 3 ימים לתקופת הניסיון שלך ⏰'
+    : 'VaadPro — תקופת הניסיון שלך הסתיימה 🔔';
+  const body = type === 'warning'
+    ? `שלום ${user.fullName||user.buildingName||''},
+
+תקופת הניסיון שלך ב-VaadPro תסתיים בעוד 3 ימים.
+
+כדי להמשיך ליהנות מהשירות ולא לאבד גישה — צור איתנו קשר לחידוש המנוי.
+
+אימייל: support@vaadpro.co.il
+
+תודה שאתה משתמש ב-VaadPro!
+צוות VaadPro`
+    : `שלום ${user.fullName||user.buildingName||''},
+
+תקופת הניסיון החינמית שלך ב-VaadPro הסתיימה היום.
+
+כדי להמשיך לשלוח תזכורות תשלום לדיירים — צור איתנו קשר לחידוש המנוי.
+
+אימייל: support@vaadpro.co.il
+טלפון: צור קשר דרך הווטסאפ
+
+צוות VaadPro`;
+  try {
+    if (RESEND_API_KEY) {
+      await sendEmailResend(user.email, subject, body);
+    } else {
+      const nodemailer = require('nodemailer');
+      const t = nodemailer.createTransport({ service:'gmail', auth:{ user:SMTP_USER, pass:SMTP_PASS } });
+      await t.sendMail({ from: SMTP_FROM||SMTP_USER, to: user.email, subject, text: body });
+    }
+    console.log(`[Trial] ${type} email sent to ${user.email}`);
+    return true;
+  } catch(e) {
+    console.error(`[Trial] email failed for ${user.email}:`, e.message);
+    return false;
+  }
+}
+
+async function runTrialCheck() {
+  const users = loadUsers();
+  const now   = new Date();
+  let warned = 0, expired = 0;
+
+  for (const user of users) {
+    if (user.plan !== 'trial' || !user.trialEnd || user.plan === 'unlimited') continue;
+    const end      = new Date(user.trialEnd);
+    const daysLeft = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+    const lastSent = user._trialEmailSent || {};
+
+    if (daysLeft <= 0 && !lastSent.expired) {
+      await sendTrialEmail(user, 'expired');
+      user._trialEmailSent = { ...lastSent, expired: now.toISOString() };
+      expired++;
+    } else if (daysLeft <= 3 && daysLeft > 0 && !lastSent.warning) {
+      await sendTrialEmail(user, 'warning');
+      user._trialEmailSent = { ...lastSent, warning: now.toISOString() };
+      warned++;
+    }
+  }
+
+  if (warned > 0 || expired > 0) {
+    saveUsers(users);
+    console.log(`[Trial] check done: ${warned} warnings, ${expired} expired emails sent`);
+  }
+  return { warned, expired };
+}
+
+// הרץ בדיקה כל 24 שעות
+setInterval(runTrialCheck, 24 * 60 * 60 * 1000);
+// הרץ גם בהפעלה (אחרי 30 שניות)
+setTimeout(runTrialCheck, 30 * 1000);
+
+// ── Admin: הרצת בדיקת Trial ידנית ──────────────────────────────
+app.post('/api/admin/trial-check', adminAuthMiddleware, async (req, res) => {
+  const result = await runTrialCheck();
+  res.json({ ok: true, ...result });
+});
+
+// ── Admin: לקוחות שפג/עומד לפוג ─────────────────────────────────
+app.get('/api/admin/trials', adminAuthMiddleware, (req, res) => {
+  const now   = new Date();
+  const users = loadUsers();
+  const trials = users
+    .filter(u => u.plan === 'trial' && u.trialEnd)
+    .map(u => {
+      const end      = new Date(u.trialEnd);
+      const daysLeft = Math.ceil((end - now) / (1000 * 60 * 60 * 24));
+      return { email: u.email, fullName: u.fullName||'', buildingName: u.buildingName, phone: u.phone||'', trialEnd: u.trialEnd, daysLeft, expired: daysLeft <= 0 };
+    })
+    .sort((a, b) => a.daysLeft - b.daysLeft);
+  res.json({ trials });
 });
 
 // ── Start ────────────────────────────────────────────────────────

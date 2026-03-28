@@ -216,6 +216,7 @@
   .badge-advanced { background: rgba(6,182,212,.15); color: var(--accent2); }
   .badge-premium { background: rgba(16,185,129,.15); color: var(--green); }
   .badge-expired { background: rgba(239,68,68,.15); color: var(--red); }
+  .badge-expiring { background: rgba(245,158,11,.15); color: var(--yellow); }
   .badge-lead { background: rgba(148,163,184,.1); color: var(--text2); }
 
   /* ── BUTTONS ── */
@@ -492,6 +493,17 @@
         </div>
       </div>
 
+      <!-- Trial alerts -->
+      <div id="trialAlerts" style="display:none;margin-bottom:20px">
+        <div style="background:rgba(245,158,11,.08);border:1px solid rgba(245,158,11,.3);border-radius:12px;padding:16px 20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <h3 style="font-size:14px;font-weight:700;color:var(--yellow)">⏰ התראות Trial</h3>
+            <button class="btn btn-sm btn-yellow" onclick="runTrialCheck()">🔄 בדוק עכשיו</button>
+          </div>
+          <div id="trialAlertsList"></div>
+        </div>
+      </div>
+
       <!-- Plans breakdown -->
       <div class="table-wrap" style="margin-bottom:20px">
         <div class="table-header"><h3>פילוח מנויים</h3></div>
@@ -673,25 +685,63 @@
 
 <!-- Plan Modal -->
 <div class="modal-bg" id="planModal">
-  <div class="modal">
-    <h2>✏️ שינוי Plan</h2>
+  <div class="modal" style="width:480px">
+    <h2>✏️ ניהול מנוי</h2>
     <div class="field">
       <label>לקוח</label>
       <input type="text" id="planEmail" readonly style="opacity:.6" />
     </div>
-    <div class="field">
-      <label>Plan חדש</label>
-      <select id="planSelect">
-        <option value="trial">Trial (30 יום)</option>
-        <option value="basic">Basic</option>
-        <option value="advanced">Advanced</option>
-        <option value="premium">Premium</option>
-        <option value="suspended">מושהה</option>
-      </select>
+
+    <div class="tabs" style="margin-bottom:16px">
+      <div class="tab active" id="planTab1" onclick="switchPlanTab('plan',this)">שינוי Plan</div>
+      <div class="tab" id="planTab2" onclick="switchPlanTab('extend',this)">הארכת מנוי</div>
     </div>
+
+    <!-- Plan Tab -->
+    <div id="planTabPlan">
+      <div class="field">
+        <label>Plan חדש</label>
+        <select id="planSelect" onchange="updatePlanNote()">
+          <option value="trial">Trial (30 יום מהיום)</option>
+          <option value="basic">Basic</option>
+          <option value="advanced">Advanced</option>
+          <option value="premium">Premium</option>
+          <option value="unlimited">ללא הגבלה ♾️</option>
+          <option value="suspended">מושהה 🔴</option>
+        </select>
+      </div>
+      <div id="planNoteUnlimited" style="display:none;font-size:12px;color:var(--accent);padding:8px;background:rgba(59,130,246,.08);border-radius:6px;">
+        ♾️ ללא הגבלה — ללא תאריך תפוגה (מתאים לבניין שלך או לקוחות VIP)
+      </div>
+      <div id="planNoteSuspended" style="display:none;font-size:12px;color:var(--red);padding:8px;background:rgba(239,68,68,.08);border-radius:6px;">
+        🔴 מושהה — הלקוח לא יוכל להתחבר מיד
+      </div>
+    </div>
+
+    <!-- Extend Tab -->
+    <div id="planTabExtend" style="display:none">
+      <div class="field">
+        <label>הארך ב:</label>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-ghost" onclick="extendDays(7)">+7 ימים</button>
+          <button class="btn btn-ghost" onclick="extendDays(14)">+14 ימים</button>
+          <button class="btn btn-ghost" onclick="extendDays(30)">+30 ימים</button>
+          <button class="btn btn-ghost" onclick="extendDays(90)">+90 ימים</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>או הזן מספר ימים:</label>
+        <div style="display:flex;gap:8px">
+          <input type="number" id="extendDaysInput" min="1" max="365" placeholder="ימים..." />
+          <button class="btn btn-blue" onclick="extendDays()">הארך</button>
+        </div>
+      </div>
+      <div id="extendCurrentEnd" style="font-size:12px;color:var(--text2);margin-top:4px"></div>
+    </div>
+
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('planModal')">ביטול</button>
-      <button class="btn btn-blue" onclick="savePlan()">שמור</button>
+      <button class="btn btn-blue" id="planSaveBtn" onclick="savePlan()">שמור</button>
     </div>
   </div>
 </div>
@@ -853,6 +903,7 @@ function showApp() {
   loadBridges();
   loadTemplates();
   loadMsgLog();
+  loadTrialAlerts();
   renderLeads();
   renderRecipients();
 }
@@ -980,14 +1031,16 @@ function renderCustomers(users) {
   const now = new Date();
   document.getElementById('customersBody').innerHTML = users.map(u => {
     const isExpired = u.plan === 'trial' && new Date(u.trialEnd) < now;
-    const planBadge = isExpired ? 'expired' : u.plan;
+    const daysLeft = u.plan === 'trial' && u.trialEnd ? Math.ceil((new Date(u.trialEnd) - now) / (1000*60*60*24)) : null;
+    const planBadge = isExpired ? 'expired' : (daysLeft !== null && daysLeft <= 3 ? 'expiring' : u.plan);
+    const planExtra = daysLeft !== null && !isExpired ? ' (' + daysLeft + 'd)' : '';
     return `
     <tr>
       <td><b>${u.fullName||'—'}</b></td>
       <td style="font-size:12px">${u.email}</td>
       <td>${u.buildingName||'—'}</td>
       <td style="color:var(--text2);font-size:12px">${u.phone||'—'}</td>
-      <td><span class="badge badge-${planBadge}">${planLabel(planBadge)}</span></td>
+      <td><span class="badge badge-${planBadge}">${planLabel(planBadge)}${planExtra}</span></td>
       <td style="font-size:12px">${formatDate(u.createdAt)}</td>
       <td style="font-size:12px">${u.plan==='trial' ? formatDate(u.trialEnd) : '∞'}</td>
       <td>
@@ -1014,7 +1067,51 @@ function filterCustomers() {
 function openPlanModal(email, plan) {
   document.getElementById('planEmail').value = email;
   document.getElementById('planSelect').value = plan;
+  switchPlanTab('plan', document.getElementById('planTab1'));
+  updatePlanNote();
+  // Show current expiry
+  const user = allCustomers.find(u => u.email === email);
+  if (user && user.trialEnd) {
+    document.getElementById('extendCurrentEnd').textContent = 'תוקף נוכחי: ' + formatDate(user.trialEnd);
+  } else {
+    document.getElementById('extendCurrentEnd').textContent = '';
+  }
   openModal('planModal');
+}
+
+function switchPlanTab(tab, el) {
+  document.querySelectorAll('#planModal .tab').forEach(t => t.classList.remove('active'));
+  el.classList.add('active');
+  document.getElementById('planTabPlan').style.display = tab === 'plan' ? 'block' : 'none';
+  document.getElementById('planTabExtend').style.display = tab === 'extend' ? 'block' : 'none';
+  document.getElementById('planSaveBtn').style.display = tab === 'plan' ? 'block' : 'none';
+}
+
+function updatePlanNote() {
+  const plan = document.getElementById('planSelect').value;
+  document.getElementById('planNoteUnlimited').style.display = plan === 'unlimited' ? 'block' : 'none';
+  document.getElementById('planNoteSuspended').style.display = plan === 'suspended' ? 'block' : 'none';
+}
+
+async function extendDays(days) {
+  const d = days || parseInt(document.getElementById('extendDaysInput').value);
+  if (!d || d < 1) { toast('יש להזין מספר ימים', 'err'); return; }
+  const email = document.getElementById('planEmail').value;
+  const res = await fetch('/api/admin/extend-trial', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ email, days: d })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('מנוי הוארך ב-' + d + ' ימים ✓', 'ok');
+    closeModal('planModal');
+    loadCustomers();
+    loadDashboard();
+    loadTrialAlerts();
+  } else {
+    toast(data.error || 'שגיאה', 'err');
+  }
 }
 
 async function savePlan() {
@@ -1307,6 +1404,50 @@ function msgCustomer(email, building) {
 }
 
 // ════════════════════════════════════════════
+// TRIAL MANAGEMENT
+// ════════════════════════════════════════════
+async function loadTrialAlerts() {
+  try {
+    const res = await fetch('/api/admin/trials', { headers: adminHeaders() });
+    const data = await res.json();
+    const trials = data.trials || [];
+    const expiring = trials.filter(t => t.daysLeft <= 3);
+    if (!expiring.length) {
+      document.getElementById('trialAlerts').style.display = 'none';
+      return;
+    }
+    document.getElementById('trialAlerts').style.display = 'block';
+    document.getElementById('trialAlertsList').innerHTML = expiring.map(t => {
+      const color = t.expired ? 'var(--red)' : t.daysLeft <= 1 ? 'var(--red)' : 'var(--yellow)';
+      const label = t.expired ? 'פג תוקף!' : `נותרו ${t.daysLeft} ימים`;
+      return '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+        '<span style="font-size:12px;color:' + color + ';font-weight:700;min-width:90px">' + label + '</span>' +
+        '<span style="font-size:13px;flex:1">' + (t.fullName||t.buildingName||t.email) + '</span>' +
+        '<span style="font-size:11px;color:var(--text3)">' + t.email + '</span>' +
+        '<button class="btn btn-sm btn-yellow" onclick="openPlanModal(&quot;' + t.email + '&quot;,&quot;trial&quot;)">חדש</button>' +
+        '</div>';
+    }).join('');
+  } catch(e) {}
+}
+
+async function runTrialCheck() {
+  const btn = event.currentTarget;
+  btn.textContent = '⏳ בודק...';
+  btn.disabled = true;
+  try {
+    const res = await fetch('/api/admin/trial-check', { method:'POST', headers: adminHeaders() });
+    const data = await res.json();
+    toast(`נשלחו: ${data.warned} אזהרות, ${data.expired} הודעות סיום`, 'ok');
+    await loadTrialAlerts();
+    await loadDashboard();
+  } catch(e) {
+    toast('שגיאה', 'err');
+  }
+  btn.textContent = '🔄 בדוק עכשיו';
+  btn.disabled = false;
+}
+
+// ════════════════════════════════════════════
 // TEMPLATES
 // ════════════════════════════════════════════
 let allTemplates = [];
@@ -1554,7 +1695,7 @@ function toast(msg, type='ok') {
 }
 
 function planLabel(plan) {
-  const map = { trial:'Trial', basic:'Basic', advanced:'Advanced', premium:'Premium', suspended:'מושהה', expired:'פג תוקף' };
+  const map = { trial:'Trial', basic:'Basic', advanced:'Advanced', premium:'Premium', unlimited:'ללא הגבלה', suspended:'מושהה', expired:'פג תוקף', expiring:'Trial' };
   return map[plan] || plan;
 }
 

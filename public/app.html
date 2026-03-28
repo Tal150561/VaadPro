@@ -359,7 +359,7 @@ function vpLogout() {
         </div>
         <input type="file" id="bankFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleBankFile(event)">
         <div style="margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;">
-          <div style="flex:1;min-width:140px;"><label>סכום לחיפוש (₪)</label><input type="number" id="bankAmount" placeholder="לפי הגדרת הסכום" style="margin-top:4px;"></div>
+          <div style="flex:1;min-width:140px;"><label>סכום לחיפוש (₪)</label><input type="number" id="bankAmount" placeholder="ריק = כל הסכומים" style="margin-top:4px;"><div class="hint">השאר ריק לזיהוי לפי שם בלבד</div></div>
           <div style="flex:1;min-width:140px;"><label>סבילות (±₪)</label><input type="number" id="bankTolerance" value="5" min="0" style="margin-top:4px;"><div class="hint">לגמישות בסכומים</div></div>
         </div>
         <div id="bankResult" style="display:none;"></div>
@@ -1264,19 +1264,22 @@ function processBankFile(file){
 }
 
 function analyzeBankRows(rows,fileName){
-  const ta=parseFloat(document.getElementById('bankAmount').value)||parseFloat(document.getElementById('cfgAmount').value)||300;
-  const tol=parseFloat(document.getElementById('bankTolerance').value)||5;
-  const min=ta-tol,max=ta+tol;
+  const taRaw = document.getElementById('bankAmount').value.trim();
+  const ta = taRaw !== '' ? parseFloat(taRaw) : null; // null = כל הסכומים
+  const tol = parseFloat(document.getElementById('bankTolerance').value)||5;
+  const filterByAmount = ta !== null && !isNaN(ta) && ta > 0;
+  const min = filterByAmount ? ta-tol : -Infinity;
+  const max = filterByAmount ? ta+tol :  Infinity;
 
-  // כל שורת בנק שיש בה לפחות תא אחד בסכום הנכון – רשומה פעם אחת
+  // כל שורת בנק שיש בה לפחות תא אחד עם מספר (ולפי סכום אם הוגדר)
   const mr=[];
   rows.forEach(function(row,rowIdx){
     let matchAmount=null;
     row.forEach(function(cell){
-      if(matchAmount!==null)return; // כבר מצאנו סכום בשורה זו
+      if(matchAmount!==null)return;
       if(!cell&&cell!==0)return;
       const n=parseFloat(String(cell).replace(/[,\s₪]/g,''));
-      if(!isNaN(n)&&n>=min&&n<=max) matchAmount=n;
+      if(!isNaN(n)&&n>0&&n>=min&&n<=max) matchAmount=n;
     });
     if(matchAmount!==null) mr.push({row:row,amount:matchAmount,rowIdx:rowIdx});
   });
@@ -1353,7 +1356,8 @@ function analyzeBankRows(rows,fileName){
 function showBankResult(matched,unmatched,total,ta,fn){
   const rd=document.getElementById('bankResult');
   let h='<div class="match-result">';
-  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות של '+ta+'₪ (±'+( parseFloat(document.getElementById('bankTolerance').value)||5)+')</div>';
+  const amountDesc = filterByAmount ? ta+'₪ (±'+(parseFloat(document.getElementById('bankTolerance').value)||5)+')' : 'כל הסכומים';
+  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות | חיפוש: '+amountDesc+'</div>';
   if(matched.length){
     h+='<div style="color:var(--accent);font-weight:700;margin-bottom:6px;">✅ זוהו כמשלמים ('+matched.length+'):</div>';
     matched.forEach(function(m){
