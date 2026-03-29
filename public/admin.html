@@ -1322,11 +1322,11 @@ function renderRecipients() {
   if (currentRecipTab === 'customers') {
     items = allCustomers.map(u => ({ id: u.email, label: u.fullName||u.buildingName||u.email, sub: u.email, phone: u.phone, tenantId: u.tenantId }));
   } else {
-    items = allLeads.map(l => ({ id: l.id, label: l.name, sub: l.phone||l.email, phone: l.phone }));
+    items = allLeads.map(l => ({ id: l.id, label: l.name, sub: l.phone||l.email, phone: l.phone||'', email: l.email||'' }));
   }
   list.innerHTML = items.length ? items.map(i => `
     <label>
-      <input type="checkbox" class="recip-check" value="${i.id}" data-phone="${i.phone||''}" data-email="${i.sub||''}" data-tenant="${i.tenantId||''}">
+      <input type="checkbox" class="recip-check" value="${i.id}" data-phone="${i.phone||''}" data-email="${i.email!==undefined?i.email:i.sub||''}" data-tenant="${i.tenantId||''}">
       <div>
         <div style="font-weight:600;font-size:13px">${i.label}</div>
         <div style="font-size:11px;color:var(--text3)">${i.sub}</div>
