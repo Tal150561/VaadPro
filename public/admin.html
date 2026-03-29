@@ -883,7 +883,7 @@ const API = ''; // same origin
 let adminToken = localStorage.getItem('vaadpro_admin_token');
 let adminEmailGlobal = localStorage.getItem('vaadpro_admin_email');
 let allCustomers = [];
-let allLeads = JSON.parse(localStorage.getItem('vaadpro_leads') || '[]');
+let allLeads = [];
 let currentChannel = 'wa';
 let currentRecipTab = 'customers';
 let editingLeadId = null;
@@ -933,6 +933,7 @@ function showApp() {
   loadDashboard();
   loadCustomers();
   loadBridges();
+  loadLeads();
   loadTemplates();
   loadMsgLog();
   loadTrialAlerts();
@@ -1175,7 +1176,18 @@ async function savePlan() {
 // ════════════════════════════════════════════
 // LEADS
 // ════════════════════════════════════════════
-function saveLeads() { localStorage.setItem('vaadpro_leads', JSON.stringify(allLeads)); }
+async function saveLeads() { /* נשמר בשרת */ }
+
+async function loadLeads() {
+  try {
+    const res = await fetch('/api/admin/leads', { headers: adminHeaders() });
+    const data = await res.json();
+    allLeads = data.leads || [];
+    renderLeads();
+    renderRecipients();
+    document.getElementById('statLeads').textContent = allLeads.length;
+  } catch(e) { console.error('loadLeads:', e); }
+}
 
 function renderLeads(filter = '') {
   const leads = filter ? allLeads.filter(l =>
@@ -1200,7 +1212,7 @@ function renderLeads(filter = '') {
       </td>
     </tr>
   `).join('') || '<tr><td colspan="8"><div class="empty-state"><div class="icon">📋</div>אין לידים עדיין</div></td></tr>';
-  document.getElementById('statLeads').textContent = allLeads.length;
+  if(document.getElementById('statLeads')) document.getElementById('statLeads').textContent = allLeads.length;
 }
 
 function filterLeads() {
@@ -1230,38 +1242,36 @@ function editLead(id) {
   openModal('addLeadModal');
 }
 
-function saveLead() {
+async function saveLead() {
   const name = document.getElementById('leadName').value.trim();
   if (!name) { toast('שם הוא שדה חובה', 'err'); return; }
   const lead = {
-    id: editingLeadId || Date.now().toString(),
+    id: editingLeadId || undefined,
     name,
     phone: document.getElementById('leadPhone').value.trim(),
     email: document.getElementById('leadEmail').value.trim(),
     source: document.getElementById('leadSource').value,
     status: document.getElementById('leadStatus').value,
-    notes: document.getElementById('leadNotes').value.trim(),
-    createdAt: editingLeadId ? (allLeads.find(l=>l.id===editingLeadId)||{}).createdAt : new Date().toISOString()
+    notes: document.getElementById('leadNotes').value.trim()
   };
-  if (editingLeadId) {
-    const idx = allLeads.findIndex(l => l.id === editingLeadId);
-    allLeads[idx] = lead;
+  const res = await fetch('/api/admin/leads', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify(lead)
+  });
+  const data = await res.json();
+  if (data.ok) {
+    await loadLeads();
+    closeModal('addLeadModal');
+    toast(editingLeadId ? 'ליד עודכן ✓' : 'ליד נוסף ✓', 'ok');
   } else {
-    allLeads.unshift(lead);
+    toast(data.error || 'שגיאה', 'err');
   }
-  saveLeads();
-  renderLeads();
-  renderRecipients();
-  closeModal('addLeadModal');
-  toast(editingLeadId ? 'ליד עודכן ✓' : 'ליד נוסף ✓', 'ok');
 }
 
-function deleteLead(id) {
+async function deleteLead(id) {
   if (!confirm('למחוק ליד זה?')) return;
-  allLeads = allLeads.filter(l => l.id !== id);
-  saveLeads();
-  renderLeads();
-  renderRecipients();
+  await fetch('/api/admin/leads/' + id, { method: 'DELETE', headers: adminHeaders() });
+  await loadLeads();
   toast('ליד נמחק', 'ok');
 }
 
@@ -1270,36 +1280,38 @@ function toggleSelectAll() {
   document.querySelectorAll('.lead-check').forEach(c => c.checked = checked);
 }
 
-function importCSV(event) {
+async function importCSV(event) {
   const file = event.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = e => {
+  reader.onload = async e => {
     const lines = e.target.result.split('\n').filter(l => l.trim());
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g,''));
-    let added = 0;
+    const newLeads = [];
     for (let i = 1; i < lines.length; i++) {
       const cols = lines[i].split(',').map(c => c.trim().replace(/"/g,''));
       const obj = {};
       headers.forEach((h,idx) => obj[h] = cols[idx]||'');
       if (obj['שם'] || obj['name']) {
-        allLeads.push({
-          id: Date.now().toString() + i,
+        newLeads.push({
           name: obj['שם']||obj['name']||'',
           phone: obj['טלפון']||obj['phone']||'',
           email: obj['אימייל']||obj['email']||'',
           source: 'CSV',
           status: 'חדש',
-          notes: obj['הערות']||obj['notes']||'',
-          createdAt: new Date().toISOString()
+          notes: obj['הערות']||obj['notes']||''
         });
-        added++;
       }
     }
-    saveLeads();
-    renderLeads();
-    renderRecipients();
-    toast(`יובאו ${added} לידים ✓`, 'ok');
+    const res = await fetch('/api/admin/leads/import', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ leads: newLeads })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      await loadLeads();
+      toast('יובאו ' + data.added + ' לידים ✓', 'ok');
+    }
   };
   reader.readAsText(file, 'utf-8');
   event.target.value = '';

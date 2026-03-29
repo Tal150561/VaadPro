@@ -623,6 +623,13 @@ app.get('/api/bridge/download', authMiddleware, (req, res) => {
 // ════════════════════════════════════════════════════════════════
 const ADMIN_USERS_FILE = path.join(DATA_DIR, '_admins.json');
 const TEMPLATES_FILE = path.join(DATA_DIR, '_templates.json');
+const LEADS_FILE = path.join(DATA_DIR, '_leads.json');
+
+function loadLeads() {
+  if (!fs.existsSync(LEADS_FILE)) return [];
+  try { return JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8')); } catch(e) { return []; }
+}
+function saveLeads(leads) { fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2)); }
 const CRM_FILE = path.join(DATA_DIR, '_crm.json');
 
 function loadCRM() {
@@ -904,6 +911,43 @@ app.delete('/api/admin/crm/:id/:type/:itemId', adminAuthMiddleware, (req, res) =
   card[key] = (card[key]||[]).filter(x => x.id !== req.params.itemId);
   saveCRMCard(req.params.id, card);
   res.json({ ok: true });
+});
+
+// ── Admin: לידים ────────────────────────────────────────────────
+app.get('/api/admin/leads', adminAuthMiddleware, (req, res) => {
+  res.json({ leads: loadLeads() });
+});
+
+app.post('/api/admin/leads', adminAuthMiddleware, (req, res) => {
+  const { id, name, phone, email, source, status, notes } = req.body;
+  if (!name) return res.json({ ok: false, error: 'שם חובה' });
+  const leads = loadLeads();
+  const existing = leads.findIndex(l => l.id === id);
+  const lead = { id: id || require('uuid').v4(), name, phone: phone||'', email: email||'', source: source||'', status: status||'חדש', notes: notes||'', createdAt: existing>=0 ? leads[existing].createdAt : new Date().toISOString() };
+  if (existing >= 0) leads[existing] = lead;
+  else leads.unshift(lead);
+  saveLeads(leads);
+  res.json({ ok: true, lead });
+});
+
+app.delete('/api/admin/leads/:id', adminAuthMiddleware, (req, res) => {
+  const leads = loadLeads().filter(l => l.id !== req.params.id);
+  saveLeads(leads);
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/leads/import', adminAuthMiddleware, (req, res) => {
+  const { leads: newLeads } = req.body;
+  if (!Array.isArray(newLeads)) return res.json({ ok: false, error: 'פורמט שגוי' });
+  const leads = loadLeads();
+  let added = 0;
+  newLeads.forEach(l => {
+    if (!l.name) return;
+    leads.unshift({ id: require('uuid').v4(), name: l.name||'', phone: l.phone||'', email: l.email||'', source: l.source||'CSV', status: l.status||'חדש', notes: l.notes||'', createdAt: new Date().toISOString() });
+    added++;
+  });
+  saveLeads(leads);
+  res.json({ ok: true, added });
 });
 
 // ── Admin: תבניות הודעות ────────────────────────────────────────
