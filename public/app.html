@@ -1600,7 +1600,7 @@ function exportBankReport(){
 
   // אם אין תאריכים — דוח פשוט
   if(months.length===0){
-    const wsData=[['שם','סה"כ','מס' תשלומים']];
+    const wsData=[['שם','סה"כ','מספר תשלומים']];
     matched.forEach(function(m){ wsData.push([m.tenant.name,m.amount,m.count]); });
     const wb=XLSX.utils.book_new();
     const ws=XLSX.utils.aoa_to_sheet(wsData);
