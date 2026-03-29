@@ -658,7 +658,7 @@
         <h1>לוג שליחות</h1>
         <p>היסטוריית הודעות WA ומיילים</p>
       </div>
-      <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center">
+      <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
         <select id="logFilter" onchange="filterLog()" style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
           <option value="">הכל</option>
           <option value="wa">WhatsApp</option>
@@ -667,6 +667,17 @@
           <option value="failed">נכשל</option>
         </select>
         <button class="btn btn-ghost" onclick="loadMsgLog()">🔄 רענן</button>
+        <div style="margin-right:auto;display:flex;gap:8px;align-items:center">
+          <span style="font-size:12px;color:var(--text3)">נקה לפני:</span>
+          <select id="cleanDays" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:12px;">
+            <option value="30">30 ימים</option>
+            <option value="60">60 ימים</option>
+            <option value="90" selected>90 ימים</option>
+            <option value="180">180 ימים</option>
+            <option value="7">7 ימים (בדיקה)</option>
+          </select>
+          <button class="btn btn-red btn-sm" onclick="cleanMsgLog()">🗑 נקה</button>
+        </div>
       </div>
       <div class="table-wrap">
         <table>
@@ -1629,6 +1640,22 @@ function renderMsgLog(log) {
 function filterLog() {
   const f = document.getElementById('logFilter').value;
   renderMsgLog(f ? allMsgLog.filter(l => l.channel === f || l.status === f) : allMsgLog);
+}
+
+async function cleanMsgLog() {
+  const days = document.getElementById('cleanDays').value;
+  if (!confirm('למחוק רשומות ישנות מלפני יותר מ-' + days + ' ימים?')) return;
+  const res = await fetch('/api/admin/msglog/clean', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ days: parseInt(days) })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('נמחקו ' + data.removed + ' רשומות ✓', 'ok');
+    loadMsgLog();
+  } else {
+    toast('שגיאה', 'err');
+  }
 }
 
 function formatDateTime(iso) {

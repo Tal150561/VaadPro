@@ -647,8 +647,10 @@ function loadMsgLog() {
 function addMsgLog(entry) {
   const log = loadMsgLog();
   log.unshift({ ...entry, ts: new Date().toISOString() });
-  if (log.length > 500) log.splice(500); // שמור 500 אחרונים
-  fs.writeFileSync(MSG_LOG_FILE, JSON.stringify(log, null, 2));
+  // מחיקה אוטומטית: שמור רק 90 ימים אחרונים (מקסימום 1000 רשומות)
+  const cutoff = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+  const cleaned = log.filter(e => new Date(e.ts) > cutoff).slice(0, 1000);
+  fs.writeFileSync(MSG_LOG_FILE, JSON.stringify(cleaned, null, 2));
 }
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + '-admin';
 
@@ -745,6 +747,18 @@ app.post('/api/admin/extend-trial', adminAuthMiddleware, (req, res) => {
   delete user._trialEmailSent;
   saveUsers(users);
   res.json({ ok: true, email, trialEnd: user.trialEnd, days });
+});
+
+// ── Admin: ניקוי לוג שליחות ─────────────────────────────────────
+app.post('/api/admin/msglog/clean', adminAuthMiddleware, (req, res) => {
+  const { days } = req.body;
+  const d = parseInt(days) || 90;
+  const log = loadMsgLog();
+  const cutoff = new Date(Date.now() - d * 24 * 60 * 60 * 1000);
+  const before = log.length;
+  const cleaned = log.filter(e => new Date(e.ts) > cutoff);
+  fs.writeFileSync(MSG_LOG_FILE, JSON.stringify(cleaned, null, 2));
+  res.json({ ok: true, removed: before - cleaned.length, remaining: cleaned.length });
 });
 
 // ── Admin: שליחת מייל (Resend / SMTP fallback) ─────────────────
