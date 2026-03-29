@@ -1552,33 +1552,43 @@ function resetDropZone(){ document.getElementById('dropZone').innerHTML='<div cl
 
 function exportBankReport(){
   const matched = window._lastBankMatched;
-  const fn = window._lastBankFileName || 'דוח';
   if(!matched||!matched.length){ toast('אין נתונים לייצוא','error'); return; }
 
-  // חלץ חודשים ייחודיים מכל התשלומים
-  const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const HEB_MONTHS=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
-  function parseDate(dateStr){
-    if(!dateStr) return null;
-    // נסה פורמטים שונים: DD/MM/YYYY, YYYY-MM-DD, MM/DD/YYYY
-    const s = String(dateStr).trim();
-    let d;
-    if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){
-      const p=s.split('/'); d=new Date(p[2],p[1]-1,p[0]);
-    } else if(/^\d{4}-\d{2}-\d{2}/.test(s)){
-      d=new Date(s);
-    } else if(/^\d{1,2}\.\d{1,2}\.\d{4}/.test(s)){
-      const p=s.split('.'); d=new Date(p[2],p[1]-1,p[0]);
-    } else {
-      d=new Date(dateStr);
+  // המרת תאריך — תומך גם במספרים סידוריים של Excel (serial date)
+  function parseDate(v){
+    if(!v && v!==0) return null;
+    const s = String(v).trim();
+
+    // מספר סידורי של Excel (למשל 45659)
+    const n = parseFloat(s);
+    if(!isNaN(n) && n > 40000 && n < 60000){
+      // Excel serial: ימים מ-1/1/1900 (עם תיקון leap year 1900 bug)
+      const d = new Date((n - 25569) * 86400 * 1000);
+      if(!isNaN(d.getTime())) return d;
     }
+
+    // DD/MM/YYYY
+    if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){
+      const p=s.split('/'); return new Date(p[2],p[1]-1,p[0]);
+    }
+    // DD.MM.YYYY
+    if(/^\d{1,2}\.\d{1,2}\.\d{4}/.test(s)){
+      const p=s.split('.'); return new Date(p[2],p[1]-1,p[0]);
+    }
+    // YYYY-MM-DD
+    if(/^\d{4}-\d{2}-\d{2}/.test(s)){
+      return new Date(s);
+    }
+    const d = new Date(v);
     return isNaN(d.getTime()) ? null : d;
   }
 
-  function monthKey(d){ return d.getFullYear()+'-'+(d.getMonth()+1); }
+  function monthKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
   function monthLabel(key){ const p=key.split('-'); return HEB_MONTHS[parseInt(p[1])-1]+' '+p[0]; }
 
-  // אסוף כל החודשים הייחודיים
+  // אסוף חודשים ייחודיים וקבץ לפי חודש
   const monthsSet = new Set();
   matched.forEach(function(m){
     (m.payments||[]).forEach(function(p){
@@ -1586,76 +1596,66 @@ function exportBankReport(){
       if(d) monthsSet.add(monthKey(d));
     });
   });
-  // מיין חודשים כרונולוגית
   const months = Array.from(monthsSet).sort();
 
+  // אם אין תאריכים — דוח פשוט
   if(months.length===0){
-    // אם אין תאריכים — דוח פשוט ללא עמודות חודש
-    const wsData = [['שם','סה"כ תשלומים','מספר תשלומים']];
-    matched.forEach(function(m){
-      wsData.push([m.tenant.name, m.amount, m.count]);
-    });
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.aoa_to_sheet(wsData);
-    ws['!cols'] = [{wch:20},{wch:15},{wch:15}];
-    XLSX.utils.book_append_sheet(wb, ws, 'דוח תשלומים');
-    XLSX.writeFile(wb, 'דוח-תשלומים.xlsx');
+    const wsData=[['שם','סה"כ','מס' תשלומים']];
+    matched.forEach(function(m){ wsData.push([m.tenant.name,m.amount,m.count]); });
+    const wb=XLSX.utils.book_new();
+    const ws=XLSX.utils.aoa_to_sheet(wsData);
+    ws['!cols']=[{wch:20},{wch:14},{wch:14}];
+    XLSX.utils.book_append_sheet(wb,ws,'דוח תשלומים');
+    XLSX.writeFile(wb,'דוח-תשלומים.xlsx');
     toast('✅ הדוח יוצא','success');
     return;
   }
 
-  // בנה שורות: שם | חודש1 | חודש2 | ... | סה"כ
-  const header = ['שם'].concat(months.map(monthLabel)).concat(['סה"כ לתקופה']);
-  const wsData = [header];
+  // בנה טבלה: שם | חודש1 | חודש2 | ... | סה"כ
+  const header=['שם'].concat(months.map(monthLabel)).concat(['סה"כ לתקופה']);
+  const wsData=[header];
 
   matched.forEach(function(m){
-    const row = [m.tenant.name];
-    let total = 0;
+    const row=[m.tenant.name];
+    let total=0;
     months.forEach(function(mk){
-      const monthPayments = (m.payments||[]).filter(function(p){
-        const d = parseDate(p.date);
-        return d && monthKey(d)===mk;
-      });
-      const sum = monthPayments.reduce(function(s,p){return s+p.amount;},0);
-      row.push(sum > 0 ? sum : '');
-      total += sum;
+      const sum=(m.payments||[]).reduce(function(s,p){
+        const d=parseDate(p.date);
+        return d&&monthKey(d)===mk ? s+p.amount : s;
+      },0);
+      row.push(sum>0 ? sum : '');
+      total+=sum;
     });
     row.push(total);
     wsData.push(row);
   });
 
   // שורת סיכום
-  const summaryRow = ['סה"כ'];
-  let grandTotal = 0;
-  months.forEach(function(mk, mi){
-    const colSum = matched.reduce(function(s,m){
-      const mp = (m.payments||[]).filter(function(p){
-        const d=parseDate(p.date); return d&&monthKey(d)===mk;
-      });
-      return s + mp.reduce(function(a,p){return a+p.amount;},0);
+  const totRow=['סה"כ'];
+  let grand=0;
+  months.forEach(function(mk){
+    const s=matched.reduce(function(acc,m){
+      return acc+(m.payments||[]).reduce(function(a,p){
+        const d=parseDate(p.date); return d&&monthKey(d)===mk?a+p.amount:a;
+      },0);
     },0);
-    summaryRow.push(colSum>0?colSum:'');
-    grandTotal+=colSum;
+    totRow.push(s>0?s:'');
+    grand+=s;
   });
-  summaryRow.push(grandTotal);
-  wsData.push(summaryRow);
+  totRow.push(grand);
+  wsData.push(totRow);
 
-  // צור Excel
-  const wb = XLSX.utils.book_new();
-  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  // Excel
+  const wb=XLSX.utils.book_new();
+  const ws=XLSX.utils.aoa_to_sheet(wsData);
+  ws['!cols']=[{wch:20}].concat(months.map(function(){return {wch:13};})).concat([{wch:15}]);
+  XLSX.utils.book_append_sheet(wb,ws,'דוח תשלומים');
 
-  // רוחב עמודות
-  ws['!cols'] = [{wch:20}].concat(months.map(function(){return {wch:14};})).concat([{wch:16}]);
-
-  // עיצוב כותרת ושורת סיכום (אם XLSX תומך)
-  XLSX.utils.book_append_sheet(wb, ws, 'דוח תשלומים');
-
-  // שם קובץ לפי תקופה
-  const periodLabel = months.length>1
-    ? monthLabel(months[0]).replace(' ','-')+' עד '+monthLabel(months[months.length-1]).replace(' ','-')
+  const periodLabel=months.length>1
+    ? monthLabel(months[0])+' עד '+monthLabel(months[months.length-1])
     : monthLabel(months[0]);
-  XLSX.writeFile(wb, 'דוח-תשלומים-'+periodLabel+'.xlsx');
-  toast('✅ הדוח יוצא בהצלחה','success');
+  XLSX.writeFile(wb,'דוח-תשלומים-'+periodLabel+'.xlsx');
+  toast('✅ הדוח יוצא','success');
 }
 
 // ─── REPORTS TAB ──────────────────────────────────────────
