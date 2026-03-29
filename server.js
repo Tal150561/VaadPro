@@ -1008,6 +1008,48 @@ setInterval(runTrialCheck, 24 * 60 * 60 * 1000);
 // הרץ גם בהפעלה (אחרי 30 שניות)
 setTimeout(runTrialCheck, 30 * 1000);
 
+// ── Admin: עריכת לקוח ───────────────────────────────────────────
+app.post('/api/admin/edit-customer', adminAuthMiddleware, async (req, res) => {
+  const { oldEmail, newEmail, fullName, phone, buildingName, address, password } = req.body;
+  if (!oldEmail || !newEmail) return res.json({ ok: false, error: 'חסר אימייל' });
+  const users = loadUsers();
+  const idx = users.findIndex(u => u.email === oldEmail.toLowerCase());
+  if (idx < 0) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+  // בדוק שהאימייל החדש לא תפוס (אם שונה)
+  const newEmailLower = newEmail.toLowerCase();
+  if (newEmailLower !== oldEmail.toLowerCase()) {
+    if (users.find(u => u.email === newEmailLower)) {
+      return res.json({ ok: false, error: 'אימייל זה כבר קיים במערכת' });
+    }
+    users[idx].email = newEmailLower;
+  }
+  if (fullName !== undefined) users[idx].fullName = fullName;
+  if (phone !== undefined) users[idx].phone = phone;
+  if (buildingName) users[idx].buildingName = buildingName;
+  if (address !== undefined) users[idx].address = address;
+  if (password && password.length >= 6) {
+    users[idx].passHash = await bcrypt.hash(password, 10);
+  }
+  saveUsers(users);
+  res.json({ ok: true });
+});
+
+// ── Admin: מחיקת לקוח ───────────────────────────────────────────
+app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.json({ ok: false, error: 'חסר אימייל' });
+  let users = loadUsers();
+  const user = users.find(u => u.email === email.toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+  // מחק קובץ נתוני הבניין
+  const tf = tenantFile(user.tenantId);
+  if (fs.existsSync(tf)) fs.unlinkSync(tf);
+  // הסר מרשימת המשתמשים
+  users = users.filter(u => u.email !== email.toLowerCase());
+  saveUsers(users);
+  res.json({ ok: true });
+});
+
 // ── Admin: הרצת בדיקת Trial ידנית ──────────────────────────────
 app.post('/api/admin/trial-check', adminAuthMiddleware, async (req, res) => {
   const result = await runTrialCheck();

@@ -785,6 +785,27 @@
   </div>
 </div>
 
+<!-- Edit Customer Modal -->
+<div class="modal-bg" id="editCustomerModal">
+  <div class="modal" style="width:460px">
+    <h2>✏️ עריכת לקוח</h2>
+    <input type="hidden" id="editCustomerEmail" />
+    <div class="form-row">
+      <div class="field"><label>שם מלא</label><input type="text" id="editFullName" /></div>
+      <div class="field"><label>טלפון</label><input type="tel" id="editPhone" /></div>
+    </div>
+    <div class="field"><label>אימייל חדש</label><input type="email" id="editNewEmail" /></div>
+    <div class="field"><label>שם בניין</label><input type="text" id="editBuildingName" /></div>
+    <div class="field"><label>כתובת</label><input type="text" id="editAddress" /></div>
+    <div class="field"><label>סיסמה חדשה (השאר ריק לשמור קיימת)</label>
+      <input type="password" id="editPassword" placeholder="••••••" /></div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('editCustomerModal')">ביטול</button>
+      <button class="btn btn-blue" onclick="saveCustomer()">שמור שינויים</button>
+    </div>
+  </div>
+</div>
+
 <!-- CRM Modal -->
 <div class="modal-bg" id="crmModal" style="align-items:flex-start;padding:20px;overflow-y:auto;">
   <div class="modal" style="width:620px;max-width:98vw;">
@@ -914,9 +935,11 @@ async function loadBridges() {
     const data = await res.json();
     const sel = document.getElementById('waBridgeSel');
     if (data.bridges && data.bridges.length > 0) {
+      const current = sel.value;
       sel.innerHTML = data.bridges.map(b =>
         `<option value="${b.tenantId}">${b.buildingName || b.email} (${b.phone || 'מחובר'})</option>`
       ).join('');
+      if (current) sel.value = current;
     } else {
       sel.innerHTML = '<option value="">⚠️ אין Bridge מחובר</option>';
     }
@@ -924,6 +947,9 @@ async function loadBridges() {
     document.getElementById('waBridgeSel').innerHTML = '<option value="">שגיאה בטעינת Bridges</option>';
   }
 }
+
+// רענון אוטומטי כל 30 שניות
+setInterval(loadBridges, 30000);
 
 // ── Mobile menu ─────────────────────────────────────────────────
 let sidebarPinned = localStorage.getItem('sidebarPinned') === 'true';
@@ -1046,8 +1072,10 @@ function renderCustomers(users) {
       <td>
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")'>Plan</button>
+          <button class="btn btn-sm btn-ghost" onclick='editCustomer("${u.email}")'>✏️</button>
           <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")'>📨</button>
           <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")'>📋</button>
+          <button class="btn btn-sm btn-red" onclick='deleteCustomer("${u.email}")'>🗑</button>
         </div>
       </td>
     </tr>`;
@@ -1445,6 +1473,67 @@ async function runTrialCheck() {
   }
   btn.textContent = '🔄 בדוק עכשיו';
   btn.disabled = false;
+}
+
+// ════════════════════════════════════════════
+// EDIT / DELETE CUSTOMER
+// ════════════════════════════════════════════
+function editCustomer(email) {
+  const u = allCustomers.find(c => c.email === email);
+  if (!u) return;
+  document.getElementById('editCustomerEmail').value = email;
+  document.getElementById('editFullName').value = u.fullName || '';
+  document.getElementById('editPhone').value = u.phone || '';
+  document.getElementById('editNewEmail').value = email;
+  document.getElementById('editBuildingName').value = u.buildingName || '';
+  document.getElementById('editAddress').value = u.address || '';
+  document.getElementById('editPassword').value = '';
+  openModal('editCustomerModal');
+}
+
+async function saveCustomer() {
+  const oldEmail = document.getElementById('editCustomerEmail').value;
+  const payload = {
+    oldEmail,
+    fullName:     document.getElementById('editFullName').value.trim(),
+    phone:        document.getElementById('editPhone').value.trim(),
+    newEmail:     document.getElementById('editNewEmail').value.trim(),
+    buildingName: document.getElementById('editBuildingName').value.trim(),
+    address:      document.getElementById('editAddress').value.trim(),
+    password:     document.getElementById('editPassword').value
+  };
+  if (!payload.newEmail) { toast('אימייל לא יכול להיות ריק', 'err'); return; }
+  const res = await fetch('/api/admin/edit-customer', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify(payload)
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('פרטי לקוח עודכנו ✓', 'ok');
+    closeModal('editCustomerModal');
+    loadCustomers();
+    loadDashboard();
+  } else {
+    toast(data.error || 'שגיאה', 'err');
+  }
+}
+
+async function deleteCustomer(email) {
+  const u = allCustomers.find(c => c.email === email);
+  const name = u ? (u.fullName || u.buildingName || email) : email;
+  if (!confirm('למחוק את הלקוח ' + name + '? פעולה זו תמחק את כל הנתונים שלו לצמיתות!')) return;
+  const res = await fetch('/api/admin/delete-customer', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ email })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('לקוח נמחק ✓', 'ok');
+    loadCustomers();
+    loadDashboard();
+  } else {
+    toast(data.error || 'שגיאה', 'err');
+  }
 }
 
 // ════════════════════════════════════════════
