@@ -1320,7 +1320,7 @@ function renderRecipients() {
   const list = document.getElementById('recipientsList');
   let items = [];
   if (currentRecipTab === 'customers') {
-    items = allCustomers.map(u => ({ id: u.email, label: u.buildingName||u.email, sub: u.email, phone: u.phone, tenantId: u.tenantId }));
+    items = allCustomers.map(u => ({ id: u.email, label: u.fullName||u.buildingName||u.email, sub: u.email, phone: u.phone, tenantId: u.tenantId }));
   } else {
     items = allLeads.map(l => ({ id: l.id, label: l.name, sub: l.phone||l.email, phone: l.phone }));
   }
