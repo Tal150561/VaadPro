@@ -271,13 +271,16 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 
 async function sendEmailResend(to, subject, body) {
   const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
+  const adminEmail = process.env.ADMIN_EMAIL || '';
+  const payload = { from: fromAddr, to, subject, text: body };
+  if (adminEmail) payload.reply_to = adminEmail;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ from: fromAddr, to, subject, text: body })
+    body: JSON.stringify(payload)
   });
   const data = await res.json();
   if (!res.ok) throw new Error(data.message || JSON.stringify(data));
