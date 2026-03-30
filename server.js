@@ -1112,13 +1112,13 @@ app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
 app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
   const users = loadUsers();
   const now = new Date();
+  const minDays = parseInt(req.query.days) || 0; // ברירת מחדל: כולם
   const waiting = users
     .filter(u => {
       if (u.plan === 'suspended') return false;
-      // נרשם לפני יותר מ-3 ימים
       const daysSince = (now - new Date(u.createdAt)) / (1000*60*60*24);
-      if (daysSince < 3) return false;
-      // מעולם לא חיבר Bridge (אין phone ב-waClients)
+      if (daysSince < minDays) return false;
+      // מעולם לא חיבר Bridge
       const wa = waClients[u.tenantId];
       const everConnected = wa && wa.phone;
       return !everConnected;
