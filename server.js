@@ -1108,6 +1108,35 @@ app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Admin: ממתינים להתקנה ───────────────────────────────────────
+app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
+  const users = loadUsers();
+  const now = new Date();
+  const waiting = users
+    .filter(u => {
+      if (u.plan === 'suspended') return false;
+      // נרשם לפני יותר מ-3 ימים
+      const daysSince = (now - new Date(u.createdAt)) / (1000*60*60*24);
+      if (daysSince < 3) return false;
+      // מעולם לא חיבר Bridge (אין phone ב-waClients)
+      const wa = waClients[u.tenantId];
+      const everConnected = wa && wa.phone;
+      return !everConnected;
+    })
+    .map(u => ({
+      email: u.email,
+      fullName: u.fullName||'',
+      buildingName: u.buildingName||'',
+      phone: u.phone||'',
+      createdAt: u.createdAt,
+      daysSince: Math.floor((now - new Date(u.createdAt)) / (1000*60*60*24)),
+      plan: u.plan,
+      trialEnd: u.trialEnd||null
+    }))
+    .sort((a,b) => b.daysSince - a.daysSince);
+  res.json({ waiting });
+});
+
 // ── Admin: הרצת בדיקת Trial ידנית ──────────────────────────────
 app.post('/api/admin/trial-check', adminAuthMiddleware, async (req, res) => {
   const result = await runTrialCheck();

@@ -504,6 +504,17 @@
         </div>
       </div>
 
+      <!-- ממתינים להתקנה -->
+      <div id="waitingInstallPanel" style="display:none;margin-bottom:20px">
+        <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);border-radius:12px;padding:16px 20px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+            <h3 style="font-size:14px;font-weight:700;color:#818cf8">⏳ ממתינים להתקנה</h3>
+            <span id="waitingInstallCount" style="font-size:12px;color:var(--text3)"></span>
+          </div>
+          <div id="waitingInstallList"></div>
+        </div>
+      </div>
+
       <!-- Plans breakdown -->
       <div class="table-wrap" style="margin-bottom:20px">
         <div class="table-header"><h3>פילוח מנויים</h3></div>
@@ -934,9 +945,11 @@ function showApp() {
   loadCustomers();
   loadBridges();
   loadLeads();
+  loadWaitingInstall();
   loadTemplates();
   loadMsgLog();
   loadTrialAlerts();
+  loadWaitingInstall();
   renderLeads();
   renderRecipients();
 }
@@ -1452,6 +1465,31 @@ function msgCustomer(email, building) {
   setTimeout(() => {
     document.getElementById('msgBody').value = `שלום ${building},\n\n`;
   }, 100);
+}
+
+// ════════════════════════════════════════════
+// ממתינים להתקנה
+// ════════════════════════════════════════════
+async function loadWaitingInstall() {
+  try {
+    const res = await fetch('/api/admin/waiting-install', { headers: adminHeaders() });
+    const data = await res.json();
+    const list = data.waiting || [];
+    const panel = document.getElementById('waitingInstallPanel');
+    if (!list.length) { panel.style.display = 'none'; return; }
+    panel.style.display = 'block';
+    document.getElementById('waitingInstallCount').textContent = list.length + ' לקוחות';
+    document.getElementById('waitingInstallList').innerHTML = list.map(u => {
+      const name = u.fullName || u.buildingName || u.email;
+      const days = u.daysSince === 1 ? 'יום' : u.daysSince + ' ימים';
+      return '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+        '<span style="font-size:12px;color:#818cf8;font-weight:700;min-width:70px">נרשם לפני ' + days + '</span>' +
+        '<span style="font-size:13px;flex:1">' + name + '</span>' +
+        '<span style="font-size:11px;color:var(--text3)">' + (u.phone||u.email) + '</span>' +
+        '<button class="btn btn-sm" style="background:rgba(99,102,241,.15);color:#818cf8" onclick="showPage(\'messaging\')" data-email="' + u.email + '">📨 פנה</button>' +
+        '</div>';
+    }).join('');
+  } catch(e) {}
 }
 
 // ════════════════════════════════════════════
