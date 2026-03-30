@@ -174,7 +174,13 @@ function initWa(tenantId) {
 }
 
 async function sendWaMsg(tenantId, phone, message) {
-  const wa = getWa(tenantId);
+  // אם לא סופק tenantId — מצא Bridge פעיל אוטומטית
+  let resolvedTenantId = tenantId;
+  if (!resolvedTenantId || !waClients[resolvedTenantId] || waClients[resolvedTenantId].status !== 'ready') {
+    resolvedTenantId = Object.keys(waClients).find(id => waClients[id] && waClients[id].status === 'ready');
+  }
+  if (!resolvedTenantId) throw new Error('אין Bridge מחובר. הפעל את תוכנת ה-Bridge תחילה.');
+  const wa = getWa(resolvedTenantId);
   if (wa.status !== 'ready') throw new Error('WhatsApp לא מחובר');
   let normalized = phone.replace(/\D/g, '');
   if (normalized.startsWith('0')) normalized = '972' + normalized.slice(1);
