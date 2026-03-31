@@ -671,7 +671,8 @@ function vpLogout() {
             </div>
           </div>
           <div style="display:flex;align-items:flex-end;gap:8px;">
-            <button class="btn btn-secondary btn-sm" onclick="trendExportExcel()">📥 ייצא השוואה לאקסל</button>
+            <button class="btn btn-secondary btn-sm" onclick="trendExportExcel()">📥 ייצא לאקסל</button>
+            <button class="btn btn-secondary btn-sm" onclick="trendExportHTML()">📊 ייצא דוח מלא</button>
           </div>
         </div>
 
@@ -3170,6 +3171,111 @@ async function trendExportExcel() {
   XLSX.writeFile(wb, 'השוואת-הוצאות-'+base.label+'-vs-'+cmp.label+'.xlsx');
   toast('📥 ייצוא עם גרפים הושלם!', 'success');
 }
+// ────────────────────────────────────────────────────────────────
+
+async function trendExportHTML() {
+  const groups  = trendGroupReports();
+  const baseKey = document.getElementById('trendBase').value;
+  const cmpKey  = document.getElementById('trendCompare').value;
+  const baseGrp = groups.find(function(g){ return g.key===baseKey; });
+  const cmpGrp  = groups.find(function(g){ return g.key===cmpKey; });
+  if (!baseGrp || !cmpGrp) { toast('⚠️ בחר תקופות להשוואה', 'error'); return; }
+
+  const base = trendMergeGroup(baseGrp);
+  const cmp  = trendMergeGroup(cmpGrp);
+  const allCats = Array.from(new Set(
+    Object.keys(base.categories).concat(Object.keys(cmp.categories))
+  )).sort();
+
+  // צלם גרפים
+  let chart1Img = '', chart2Img = '';
+  const chartCanvas = document.getElementById('trendChartCanvas');
+  if (chartCanvas && trendChart) {
+    try { chart1Img = chartCanvas.toDataURL('image/png'); } catch(e) {}
+  }
+  const timelineCanvas = document.getElementById('trendTimelineCanvas');
+  const timelineCard = document.getElementById('trendTimelineCard');
+  if (timelineCanvas && trendTimelineChart && timelineCard && timelineCard.style.display !== 'none') {
+    try { chart2Img = timelineCanvas.toDataURL('image/png'); } catch(e) {}
+  }
+
+  // בנה שורות טבלה
+  const td_total = cmp.total - base.total;
+  const pct_total = base.total > 0 ? ((td_total/base.total)*100).toFixed(1) : '—';
+
+  let tableRows = '';
+  allCats.forEach(function(cat) {
+    const bv = base.categories[cat]||0;
+    const cv = cmp.categories[cat]||0;
+    const diff = cv - bv;
+    const pct = bv > 0 ? ((diff/bv)*100).toFixed(1) : '—';
+    const color = diff > 0 ? '#c0392b' : diff < 0 ? '#27ae60' : '#555';
+    const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '—';
+    tableRows += '<tr>' +
+      '<td>' + cat + '</td>' +
+      '<td style="text-align:left">' + bv.toLocaleString() + ' ₪</td>' +
+      '<td style="text-align:left">' + cv.toLocaleString() + ' ₪</td>' +
+      '<td style="text-align:left;color:' + color + ';font-weight:bold">' + (diff>0?'+':'') + diff.toLocaleString() + ' ₪</td>' +
+      '<td style="text-align:center;color:' + color + '">' + (pct !== '—' ? (diff>0?'+':'') + pct + '%' : '—') + '</td>' +
+      '<td style="text-align:center;color:' + color + '">' + arrow + '</td>' +
+      '</tr>';
+  });
+
+  const diffColor = td_total > 0 ? '#c0392b' : td_total < 0 ? '#27ae60' : '#555';
+
+  const html = '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="UTF-8">' +
+    '<title>דוח השוואת הוצאות — ' + base.label + ' vs ' + cmp.label + '</title>' +
+    '<style>' +
+    'body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f5f5f5;color:#222;}' +
+    '.report{max-width:900px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.1);}' +
+    'h1{font-size:22px;margin:0 0 4px;color:#1a1a2e;}' +
+    '.subtitle{color:#666;font-size:14px;margin-bottom:24px;}' +
+    '.section{margin-bottom:32px;}' +
+    'h2{font-size:16px;color:#2c3e50;border-bottom:2px solid #3b82f6;padding-bottom:6px;margin-bottom:16px;}' +
+    'table{width:100%;border-collapse:collapse;font-size:14px;}' +
+    'th{background:#2c3e50;color:#fff;padding:10px 12px;text-align:right;}' +
+    'td{padding:9px 12px;border-bottom:1px solid #eee;}' +
+    'tr:last-child td{font-weight:bold;background:#f8f8f8;border-top:2px solid #2c3e50;}' +
+    'tr:hover td{background:#f0f4ff;}' +
+    '.summary{display:flex;gap:16px;margin-bottom:24px;}' +
+    '.sum-card{flex:1;background:#f8f9fa;border-radius:8px;padding:16px;text-align:center;border:1px solid #e0e0e0;}' +
+    '.sum-card .val{font-size:22px;font-weight:bold;color:#2c3e50;}' +
+    '.sum-card .lbl{font-size:12px;color:#888;margin-top:4px;}' +
+    'img{width:100%;border-radius:8px;border:1px solid #e0e0e0;margin-top:8px;}' +
+    '.footer{text-align:center;color:#aaa;font-size:12px;margin-top:24px;}' +
+    '@media print{body{background:#fff;padding:0}.report{box-shadow:none;border-radius:0;}}' +
+    '</style></head><body>' +
+    '<div class="report">' +
+    '<h1>דוח השוואת הוצאות</h1>' +
+    '<div class="subtitle">הופק ב-' + new Date().toLocaleDateString('he-IL') + ' | ' + base.label + ' לעומת ' + cmp.label + '</div>' +
+    '<div class="summary">' +
+    '<div class="sum-card"><div class="val">' + base.total.toLocaleString() + ' ₪</div><div class="lbl">' + base.label + '</div></div>' +
+    '<div class="sum-card"><div class="val">' + cmp.total.toLocaleString() + ' ₪</div><div class="lbl">' + cmp.label + '</div></div>' +
+    '<div class="sum-card"><div class="val" style="color:' + diffColor + '">' + (td_total>0?'+':'') + td_total.toLocaleString() + ' ₪</div><div class="lbl">שינוי (' + (td_total>0?'+':'') + pct_total + '%)</div></div>' +
+    '</div>' +
+    '<div class="section"><h2>פירוט לפי קטגוריה</h2>' +
+    '<table><thead><tr><th>קטגוריה</th><th>' + base.label + '</th><th>' + cmp.label + '</th><th>שינוי</th><th>שינוי %</th><th>מגמה</th></tr></thead>' +
+    '<tbody>' + tableRows +
+    '<tr><td>סה"כ</td><td style="text-align:left">' + base.total.toLocaleString() + ' ₪</td><td style="text-align:left">' + cmp.total.toLocaleString() + ' ₪</td>' +
+    '<td style="text-align:left;color:' + diffColor + ';font-weight:bold">' + (td_total>0?'+':'') + td_total.toLocaleString() + ' ₪</td>' +
+    '<td style="text-align:center;color:' + diffColor + '">' + (td_total>0?'+':'') + pct_total + '%</td>' +
+    '<td style="text-align:center;color:' + diffColor + '">' + (td_total>0?'▲':td_total<0?'▼':'—') + '</td></tr>' +
+    '</tbody></table></div>' +
+    (chart1Img ? '<div class="section"><h2>גרף השוואה</h2><img src="' + chart1Img + '" alt="גרף השוואה"></div>' : '') +
+    (chart2Img ? '<div class="section"><h2>גרף ציר זמן</h2><img src="' + chart2Img + '" alt="גרף ציר זמן"></div>' : '') +
+    '<div class="footer">VaadPro — מערכת ניהול ועד בית | הדפס: Ctrl+P</div>' +
+    '</div></body></html>';
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'דוח-הוצאות-' + base.label + '-vs-' + cmp.label + '.html';
+  a.click();
+  URL.revokeObjectURL(url);
+  toast('📊 הדוח הופק בהצלחה!', 'success');
+}
+
 // ────────────────────────────────────────────────────────────────
 
 // ── מערכת עזרה ──────────────────────────────────────────────────
