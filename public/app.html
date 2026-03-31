@@ -311,6 +311,7 @@ function vpLogout() {
         <div class="add-row">
           <div><label>שם מלא</label><input type="text" id="inName" placeholder="ישראל ישראלי" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>טלפון</label><input type="tel" id="inPhone" placeholder="0501234567" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>מילות חיפוש לבנק <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inKeywords" placeholder="כהן י, העברה 052" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
         </div>
@@ -342,11 +343,14 @@ function vpLogout() {
 
     <div class="card">
       <div class="card-header">📤 שליחת תזכורות</div>
-      <div class="card-body" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
-        <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">📤 שלח לכולם</button>
-        <button class="btn btn-secondary" onclick="sendUnpaidOnly()">📤 שלח רק לממתינים</button>
-        <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
-        <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
+      <div class="card-body">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+          <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">💬 WA לכולם</button>
+          <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA רק לממתינים</button>
+          <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
+          <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
+        </div>
+
       </div>
     </div>
 
@@ -745,11 +749,27 @@ function vpLogout() {
           </div>
         </div>
 
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding-top:4px;border-top:1px solid var(--border);">
-          <button class="btn btn-green" onclick="blSend()" id="blSendBtn">📤 שלח הודעה</button>
-          <button class="btn btn-secondary btn-sm" onclick="blSaveDraft()">💾 שמור טיוטה</button>
-          <button class="btn btn-secondary btn-sm" onclick="blClear()">🗑️ נקה</button>
-          <span id="blSendStatus" style="font-size:0.81rem;color:var(--text2);"></span>
+        <div style="border-top:1px solid var(--border);padding-top:12px;">
+          <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button class="btn btn-sm" id="blChannelWA" onclick="blSetChannel('wa')" style="background:rgba(37,211,102,.15);color:#25d366;border:1px solid rgba(37,211,102,.3);">💬 WhatsApp</button>
+            <button class="btn btn-sm" id="blChannelEmail" onclick="blSetChannel('email')" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);">📧 מייל</button>
+          </div>
+          <div id="blEmailOptions" style="display:none;margin-bottom:12px;">
+            <div style="margin-bottom:8px;">
+              <label style="font-size:0.82rem;">נושא המייל</label>
+              <input type="text" id="blEmailSubject" placeholder="עדכון ועד בית..." style="margin-top:4px;">
+            </div>
+            <div>
+              <label style="font-size:0.82rem;">צרף קובץ <span style="opacity:.5;">(אופציונלי)</span></label>
+              <input type="file" id="blEmailAttachment" style="margin-top:4px;font-size:0.82rem;" accept=".pdf,.xlsx,.xls,.doc,.docx,.png,.jpg,.jpeg">
+            </div>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+            <button class="btn btn-green" onclick="blSend()" id="blSendBtn">📤 שלח הודעה</button>
+            <button class="btn btn-secondary btn-sm" onclick="blSaveDraft()">💾 שמור טיוטה</button>
+            <button class="btn btn-secondary btn-sm" onclick="blClear()">🗑️ נקה</button>
+            <span id="blSendStatus" style="font-size:0.81rem;color:var(--text2);"></span>
+          </div>
         </div>
 
       </div>
@@ -973,11 +993,12 @@ function insertVar(v) {
 async function addTenant() {
   const name=document.getElementById('inName').value.trim();
   const phone=document.getElementById('inPhone').value.trim().replace(/\D/g,'');
+  const email=document.getElementById('inEmail').value.trim();
   const kw=document.getElementById('inKeywords').value.trim();
   if(!name||!phone){toast('⚠️ יש למלא שם וטלפון','error');return;}
   if(!/^0[0-9]{8,9}$/.test(phone)){toast('⚠️ מספר לא תקין','error');return;}
-  data.tenants.push({id:Date.now(),name:name,phone:phone,keywords:kw});
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inKeywords').value='';
+  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw});
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});}catch(e){}
   render(); toast('✅ דייר נוסף!','success');
 }
@@ -1137,6 +1158,67 @@ async function sendOne(id) {
       await loadData(); render(); toast('✅ הודעה נשלחה!','success');
     } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
   }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
+}
+
+async function sendEmailToTenants(unpaidOnly) {
+  const subject = document.getElementById('emailSubjectTenant').value.trim();
+  const body = document.getElementById('emailBodyTenant').value.trim();
+  const fileInput = document.getElementById('emailAttachment');
+  const statusEl = document.getElementById('emailSendStatus');
+
+  if (!subject) { toast('יש להזין נושא למייל', 'error'); return; }
+  if (!body) { toast('יש להזין תוכן להודעה', 'error'); return; }
+
+  const tenants = data.tenants.filter(t => t.email && t.email.includes('@'));
+  if (!tenants.length) { toast('אין דיירים עם מייל מוגדר', 'error'); return; }
+
+  const targets = unpaidOnly
+    ? tenants.filter(t => {
+        const em = getEffectiveMonth();
+        const k = t.id + '_' + em;
+        return !data.sentLog[k];
+      })
+    : tenants;
+
+  if (!targets.length) { toast('אין דיירים לשליחה', 'error'); return; }
+
+  // קרא קובץ מצורף אם יש
+  let attachmentB64 = null, attachmentName = null, attachmentType = null;
+  if (fileInput.files[0]) {
+    const file = fileInput.files[0];
+    attachmentName = file.name;
+    attachmentType = file.type || 'application/octet-stream';
+    attachmentB64 = await new Promise(resolve => {
+      const r = new FileReader();
+      r.onload = e => resolve(e.target.result.split(',')[1]);
+      r.readAsDataURL(file);
+    });
+  }
+
+  statusEl.textContent = 'שולח...';
+  let sent = 0, failed = 0;
+  const token = localStorage.getItem('vp_token');
+
+  for (const t of targets) {
+    const msg = body.replace(/{שם}/g, t.name).replace(/{בניין}/g, data.buildingName||'');
+    try {
+      const payload = { to: t.email, subject, body: msg };
+      if (attachmentB64) {
+        payload.attachment = { content: attachmentB64, filename: attachmentName, type: attachmentType };
+      }
+      const r = await fetch(API + '/send-email-tenant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+        body: JSON.stringify(payload)
+      });
+      const d = await r.json();
+      if (d.ok) sent++;
+      else { console.error('email failed:', d.error); failed++; }
+    } catch(e) { failed++; }
+  }
+
+  statusEl.textContent = '';
+  toast('נשלחו ' + sent + ' מיילים' + (failed ? ' | נכשלו ' + failed : ''), sent ? 'success' : 'error');
 }
 
 async function sendAll() {
@@ -2243,6 +2325,32 @@ function blBuildMessage(tenantName) {
   return text;
 }
 
+let blCurrentChannel = 'wa';
+
+function blSetChannel(ch) {
+  blCurrentChannel = ch;
+  const waBtn = document.getElementById('blChannelWA');
+  const emailBtn = document.getElementById('blChannelEmail');
+  const emailOpts = document.getElementById('blEmailOptions');
+  if (ch === 'wa') {
+    waBtn.style.background = 'rgba(37,211,102,.15)';
+    waBtn.style.color = '#25d366';
+    waBtn.style.border = '1px solid rgba(37,211,102,.3)';
+    emailBtn.style.background = 'var(--surface2)';
+    emailBtn.style.color = 'var(--text2)';
+    emailBtn.style.border = '1px solid var(--border)';
+    emailOpts.style.display = 'none';
+  } else {
+    emailBtn.style.background = 'rgba(59,130,246,.15)';
+    emailBtn.style.color = '#3b82f6';
+    emailBtn.style.border = '1px solid rgba(59,130,246,.3)';
+    waBtn.style.background = 'var(--surface2)';
+    waBtn.style.color = 'var(--text2)';
+    waBtn.style.border = '1px solid var(--border)';
+    emailOpts.style.display = 'block';
+  }
+}
+
 async function blSend() {
   const body = document.getElementById('blBody').value.trim();
   if (!body) { toast('⚠️ יש לנסח הודעה', 'error'); return; }
@@ -2257,25 +2365,54 @@ async function blSend() {
     id: Date.now(),
     subject: document.getElementById('blSubject').value.trim(),
     body: body,
-    recipients: recipients.map(function(t){ return {id:t.id, name:t.name, phone:t.phone}; }),
+    recipients: recipients.map(function(t){ return {id:t.id, name:t.name, phone:t.phone, email:t.email||''}; }),
     sentAt: new Date().toISOString(),
     results: []
   };
 
+  // קרא קובץ מצורף אם ערוץ מייל
+  let attachmentB64 = null, attachmentName = null, attachmentType = null;
+  if (blCurrentChannel === 'email') {
+    const fi = document.getElementById('blEmailAttachment');
+    if (fi && fi.files[0]) {
+      const file = fi.files[0];
+      attachmentName = file.name;
+      attachmentType = file.type || 'application/octet-stream';
+      attachmentB64 = await new Promise(function(res) {
+        const r = new FileReader();
+        r.onload = function(e) { res(e.target.result.split(',')[1]); };
+        r.readAsDataURL(file);
+      });
+    }
+  }
+
   let sent = 0;
+  const token = localStorage.getItem('vp_token');
   for (let i = 0; i < recipients.length; i++) {
     const t = recipients[i];
     status.textContent = 'שולח ל' + t.name + '...';
     const msg = blBuildMessage(t.name);
     try {
-      const r = await fetch(API + '/send-message', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone: t.phone, message: msg}) });
-      const d = await r.json();
-      record.results.push({ name: t.name, ok: !!d.ok });
-      if (d.ok) sent++;
+      let ok = false;
+      if (blCurrentChannel === 'email') {
+        if (!t.email) { record.results.push({ name: t.name, ok: false, reason: 'אין מייל' }); continue; }
+        const subject = document.getElementById('blEmailSubject').value.trim() || document.getElementById('blSubject').value.trim() || 'הודעה מועד הבית';
+        const payload = { to: t.email, subject, body: msg };
+        if (attachmentB64) payload.attachment = { content: attachmentB64, filename: attachmentName, type: attachmentType };
+        const r = await fetch(API + '/send-email-tenant', { method:'POST', headers:{'Content-Type':'application/json','Authorization':'Bearer '+token}, body: JSON.stringify(payload) });
+        const d = await r.json();
+        ok = !!d.ok;
+      } else {
+        const r = await fetch(API + '/send-message', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({phone: t.phone, message: msg}) });
+        const d = await r.json();
+        ok = !!d.ok;
+      }
+      record.results.push({ name: t.name, ok });
+      if (ok) sent++;
     } catch(e) {
       record.results.push({ name: t.name, ok: false });
     }
-    await new Promise(function(res){ setTimeout(res, 1200); });
+    await new Promise(function(res){ setTimeout(res, 800); });
   }
 
   blMessages.unshift(record);
