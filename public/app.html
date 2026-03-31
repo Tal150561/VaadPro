@@ -1021,7 +1021,8 @@ function startEdit(id) {
   cells[0].innerHTML='<input id="en-'+id+'" value="'+t.name+'" style="width:100%;margin-bottom:4px;" placeholder="שם">';
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מילות חיפוש">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
-  cells[4].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
+  cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
+  cells[5].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
   document.getElementById('en-'+id).focus();
 }
 
@@ -1035,9 +1036,10 @@ async function saveEdit(id) {
   const n=document.getElementById('en-'+id).value.trim();
   const p=document.getElementById('ep-'+id).value.trim().replace(/\D/g,'');
   const k=document.getElementById('ek-'+id).value.trim();
+  const e=document.getElementById('ee-'+id) ? document.getElementById('ee-'+id).value.trim() : (t.email||'');
   if(!n){toast('⚠️ שם לא יכול להיות ריק','error');return;}
   if(!/^0[0-9]{8,9}$/.test(p)){toast('⚠️ מספר טלפון לא תקין','error');return;}
-  t.name=n;t.phone=p;t.keywords=k;
+  t.name=n;t.phone=p;t.keywords=k;t.email=e;
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -1298,7 +1300,7 @@ function render() {
   const tw=document.getElementById('tenantsWrap');
   if(!data.tenants.length){ tw.innerHTML='<div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div>'; }
   else {
-    let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>מילות חיפוש</th><th>טלפון</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>';
+    let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>מילות חיפוש</th><th>טלפון</th><th>מייל</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>';
     data.tenants.forEach(function(t){
       const key=t.id+'_'+em, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
@@ -1313,6 +1315,7 @@ function render() {
       h+='<td><strong>'+t.name+'</strong></td>';
       h+='<td style="font-size:0.77rem;color:var(--text2);">'+(t.keywords||'<span style="opacity:.4;">—</span>')+'</td>';
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
+      h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td style="white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="startEdit('+t.id+')" title="ערוך">✏️</button> <button class="btn btn-danger-soft" onclick="removeTenant('+t.id+')" title="מחק">🗑️</button></td>';
       h+='</tr>';
