@@ -3081,7 +3081,7 @@ function trendRenderTimeline() {
   });
 }
 
-function trendExportExcel() {
+async function trendExportExcel() {
   const groups  = trendGroupReports();
   const baseKey = document.getElementById('trendBase').value;
   const cmpKey  = document.getElementById('trendCompare').value;
@@ -3103,14 +3103,12 @@ function trendExportExcel() {
     const pct  = bv>0 ? +((diff/bv)*100).toFixed(1) : '';
     rows.push([cat, bv||'', cv||'', diff||'', pct, diff>0?'▲':diff<0?'▼':'—']);
   });
-  // סיכום
   const td = cmp.total-base.total;
   rows.push(['סה"כ', base.total, cmp.total, td, base.total>0?+((td/base.total)*100).toFixed(1):'', td>0?'▲':td<0?'▼':'—']);
 
   const ws = XLSX.utils.aoa_to_sheet(rows);
   ws['!cols'] = [{wch:16},{wch:14},{wch:14},{wch:12},{wch:10},{wch:8}];
 
-  // צביעה
   rows.forEach(function(row, ri) {
     if (ri===0 || ri===rows.length-1) return;
     const diff = row[3];
@@ -3123,8 +3121,54 @@ function trendExportExcel() {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'השוואת הוצאות');
+
+  // הוסף גיליון גרפים עם תמונות מה-Canvas
+  const wsCharts = XLSX.utils.aoa_to_sheet([['גרפי ניתוח מגמות']]);
+  wsCharts['!cols'] = [{wch:80}];
+  XLSX.utils.book_append_sheet(wb, wsCharts, 'גרפים');
+
+  // צלם גרף השוואה
+  const chartCanvas = document.getElementById('trendChartCanvas');
+  if (chartCanvas && trendChart) {
+    try {
+      const imgData = chartCanvas.toDataURL('image/png').split(',')[1];
+      if (!wb.Workbook) wb.Workbook = {};
+      if (!wb.Workbook.Sheets) wb.Workbook.Sheets = [];
+      // הוסף תמונה לגיליון גרפים
+      if (!wsCharts['!images']) wsCharts['!images'] = [];
+      wsCharts['!images'].push({
+        name: 'chart1.png',
+        data: imgData,
+        opts: { base64: true },
+        position: { type: 'twoCellAnchor', attrs: { editAs: 'oneCell' },
+          from: { col: 0, colOff: 0, row: 1, rowOff: 0 },
+          to:   { col: 12, colOff: 0, row: 30, rowOff: 0 }
+        }
+      });
+    } catch(e) { console.log('chart capture failed:', e); }
+  }
+
+  // צלם גרף ציר זמן
+  const timelineCanvas = document.getElementById('trendTimelineCanvas');
+  const timelineCard = document.getElementById('trendTimelineCard');
+  if (timelineCanvas && trendTimelineChart && timelineCard && timelineCard.style.display !== 'none') {
+    try {
+      const imgData2 = timelineCanvas.toDataURL('image/png').split(',')[1];
+      if (!wsCharts['!images']) wsCharts['!images'] = [];
+      wsCharts['!images'].push({
+        name: 'chart2.png',
+        data: imgData2,
+        opts: { base64: true },
+        position: { type: 'twoCellAnchor', attrs: { editAs: 'oneCell' },
+          from: { col: 0, colOff: 0, row: 32, rowOff: 0 },
+          to:   { col: 12, colOff: 0, row: 62, rowOff: 0 }
+        }
+      });
+    } catch(e) { console.log('timeline capture failed:', e); }
+  }
+
   XLSX.writeFile(wb, 'השוואת-הוצאות-'+base.label+'-vs-'+cmp.label+'.xlsx');
-  toast('📥 ייצוא הושלם!', 'success');
+  toast('📥 ייצוא עם גרפים הושלם!', 'success');
 }
 // ────────────────────────────────────────────────────────────────
 
