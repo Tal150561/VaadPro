@@ -633,6 +633,10 @@
             <label>נושא מייל</label>
             <input type="text" id="emailSubject" placeholder="נושא ההודעה..." />
           </div>
+          <div id="emailAttachRow" class="field" style="display:none">
+            <label>צרף קובץ <span style="opacity:.5;font-weight:400;">(אופציונלי)</span></label>
+            <input type="file" id="adminEmailAttachment" accept=".pdf,.xlsx,.xls,.doc,.docx,.png,.jpg,.jpeg" style="font-size:13px;">
+          </div>
 
           <div class="field">
             <label>תבניות שמורות</label>
@@ -1397,6 +1401,7 @@ function selectChannel(ch) {
   document.getElementById('chanWA').classList.toggle('active', ch==='wa');
   document.getElementById('chanEmail').classList.toggle('active', ch==='email');
   document.getElementById('emailSubjectRow').style.display = ch==='email' ? 'block' : 'none';
+  document.getElementById('emailAttachRow').style.display = ch==='email' ? 'block' : 'none';
   document.getElementById('waBridgeRow').style.display = ch==='wa' ? 'block' : 'none';
   document.getElementById('manualPhoneRow').style.display = ch==='wa' ? 'block' : 'none';
   // always visible on WA
@@ -1450,10 +1455,22 @@ async function sendMessages() {
     } else if (currentChannel === 'email' && emailAddr && emailAddr.includes('@')) {
       const subject = document.getElementById('emailSubject').value || 'הודעה מ-VaadPro';
       try {
+        // קרא קובץ מצורף אם יש
+        let emailPayload = { to: emailAddr, subject, body: msg };
+        const fi = document.getElementById('adminEmailAttachment');
+        if (fi && fi.files[0]) {
+          const file = fi.files[0];
+          const b64 = await new Promise(function(res) {
+            const reader = new FileReader();
+            reader.onload = function(e) { res(e.target.result.split(',')[1]); };
+            reader.readAsDataURL(file);
+          });
+          emailPayload.attachment = { content: b64, filename: file.name, type: file.type||'application/octet-stream' };
+        }
         const r = await fetch('/api/admin/send-email', {
           method: 'POST',
           headers: adminHeaders(),
-          body: JSON.stringify({ to: emailAddr, subject, body: msg })
+          body: JSON.stringify(emailPayload)
         });
         const d = await r.json();
         if (d.ok) sent++; else failed++;

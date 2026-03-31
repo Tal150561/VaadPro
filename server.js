@@ -781,13 +781,59 @@ app.post('/api/admin/msglog/clean', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true, removed: before - cleaned.length, remaining: cleaned.length });
 });
 
+// ── Tenant: שליחת מייל עם קובץ מצורף ───────────────────────────
+app.post('/api/send-email-tenant', authMiddleware, async (req, res) => {
+  const { to, subject, body, attachment } = req.body;
+  if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים פרטים' });
+  try {
+    const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
+    const adminEmail = process.env.ADMIN_EMAIL || '';
+    const payload = { from: fromAddr, to, subject, text: body };
+    if (adminEmail) payload.reply_to = adminEmail;
+    if (attachment && attachment.content && attachment.filename) {
+      payload.attachments = [{
+        filename: attachment.filename,
+        content:  attachment.content,
+        type:     attachment.type || 'application/octet-stream'
+      }];
+    }
+    const r = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.message || JSON.stringify(data));
+    addMsgLog({ channel: 'email', to, subject, message: body.slice(0,100), status: 'sent' });
+    res.json({ ok: true });
+  } catch(e) {
+    console.error('[send-email-tenant]', e.message);
+    addMsgLog({ channel: 'email', to, subject, message: body.slice(0,100), status: 'failed', error: e.message });
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // ── Admin: שליחת מייל (Resend / SMTP fallback) ─────────────────
 app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
-  const { to, subject, body } = req.body;
+  const { to, subject, body, attachment } = req.body;
   if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים שדות' });
   try {
     if (RESEND_API_KEY) {
-      await sendEmailResend(to, subject, body);
+      // שלח דרך Resend עם קובץ מצורף אם יש
+      const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
+      const adminEmail = process.env.ADMIN_EMAIL || '';
+      const payload = { from: fromAddr, to, subject, text: body };
+      if (adminEmail) payload.reply_to = adminEmail;
+      if (attachment && attachment.content && attachment.filename) {
+        payload.attachments = [{ filename: attachment.filename, content: attachment.content, type: attachment.type||'application/octet-stream' }];
+      }
+      const r = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.message || JSON.stringify(data));
     } else if (SMTP_USER) {
       const nodemailer = require('nodemailer');
       let transportConfig;
