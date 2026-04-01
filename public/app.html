@@ -1168,7 +1168,7 @@ function parseImportRows(rows,fileName) {
   }
 
   const toAdd=[];
-  const existing=data.tenants.map(function(t){return t.phone;});
+  const existing = data.tenants.map(function(t){ return t.phone.replace(/\D/g,''); });
 
   for(let i=1;i<rows.length;i++){
     const row=rows[i];
@@ -1181,7 +1181,7 @@ function parseImportRows(rows,fileName) {
     if(!name&&!phone) continue;
     if(!name){ html+='<div class="import-row err">❌ שורה '+(i+1)+': חסר שם</div>'; }
     else if(!phone||!/^0[0-9]{8,9}$/.test(phone)){ html+='<div class="import-row warn">⚠️ '+name+' – טלפון לא תקין: '+rawPhone+'</div>'; }
-    else if(existing.includes(phone)){ html+='<div class="import-row warn">⏭️ '+name+' – כבר קיים</div>'; }
+    else if(existing.includes(phone.replace(/\D/g,''))){ html+='<div class="import-row warn">⏭️ '+name+' – כבר קיים</div>'; }
     else { toAdd.push({id:Date.now()+i,name:name,phone:phone,email:email,keywords:kw}); html+='<div class="import-row ok">✅ '+name+' | '+phone+(email?' | ✉️ '+email:'')+(kw?' | 🔍 '+kw:'')+'</div>'; }
   }
   html+='</div>';
