@@ -322,9 +322,32 @@ function vpLogout() {
     <div class="card">
       <div class="card-header">📥 ייבוא דיירים מאקסל</div>
       <div class="card-body">
-        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">ייבא רשימת דיירים מקובץ Excel. עמודות נדרשות: <strong>שם, טלפון</strong> | אופציונלי: <strong>מילות_חיפוש</strong>.<br><span style="color:var(--warn);">⚠️ דיירים קיימים עם אותו טלפון לא ייוספו פעמיים.</span></p>
+        <div style="background:var(--surface2);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:0.82rem;border:1px solid var(--border);">
+          <div style="font-weight:700;margin-bottom:6px;">📋 מבנה הקובץ הנדרש:</div>
+          <div style="overflow-x:auto;">
+            <table style="border-collapse:collapse;font-size:0.79rem;width:100%;">
+              <thead><tr style="background:var(--surface);">
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">שם ✅</th>
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">טלפון ✅</th>
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">מייל</th>
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">מילות_חיפוש</th>
+              </tr></thead>
+              <tbody><tr>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">ישראל כהן</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">0501234567</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">israel@email.com</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">כהן י, דירה 3</td>
+              </tr></tbody>
+            </table>
+          </div>
+          <div style="margin-top:8px;color:var(--text2);">
+            ✅ חובה: <strong>שם, טלפון</strong> &nbsp;|&nbsp; אופציונלי: מייל, מילות_חיפוש<br>
+            📌 שורה ראשונה = כותרות | טלפון בפורמט 05X-XXXXXXX<br>
+            ⚠️ דיירים קיימים עם אותו טלפון לא ייוספו פעמיים
+          </div>
+        </div>
         <div class="drop-zone" id="importDropZone" onclick="document.getElementById('importFile').click()" ondragover="handleImportDrag(event,true)" ondragleave="handleImportDrag(event,false)" ondrop="handleImportDrop(event)">
-          <div class="dz-icon">📋</div><p>לחץ לבחירת קובץ Excel או גרור לכאן</p><small>עמודות: שם, טלפון (ואופציונלית מילות_חיפוש)</small>
+          <div class="dz-icon">📋</div><p>לחץ לבחירת קובץ Excel או גרור לכאן</p><small>Excel (.xlsx, .xls) או CSV</small>
         </div>
         <input type="file" id="importFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleImportFile(event)">
         <div id="importPreview"></div>
@@ -1100,10 +1123,11 @@ function processImportFile(file) {
 function parseImportRows(rows,fileName) {
   if(!rows.length){toast('⚠️ הקובץ ריק','error');return;}
   const header=rows[0].map(function(h){return String(h).trim().toLowerCase();});
-  let nameCol=-1,phoneCol=-1,kwCol=-1;
+  let nameCol=-1,phoneCol=-1,emailCol=-1,kwCol=-1;
   header.forEach(function(h,i){
     if(h.includes('שם')||h==='name') nameCol=i;
     if(h.includes('טלפון')||h.includes('phone')||h.includes('נייד')) phoneCol=i;
+    if(h.includes('מייל')||h.includes('email')||h.includes('mail')) emailCol=i;
     if(h.includes('מילות')||h.includes('חיפוש')||h.includes('keyword')) kwCol=i;
   });
   if(nameCol===-1) nameCol=0;
@@ -1112,6 +1136,24 @@ function parseImportRows(rows,fileName) {
   const preview=document.getElementById('importPreview');
   let html='<div class="import-preview">';
   html+='<div style="font-size:0.79rem;color:var(--text2);margin-bottom:8px;">📄 '+fileName+' | '+(rows.length-1)+' שורות</div>';
+
+  // תצוגה מקדימה — 3 שורות ראשונות
+  const previewRows = rows.slice(1,4).filter(function(r){ return r && r.some(function(c){ return c; }); });
+  if(previewRows.length) {
+    html += '<div style="margin-bottom:10px;">';
+    html += '<div style="font-size:0.78rem;font-weight:700;color:var(--text2);margin-bottom:4px;">תצוגה מקדימה (3 שורות ראשונות):</div>';
+    html += '<div style="overflow-x:auto;"><table style="border-collapse:collapse;font-size:0.75rem;width:100%;">';
+    html += '<tr style="background:var(--surface2);">';
+    header.forEach(function(h){ html += '<th style="padding:3px 8px;border:1px solid var(--border);text-align:right;">'+h+'</th>'; });
+    html += '</tr>';
+    previewRows.forEach(function(row){
+      html += '<tr>';
+      row.forEach(function(cell){ html += '<td style="padding:3px 8px;border:1px solid var(--border);color:var(--text2);">'+String(cell||'')+'</td>'; });
+      html += '</tr>';
+    });
+    html += '</table></div></div>';
+  }
+
   const toAdd=[];
   const existing=data.tenants.map(function(t){return t.phone;});
 
@@ -1120,13 +1162,14 @@ function parseImportRows(rows,fileName) {
     if(!row||row.every(function(c){return !c;})) continue;
     const name=nameCol>=0?String(row[nameCol]||'').trim():'';
     const rawPhone=phoneCol>=0?String(row[phoneCol]||'').trim().replace(/\D/g,''):'';
+    const email=emailCol>=0?String(row[emailCol]||'').trim():'';
     const kw=kwCol>=0?String(row[kwCol]||'').trim():'';
     const phone=rawPhone.startsWith('972')?'0'+rawPhone.slice(3):rawPhone;
     if(!name&&!phone) continue;
     if(!name){ html+='<div class="import-row err">❌ שורה '+(i+1)+': חסר שם</div>'; }
     else if(!phone||!/^0[0-9]{8,9}$/.test(phone)){ html+='<div class="import-row warn">⚠️ '+name+' – טלפון לא תקין: '+rawPhone+'</div>'; }
     else if(existing.includes(phone)){ html+='<div class="import-row warn">⏭️ '+name+' – כבר קיים</div>'; }
-    else { toAdd.push({id:Date.now()+i,name:name,phone:phone,keywords:kw}); html+='<div class="import-row ok">✅ '+name+' | '+phone+(kw?' | 🔍 '+kw:'')+'</div>'; }
+    else { toAdd.push({id:Date.now()+i,name:name,phone:phone,email:email,keywords:kw}); html+='<div class="import-row ok">✅ '+name+' | '+phone+(email?' | ✉️ '+email:'')+(kw?' | 🔍 '+kw:'')+'</div>'; }
   }
   html+='</div>';
   if(toAdd.length>0){
