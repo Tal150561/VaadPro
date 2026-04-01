@@ -383,7 +383,12 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">🏦 ייבוא קובץ בנק – זיהוי מי שילם <button class="help-btn" onclick="showHelp('payments')">?</button></div>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleBankSection()">
+        🏦 ייבוא קובץ בנק – זיהוי מי שילם
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('payments')">?</button>
+        <span id="bankToggleIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▼ הרחב</span>
+      </div>
+      <div id="bankSectionBody" style="display:none;">
       <div class="card-body">
         <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הורד קובץ Excel/CSV של תנועות מהבנק וגרור לכאן. האפליקציה תזהה מי שילם לפי עמודות שתבחר.</p>
 
@@ -424,6 +429,7 @@ function vpLogout() {
         </div>
 
         <div id="bankResult" style="display:none;margin-top:12px;"></div>
+      </div>
       </div>
     </div>
 
@@ -1098,6 +1104,14 @@ function exportTenantsExcel() {
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
   toast('📤 קובץ Excel יוצא!','success');
+}
+
+function toggleBankSection() {
+  const body = document.getElementById('bankSectionBody');
+  const icon = document.getElementById('bankToggleIcon');
+  const open = body.style.display === 'block';
+  body.style.display = open ? 'none' : 'block';
+  icon.textContent = open ? '▼ הרחב' : '▲ צמצם';
 }
 
 function toggleImportSection() {
