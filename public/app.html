@@ -716,7 +716,7 @@ function vpLogout() {
   <div class="tab-panel" id="tab-bulletin">
 
     <div class="card">
-      <div class="card-header">✍️ כתיבת הודעה חדשה</div>
+      <div class="card-header">✍️ כתיבת הודעה חדשה <button class="help-btn" onclick="showHelp('bulletin')">?</button></div>
       <div class="card-body bulletin-compose">
 
         <div>
@@ -3287,11 +3287,14 @@ const HELP_CONTENT = {
       <ul>
         <li><strong>שם מלא</strong> — כפי שמופיע בחשבון הבנק</li>
         <li><strong>טלפון</strong> — 10 ספרות (050...)</li>
+        <li><strong>מייל</strong> — לשליחת הודעות ודוחות במייל (אופציונלי)</li>
         <li><strong>מילות חיפוש</strong> — ביטויים שמזהים את הדייר בקובץ הבנק</li>
       </ul>
       <h3>טיפ למילות חיפוש</h3>
       <p>השתמש ב-phrase מלא: <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">כהן דוד, דירה 3</code></p>
       <p>כל ביטוי מופרד בפסיק — "דירה 3" לא יתאים בטעות ל"דירה 30".</p>
+      <h3>עריכת דייר</h3>
+      <p>לחץ ✏️ בשורת הדייר לעריכת כל הפרטים כולל מייל.</p>
       <h3>ייצוא לאקסל</h3>
       <p>כולל עמודת מספר דירה שמזוהה אוטומטית ממילות החיפוש.</p>
     `
@@ -3299,18 +3302,19 @@ const HELP_CONTENT = {
   payments: {
     title: '💳 מדריך — תשלומים',
     body: `
-      <h3>ייבוא קובץ בנק</h3>
+      <h3>ייבוא קובץ בנק — מיפוי עמודות</h3>
       <ol>
-        <li>הורד קובץ Excel/CSV של תנועות מהבנק</li>
-        <li>גרור לתיבה הכחולה</li>
-        <li>המערכת מזהה אוטומטית מי שילם לפי מילות החיפוש</li>
+        <li>גרור קובץ Excel/CSV של תנועות מהבנק</li>
+        <li>בחר איזו עמודה היא השם, הסכום, התאריך, ההערות</li>
+        <li>לחץ <strong>💾 שמור מבנה</strong> — המיפוי נזכר לפעם הבאה</li>
+        <li>לחץ <strong>🔍 זהה משלמים</strong></li>
       </ol>
-      <h3>סכום וסבילות</h3>
-      <p>הגדר את הסכום החודשי וסבילות (±₪) לגמישות בסכומים.</p>
+      <h3>סכום לחיפוש</h3>
+      <p>השאר ריק לזיהוי לפי שם בלבד (ללא סינון סכום). הזן סכום + סבילות לסינון מדויק.</p>
+      <h3>ייצוא דוח תקופה</h3>
+      <p>לאחר זיהוי — לחץ <strong>📊 ייצא דוח תקופה לאקסל</strong> לקבלת טבלה חודשית לפי שם דייר.</p>
       <h3>סימון ידני</h3>
-      <p>ניתן לסמן/לבטל תשלום ידנית לכל דייר.</p>
-      <h3>מעקב שנתי</h3>
-      <p>לחץ "ייצא מעקב שנתי" לקובץ Excel עם כל החודשים.</p>
+      <p>ניתן לסמן/לבטל תשלום ידנית מטאב "תשלומים".</p>
     `
   },
   reports: {
@@ -3318,12 +3322,32 @@ const HELP_CONTENT = {
     body: `
       <h3>שלבים</h3>
       <div class="step"><div class="step-num">1</div><div>גרור קובץ תנועות בנק</div></div>
-      <div class="step"><div class="step-num">2</div><div>בחר עמודות (תאריך, תיאור, חיוב) ← לחץ "שמור מבנה" לשמירה לפעמים הבאות</div></div>
+      <div class="step"><div class="step-num">2</div><div>בחר עמודות (תאריך, תיאור, חיוב) ← לחץ "שמור מבנה"</div></div>
       <div class="step"><div class="step-num">3</div><div>בחר טווח תאריכים ← "נתח הוצאות"</div></div>
       <div class="step"><div class="step-num">4</div><div>בחר הוצאות לכלול ← "שמור דוח למגמות"</div></div>
       <div class="step"><div class="step-num">5</div><div>נסח הודעה ← שלח לדיירים</div></div>
       <h3>גרף קטגוריות</h3>
       <p>לחץ "📊 גרף קטגוריות" לתרשים עוגה/עמודות עם ייצוא PNG.</p>
+      <h3>ייצוא דוח מלא</h3>
+      <p>בטאב "ניתוח מגמות" — לחץ <strong>📊 ייצא דוח מלא</strong> לקובץ HTML עם גרפים מוטמעים שעובד בכל דפדפן ואפשר להדפיס ל-PDF.</p>
+    `
+  },
+  bulletin: {
+    title: '📣 מדריך — הודעות ועד הבית',
+    body: `
+      <h3>שליחה בווטסאפ</h3>
+      <p>בחר <strong>💬 WhatsApp</strong>, נסח הודעה, בחר דיירים ← שלח.</p>
+      <h3>שליחה במייל</h3>
+      <p>בחר <strong>📧 מייל</strong> — יופיעו שדות נוספים:</p>
+      <ul>
+        <li><strong>נושא המייל</strong> — כותרת ההודעה</li>
+        <li><strong>צרף קובץ</strong> — PDF, Excel, Word, תמונה (אופציונלי)</li>
+      </ul>
+      <p>⚠️ נשלח רק לדיירים שהוגדר להם מייל בטאב "דיירים".</p>
+      <h3>משתנים</h3>
+      <p><code>{שם}</code> — יוחלף בשם הדייר אוטומטית.</p>
+      <h3>היסטוריה</h3>
+      <p>כל ההודעות שנשלחו מופיעות בתחתית הטאב.</p>
     `
   },
   settings: {
@@ -3336,21 +3360,27 @@ const HELP_CONTENT = {
       <p><strong>ידני</strong> — בחר חודש ספציפי.</p>
       <h3>תבנית הודעה</h3>
       <p>משתנים זמינים: <code>{שם}</code> <code>{חודש}</code> <code>{סכום}</code></p>
+      <h3>הורדת Bridge</h3>
+      <p>לחץ "הורד חבילת Bridge המלאה" לקבלת ZIP עם כל מה שצריך לחיבור ווטסאפ.</p>
     `
   },
   wa: {
     title: '📱 חיבור ווטסאפ — מדריך מלא',
     body: `
       <h3>למה צריך את ה-Bridge?</h3>
-      <p>ווטסאפ לא מאפשר שליחת הודעות דרך ענן בלבד — הוא מחייב חיבור לטלפון שלך. ה-Bridge הוא תוכנה קטנה שרצה על המחשב שלך ומחברת בין הטלפון לבין האפליקציה בענן.</p>
-      <h3>צעדים</h3>
-      <div class="step"><div class="step-num">1</div><div>הורד והתקן <a href="https://nodejs.org" target="_blank" style="color:var(--accent);">Node.js</a> (גרסת LTS)</div></div>
-      <div class="step"><div class="step-num">2</div><div>הורד חבילת Bridge מ"הגדרות" ← חלץ לתיקייה</div></div>
-      <div class="step"><div class="step-num">3</div><div>לחץ פעמיים על <strong>install.bat</strong> — ממתין להתקנה (~2 דקות)</div></div>
-      <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>start.bat</strong> — יפתח חלון שחור</div></div>
-      <div class="step"><div class="step-num">5</div><div>חזור לאפליקציה ← לחץ "חיבור ווטסאפ" ← סרוק QR בטלפון</div></div>
+      <p>ווטסאפ מחייב חיבור לטלפון שלך. ה-Bridge הוא תוכנה קטנה שרצה על המחשב ומחברת בין הטלפון לאפליקציה בענן.</p>
+      <h3>Windows — צעדים</h3>
+      <div class="step"><div class="step-num">1</div><div>התקן <a href="https://nodejs.org" target="_blank" style="color:var(--accent);">Node.js</a> (גרסת LTS)</div></div>
+      <div class="step"><div class="step-num">2</div><div>הגדרות ← "הורד חבילת Bridge המלאה" ← חלץ ZIP</div></div>
+      <div class="step"><div class="step-num">3</div><div>לחץ פעמיים על <strong>install.bat</strong> ← המתן ~2 דקות</div></div>
+      <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>start.bat</strong> — אל תסגור!</div></div>
+      <div class="step"><div class="step-num">5</div><div>חזור לאפליקציה ← "חיבור ווטסאפ" ← סרוק QR</div></div>
+      <h3>Mac/Linux — צעדים</h3>
+      <p>אחרי הורדת ה-ZIP, פתח Terminal בתיקייה:</p>
+      <p><code style="background:var(--surface2);padding:2px 8px;border-radius:4px;">chmod +x install.sh && ./install.sh</code></p>
+      <p>הפעלה: <code style="background:var(--surface2);padding:2px 8px;border-radius:4px;">./start.sh</code></p>
       <h3>כל יום</h3>
-      <p>הפעל את <strong>start.bat</strong> לפני שליחת הודעות. ניתן להשאיר פתוח ברקע.</p>
+      <p>הפעל את start.bat (Windows) או start.sh (Mac) לפני שליחת הודעות.</p>
     `
   }
 };

@@ -1505,17 +1505,33 @@ async function loadWaitingInstall() {
     if (!list.length) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
     document.getElementById('waitingInstallCount').textContent = list.length + ' לקוחות';
+    const statusMap = { pending:'⏳ ממתין', needs_help:'🆘 דורש עזרה', in_progress:'⏳ בתהליך', installed:'✅ הותקן', not_interested:'❌ לא מעוניין' };
+    const statusColor = { pending:'#818cf8', needs_help:'#ef4444', in_progress:'#f59e0b', installed:'#22c55e', not_interested:'#6b7280' };
     document.getElementById('waitingInstallList').innerHTML = list.map(u => {
       const name = u.fullName || u.buildingName || u.email;
       const days = u.daysSince === 1 ? 'יום' : u.daysSince + ' ימים';
-      return '<div style="display:flex;align-items:center;gap:12px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
-        '<span style="font-size:12px;color:#818cf8;font-weight:700;min-width:70px">נרשם לפני ' + days + '</span>' +
-        '<span style="font-size:13px;flex:1">' + name + '</span>' +
-        '<span style="font-size:11px;color:var(--text3)">' + (u.phone||u.email) + '</span>' +
-        '<button class="btn btn-sm" style="background:rgba(99,102,241,.15);color:#818cf8" onclick="showPage(\'messaging\')" data-email="' + u.email + '">📨 פנה</button>' +
+      const st = u.installStatus || 'pending';
+      const opts = Object.entries(statusMap).map(function(e){ return '<option value="'+e[0]+'"'+(st===e[0]?' selected':'')+'>'+e[1]+'</option>'; }).join('');
+      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap">' +
+        '<span style="font-size:11px;color:#818cf8;font-weight:700;min-width:80px">לפני ' + days + '</span>' +
+        '<span style="font-size:13px;flex:1;min-width:120px">' + name + '</span>' +
+        '<select onchange="setInstallStatus(\'' + u.email + '\',this.value)" style="font-size:11px;padding:3px 6px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);color:' + (statusColor[st]||'#818cf8') + '">' + opts + '</select>' +
+        '<button class="btn btn-sm" style="background:rgba(99,102,241,.15);color:#818cf8;font-size:11px" onclick="showPage(\'messaging\')">📨 פנה</button>' +
         '</div>';
     }).join('');
   } catch(e) {}
+}
+
+async function setInstallStatus(email, status) {
+  try {
+    await fetch('/api/admin/install-status', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ email, status })
+    });
+    if (status === 'installed' || status === 'not_interested') {
+      await loadWaitingInstall();
+    }
+  } catch(e) { toast('שגיאה בעדכון סטטוס', 'err'); }
 }
 
 // ════════════════════════════════════════════

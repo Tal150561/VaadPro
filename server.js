@@ -225,6 +225,16 @@ app.post('/api/bridge/status', (req, res) => {
   wa.status = status || 'disconnected';
   wa.qrData = qrDataUrl || null;
   wa.phone  = phone || null;
+  // שמור lastConnectedAt בקובץ המשתמש בכל חיבור
+  if (status === 'ready' && phone) {
+    const users = loadUsers();
+    const user = users.find(u => u.tenantId === tenantId);
+    if (user) {
+      if (!user.firstConnectedAt) user.firstConnectedAt = new Date().toISOString();
+      user.lastConnectedAt = new Date().toISOString();
+      saveUsers(users);
+    }
+  }
   console.log(`[Bridge:${tenantId}] status=${status} phone=${phone||'-'}`);
   res.json({ ok: true });
 });
@@ -638,6 +648,13 @@ app.get('/api/bridge/download', authMiddleware, (req, res) => {
 const ADMIN_USERS_FILE = path.join(DATA_DIR, '_admins.json');
 const TEMPLATES_FILE = path.join(DATA_DIR, '_templates.json');
 const LEADS_FILE = path.join(DATA_DIR, '_leads.json');
+const INSTALL_STATUS_FILE = path.join(DATA_DIR, '_install_status.json');
+
+function loadInstallStatus() {
+  if (!fs.existsSync(INSTALL_STATUS_FILE)) return {};
+  try { return JSON.parse(fs.readFileSync(INSTALL_STATUS_FILE, 'utf8')); } catch(e) { return {}; }
+}
+function saveInstallStatus(s) { fs.writeFileSync(INSTALL_STATUS_FILE, JSON.stringify(s, null, 2)); }
 
 function loadLeads() {
   if (!fs.existsSync(LEADS_FILE)) return [];
@@ -1169,19 +1186,36 @@ app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
 });
 
 // ── Admin: ממתינים להתקנה ───────────────────────────────────────
+// ── Admin: עדכון סטטוס התקנה ידני ─────────────────────────────
+app.post('/api/admin/install-status', adminAuthMiddleware, (req, res) => {
+  const { email, status } = req.body;
+  if (!email || !status) return res.json({ ok: false, error: 'חסרים פרטים' });
+  const statuses = loadInstallStatus();
+  statuses[email] = { status, updatedAt: new Date().toISOString() };
+  saveInstallStatus(statuses);
+  res.json({ ok: true });
+});
+
 app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
   const users = loadUsers();
   const now = new Date();
-  const minDays = parseInt(req.query.days) || 0; // ברירת מחדל: כולם
+  const minDays = parseInt(req.query.days) || 0;
+  const statuses = loadInstallStatus();
   const waiting = users
     .filter(u => {
       if (u.plan === 'suspended') return false;
       const daysSince = (now - new Date(u.createdAt)) / (1000*60*60*24);
       if (daysSince < minDays) return false;
-      // מעולם לא חיבר Bridge
+      // הוסתר ידנית (הותקן / לא מעוניין)
+      const st = statuses[u.email];
+      if (st && (st.status === 'installed' || st.status === 'not_interested')) return false;
+      // בדוק אם חיבר Bridge לאחרונה (30 ימים)
       const wa = waClients[u.tenantId];
-      const everConnected = wa && wa.phone;
-      return !everConnected;
+      const activeInMemory = wa && wa.phone;
+      const lastConn = u.lastConnectedAt ? new Date(u.lastConnectedAt) : null;
+      const daysSinceConn = lastConn ? (now - lastConn) / (1000*60*60*24) : Infinity;
+      const recentlyConnected = activeInMemory || daysSinceConn < 30;
+      return !recentlyConnected;
     })
     .map(u => ({
       email: u.email,
@@ -1191,7 +1225,9 @@ app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
       createdAt: u.createdAt,
       daysSince: Math.floor((now - new Date(u.createdAt)) / (1000*60*60*24)),
       plan: u.plan,
-      trialEnd: u.trialEnd||null
+      trialEnd: u.trialEnd||null,
+      lastConnectedAt: u.lastConnectedAt||null,
+      installStatus: (statuses[u.email] && statuses[u.email].status) || 'pending'
     }))
     .sort((a,b) => b.daysSince - a.daysSince);
   res.json({ waiting });
