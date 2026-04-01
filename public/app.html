@@ -1059,13 +1059,13 @@ function extractApartmentNumber(keywords) {
 
 function exportTenantsExcel() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
-  const rows=[['דירה','שם','טלפון','מילות_חיפוש']];
+  const rows=[['דירה','שם','טלפון','מייל','מילות_חיפוש']];
   data.tenants.forEach(function(t){
     const apt = extractApartmentNumber(t.keywords||'');
-    rows.push([apt, t.name, t.phone, t.keywords||'']);
+    rows.push([apt, t.name, t.phone, t.email||'', t.keywords||'']);
   });
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:8},{wch:22},{wch:16},{wch:30}];
+  ws['!cols'] = [{wch:8},{wch:22},{wch:16},{wch:28},{wch:30}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
