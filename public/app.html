@@ -546,7 +546,11 @@ function vpLogout() {
       </div>
       <div class="card-body">
         <div class="wa-setup-card">
-          <h3>📦 שלב 1 — התקנת Node.js (פעם אחת בלבד)</h3>
+          <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step1')">
+            <span>📦 שלב 1 — התקנת Node.js (פעם אחת בלבד)</span>
+            <span id="step1Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
+          </h3>
+          <div id="step1Body">
           <div class="wa-setup-step">
             <div class="wa-setup-num">1</div>
             <div style="font-size:0.84rem;color:var(--text2);">
@@ -561,10 +565,15 @@ function vpLogout() {
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ההתקנה לוקחת כ-2 דקות — אל תסגור את החלון ✔️ פעם אחת בלבד</div>
             </div>
           </div>
+          </div>
         </div>
 
         <div class="wa-setup-card">
-          <h3>📥 שלב 2 — הורד את חבילת ה-Bridge</h3>
+          <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step2')">
+            <span>📥 שלב 2 — הורד את חבילת ה-Bridge</span>
+            <span id="step2Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
+          </h3>
+          <div id="step2Body">
           <div class="wa-setup-step">
             <div class="wa-setup-num">3</div>
             <div style="font-size:0.84rem;color:var(--text2);">
@@ -579,10 +588,15 @@ function vpLogout() {
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📁 תיצור תיקייה בשם VaadPro-Bridge — לא תצטרך להזיז כלום</div>
             </div>
           </div>
+          </div>
         </div>
 
         <div class="wa-setup-card">
-          <h3>▶️ שלב 3 — הפעלה (פעם אחת)</h3>
+          <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step3')">
+            <span>▶️ שלב 3 — הפעלה (פעם אחת)</span>
+            <span id="step3Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
+          </h3>
+          <div id="step3Body">
           <div class="wa-setup-step">
             <div class="wa-setup-num">5</div>
             <div style="font-size:0.84rem;color:var(--text2);">
@@ -605,6 +619,8 @@ function vpLogout() {
               חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק את הברקוד עם הטלפון
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📱 פתח ווטסאפ בטלפון ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</div>
             </div>
+          </div>
+        </div>
           </div>
         </div>
         <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(59,130,246,.08);padding:10px;border-radius:8px;border:1px solid rgba(59,130,246,.2);">
@@ -1104,6 +1120,14 @@ function exportTenantsExcel() {
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
   toast('📤 קובץ Excel יוצא!','success');
+}
+
+function toggleStep(id) {
+  const body = document.getElementById(id + 'Body');
+  const icon = document.getElementById(id + 'Icon');
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  icon.textContent = open ? '▶' : '▼';
 }
 
 function toggleBankSection() {
