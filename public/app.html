@@ -545,10 +545,20 @@ function vpLogout() {
     <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
       <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
       <div class="card-body">
-        <p style="font-size:0.84rem;color:var(--text2);margin-bottom:14px;">שלח לחבר שמנהל ועד בית — הוא יקבל 30 יום ניסיון חינם, ואתה עוזר לו לחסוך שעות עבודה 😊</p>
+        <p style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;">שלח לחבר שמנהל ועד בית — הוא יקבל 30 יום ניסיון חינם, ואתה עוזר לו לחסוך שעות עבודה 😊</p>
+
+        <div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:0.78rem;color:var(--text3);">תוכן ההודעה (ניתן לעריכה)</span>
+            <button class="btn btn-secondary btn-sm" onclick="shareResetMsg()" style="font-size:0.72rem;padding:2px 8px;">↺ אפס</button>
+          </div>
+          <textarea id="shareMsg" rows="5" style="width:100%;font-size:0.82rem;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);resize:vertical;direction:rtl;"></textarea>
+        </div>
+
         <div style="display:flex;gap:10px;flex-wrap:wrap;">
           <button class="btn" style="background:rgba(37,211,102,.15);color:#25d366;border:1px solid rgba(37,211,102,.3);" onclick="shareVaadProWA()">📱 שתף בווטסאפ</button>
           <button class="btn btn-secondary" onclick="shareVaadProEmail()">📧 שתף במייל</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyShareMsg()">📋 העתק הודעה</button>
           <button class="btn btn-secondary btn-sm" onclick="copyReferralLink()">🔗 העתק קישור</button>
         </div>
         <div id="shareConfirm" style="display:none;font-size:0.82rem;color:#25d366;margin-top:10px;"></div>
@@ -909,6 +919,7 @@ let statusInterval=null, saveTimer=null;
 
 function switchTab(name) {
   if (name === 'troubleshoot') setTimeout(tsInit, 50);
+  if (name === 'settings') setTimeout(shareInitMsg, 50);
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('tab-'+name).classList.add('active');
@@ -1163,41 +1174,53 @@ function toggleStep(id) {
   icon.textContent = open ? '▶' : '▼';
 }
 
-function shareVaadProWA() {
+function shareGetDefaultMsg() {
   const name = (data && data.fullName) ? data.fullName.split(' ')[0] : 'חבר';
   const building = (data && data.buildingName) ? data.buildingName : 'הבניין שלי';
-  const msg = encodeURIComponent(
-    'שלום! 👋\n\n' +
+  return 'שלום! 👋\n\n' +
     'אני ' + name + ', מנהל ועד הבית של ' + building + '.\n\n' +
     'גיליתי תוכנה שחסכה לי המון זמן — VaadPro.\n' +
     'היא שולחת תזכורות תשלום לכל הדיירים בווטסאפ בלחיצה אחת, ' +
     'ומזהה מי שילם ישירות מקובץ הבנק.\n\n' +
     '30 יום ניסיון חינם, ללא כרטיס אשראי:\n' +
     '👉 https://vaadpro.org\n\n' +
-    'ממליץ בחום! 🏢'
-  );
-  window.open('https://wa.me/?text=' + msg, '_blank');
+    'ממליץ בחום! 🏢';
+}
+
+function shareInitMsg() {
+  const el = document.getElementById('shareMsg');
+  if (el && !el.value) el.value = shareGetDefaultMsg();
+}
+
+function shareResetMsg() {
+  const el = document.getElementById('shareMsg');
+  if (el) el.value = shareGetDefaultMsg();
+}
+
+function shareGetMsg() {
+  const el = document.getElementById('shareMsg');
+  return el ? el.value : shareGetDefaultMsg();
+}
+
+function shareVaadProWA() {
+  shareInitMsg();
+  window.open('https://wa.me/?text=' + encodeURIComponent(shareGetMsg()), '_blank');
 }
 
 function shareVaadProEmail() {
-  const name = (data && data.fullName) ? data.fullName.split(' ')[0] : 'חבר';
-  const building = (data && data.buildingName) ? data.buildingName : 'הבניין שלי';
+  shareInitMsg();
   const subject = encodeURIComponent('המלצה על תוכנה לניהול ועד בית — VaadPro');
-  const body = encodeURIComponent(
-    'שלום,\n\n' +
-    'אני ' + name + ', מנהל ועד הבית של ' + building + '.\n\n' +
-    'רציתי לשתף אותך בתוכנה שגיליתי ועוזרת לי המון — VaadPro.\n\n' +
-    'מה היא עושה:\n' +
-    '• שולחת תזכורות תשלום לכל הדיירים בווטסאפ בלחיצה אחת\n' +
-    '• מזהה מי שילם ישירות מקובץ הבנק\n' +
-    '• שולחת מיילים עם קבצים מצורפים (דוחות הוצאות וכו\')\n' +
-    '• ניהול דיירים, מעקב שנתי ודוחות\n\n' +
-    '30 יום ניסיון חינם, ללא כרטיס אשראי:\n' +
-    'https://vaadpro.org\n\n' +
-    'ממליץ בחום!\n' +
-    name
-  );
-  window.location.href = 'mailto:?subject=' + subject + '&body=' + body;
+  window.location.href = 'mailto:?subject=' + subject + '&body=' + encodeURIComponent(shareGetMsg());
+}
+
+function copyShareMsg() {
+  shareInitMsg();
+  navigator.clipboard.writeText(shareGetMsg()).then(function() {
+    const el = document.getElementById('shareConfirm');
+    el.style.display = 'block';
+    el.textContent = '✅ ההודעה הועתקה — הדבק בכל אפליקציה';
+    setTimeout(function() { el.style.display = 'none'; }, 3000);
+  });
 }
 
 function copyReferralLink() {
