@@ -1175,15 +1175,34 @@ function toggleStep(id) {
 }
 
 function shareGetDefaultMsg() {
-  const name = (data && data.fullName) ? data.fullName.split(' ')[0] : 'חבר';
-  const building = (data && data.buildingName) ? data.buildingName : 'הבניין שלי';
-  return 'שלום! 👋\n\n' +
-    'אני ' + name + ', מנהל ועד הבית של ' + building + '.\n\n' +
-    'גיליתי תוכנה שחסכה לי המון זמן — VaadPro.\n' +
+  var name = 'חבר', building = 'הבניין שלי';
+  try {
+    var token = localStorage.getItem('vp_token');
+    if (token) {
+      var b64 = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      var p = JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){ return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2); }).join('')));
+      if (p.fullName) name = p.fullName.split(' ')[0];
+      else if (p.email) name = p.email.split('@')[0];
+      if (p.buildingName) building = p.buildingName;
+    }
+  } catch(e) {}
+  return 'שלום! 👋
+
+' +
+    'אני ' + name + ', מנהל ועד הבית של ' + building + '.
+
+' +
+    'גיליתי תוכנה שחסכה לי המון זמן — VaadPro.
+' +
     'היא שולחת תזכורות תשלום לכל הדיירים בווטסאפ בלחיצה אחת, ' +
-    'ומזהה מי שילם ישירות מקובץ הבנק.\n\n' +
-    '30 יום ניסיון חינם, ללא כרטיס אשראי:\n' +
-    '👉 https://vaadpro.org\n\n' +
+    'ומזהה מי שילם ישירות מקובץ הבנק.
+
+' +
+    '30 יום ניסיון חינם, ללא כרטיס אשראי:
+' +
+    '👉 https://vaadpro.org
+
+' +
     'ממליץ בחום! 🏢';
 }
 

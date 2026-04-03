@@ -378,7 +378,7 @@ app.post('/api/auth/register', async (req, res) => {
   // צור קובץ נתונים ראשוני לבניין
   saveTenantData(tenantId, { tenants: [], sentLog: {}, config: { amount: 300, sendDay: 1, sendHour: 9, sendMinute: 0, monthMode: 'auto', manualMonth: '', template: 'שלום {שם}! 👋\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה! 🙏' }, reports: [], rptLayouts: {} });
 
-  const token = jwt.sign({ userId: user.id, tenantId, email: user.email, buildingName }, JWT_SECRET, { expiresIn: '30d' });
+  const token = jwt.sign({ userId: user.id, tenantId, email: user.email, buildingName, fullName: fullName||'' }, JWT_SECRET, { expiresIn: '30d' });
   // שלח אימייל ברוכה (לא חוסם את התשובה)
   sendWelcomeEmail(user.email, buildingName, tenantId).catch(() => {});
   res.json({ ok: true, token, buildingName, plan: 'trial', trialEnd });
@@ -402,7 +402,7 @@ app.post('/api/auth/login', async (req, res) => {
     return res.json({ ok: false, error: 'תקופת הניסיון הסתיימה – צור קשר לחידוש המנוי', expired: true });
   }
 
-  const token = jwt.sign({ userId: user.id, tenantId: user.tenantId, email: user.email, buildingName: user.buildingName }, JWT_SECRET, { expiresIn: '30d' });
+  const token = jwt.sign({ userId: user.id, tenantId: user.tenantId, email: user.email, buildingName: user.buildingName, fullName: user.fullName||'' }, JWT_SECRET, { expiresIn: '30d' });
   res.json({ ok: true, token, buildingName: user.buildingName, plan: user.plan, trialEnd: user.trialEnd });
 });
 
