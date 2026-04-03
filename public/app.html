@@ -340,7 +340,7 @@ function vpLogout() {
               <tbody><tr>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">ישראל כהן</td>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">0501234567</td>
-                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">israel@email.com</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);"><a href="/cdn-cgi/l/email-protection" class="__cf_email__" data-cfemail="87eef4f5e6e2ebc7e2eae6eeeba9e4e8ea">[email&#160;protected]</a></td>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">כהן י, דירה 3</td>
               </tr></tbody>
             </table>
@@ -865,7 +865,7 @@ function vpLogout() {
     <div class="card">
       <div class="card-header">🔧 פתרון בעיות נפוצות <button class="btn btn-secondary btn-sm" onclick="tsOpenFullGuide()" style="margin-right:auto;">📄 פתח מדריך מלא</button></div>
       <div class="card-body">
-        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:16px;">לא מוצאים את הבעיה? <a href="mailto:vaadpro15@gmail.com" style="color:var(--accent);">צרו קשר</a></p>
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:16px;">לא מוצאים את הבעיה? <a href="/cdn-cgi/l/email-protection#bfc9dededbcfcdd08e8affd8d2ded6d391dcd0d2" style="color:var(--accent);">צרו קשר</a></p>
 
         <div id="tsSearch" style="margin-bottom:16px;">
           <input type="text" id="tsSearchInput" placeholder="🔍 חפש בעיה..." oninput="tsFilter()" style="width:100%;">
@@ -912,7 +912,7 @@ function vpLogout() {
 </div>
 <div id="toast"></div>
 
-<script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
 const API = '/api';
 let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,monthMode:'auto',manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
@@ -1175,37 +1175,34 @@ function toggleStep(id) {
 }
 
 function shareGetDefaultMsg() {
-  var name = 'חבר', building = 'הבניין שלי';
+  var nm = '\u05d7\u05d1\u05e8', bld = '\u05d4\u05d1\u05e0\u05d9\u05d9\u05df \u05e9\u05dc\u05d9';
   try {
-    var token = localStorage.getItem('vp_token');
-    if (token) {
-      var b64 = token.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
-      var p = JSON.parse(decodeURIComponent(atob(b64).split('').map(function(c){ return '%'+('00'+c.charCodeAt(0).toString(16)).slice(-2); }).join('')));
-      if (p.fullName) name = p.fullName.split(' ')[0];
-      else if (p.email) name = p.email.split('@')[0];
-      if (p.buildingName) building = p.buildingName;
+    var tok = localStorage.getItem('vp_token');
+    if (tok) {
+      var b64 = tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/');
+      var pl = JSON.parse(decodeURIComponent(atob(b64).split('').map(function(ch){
+        return '%' + ('00' + ch.charCodeAt(0).toString(16)).slice(-2);
+      }).join('')));
+      if (pl.fullName) nm = pl.fullName.split(' ')[0];
+      else if (pl.email) nm = pl.email.split('@')[0];
+      if (pl.buildingName) bld = pl.buildingName;
     }
   } catch(e) {}
-  return 'שלום! 👋
-
-' +
-    'אני ' + name + ', מנהל ועד הבית של ' + building + '.
-
-' +
-    'גיליתי תוכנה שחסכה לי המון זמן — VaadPro.
-' +
-    'היא שולחת תזכורות תשלום לכל הדיירים בווטסאפ בלחיצה אחת, ' +
-    'ומזהה מי שילם ישירות מקובץ הבנק.
-
-' +
-    '30 יום ניסיון חינם, ללא כרטיס אשראי:
-' +
-    '👉 https://vaadpro.org
-
-' +
-    'ממליץ בחום! 🏢';
+  var lines = [
+    '\u05e9\u05dc\u05d5\u05dd! \ud83d\udc4b',
+    '',
+    '\u05d0\u05e0\u05d9 ' + nm + ', \u05de\u05e0\u05d4\u05dc \u05d5\u05e2\u05d3 \u05d4\u05d1\u05d9\u05ea \u05e9\u05dc ' + bld + '.',
+    '',
+    '\u05d2\u05d9\u05dc\u05d9\u05ea\u05d9 \u05ea\u05d5\u05db\u05e0\u05d4 \u05e9\u05d7\u05e1\u05db\u05d4 \u05dc\u05d9 \u05d4\u05de\u05d5\u05df \u05d6\u05de\u05df \u2014 VaadPro.',
+    '\u05d4\u05d9\u05d0 \u05e9\u05d5\u05dc\u05d7\u05ea \u05ea\u05d6\u05db\u05d5\u05e8\u05d5\u05ea \u05ea\u05e9\u05dc\u05d5\u05dd \u05dc\u05db\u05dc \u05d4\u05d3\u05d9\u05d9\u05e8\u05d9\u05dd \u05d1\u05d5\u05d5\u05d8\u05e1\u05d0\u05e4 \u05d1\u05dc\u05d7\u05d9\u05e6\u05d4 \u05d0\u05d7\u05ea, \u05d5\u05de\u05d6\u05d4\u05d4 \u05de\u05d9 \u05e9\u05d9\u05dc\u05dd \u05d9\u05e9\u05d9\u05e8\u05d5\u05ea \u05de\u05e7\u05d5\u05d1\u05e5 \u05d4\u05d1\u05e0\u05e7.',
+    '',
+    '30 \u05d9\u05d5\u05dd \u05e0\u05d9\u05e1\u05d9\u05d5\u05df \u05d7\u05d9\u05e0\u05dd, \u05dc\u05dc\u05d0 \u05db\u05e8\u05d8\u05d9\u05e1 \u05d0\u05e9\u05e8\u05d0\u05d9:',
+    '\ud83d\udc49 https://vaadpro.org',
+    '',
+    '\u05de\u05de\u05dc\u05d9\u05e5 \u05d1\u05d7\u05d5\u05dd! \ud83c\udfe2'
+  ];
+  return lines.join('\n');
 }
-
 function shareInitMsg() {
   const el = document.getElementById('shareMsg');
   if (el && !el.value) el.value = shareGetDefaultMsg();
@@ -4027,16 +4024,4 @@ async function downloadBridge() {
         planEl.style.background='rgba(248,81,73,.15)'; planEl.style.color='#f85149';
       }
     } else if (d.plan) {
-      planEl.textContent = d.plan==='basic'?'בסיסי':d.plan==='advanced'?'מתקדם':'פרימיום';
-    }
-  }).catch(function(){});
-
-  // אתחל WhatsApp
-  fetch('/api/wa/init', {method:'POST'}).catch(function(){});
-
-  // הפעל את האפליקציה — כאן init() כבר מוגדר
-  init();
-})();
-</script>
-</body>
-</html>
+      planEl.textContent = d.plan==='basic'?'בסיסי':d.plan==='advance
