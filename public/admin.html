@@ -456,6 +456,8 @@
     </div>
     <div class="sidebar-footer">
       <div id="adminEmailDisplay" style="margin-bottom:4px"></div>
+      <div id="adminRoleDisplay" style="font-size:11px;color:var(--text3);margin-bottom:6px;"></div>
+      <button id="btnManageAdmins" style="display:none;width:100%;margin-bottom:6px;background:rgba(99,102,241,.15);color:#818cf8;border:1px solid rgba(99,102,241,.3);border-radius:6px;padding:6px;font-size:12px;cursor:pointer;" onclick="showPage('admins')">👤 ניהול משתמשי Admin</button>
       <button class="pin-btn" id="pinBtn" onclick="togglePin()">📌 קבע תפריט</button>
       <button class="logout-btn" onclick="logout()">התנתק</button>
     </div>
@@ -676,6 +678,20 @@
     </div>
 
     <!-- ── MSG LOG ── -->
+    <div class="page" id="page-admins">
+      <h2 class="page-title">👤 ניהול משתמשי Admin</h2>
+      <div class="table-wrap" style="margin-bottom:20px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+          <span style="font-size:13px;color:var(--text2);">משתמשים שיש להם גישה לממשק הניהול</span>
+          <button class="btn btn-green btn-sm" onclick="openAddAdminModal()">➕ הוסף Admin</button>
+        </div>
+        <table>
+          <thead><tr><th>שם</th><th>אימייל</th><th>תפקיד</th><th>פעולות</th></tr></thead>
+          <tbody id="adminUsersTable"><tr><td colspan="4" style="text-align:center;color:var(--text2);">טוען...</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="page" id="page-msglog">
       <div class="page-header">
         <h1>לוג שליחות</h1>
@@ -905,6 +921,8 @@
 const API = ''; // same origin
 let adminToken = localStorage.getItem('vaadpro_admin_token');
 let adminEmailGlobal = localStorage.getItem('vaadpro_admin_email');
+let adminRole = localStorage.getItem('vaadpro_admin_role') || 'admin';
+let adminName = localStorage.getItem('vaadpro_admin_name') || '';
 let allCustomers = [];
 let allLeads = [];
 let currentChannel = 'wa';
@@ -939,8 +957,12 @@ async function adminLogin() {
   if (data.ok) {
     adminToken = data.token;
     adminEmailGlobal = email;
+    adminRole = data.role || 'admin';
+    adminName = data.name || '';
     localStorage.setItem('vaadpro_admin_token', adminToken);
     localStorage.setItem('vaadpro_admin_email', email);
+    localStorage.setItem('vaadpro_admin_role', adminRole);
+    localStorage.setItem('vaadpro_admin_name', adminName);
     document.getElementById('loginError').style.display = 'none';
     showApp();
   } else {
@@ -959,6 +981,19 @@ function showApp() {
   loadLeads();
   loadWaitingInstall();
   loadTemplates();
+  // הצג אלמנטים לפי תפקיד
+  const isSuper = adminRole === 'super';
+  const isViewer = adminRole === 'viewer';
+  document.getElementById('btnManageAdmins').style.display = isSuper ? 'block' : 'none';
+  const roleLabel = isSuper ? '⭐ Super Admin' : isViewer ? '👁️ צופה' : '👤 Admin';
+  document.getElementById('adminRoleDisplay').textContent = roleLabel;
+  // הוסף banner לצופים
+  if (isViewer) {
+    const banner = document.createElement('div');
+    banner.style = 'background:rgba(251,191,36,.15);border:1px solid rgba(251,191,36,.3);border-radius:8px;padding:8px 12px;font-size:12px;color:#92400e;margin-bottom:12px;text-align:center;';
+    banner.textContent = '👁️ מצב צפייה בלבד — אין אפשרות לשלוח או לערוך';
+    document.querySelector('.main').prepend(banner);
+  }
   loadMsgLog();
   loadTrialAlerts();
   loadWaitingInstall();
@@ -1021,6 +1056,8 @@ document.querySelectorAll('.nav-item').forEach(item => {
 function logout() {
   localStorage.removeItem('vaadpro_admin_token');
   localStorage.removeItem('vaadpro_admin_email');
+  localStorage.removeItem('vaadpro_admin_role');
+  localStorage.removeItem('vaadpro_admin_name');
   location.reload();
 }
 
@@ -1032,6 +1069,7 @@ function adminHeaders() {
 // NAVIGATION
 // ════════════════════════════════════════════
 function showPage(name) {
+  if (name === 'admins') setTimeout(loadAdminUsers, 50);
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
   document.getElementById('page-' + name).classList.add('active');
@@ -1532,6 +1570,75 @@ async function setInstallStatus(email, status) {
       await loadWaitingInstall();
     }
   } catch(e) { toast('שגיאה בעדכון סטטוס', 'err'); }
+}
+
+// ════════════════════════════════════════════
+// ניהול משתמשי Admin
+// ════════════════════════════════════════════
+async function loadAdminUsers() {
+  try {
+    const res = await fetch('/api/admin/admins', { headers: adminHeaders() });
+    const data = await res.json();
+    const tbody = document.getElementById('adminUsersTable');
+    if (!tbody) return;
+    if (!data.admins || !data.admins.length) {
+      tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text2);">אין משתמשים</td></tr>';
+      return;
+    }
+    tbody.innerHTML = data.admins.map(a => {
+      const roleLabel = a.role === 'super' ? '<span style="color:#f59e0b;font-weight:700;">⭐ Super Admin</span>' :
+        a.role === 'viewer' ? '<span style="color:#6b7280;">👁️ צופה</span>' :
+        '<span style="color:#818cf8;">👤 Admin</span>';
+      const isSelf = a.email === adminEmailGlobal;
+      return '<tr>' +
+        '<td>' + (a.name||'') + (isSelf ? ' <span style="font-size:11px;color:var(--text3)">(אתה)</span>' : '') + '</td>' +
+        '<td style="direction:ltr;text-align:right;">' + a.email + '</td>' +
+        '<td>' + roleLabel + '</td>' +
+        '<td style="white-space:nowrap;">' +
+          '<button class="btn btn-sm btn-secondary" onclick="resetAdminPassword(this.dataset.id, this.dataset.n)" data-id="' + a.id + '" data-n="' + (a.name||a.email) + '">🔑 סיסמה</button> ' +
+          (!isSelf ? '<button class="btn btn-sm btn-danger-soft" onclick="deleteAdminUser(this.dataset.id, this.dataset.n)" data-id="' + a.id + '" data-n="' + (a.name||a.email) + '">🗑️</button>' : '') +
+        '</td>' +
+      '</tr>';
+    }).join('');
+  } catch(e) { console.error('loadAdminUsers:', e); }
+}
+
+function openAddAdminModal() {
+  const name = prompt('שם מלא:');
+  if (!name) return;
+  const email = prompt('אימייל:');
+  if (!email) return;
+  const password = prompt('סיסמה (לפחות 6 תווים):');
+  if (!password || password.length < 6) { toast('סיסמה קצרה מדי', 'err'); return; }
+  const roleInput = prompt('תפקיד:\n1 = Super Admin\n2 = Admin רגיל\n3 = צופה בלבד\n\nהכנס 1, 2 או 3:');
+  const role = roleInput === '1' ? 'super' : roleInput === '3' ? 'viewer' : 'admin';
+  fetch('/api/admin/admins', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ email, password, name, role })
+  }).then(r => r.json()).then(d => {
+    if (d.ok) { toast('✅ Admin נוסף!', 'ok'); loadAdminUsers(); }
+    else toast(d.error || 'שגיאה', 'err');
+  });
+}
+
+async function resetAdminPassword(id, name) {
+  const password = prompt('סיסמה חדשה עבור ' + name + ':');
+  if (!password || password.length < 6) { toast('סיסמה קצרה מדי', 'err'); return; }
+  const res = await fetch('/api/admin/admins/' + id + '/password', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ password })
+  });
+  const d = await res.json();
+  if (d.ok) toast('✅ סיסמה עודכנה!', 'ok');
+  else toast(d.error || 'שגיאה', 'err');
+}
+
+async function deleteAdminUser(id, name) {
+  if (!confirm('למחוק את ' + name + '?')) return;
+  const res = await fetch('/api/admin/admins/' + id, { method: 'DELETE', headers: adminHeaders() });
+  const d = await res.json();
+  if (d.ok) { toast('✅ נמחק', 'ok'); loadAdminUsers(); }
+  else toast(d.error || 'שגיאה', 'err');
 }
 
 // ════════════════════════════════════════════

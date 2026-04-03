@@ -694,15 +694,39 @@ const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + '-admin';
 
 function loadAdmins() {
   if (!fs.existsSync(ADMIN_USERS_FILE)) {
-    // צור admin ברירת מחדל אם לא קיים
     const defaultAdmin = [{
+      id: 'super-1',
       email: process.env.ADMIN_EMAIL || 'admin@vaadpro.co.il',
+      name: 'Super Admin',
+      role: 'super',
       passHash: bcrypt.hashSync(process.env.ADMIN_PASSWORD || 'VaadPro2025!', 10)
     }];
     fs.writeFileSync(ADMIN_USERS_FILE, JSON.stringify(defaultAdmin, null, 2));
     return defaultAdmin;
   }
-  try { return JSON.parse(fs.readFileSync(ADMIN_USERS_FILE, 'utf8')); } catch(e) { return []; }
+  try {
+    const admins = JSON.parse(fs.readFileSync(ADMIN_USERS_FILE, 'utf8'));
+    // מיגרציה — הוסף role=super לadmins ישנים
+    let changed = false;
+    admins.forEach(a => {
+      if (!a.role) { a.role = 'super'; changed = true; }
+      if (!a.id) { a.id = require('uuid').v4(); changed = true; }
+      if (!a.name) { a.name = a.email.split('@')[0]; changed = true; }
+    });
+    if (changed) fs.writeFileSync(ADMIN_USERS_FILE, JSON.stringify(admins, null, 2));
+    return admins;
+  } catch(e) { return []; }
+}
+function saveAdmins(admins) { fs.writeFileSync(ADMIN_USERS_FILE, JSON.stringify(admins, null, 2)); }
+
+// חסום צופים מפעולות כתיבה
+function viewerBlockMiddleware(req, res, next) {
+  const token = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
+  try {
+    const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+    if (decoded.role === 'viewer') return res.status(403).json({ ok: false, error: 'אין הרשאה — צופה בלבד' });
+    next();
+  } catch(e) { next(); }
 }
 
 function adminAuthMiddleware(req, res, next) {
@@ -711,6 +735,21 @@ function adminAuthMiddleware(req, res, next) {
   try {
     const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
     if (!decoded.isAdmin) return res.status(403).json({ error: 'אסור' });
+    req.adminUser = decoded;
+    next();
+  } catch(e) {
+    res.status(401).json({ error: 'פג תוקף החיבור' });
+  }
+}
+
+// Super Admin בלבד
+function superAdminMiddleware(req, res, next) {
+  const token = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'לא מחובר' });
+  try {
+    const decoded = jwt.verify(token, ADMIN_JWT_SECRET);
+    if (!decoded.isAdmin) return res.status(403).json({ error: 'אסור' });
+    if (decoded.role !== 'super') return res.status(403).json({ error: 'נדרשות הרשאות Super Admin' });
     req.adminUser = decoded;
     next();
   } catch(e) {
@@ -727,8 +766,47 @@ app.post('/api/admin/login', async (req, res) => {
   if (!admin) return res.json({ ok: false, error: 'אימייל או סיסמה שגויים' });
   const ok = await bcrypt.compare(password, admin.passHash);
   if (!ok) return res.json({ ok: false, error: 'אימייל או סיסמה שגויים' });
-  const token = jwt.sign({ email: admin.email, isAdmin: true }, ADMIN_JWT_SECRET, { expiresIn: '7d' });
-  res.json({ ok: true, token, email: admin.email });
+  const token = jwt.sign({ email: admin.email, isAdmin: true, role: admin.role || 'admin', name: admin.name || '' }, ADMIN_JWT_SECRET, { expiresIn: '7d' });
+  res.json({ ok: true, token, email: admin.email, role: admin.role || 'admin', name: admin.name || '' });
+});
+
+// ── Admin: ניהול משתמשי Admin ──────────────────────────────────
+app.get('/api/admin/admins', superAdminMiddleware, (req, res) => {
+  const admins = loadAdmins().map(a => ({ id: a.id, email: a.email, name: a.name, role: a.role }));
+  res.json({ admins });
+});
+
+app.post('/api/admin/admins', superAdminMiddleware, async (req, res) => {
+  const { email, password, name, role } = req.body;
+  if (!email || !password || !name) return res.json({ ok: false, error: 'חסרים שדות חובה' });
+  if (!['admin', 'super', 'viewer'].includes(role)) return res.json({ ok: false, error: 'תפקיד לא תקין' });
+  const admins = loadAdmins();
+  if (admins.find(a => a.email === email.toLowerCase())) return res.json({ ok: false, error: 'אימייל כבר קיים' });
+  const passHash = await bcrypt.hash(password, 10);
+  admins.push({ id: require('uuid').v4(), email: email.toLowerCase(), name, role, passHash });
+  saveAdmins(admins);
+  res.json({ ok: true });
+});
+
+app.delete('/api/admin/admins/:id', superAdminMiddleware, (req, res) => {
+  const admins = loadAdmins();
+  const target = admins.find(a => a.id === req.params.id);
+  if (!target) return res.json({ ok: false, error: 'לא נמצא' });
+  if (target.role === 'super' && admins.filter(a => a.role === 'super').length === 1)
+    return res.json({ ok: false, error: 'חייב להישאר לפחות Super Admin אחד' });
+  saveAdmins(admins.filter(a => a.id !== req.params.id));
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/admins/:id/password', superAdminMiddleware, async (req, res) => {
+  const { password } = req.body;
+  if (!password || password.length < 6) return res.json({ ok: false, error: 'סיסמה קצרה מדי' });
+  const admins = loadAdmins();
+  const idx = admins.findIndex(a => a.id === req.params.id);
+  if (idx < 0) return res.json({ ok: false, error: 'לא נמצא' });
+  admins[idx].passHash = await bcrypt.hash(password, 10);
+  saveAdmins(admins);
+  res.json({ ok: true });
 });
 
 // ── Admin: רשימת לקוחות ─────────────────────────────────────────
@@ -743,7 +821,7 @@ app.get('/api/admin/tenants', adminAuthMiddleware, (req, res) => {
 });
 
 // ── Admin: שינוי plan ───────────────────────────────────────────
-app.post('/api/admin/set-plan', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/set-plan', superAdminMiddleware, (req, res) => {
   const { email, plan } = req.body;
   const users = loadUsers();
   const user = users.find(u => u.email === email.toLowerCase());
@@ -832,7 +910,7 @@ app.post('/api/send-email-tenant', authMiddleware, async (req, res) => {
 });
 
 // ── Admin: שליחת מייל (Resend / SMTP fallback) ─────────────────
-app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
+app.post('/api/admin/send-email', adminAuthMiddleware, viewerBlockMiddleware, async (req, res) => {
   const { to, subject, body, attachment } = req.body;
   if (!to || !subject || !body) return res.json({ ok: false, error: 'חסרים שדות' });
   try {
@@ -875,7 +953,7 @@ app.post('/api/admin/send-email', adminAuthMiddleware, async (req, res) => {
 });
 
 // ── Admin: שליחת WA ─────────────────────────────────────────────
-app.post('/api/admin/send-wa', adminAuthMiddleware, async (req, res) => {
+app.post('/api/admin/send-wa', adminAuthMiddleware, viewerBlockMiddleware, async (req, res) => {
   const { phone, message, tenantId, sendToOwner } = req.body;
   if (!message) return res.json({ ok: false, error: 'חסרה הודעה' });
 
@@ -942,7 +1020,7 @@ app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
 });
 
 // שמור כרטיית לקוח/ליד
-app.post('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/crm/:id', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const card = getCRMCard(req.params.id);
   const updated = Object.assign(card, req.body);
   saveCRMCard(req.params.id, updated);
@@ -950,7 +1028,7 @@ app.post('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
 });
 
 // הוסף סיכום שיחה
-app.post('/api/admin/crm/:id/call', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/crm/:id/call', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { summary } = req.body;
   if (!summary) return res.json({ ok: false, error: 'חסר סיכום' });
   const card = getCRMCard(req.params.id);
@@ -961,7 +1039,7 @@ app.post('/api/admin/crm/:id/call', adminAuthMiddleware, (req, res) => {
 });
 
 // הוסף משימה
-app.post('/api/admin/crm/:id/task', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/crm/:id/task', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { text, dueDate } = req.body;
   if (!text) return res.json({ ok: false, error: 'חסר טקסט' });
   const card = getCRMCard(req.params.id);
@@ -995,7 +1073,7 @@ app.get('/api/admin/leads', adminAuthMiddleware, (req, res) => {
   res.json({ leads: loadLeads() });
 });
 
-app.post('/api/admin/leads', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/leads', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { id, name, phone, email, source, status, notes } = req.body;
   if (!name) return res.json({ ok: false, error: 'שם חובה' });
   const leads = loadLeads();
@@ -1007,13 +1085,13 @@ app.post('/api/admin/leads', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true, lead });
 });
 
-app.delete('/api/admin/leads/:id', adminAuthMiddleware, (req, res) => {
+app.delete('/api/admin/leads/:id', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const leads = loadLeads().filter(l => l.id !== req.params.id);
   saveLeads(leads);
   res.json({ ok: true });
 });
 
-app.post('/api/admin/leads/import', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/leads/import', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { leads: newLeads } = req.body;
   if (!Array.isArray(newLeads)) return res.json({ ok: false, error: 'פורמט שגוי' });
   const leads = loadLeads();
@@ -1032,7 +1110,7 @@ app.get('/api/admin/templates', adminAuthMiddleware, (req, res) => {
   res.json({ templates: loadTemplates() });
 });
 
-app.post('/api/admin/templates', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/templates', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { name, channel, subject, body } = req.body;
   if (!name || !body) return res.json({ ok: false, error: 'חסרים שדות' });
   const templates = loadTemplates();
@@ -1044,7 +1122,7 @@ app.post('/api/admin/templates', adminAuthMiddleware, (req, res) => {
   res.json({ ok: true, template });
 });
 
-app.delete('/api/admin/templates/:id', adminAuthMiddleware, (req, res) => {
+app.delete('/api/admin/templates/:id', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const templates = loadTemplates().filter(t => t.id !== req.params.id);
   saveTemplates(templates);
   res.json({ ok: true });
@@ -1144,7 +1222,7 @@ setInterval(runTrialCheck, 24 * 60 * 60 * 1000);
 setTimeout(runTrialCheck, 30 * 1000);
 
 // ── Admin: עריכת לקוח ───────────────────────────────────────────
-app.post('/api/admin/edit-customer', adminAuthMiddleware, async (req, res) => {
+app.post('/api/admin/edit-customer', superAdminMiddleware, async (req, res) => {
   const { oldEmail, newEmail, fullName, phone, buildingName, address, password } = req.body;
   if (!oldEmail || !newEmail) return res.json({ ok: false, error: 'חסר אימייל' });
   const users = loadUsers();
@@ -1170,7 +1248,7 @@ app.post('/api/admin/edit-customer', adminAuthMiddleware, async (req, res) => {
 });
 
 // ── Admin: מחיקת לקוח ───────────────────────────────────────────
-app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/delete-customer', superAdminMiddleware, (req, res) => {
   const { email } = req.body;
   if (!email) return res.json({ ok: false, error: 'חסר אימייל' });
   let users = loadUsers();
@@ -1187,7 +1265,7 @@ app.post('/api/admin/delete-customer', adminAuthMiddleware, (req, res) => {
 
 // ── Admin: ממתינים להתקנה ───────────────────────────────────────
 // ── Admin: עדכון סטטוס התקנה ידני ─────────────────────────────
-app.post('/api/admin/install-status', adminAuthMiddleware, (req, res) => {
+app.post('/api/admin/install-status', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { email, status } = req.body;
   if (!email || !status) return res.json({ ok: false, error: 'חסרים פרטים' });
   const statuses = loadInstallStatus();
