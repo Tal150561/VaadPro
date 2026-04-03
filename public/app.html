@@ -297,6 +297,7 @@ function vpLogout() {
     <button class="tab-btn" onclick="switchTab('trends')">📈 ניתוח מגמות</button>
     <button class="tab-btn" onclick="switchTab('bulletin')">📣 הודעות ועד הבית</button>
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
+    <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
   </div>
 </div>
 
@@ -835,6 +836,24 @@ function vpLogout() {
 
   </div>
 
+  <!-- TAB TROUBLESHOOT -->
+  <div class="tab-panel" id="tab-troubleshoot">
+
+    <div class="card">
+      <div class="card-header">🔧 פתרון בעיות נפוצות <button class="btn btn-secondary btn-sm" onclick="tsOpenFullGuide()" style="margin-right:auto;">📄 פתח מדריך מלא</button></div>
+      <div class="card-body">
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:16px;">לא מוצאים את הבעיה? <a href="mailto:vaadpro15@gmail.com" style="color:var(--accent);">צרו קשר</a></p>
+
+        <div id="tsSearch" style="margin-bottom:16px;">
+          <input type="text" id="tsSearchInput" placeholder="🔍 חפש בעיה..." oninput="tsFilter()" style="width:100%;">
+        </div>
+
+        <div id="tsAccordion"></div>
+      </div>
+    </div>
+
+  </div>
+
 </main>
 
 <!-- Help Modal -->
@@ -876,6 +895,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,mo
 let statusInterval=null, saveTimer=null;
 
 function switchTab(name) {
+  if (name === 'troubleshoot') setTimeout(tsInit, 50);
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('tab-'+name).classList.add('active');
@@ -3371,6 +3391,332 @@ async function trendExportHTML() {
 }
 
 // ────────────────────────────────────────────────────────────────
+
+// ── פתרון בעיות ─────────────────────────────────────────────
+const TS_ITEMS = [
+  {
+    cat: "WhatsApp / Bridge",
+    q: "הסטטוס מציג 'לא מחובר' למרות שה-Bridge רץ",
+    a: [
+      "ודא שחלון ה-Bridge (החלון השחור) פתוח ולא מוזער",
+      "לחץ רענן בדף — לפעמים הסטטוס מתעדכן באיחור של 30 שניות",
+      "סגור את start.bat ופתח שוב",
+      "אם עדיין לא עובד — מחק את תיקיית wa-auth בתוך VaadPro-Bridge וסרוק QR מחדש"
+    ]
+  },
+  {
+    cat: "WhatsApp / Bridge",
+    q: "ה-QR לא מופיע / נעלם מהר מדי",
+    a: [
+      "רענן את הדף ב-VaadPro ולחץ שוב על 'חיבור ווטסאפ'",
+      "ה-QR תקף ל-60 שניות — סרוק מהר",
+      "ודא שה-Bridge פועל (חלון שחור פתוח) לפני שאתה לוחץ על חיבור ווטסאפ"
+    ]
+  },
+  {
+    cat: "WhatsApp / Bridge",
+    q: "הודעות WA לא נשלחות — מקבל שגיאה",
+    a: [
+      "ודא שה-Bridge מחובר (סטטוס ירוק)",
+      "ווטסאפ חייב להיות פתוח בטלפון (לא חייב להיות בחזית, אבל לא סגור לחלוטין)",
+      "בדוק שהטלפון מחובר לאינטרנט",
+      "נסה לשלוח לדייר בודד — אם עובד, הבעיה בדייר ספציפי (מספר שגוי?)"
+    ]
+  },
+  {
+    cat: "WhatsApp / Bridge",
+    q: "install.bat לא עושה כלום / נסגר מיד",
+    a: [
+      "ודא שהתקנת Node.js (nodejs.org) לפני הפעלת install.bat",
+      "לחץ ימני על install.bat ← 'הפעל כמנהל'",
+      "Mac/Linux: פתח Terminal בתיקייה והרץ: chmod +x install.sh && ./install.sh"
+    ]
+  },
+  {
+    cat: "WhatsApp / Bridge",
+    q: "ווטסאפ התנתק לאחר ימים / שבועות",
+    a: [
+      "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
+      "פתח שוב את start.bat — אם מתבקש QR, סרוק שוב",
+      "אין צורך להריץ install.bat שוב — רק start.bat"
+    ]
+  },
+  {
+    cat: "ייבוא קובץ בנק",
+    q: "המערכת לא מזהה אף דייר / מזהה אפס שילמו",
+    a: [
+      "בדוק שמילות החיפוש של הדייר תואמות לטקסט שמופיע בקובץ הבנק",
+      "ודא שבחרת את עמודת השם הנכונה במיפוי העמודות",
+      "נסה להוסיף את שם המשפחה בלבד כמילת חיפוש",
+      "אם הסכום לא תואם — נסה להגדיל את הסבילות (±) או השאר ריק לחיפוש לפי שם בלבד"
+    ]
+  },
+  {
+    cat: "ייבוא קובץ בנק",
+    q: "קובץ הבנק לא נטען / שגיאה בקריאת הקובץ",
+    a: [
+      "ודא שהקובץ הוא Excel (.xlsx/.xls) או CSV — לא PDF",
+      "נסה לפתוח את הקובץ ב-Excel ולשמור מחדש בפורמט .xlsx",
+      "אם הקובץ מוגן בסיסמה — הסר את ההגנה תחילה"
+    ]
+  },
+  {
+    cat: "ייבוא קובץ בנק",
+    q: "הדייר מזוהה כמשלם אבל הוא לא שילם",
+    a: [
+      "מילות החיפוש שלו רחבות מדי — למשל 'כהן' תתאים לכל העברה של כהן",
+      "צמצם את מילות החיפוש — הוסף שם פרטי, מספר דירה או ביטוי ייחודי"
+    ]
+  },
+  {
+    cat: "דיירים",
+    q: "בייבוא אקסל — כל הדיירים מופיעים כחדשים",
+    a: [
+      "ודא שעמודת הטלפון מוגדרת כ-Text ב-Excel (לא מספר)",
+      "אם הטלפון הוצג ללא 0 (כגון 502146510) — Excel הפך אותו למספר",
+      "לחץ ימני על עמודת הטלפון ← Format Cells ← Text ← הקלד מחדש",
+      "אפשר גם לרשום גרש לפני המספר: '0501234567"
+    ]
+  },
+  {
+    cat: "דיירים",
+    q: "לא מצליח לייבא דייר — 'טלפון לא תקין'",
+    a: [
+      "טלפון חייב להיות 10 ספרות המתחיל ב-05",
+      "ודא שאין רווחים, מקפים או תווים מיוחדים",
+      "מספרים בינלאומיים (+972...) מומרים אוטומטית"
+    ]
+  },
+  {
+    cat: "מייל",
+    q: "מיילים לא מגיעים ללקוחות",
+    a: [
+      "בדוק שהמייל של הדייר הוגדר נכון בטאב 'דיירים'",
+      "בדוק תיבת ספאם אצל הנמען",
+      "בקש מהנמען להוסיף noreply@vaadpro.org לאנשי קשר",
+      "ודא שה-RESEND_API_KEY מוגדר ב-Railway"
+    ]
+  },
+  {
+    cat: "מייל",
+    q: "קובץ מצורף למייל לא נשלח / שגיאה בשליחה",
+    a: [
+      "גודל מקסימלי לקובץ מצורף: כ-20MB",
+      "פורמטים נתמכים: PDF, Excel, Word, תמונות (PNG/JPG)",
+      "אם הקובץ גדול — נסה לדחוס אותו לפני שליחה"
+    ]
+  },
+  {
+    cat: "דוחות",
+    q: "הגרפים לא מוצגים בדוח HTML",
+    a: [
+      "ודא שאתה פותח את קובץ ה-HTML בדפדפן (Chrome / Firefox)",
+      "לא לפתוח ישירות מ-Outlook — יש לשמור ולפתוח בדפדפן",
+      "גרפים מופיעים רק אחרי שיצרת ניתוח בטאב 'ניתוח מגמות' באותה פעילות"
+    ]
+  },
+  {
+    cat: "כללי",
+    q: "האפליקציה איטית / לא נטענת",
+    a: [
+      "רענן את הדף (Ctrl+F5)",
+      "נסה דפדפן אחר (Chrome מומלץ)",
+      "בדוק חיבור אינטרנט",
+      "אם הבעיה נמשכת — בדוק סטטוס Railway: railway.app/status"
+    ]
+  },
+  {
+    cat: "כללי",
+    q: "נתונים שהזנתי נעלמו אחרי רענון",
+    a: [
+      "כל הנתונים נשמרים אוטומטית בשרת — לא אמורים להיעלם",
+      "ייתכן שיש בעיה בחיבור לשרת — בדוק שכתובת vaadpro.org נגישה",
+      "אם הבעיה חוזרת — פנה לתמיכה עם פרטים על מה שנעלם"
+    ]
+  },
+];
+
+let tsFiltered = [...TS_ITEMS];
+let tsOpenIdx = null;
+
+function tsRender(items) {
+  const el = document.getElementById('tsAccordion');
+  if (!items.length) {
+    el.innerHTML = '<div style="color:var(--text2);padding:16px;text-align:center;">לא נמצאו תוצאות</div>';
+    return;
+  }
+  // Group by category
+  const cats = {};
+  items.forEach(function(item, idx) {
+    if (!cats[item.cat]) cats[item.cat] = [];
+    cats[item.cat].push({ item, idx });
+  });
+
+  let html = '';
+  Object.entries(cats).forEach(function([cat, entries]) {
+    html += '<div style="margin-bottom:20px;">';
+    html += '<div style="font-size:0.78rem;font-weight:700;color:var(--text3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;padding-bottom:4px;border-bottom:1px solid var(--border);">' + cat + '</div>';
+    entries.forEach(function(e) {
+      const open = tsOpenIdx === e.idx;
+      html += '<div style="border:1px solid var(--border);border-radius:8px;margin-bottom:6px;overflow:hidden;">';
+      html += '<div onclick="tsToggle(' + e.idx + ')" style="display:flex;align-items:center;justify-content:space-between;padding:12px 14px;cursor:pointer;background:' + (open ? 'var(--surface2)' : 'var(--bg)') + ';gap:10px;">';
+      html += '<span style="font-size:0.87rem;font-weight:600;color:' + (open ? 'var(--accent)' : 'var(--text)') + ';">' + e.item.q + '</span>';
+      html += '<span style="font-size:0.8rem;color:var(--text3);flex-shrink:0;">' + (open ? '▲' : '▼') + '</span>';
+      html += '</div>';
+      if (open) {
+        html += '<div style="padding:12px 16px;background:var(--surface2);border-top:1px solid var(--border);">';
+        e.item.a.forEach(function(step, si) {
+          html += '<div style="display:flex;gap:10px;margin-bottom:8px;align-items:flex-start;">';
+          html += '<span style="font-size:0.78rem;font-weight:700;color:var(--accent);min-width:20px;margin-top:2px;">' + (si+1) + '.</span>';
+          html += '<span style="font-size:0.84rem;color:var(--text2);line-height:1.5;">' + step + '</span>';
+          html += '</div>';
+        });
+        html += '</div>';
+      }
+      html += '</div>';
+    });
+    html += '</div>';
+  });
+  el.innerHTML = html;
+}
+
+function tsToggle(idx) {
+  tsOpenIdx = tsOpenIdx === idx ? null : idx;
+  tsRender(tsFiltered);
+}
+
+function tsOpenFullGuide() {
+  const cats = {};
+  TS_ITEMS.forEach(function(item) {
+    if (!cats[item.cat]) cats[item.cat] = [];
+    cats[item.cat].push(item);
+  });
+
+  const catColors = {
+    "WhatsApp / Bridge": { bg: "#e8f5e9", border: "#4caf50", title: "#1b5e20" },
+    "ייבוא קובץ בנק":   { bg: "#e3f2fd", border: "#2196f3", title: "#0d47a1" },
+    "דיירים":           { bg: "#fce4ec", border: "#e91e63", title: "#880e4f" },
+    "מייל":             { bg: "#fff3e0", border: "#ff9800", title: "#e65100" },
+    "דוחות":            { bg: "#f3e5f5", border: "#9c27b0", title: "#4a148c" },
+    "כללי":             { bg: "#f5f5f5", border: "#9e9e9e", title: "#212121" },
+  };
+
+  let sectionsHtml = '';
+  Object.entries(cats).forEach(function([cat, items]) {
+    const c = catColors[cat] || { bg: "#f5f5f5", border: "#9e9e9e", title: "#212121" };
+    sectionsHtml += '<div style="margin-bottom:32px;">';
+    sectionsHtml += '<h2 style="font-size:18px;font-weight:700;color:' + c.title + ';padding:10px 16px;background:' + c.bg + ';border-right:5px solid ' + c.border + ';border-radius:4px;margin:0 0 16px;">' + cat + '</h2>';
+    items.forEach(function(item, i) {
+      sectionsHtml += '<div style="margin-bottom:14px;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">';
+      sectionsHtml += '<div style="background:' + c.bg + ';padding:12px 16px;border-bottom:1px solid #e0e0e0;">';
+      sectionsHtml += '<strong style="font-size:15px;color:' + c.title + ';">❓ ' + item.q + '</strong>';
+      sectionsHtml += '</div>';
+      sectionsHtml += '<div style="padding:14px 16px;background:#fff;">';
+      item.a.forEach(function(step, si) {
+        sectionsHtml += '<div style="display:flex;gap:12px;margin-bottom:8px;align-items:flex-start;">';
+        sectionsHtml += '<span style="font-size:13px;font-weight:700;color:' + c.border + ';min-width:22px;margin-top:1px;">' + (si+1) + '.</span>';
+        sectionsHtml += '<span style="font-size:14px;color:#333;line-height:1.6;">' + step + '</span>';
+        sectionsHtml += '</div>';
+      });
+      sectionsHtml += '</div></div>';
+    });
+    sectionsHtml += '</div>';
+  });
+
+  const html = '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="UTF-8">' +
+    '<title>VaadPro — מדריך פתרון בעיות</title>' +
+    '<style>' +
+    'body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f5f5f5;color:#222;}' +
+    '.wrap{max-width:860px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.1);}' +
+    'h1{font-size:26px;color:#1F4E79;margin:0 0 6px;}' +
+    '.sub{color:#666;font-size:14px;margin-bottom:28px;}' +
+    '.search{width:100%;padding:10px 14px;font-size:15px;border:1px solid #ddd;border-radius:8px;margin-bottom:24px;box-sizing:border-box;direction:rtl;}' +
+    '.item{display:none;}' +
+    '@media print{.search,.no-print{display:none!important}.wrap{box-shadow:none;border-radius:0}}' +
+    '</style>' +
+    '<script>' +
+    'function filter(){var q=document.getElementById("s").value.toLowerCase();' +
+    'document.querySelectorAll(".item").forEach(function(el){' +
+    'el.style.display=(!q||el.dataset.text.includes(q))?"block":"none"});}' +
+    'window.onload=function(){document.querySelectorAll(".item").forEach(function(el){el.style.display="block"});}' +
+    '<\/script>' +
+    '</head><body>' +
+    '<div class="wrap">' +
+    '<h1>🔧 VaadPro — מדריך פתרון בעיות</h1>' +
+    '<div class="sub">הדפס: Ctrl+P | עודכן: ' + new Date().toLocaleDateString('he-IL') + ' | לתמיכה: <a href="mailto:vaadpro15@gmail.com">vaadpro15@gmail.com</a></div>' +
+    '<input id="s" class="search" type="text" placeholder="🔍 חפש בעיה..." oninput="filter()">' +
+    sectionsHtml.replace(/<div style="margin-bottom:14px;/g, '<div class="item" data-text="' + '" style="margin-bottom:14px;').replace(/class="item" data-text=""/g, function() { return ''; }) +
+    '<div class="no-print" style="margin-top:32px;text-align:center;color:#aaa;font-size:12px;">VaadPro © 2026 | הדפס לPDF: Ctrl+P</div>' +
+    '</div></body></html>';
+
+  // בנה מחדש עם data-text נכון
+  const cats2 = {};
+  TS_ITEMS.forEach(function(item) {
+    if (!cats2[item.cat]) cats2[item.cat] = [];
+    cats2[item.cat].push(item);
+  });
+
+  let sectionsHtml2 = '';
+  Object.entries(cats2).forEach(function([cat, items]) {
+    const c = catColors[cat] || { bg: "#f5f5f5", border: "#9e9e9e", title: "#212121" };
+    sectionsHtml2 += '<div style="margin-bottom:32px;">';
+    sectionsHtml2 += '<h2 style="font-size:18px;font-weight:700;color:' + c.title + ';padding:10px 16px;background:' + c.bg + ';border-right:5px solid ' + c.border + ';border-radius:4px;margin:0 0 16px;">' + cat + '</h2>';
+    items.forEach(function(item) {
+      const searchText = (item.q + ' ' + item.a.join(' ') + ' ' + cat).toLowerCase();
+      sectionsHtml2 += '<div class="item" data-text="' + searchText.replace(/"/g,"'") + '" style="margin-bottom:14px;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">';
+      sectionsHtml2 += '<div style="background:' + c.bg + ';padding:12px 16px;border-bottom:1px solid #e0e0e0;">';
+      sectionsHtml2 += '<strong style="font-size:15px;color:' + c.title + ';">❓ ' + item.q + '</strong>';
+      sectionsHtml2 += '</div>';
+      sectionsHtml2 += '<div style="padding:14px 16px;background:#fff;">';
+      item.a.forEach(function(step, si) {
+        sectionsHtml2 += '<div style="display:flex;gap:12px;margin-bottom:8px;align-items:flex-start;">';
+        sectionsHtml2 += '<span style="font-size:13px;font-weight:700;color:' + c.border + ';min-width:22px;margin-top:1px;">' + (si+1) + '.</span>';
+        sectionsHtml2 += '<span style="font-size:14px;color:#333;line-height:1.6;">' + step + '</span>';
+        sectionsHtml2 += '</div>';
+      });
+      sectionsHtml2 += '</div></div>';
+    });
+    sectionsHtml2 += '</div>';
+  });
+
+  const html2 = '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="UTF-8">' +
+    '<title>VaadPro — מדריך פתרון בעיות</title>' +
+    '<style>body{font-family:Arial,sans-serif;margin:0;padding:24px;background:#f5f5f5;color:#222;}' +
+    '.wrap{max-width:860px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 12px rgba(0,0,0,.1);}' +
+    'h1{font-size:26px;color:#1F4E79;margin:0 0 6px;}' +
+    '.sub{color:#666;font-size:14px;margin-bottom:28px;}' +
+    '.search{width:100%;padding:10px 14px;font-size:15px;border:1px solid #ddd;border-radius:8px;margin-bottom:24px;box-sizing:border-box;direction:rtl;}' +
+    '@media print{.search,.no-print{display:none!important}.wrap{box-shadow:none;border-radius:0}}</style>' +
+    '<script>function filter(){var q=document.getElementById("s").value.toLowerCase();' +
+    'document.querySelectorAll(".item").forEach(function(el){el.style.display=(!q||el.dataset.text.includes(q))?"block":"none";});}' +
+    'window.onload=function(){document.querySelectorAll(".item").forEach(function(el){el.style.display="block";});};<\/script>' +
+    '</head><body><div class="wrap">' +
+    '<h1>🔧 VaadPro — מדריך פתרון בעיות</h1>' +
+    '<div class="sub">הדפס: Ctrl+P | עודכן: ' + new Date().toLocaleDateString('he-IL') + ' | תמיכה: <a href="mailto:vaadpro15@gmail.com">vaadpro15@gmail.com</a></div>' +
+    '<input id="s" class="search" type="text" placeholder="🔍 חפש בעיה..." oninput="filter()">' +
+    sectionsHtml2 +
+    '<div class="no-print" style="margin-top:32px;text-align:center;color:#aaa;font-size:12px;">VaadPro © 2026 | הדפס ל-PDF: Ctrl+P</div>' +
+    '</div></body></html>';
+
+  const w = window.open('', '_blank');
+  w.document.write(html2);
+  w.document.close();
+}
+
+
+  const q = document.getElementById('tsSearchInput').value.trim().toLowerCase();
+  tsFiltered = q ? TS_ITEMS.filter(function(i) {
+    return i.q.toLowerCase().includes(q) || i.cat.toLowerCase().includes(q) || i.a.some(function(a) { return a.toLowerCase().includes(q); });
+  }) : [...TS_ITEMS];
+  tsOpenIdx = null;
+  tsRender(tsFiltered);
+}
+
+function tsInit() {
+  tsFiltered = [...TS_ITEMS];
+  tsOpenIdx = null;
+  tsRender(tsFiltered);
+}
 
 // ── מערכת עזרה ──────────────────────────────────────────────────
 const HELP_CONTENT = {
