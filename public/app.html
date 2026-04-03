@@ -4024,4 +4024,14 @@ async function downloadBridge() {
         planEl.style.background='rgba(248,81,73,.15)'; planEl.style.color='#f85149';
       }
     } else if (d.plan) {
-      planEl.textContent = d.plan==='basic'?'בסיסי':d.plan==='advance
+      planEl.textContent = d.plan==='basic'?'בסיסי':d.plan==='advanced'?'מתקדם':d.plan;
+    }
+  });
+
+  // הפעל את האפליקציה
+  init();
+
+})();
+</script>
+</body>
+</html>
