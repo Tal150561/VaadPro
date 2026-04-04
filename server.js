@@ -33,6 +33,30 @@ const USERS_FILE = path.join(DATA_DIR, '_users.json');
 const WA_AUTH_DIR = path.join(__dirname, '.wwebjs_auth');
 [DATA_DIR, WA_AUTH_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
+// ── Plans ────────────────────────────────────────────────────────
+const PLANS = {
+  trial:    { maxTenants: 20,  features: 'all' },
+  basic:    { maxTenants: 50,  features: ['tenants','payments','whatsapp','maintenance','bulletin'] },
+  advanced: { maxTenants: 150, features: ['tenants','payments','whatsapp','maintenance','bulletin','email','reports','trends'] },
+  premium:  { maxTenants: 999, features: 'all' },
+  unlimited:{ maxTenants: 999, features: 'all' },
+  suspended:{ maxTenants: 0,   features: [] }
+};
+
+function getPlan(planName) {
+  return PLANS[planName] || PLANS['trial'];
+}
+
+function planHasFeature(planName, feature) {
+  const p = getPlan(planName);
+  return p.features === 'all' || (Array.isArray(p.features) && p.features.includes(feature));
+}
+
+function getPlanMaxTenants(user) {
+  if (user.maxTenantsOverride) return user.maxTenantsOverride;
+  return getPlan(user.plan).maxTenants;
+}
+
 // ── Middleware ───────────────────────────────────────────────────
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
@@ -414,6 +438,22 @@ app.get('/api/auth/me', authMiddleware, (req, res) => {
   res.json({ email: user.email, buildingName: user.buildingName, address: user.address, plan: user.plan, trialEnd: user.trialEnd });
 });
 
+// Plan info — מחזיר plan + features + מגבלות ל-client
+app.get('/api/plan', authMiddleware, (req, res) => {
+  const users = loadUsers();
+  const user  = users.find(u => u.tenantId === req.user.tenantId);
+  if (!user) return res.status(404).json({ error: 'משתמש לא נמצא' });
+  const plan = getPlan(user.plan);
+  const d    = loadTenantData(req.user.tenantId);
+  res.json({
+    plan:       user.plan,
+    features:   plan.features,
+    maxTenants: getPlanMaxTenants(user),
+    currentTenants: (d.tenants || []).length,
+    trialEnd:   user.trialEnd || null
+  });
+});
+
 // ════════════════════════════════════════════════════════════════
 // TENANT API ROUTES (כל route מוגן ב-auth)
 // ════════════════════════════════════════════════════════════════
@@ -442,6 +482,18 @@ app.get('/api/data', authMiddleware, (req, res) => {
 });
 
 app.post('/api/data', authMiddleware, (req, res) => {
+  // בדוק מגבלת דיירים אם יש עדכון של רשימת דיירים
+  if (req.body.tenants) {
+    const users = loadUsers();
+    const user  = users.find(u => u.tenantId === req.user.tenantId);
+    if (user) {
+      const maxT = getPlanMaxTenants(user);
+      const planName = user.plan.charAt(0).toUpperCase() + user.plan.slice(1);
+      if (req.body.tenants.length > maxT) {
+        return res.json({ ok: false, limitError: true, error: `הגעת למגבלת ${maxT} דיירים בתוכנית ${planName} — צור קשר לשדרוג`, max: maxT });
+      }
+    }
+  }
   const merged = saveTenantData(req.user.tenantId, req.body);
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
 });
@@ -822,11 +874,19 @@ app.get('/api/admin/tenants', adminAuthMiddleware, (req, res) => {
 
 // ── Admin: שינוי plan ───────────────────────────────────────────
 app.post('/api/admin/set-plan', superAdminMiddleware, (req, res) => {
-  const { email, plan } = req.body;
+  const { email, plan, maxTenantsOverride } = req.body;
   const users = loadUsers();
   const user = users.find(u => u.email === email.toLowerCase());
   if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
+  if (!['trial','basic','advanced','premium','unlimited','suspended'].includes(plan)) {
+    return res.json({ ok: false, error: 'plan לא תקין' });
+  }
   user.plan = plan;
+  if (maxTenantsOverride && maxTenantsOverride > 0) {
+    user.maxTenantsOverride = maxTenantsOverride;
+  } else {
+    delete user.maxTenantsOverride;
+  }
   if (plan === 'trial') {
     user.trialEnd = new Date(Date.now() + 30*24*60*60*1000).toISOString();
     delete user.suspended;
@@ -1304,6 +1364,7 @@ app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
       daysSince: Math.floor((now - new Date(u.createdAt)) / (1000*60*60*24)),
       plan: u.plan,
       trialEnd: u.trialEnd||null,
+      maxTenantsOverride: u.maxTenantsOverride||null,
       lastConnectedAt: u.lastConnectedAt||null,
       installStatus: (statuses[u.email] && statuses[u.email].status) || 'pending'
     }))
@@ -1541,7 +1602,7 @@ scheduleDailyCron();
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.1.2 – SaaS Server         ║');
+  console.log('║   VaadPro v2.2.0 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

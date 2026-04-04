@@ -36,6 +36,14 @@
   .tab-btn{padding:10px 20px;background:none;border:none;border-bottom:3px solid transparent;color:var(--text2);font-family:'Heebo',sans-serif;font-size:0.9rem;font-weight:600;cursor:pointer;transition:all .18s;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:7px;}
   .tab-btn:hover{color:var(--text);background:rgba(255,255,255,.03);}
   .tab-btn.active{color:var(--accent);border-bottom-color:var(--accent);background:rgba(37,211,102,.05);}
+  .tab-btn.plan-locked{opacity:0.6;}
+  .tab-btn.plan-locked:hover{color:var(--text2);}
+  .plan-badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:0.72rem;font-weight:700;margin-right:8px;}
+  .plan-trial{background:rgba(245,158,11,0.2);color:#f59e0b;}
+  .plan-basic{background:rgba(99,102,241,0.2);color:#818cf8;}
+  .plan-advanced{background:rgba(37,211,102,0.2);color:#22c55e;}
+  .plan-premium{background:rgba(236,72,153,0.2);color:#ec4899;}
+  .plan-unlimited{background:rgba(37,211,102,0.2);color:#22c55e;}
   .tbadge{background:var(--warn);color:#000;border-radius:20px;padding:1px 7px;font-size:0.69rem;font-weight:700;}
   .tbadge.green{background:var(--accent);}
   main{max-width:1100px;margin:0 auto;padding:20px;}
@@ -1050,8 +1058,91 @@ function vpLogout() {
 const API = '/api';
 let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,monthMode:'auto',manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
+let vpPlan = { plan:'trial', features:'all', maxTenants:20, currentTenants:0 };
+
+async function loadPlan() {
+  try {
+    const r = await fetch(API+'/plan');
+    vpPlan = await r.json();
+    applyPlanUI();
+  } catch(e) {}
+}
+
+function planHasFeature(feature) {
+  if (!vpPlan) return true;
+  if (vpPlan.features === 'all') return true;
+  return Array.isArray(vpPlan.features) && vpPlan.features.includes(feature);
+}
+
+function applyPlanUI() {
+  // מפת טאבים לפיצ'רים
+  const tabFeatures = {
+    'reports':  'reports',
+    'trends':   'trends',
+    'bulletin': 'bulletin',
+    'maintenance': 'maintenance'
+  };
+  document.querySelectorAll('.tab-btn').forEach(function(btn) {
+    const onclick = btn.getAttribute('onclick') || '';
+    const match = onclick.match(/switchTab\('([^']+)'\)/);
+    if (!match) return;
+    const tabName = match[1];
+    const feature = tabFeatures[tabName];
+    if (!feature) return;
+    if (!planHasFeature(feature)) {
+      btn.classList.add('plan-locked');
+      if (!btn.querySelector('.lock-icon')) {
+        btn.insertAdjacentHTML('beforeend', '<span class="lock-icon"> 🔒</span>');
+      }
+    } else {
+      btn.classList.remove('plan-locked');
+      const lock = btn.querySelector('.lock-icon');
+      if (lock) lock.remove();
+    }
+  });
+  // עדכן תצוגת plan בסרגל
+  const planBadge = document.getElementById('planBadge');
+  if (planBadge && vpPlan.plan) {
+    const labels = { trial:'Trial', basic:'Basic', advanced:'Advanced', premium:'Premium', unlimited:'Unlimited' };
+    planBadge.textContent = labels[vpPlan.plan] || vpPlan.plan;
+    planBadge.className = 'plan-badge plan-' + vpPlan.plan;
+  }
+}
+
+function checkPlanFeature(feature, requiredPlan) {
+  if (planHasFeature(feature)) return true;
+  const names = { basic:'Basic', advanced:'Advanced', premium:'Premium' };
+  showPlanUpgradeModal(names[requiredPlan] || requiredPlan);
+  return false;
+}
+
+function showPlanUpgradeModal(requiredPlan) {
+  const existing = document.getElementById('planUpgradeModal');
+  if (existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'planUpgradeModal';
+  modal.className = 'help-modal-overlay';
+  modal.innerHTML = '<div class="help-modal" style="max-width:420px;text-align:center;">' +
+    '<button class="help-close" onclick="document.getElementById(&quot;planUpgradeModal&quot;).classList.remove(&quot;show&quot;)">✕</button>' +
+    '<div style="font-size:2.5rem;margin-bottom:12px;">🔒</div>' +
+    '<h2 style="margin-bottom:8px;">פיצר נעול</h2>' +
+    '<p style="color:var(--text2);margin-bottom:20px;">פיצר זה זמין מתוכנית <strong>' + requiredPlan + '</strong> ומעלה</p>' +
+    '<p style="color:var(--text2);font-size:0.85rem;">צור קשר לשדרוג המנוי</p>' +
+    '<a href="mailto:vaadpro15@gmail.com" class="btn btn-green" style="margin-top:16px;display:inline-block;">📧 צור קשר לשדרוג</a>' +
+    '</div>';
+  document.body.appendChild(modal);
+  setTimeout(() => modal.classList.add('show'), 10);
+}
 
 function switchTab(name) {
+  // בדוק אם הטאב נעול לפי plan
+  const tabFeatureMap = { reports:'reports', trends:'trends', bulletin:'bulletin', maintenance:'maintenance' };
+  const requiredPlanMap = { reports:'Advanced', trends:'Advanced', bulletin:'Basic', maintenance:'Basic' };
+  const feature = tabFeatureMap[name];
+  if (feature && !planHasFeature(feature)) {
+    showPlanUpgradeModal(requiredPlanMap[name] || 'Advanced');
+    return;
+  }
   if (name === 'troubleshoot') setTimeout(tsInit, 50);
   if (name === 'maintenance') { mntLoad(); }
   if (name === 'settings') setTimeout(shareInitMsg, 50);
@@ -1063,7 +1154,7 @@ function switchTab(name) {
   if (name === 'trends') { trendRenderSaved(); }
 }
 
-async function init() { pollStatus(); }
+async function init() { pollStatus(); loadPlan(); }
 
 async function loadData() {
   try {
@@ -1227,9 +1318,16 @@ async function addTenant() {
   const kw=document.getElementById('inKeywords').value.trim();
   if(!name||!phone){toast('⚠️ יש למלא שם וטלפון','error');return;}
   if(!/^0[0-9]{8,9}$/.test(phone)){toast('⚠️ מספר לא תקין','error');return;}
+  // בדוק מגבלת דיירים לפי plan
+  if (vpPlan && data.tenants.length >= vpPlan.maxTenants) {
+    const planLabel = vpPlan.plan.charAt(0).toUpperCase() + vpPlan.plan.slice(1);
+    toast('⚠️ הגעת למגבלת ' + vpPlan.maxTenants + ' דיירים בתוכנית ' + planLabel + ' — צור קשר לשדרוג', 'error');
+    return;
+  }
   data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw});
   document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';
-  try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});}catch(e){}
+  const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
+  if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');
 }
 

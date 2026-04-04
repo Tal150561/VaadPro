@@ -215,6 +215,9 @@
   .badge-basic { background: rgba(59,130,246,.15); color: var(--accent); }
   .badge-advanced { background: rgba(6,182,212,.15); color: var(--accent2); }
   .badge-premium { background: rgba(16,185,129,.15); color: var(--green); }
+  .badge-basic { background: rgba(99,102,241,.15); color: #818cf8; }
+  .badge-unlimited { background: rgba(16,185,129,.15); color: var(--green); }
+  .badge-suspended { background: rgba(239,68,68,.15); color: var(--red); }
   .badge-expired { background: rgba(239,68,68,.15); color: var(--red); }
   .badge-expiring { background: rgba(245,158,11,.15); color: var(--yellow); }
   .badge-lead { background: rgba(148,163,184,.1); color: var(--text2); }
@@ -766,6 +769,13 @@
       <div id="planNoteSuspended" style="display:none;font-size:12px;color:var(--red);padding:8px;background:rgba(239,68,68,.08);border-radius:6px;">
         🔴 מושהה — הלקוח לא יוכל להתחבר מיד
       </div>
+      <div class="field" style="margin-top:12px;">
+        <label>Override מגבלת דיירים (ריק = לפי plan)</label>
+        <input type="number" id="maxTenantsOverride" min="1" max="9999" placeholder="לדוגמה: 80 עבור Basic עם 80 דיירים" style="width:100%;">
+        <div style="font-size:11px;color:var(--text2);margin-top:4px;">
+          ברירת מחדל: Trial=20 | Basic=50 | Advanced=150 | Premium=ללא הגבלה
+        </div>
+      </div>
     </div>
 
     <!-- Extend Tab -->
@@ -1179,6 +1189,8 @@ function openPlanModal(email, plan) {
   } else {
     document.getElementById('extendCurrentEnd').textContent = '';
   }
+  // טען override קיים אם יש
+  document.getElementById('maxTenantsOverride').value = (user && user.maxTenantsOverride) ? user.maxTenantsOverride : '';
   openModal('planModal');
 }
 
@@ -1220,10 +1232,12 @@ async function extendDays(days) {
 async function savePlan() {
   const email = document.getElementById('planEmail').value;
   const plan  = document.getElementById('planSelect').value;
+  const overrideVal = document.getElementById('maxTenantsOverride').value;
+  const maxTenantsOverride = overrideVal ? parseInt(overrideVal) : null;
   const res = await fetch('/api/admin/set-plan', {
     method: 'POST',
     headers: adminHeaders(),
-    body: JSON.stringify({ email, plan })
+    body: JSON.stringify({ email, plan, maxTenantsOverride })
   });
   const data = await res.json();
   if (data.ok) {
