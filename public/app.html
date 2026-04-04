@@ -297,6 +297,7 @@ function vpLogout() {
     <button class="tab-btn" onclick="switchTab('trends')">📈 ניתוח מגמות</button>
     <button class="tab-btn" onclick="switchTab('bulletin')">📣 הודעות ועד הבית</button>
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
+    <button class="tab-btn" onclick="switchTab('maintenance')">🏗️ תחזוקה <span class="tbadge red" id="tbM" style="display:none">0</span></button>
     <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
   </div>
 </div>
@@ -877,7 +878,140 @@ function vpLogout() {
 
   </div>
 
+
+  <!-- TAB MAINTENANCE -->
+  <div class="tab-panel" id="tab-maintenance">
+
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;gap:10px;">
+        🏗️ תחזוקת בניין
+        <button class="btn btn-green btn-sm" onclick="mntOpenAdd()" style="margin-right:auto;">➕ הוסף משימה</button>
+        <button class="btn btn-secondary btn-sm" onclick="mntLoadDefaults()">📋 טען רשימה מוצעת</button>
+      </div>
+      <div class="card-body">
+        <div id="mntSummary" style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;"></div>
+        <div class="table-wrap">
+          <table id="mntTable">
+            <thead>
+              <tr>
+                <th>סטטוס</th>
+                <th>משימה</th>
+                <th>תדירות</th>
+                <th>בוצע לאחרונה</th>
+                <th>תאריך הבא</th>
+                <th>ימי התראה</th>
+                <th>פעולות</th>
+              </tr>
+            </thead>
+            <tbody id="mntBody">
+              <tr><td colspan="7" style="text-align:center;color:var(--text2);padding:30px;">טוען...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
 </main>
+
+
+<!-- Maintenance Modal -->
+<div class="help-modal-overlay" id="mntModal" style="display:none;" onclick="if(event.target===this)mntCloseModal()">
+  <div class="help-modal" style="max-width:560px;max-height:90vh;overflow-y:auto;">
+    <button class="help-close" onclick="mntCloseModal()">✕</button>
+    <h2 id="mntModalTitle">➕ הוספת משימת תחזוקה</h2>
+    <div style="display:flex;flex-direction:column;gap:14px;margin-top:16px;">
+
+      <div style="display:flex;gap:10px;align-items:center;">
+        <div style="flex:0 0 60px;">
+          <label style="font-size:0.8rem;color:var(--text2);">אייקון</label>
+          <input type="text" id="mntIcon" value="🔧" style="width:52px;font-size:1.5rem;text-align:center;padding:4px;">
+        </div>
+        <div style="flex:1;">
+          <label style="font-size:0.8rem;color:var(--text2);">שם המשימה *</label>
+          <input type="text" id="mntName" placeholder="לדוגמה: בדיקת מעלית" style="width:100%;">
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <label style="font-size:0.8rem;color:var(--text2);">תדירות *</label>
+          <select id="mntFreq" style="width:100%;">
+            <option value="1">כל חודש</option>
+            <option value="2">כל חודשיים</option>
+            <option value="3">כל 3 חודשים</option>
+            <option value="6">כל 6 חודשים</option>
+            <option value="12" selected>כל שנה</option>
+            <option value="24">כל שנתיים</option>
+            <option value="0">אחר</option>
+          </select>
+        </div>
+        <div id="mntFreqCustomWrap" style="display:none;">
+          <label style="font-size:0.8rem;color:var(--text2);">מספר חודשים</label>
+          <input type="number" id="mntFreqCustom" min="1" max="120" value="1" style="width:100%;">
+        </div>
+        <div>
+          <label style="font-size:0.8rem;color:var(--text2);">התראה X ימים לפני</label>
+          <input type="number" id="mntAlertDays" value="14" min="1" max="90" style="width:100%;">
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:0.8rem;color:var(--text2);">בוצע לאחרונה (אופציונלי)</label>
+        <input type="date" id="mntLastDone" style="width:100%;">
+      </div>
+
+      <div>
+        <label style="font-size:0.8rem;color:var(--text2);display:block;margin-bottom:6px;">שלח התראה ל:</label>
+        <div style="display:flex;gap:12px;margin-bottom:8px;">
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="mntMethodWA" checked> 📱 WhatsApp
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;cursor:pointer;">
+            <input type="checkbox" id="mntMethodEmail"> 📧 מייל
+          </label>
+        </div>
+        <div id="mntRecipientsList" style="max-height:160px;overflow-y:auto;border:1px solid var(--border);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:6px;"></div>
+        <div style="margin-top:8px;">
+          <label style="font-size:0.8rem;color:var(--text2);">או הוסף טלפון/מייל חיצוני</label>
+          <div style="display:flex;gap:8px;margin-top:4px;">
+            <input type="text" id="mntExtName" placeholder="שם" style="width:100px;">
+            <input type="text" id="mntExtPhone" placeholder="טלפון" style="flex:1;">
+            <input type="text" id="mntExtEmail" placeholder="מייל" style="flex:1;">
+            <button class="btn btn-secondary btn-sm" onclick="mntAddExternal()">➕</button>
+          </div>
+          <div id="mntExternalList" style="margin-top:6px;display:flex;flex-direction:column;gap:4px;"></div>
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:0.8rem;color:var(--text2);">הערות (שם חברה, טלפון וכו')</label>
+        <textarea id="mntNotes" rows="2" placeholder="לדוגמה: חברת מעליות XYZ, טל: 03-1234567" style="width:100%;resize:vertical;"></textarea>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:8px;">
+        <button class="btn btn-secondary" onclick="mntCloseModal()">ביטול</button>
+        <button class="btn btn-green" onclick="mntSave()">💾 שמור</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Maintenance Done Modal -->
+<div class="help-modal-overlay" id="mntDoneModal" style="display:none;" onclick="if(event.target===this)mntCloseDoneModal()">
+  <div class="help-modal" style="max-width:400px;">
+    <button class="help-close" onclick="mntCloseDoneModal()">✕</button>
+    <h2>✅ סמן כבוצע</h2>
+    <p style="color:var(--text2);margin:12px 0;" id="mntDoneTaskName"></p>
+    <label style="font-size:0.8rem;color:var(--text2);">תאריך ביצוע</label>
+    <input type="date" id="mntDoneDate" style="width:100%;margin:8px 0 16px;">
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button class="btn btn-secondary" onclick="mntCloseDoneModal()">ביטול</button>
+      <button class="btn btn-green" onclick="mntConfirmDone()">✅ אשר</button>
+    </div>
+  </div>
+</div>
 
 <!-- Help Modal -->
 <div class="help-modal-overlay" id="helpModal">
@@ -919,6 +1053,7 @@ let statusInterval=null, saveTimer=null;
 
 function switchTab(name) {
   if (name === 'troubleshoot') setTimeout(tsInit, 50);
+  if (name === 'maintenance') { mntLoad(); }
   if (name === 'settings') setTimeout(shareInitMsg, 50);
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
@@ -4032,6 +4167,339 @@ async function downloadBridge() {
   init();
 
 })();
+
+
+// ═══════════════════════════════════════════════════════════════
+// ── תחזוקת בניין ────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════
+let mntTasks = [];
+let mntEditId = null;
+let mntExternalRecipients = [];
+
+async function mntLoad() {
+  try {
+    const r = await apiFetch('/api/maintenance');
+    mntTasks = r.tasks || [];
+    mntRender();
+    mntUpdateBadge();
+  } catch(e) { console.error('mntLoad', e); }
+}
+
+function mntGetStatus(task) {
+  if (!task.nextDue) return 'none';
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due   = new Date(task.nextDue); due.setHours(0,0,0,0);
+  const daysUntil = Math.ceil((due - today) / (1000*60*60*24));
+  if (daysUntil < 0)  return 'overdue';
+  if (daysUntil <= task.alertDaysBefore) return 'soon';
+  return 'ok';
+}
+
+function mntStatusLabel(task) {
+  const s = mntGetStatus(task);
+  if (s === 'overdue') return '<span style="color:#ef4444;font-weight:700;">🔴 באיחור</span>';
+  if (s === 'soon') {
+    const due = new Date(task.nextDue); due.setHours(0,0,0,0);
+    const today = new Date(); today.setHours(0,0,0,0);
+    const days = Math.ceil((due - today) / (1000*60*60*24));
+    return '<span style="color:#f59e0b;font-weight:700;">🟡 עוד ' + days + ' ימים</span>';
+  }
+  if (s === 'ok') return '<span style="color:#22c55e;">🟢 תקין</span>';
+  return '<span style="color:var(--text2);">⚪ לא נקבע</span>';
+}
+
+function mntFreqLabel(months) {
+  if (months === 1)  return 'חודשי';
+  if (months === 2)  return 'כל חודשיים';
+  if (months === 3)  return 'רבעוני';
+  if (months === 6)  return 'חצי שנתי';
+  if (months === 12) return 'שנתי';
+  if (months === 24) return 'דו-שנתי';
+  return 'כל ' + months + ' חודשים';
+}
+
+function mntRender() {
+  const tbody = document.getElementById('mntBody');
+  if (!tbody) return;
+  if (!mntTasks.length) {
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:var(--text2);padding:40px;">' +
+      '<div style="font-size:2rem;margin-bottom:8px;">🏗️</div>' +
+      '<div>אין משימות תחזוקה עדיין</div>' +
+      '<div style="font-size:0.8rem;margin-top:6px;">לחץ "טען רשימה מוצעת" להתחלה מהירה</div></td></tr>';
+    mntRenderSummary();
+    return;
+  }
+
+  // מיין: באיחור → קרוב → תקין → לא נקבע
+  const order = { overdue: 0, soon: 1, ok: 2, none: 3 };
+  const sorted = [...mntTasks].sort((a,b) => order[mntGetStatus(a)] - order[mntGetStatus(b)]);
+
+  tbody.innerHTML = sorted.map(task => {
+    const rowColor = mntGetStatus(task) === 'overdue' ? 'background:rgba(239,68,68,0.07);' :
+                     mntGetStatus(task) === 'soon'    ? 'background:rgba(245,158,11,0.07);' : '';
+    return '<tr style="' + rowColor + '">' +
+      '<td>' + mntStatusLabel(task) + '</td>' +
+      '<td><strong>' + (task.icon||'🔧') + ' ' + task.name + '</strong>' +
+        (task.notes ? '<div style="font-size:0.75rem;color:var(--text2);margin-top:2px;">' + task.notes + '</div>' : '') +
+      '</td>' +
+      '<td>' + mntFreqLabel(task.frequencyMonths) + '</td>' +
+      '<td>' + (task.lastDone || '<span style="color:var(--text2);">—</span>') + '</td>' +
+      '<td><strong>' + (task.nextDue || '<span style="color:var(--text2);">—</span>') + '</strong></td>' +
+      '<td>' + task.alertDaysBefore + ' ימים</td>' +
+      '<td style="white-space:nowrap;">' +
+        '<button class="btn btn-green btn-sm" onclick="mntOpenDone('' + task.id + '')" title="סמן כבוצע">✅</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="mntSendAlert('' + task.id + '')" title="שלח התראה">🔔</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="mntOpenEdit('' + task.id + '')" title="עריכה">✏️</button> ' +
+        '<button class="btn btn-danger btn-sm" onclick="mntDelete('' + task.id + '')" title="מחיקה">🗑️</button>' +
+      '</td></tr>';
+  }).join('');
+
+  mntRenderSummary();
+}
+
+function mntRenderSummary() {
+  const el = document.getElementById('mntSummary');
+  if (!el) return;
+  const overdue = mntTasks.filter(t => mntGetStatus(t) === 'overdue').length;
+  const soon    = mntTasks.filter(t => mntGetStatus(t) === 'soon').length;
+  const ok      = mntTasks.filter(t => mntGetStatus(t) === 'ok').length;
+  const none    = mntTasks.filter(t => mntGetStatus(t) === 'none').length;
+  el.innerHTML =
+    (overdue ? '<div style="background:rgba(239,68,68,0.15);border:1px solid #ef4444;border-radius:8px;padding:10px 16px;display:flex;gap:8px;align-items:center;"><span style="font-size:1.4rem;">🔴</span><div><div style="font-weight:700;color:#ef4444;">' + overdue + ' באיחור</div><div style="font-size:0.78rem;color:var(--text2);">דורשות טיפול מיידי</div></div></div>' : '') +
+    (soon    ? '<div style="background:rgba(245,158,11,0.15);border:1px solid #f59e0b;border-radius:8px;padding:10px 16px;display:flex;gap:8px;align-items:center;"><span style="font-size:1.4rem;">🟡</span><div><div style="font-weight:700;color:#f59e0b;">' + soon + ' מתקרבות</div><div style="font-size:0.78rem;color:var(--text2);">בתוך ימי ההתראה</div></div></div>' : '') +
+    (ok      ? '<div style="background:rgba(34,197,94,0.1);border:1px solid #22c55e;border-radius:8px;padding:10px 16px;display:flex;gap:8px;align-items:center;"><span style="font-size:1.4rem;">🟢</span><div><div style="font-weight:700;color:#22c55e;">' + ok + ' תקינות</div><div style="font-size:0.78rem;color:var(--text2);">אין פעולה נדרשת</div></div></div>' : '') +
+    (!mntTasks.length ? '' : '<div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:10px 16px;display:flex;gap:8px;align-items:center;"><span style="font-size:1.4rem;">📋</span><div><div style="font-weight:700;">' + mntTasks.length + ' סה"כ</div><div style="font-size:0.78rem;color:var(--text2);">משימות תחזוקה</div></div></div>');
+}
+
+function mntUpdateBadge() {
+  const el = document.getElementById('tbM');
+  if (!el) return;
+  const urgent = mntTasks.filter(t => mntGetStatus(t) === 'overdue' || mntGetStatus(t) === 'soon').length;
+  if (urgent > 0) { el.textContent = urgent; el.style.display = 'inline-flex'; }
+  else { el.style.display = 'none'; }
+}
+
+// ── Modal הוספה/עריכה ──
+function mntOpenAdd() {
+  mntEditId = null;
+  mntExternalRecipients = [];
+  document.getElementById('mntModalTitle').textContent = '➕ הוספת משימת תחזוקה';
+  document.getElementById('mntIcon').value = '🔧';
+  document.getElementById('mntName').value = '';
+  document.getElementById('mntFreq').value = '12';
+  document.getElementById('mntFreqCustom').value = '1';
+  document.getElementById('mntFreqCustomWrap').style.display = 'none';
+  document.getElementById('mntAlertDays').value = '14';
+  document.getElementById('mntLastDone').value = '';
+  document.getElementById('mntMethodWA').checked = true;
+  document.getElementById('mntMethodEmail').checked = false;
+  document.getElementById('mntNotes').value = '';
+  document.getElementById('mntExtName').value = '';
+  document.getElementById('mntExtPhone').value = '';
+  document.getElementById('mntExtEmail').value = '';
+  mntRenderRecipients([]);
+  mntRenderExternalList();
+  document.getElementById('mntModal').style.display = 'flex';
+}
+
+function mntOpenEdit(id) {
+  const task = mntTasks.find(t => t.id === id);
+  if (!task) return;
+  mntEditId = id;
+  mntExternalRecipients = (task.alertTo || []).filter(r => typeof r === 'object');
+  document.getElementById('mntModalTitle').textContent = '✏️ עריכת משימה';
+  document.getElementById('mntIcon').value = task.icon || '🔧';
+  document.getElementById('mntName').value = task.name;
+  const stdFreqs = ['1','2','3','6','12','24'];
+  if (stdFreqs.includes(String(task.frequencyMonths))) {
+    document.getElementById('mntFreq').value = String(task.frequencyMonths);
+    document.getElementById('mntFreqCustomWrap').style.display = 'none';
+  } else {
+    document.getElementById('mntFreq').value = '0';
+    document.getElementById('mntFreqCustom').value = task.frequencyMonths;
+    document.getElementById('mntFreqCustomWrap').style.display = 'block';
+  }
+  document.getElementById('mntAlertDays').value = task.alertDaysBefore || 14;
+  document.getElementById('mntLastDone').value = task.lastDone || '';
+  document.getElementById('mntMethodWA').checked = (task.alertMethod||[]).includes('whatsapp');
+  document.getElementById('mntMethodEmail').checked = (task.alertMethod||[]).includes('email');
+  document.getElementById('mntNotes').value = task.notes || '';
+  const tenantIds = (task.alertTo || []).filter(r => typeof r === 'string');
+  mntRenderRecipients(tenantIds);
+  mntRenderExternalList();
+  document.getElementById('mntModal').style.display = 'flex';
+}
+
+function mntCloseModal() {
+  document.getElementById('mntModal').style.display = 'none';
+}
+
+function mntRenderRecipients(selectedIds) {
+  const el = document.getElementById('mntRecipientsList');
+  if (!el) return;
+  const tenants = data.tenants || [];
+  if (!tenants.length) { el.innerHTML = '<div style="color:var(--text2);font-size:0.82rem;">אין דיירים רשומים</div>'; return; }
+  el.innerHTML = tenants.map(t =>
+    '<label style="display:flex;align-items:center;gap:8px;padding:4px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background=''">'+
+    '<input type="checkbox" class="mntRecipCheck" value="' + t.id + '" ' + (selectedIds.includes(t.id) ? 'checked' : '') + '> ' +
+    t.name + (t.phone ? ' <span style="color:var(--text2);font-size:0.78rem;">(' + t.phone + ')</span>' : '') +
+    '</label>'
+  ).join('');
+}
+
+function mntAddExternal() {
+  const name  = document.getElementById('mntExtName').value.trim();
+  const phone = document.getElementById('mntExtPhone').value.trim();
+  const email = document.getElementById('mntExtEmail').value.trim();
+  if (!phone && !email) { toast('⚠️ יש להזין טלפון או מייל', 'error'); return; }
+  mntExternalRecipients.push({ name: name || phone || email, phone, email });
+  document.getElementById('mntExtName').value = '';
+  document.getElementById('mntExtPhone').value = '';
+  document.getElementById('mntExtEmail').value = '';
+  mntRenderExternalList();
+}
+
+function mntRemoveExternal(idx) {
+  mntExternalRecipients.splice(idx, 1);
+  mntRenderExternalList();
+}
+
+function mntRenderExternalList() {
+  const el = document.getElementById('mntExternalList');
+  if (!el) return;
+  el.innerHTML = mntExternalRecipients.map((r,i) =>
+    '<div style="display:flex;align-items:center;gap:8px;padding:4px 8px;background:var(--card2);border-radius:4px;">' +
+    '<span style="flex:1;font-size:0.82rem;">' + r.name + (r.phone ? ' 📱'+r.phone : '') + (r.email ? ' 📧'+r.email : '') + '</span>' +
+    '<button class="btn btn-danger btn-sm" style="padding:2px 6px;" onclick="mntRemoveExternal(' + i + ')">✕</button></div>'
+  ).join('');
+}
+
+async function mntSave() {
+  const name = document.getElementById('mntName').value.trim();
+  if (!name) { toast('⚠️ שם המשימה הוא שדה חובה', 'error'); return; }
+
+  const freqSel = document.getElementById('mntFreq').value;
+  const frequencyMonths = freqSel === '0'
+    ? parseInt(document.getElementById('mntFreqCustom').value) || 1
+    : parseInt(freqSel);
+
+  const alertMethod = [];
+  if (document.getElementById('mntMethodWA').checked)    alertMethod.push('whatsapp');
+  if (document.getElementById('mntMethodEmail').checked) alertMethod.push('email');
+
+  const tenantIds = [...document.querySelectorAll('.mntRecipCheck:checked')].map(c => c.value);
+  const alertTo   = [...tenantIds, ...mntExternalRecipients];
+
+  const payload = {
+    name,
+    icon: document.getElementById('mntIcon').value || '🔧',
+    frequencyMonths,
+    alertDaysBefore: parseInt(document.getElementById('mntAlertDays').value) || 14,
+    alertMethod,
+    alertTo,
+    notes:    document.getElementById('mntNotes').value.trim(),
+    lastDone: document.getElementById('mntLastDone').value || null,
+  };
+
+  try {
+    let r;
+    if (mntEditId) {
+      r = await apiFetch('/api/maintenance/' + mntEditId, { method: 'PUT', body: JSON.stringify(payload) });
+    } else {
+      r = await apiFetch('/api/maintenance', { method: 'POST', body: JSON.stringify(payload) });
+    }
+    if (!r.ok) { toast('❌ ' + (r.error || 'שגיאה'), 'error'); return; }
+    toast(mntEditId ? '✅ משימה עודכנה' : '✅ משימה נוספה', 'success');
+    mntCloseModal();
+    await mntLoad();
+  } catch(e) { toast('❌ שגיאה: ' + e.message, 'error'); }
+}
+
+// ── Done Modal ──
+let mntDoneTaskId = null;
+function mntOpenDone(id) {
+  const task = mntTasks.find(t => t.id === id);
+  if (!task) return;
+  mntDoneTaskId = id;
+  document.getElementById('mntDoneTaskName').textContent = (task.icon||'🔧') + ' ' + task.name;
+  document.getElementById('mntDoneDate').value = new Date().toISOString().split('T')[0];
+  document.getElementById('mntDoneModal').style.display = 'flex';
+}
+function mntCloseDoneModal() {
+  document.getElementById('mntDoneModal').style.display = 'none';
+}
+async function mntConfirmDone() {
+  const date = document.getElementById('mntDoneDate').value;
+  if (!date) { toast('⚠️ בחר תאריך', 'error'); return; }
+  try {
+    const r = await apiFetch('/api/maintenance/' + mntDoneTaskId + '/done', {
+      method: 'POST', body: JSON.stringify({ date })
+    });
+    if (!r.ok) { toast('❌ ' + (r.error||'שגיאה'), 'error'); return; }
+    toast('✅ בוצע! תאריך הבא: ' + r.task.nextDue, 'success');
+    mntCloseDoneModal();
+    await mntLoad();
+  } catch(e) { toast('❌ ' + e.message, 'error'); }
+}
+
+// ── שלח התראה ידנית ──
+async function mntSendAlert(id) {
+  const task = mntTasks.find(t => t.id === id);
+  if (!task) return;
+  if (!task.alertTo || task.alertTo.length === 0) {
+    toast('⚠️ לא הוגדרו נמענים למשימה זו', 'error'); return;
+  }
+  if (!confirm('לשלוח התראה על "' + task.name + '"?')) return;
+  try {
+    const r = await apiFetch('/api/maintenance/' + id + '/alert', { method: 'POST', body: '{}' });
+    if (r.ok) toast('✅ נשלח! WA: ' + r.sentWa + ' מייל: ' + r.sentEmail, 'success');
+    else toast('❌ ' + (r.error||'שגיאה'), 'error');
+  } catch(e) { toast('❌ ' + e.message, 'error'); }
+}
+
+// ── מחיקה ──
+async function mntDelete(id) {
+  const task = mntTasks.find(t => t.id === id);
+  if (!task) return;
+  if (!confirm('למחוק את "' + task.name + '"?')) return;
+  try {
+    await apiFetch('/api/maintenance/' + id, { method: 'DELETE' });
+    toast('🗑️ משימה נמחקה', 'success');
+    await mntLoad();
+  } catch(e) { toast('❌ ' + e.message, 'error'); }
+}
+
+// ── טען ברירת מחדל ──
+async function mntLoadDefaults() {
+  if (mntTasks.length > 0 && !confirm('הרשימה תתווסף מעל המשימות הקיימות. להמשיך?')) return;
+  try {
+    const r = await apiFetch('/api/maintenance/defaults');
+    for (const def of r.defaults) {
+      const exists = mntTasks.some(t => t.name === def.name);
+      if (!exists) {
+        await apiFetch('/api/maintenance', {
+          method: 'POST',
+          body: JSON.stringify({ ...def, alertTo: [], alertMethod: ['whatsapp'] })
+        });
+      }
+    }
+    toast('✅ רשימה מוצעת נטענה', 'success');
+    await mntLoad();
+  } catch(e) { toast('❌ ' + e.message, 'error'); }
+}
+
+// ── freq select change ──
+document.addEventListener('change', function(e) {
+  if (e.target && e.target.id === 'mntFreq') {
+    document.getElementById('mntFreqCustomWrap').style.display =
+      e.target.value === '0' ? 'block' : 'none';
+  }
+});
+
+// ── טעינה כשנכנסים לטאב ──
+// (נוסף ל-switchTab)
+
+
 </script>
 </body>
 </html>

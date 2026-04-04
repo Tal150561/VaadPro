@@ -1,5 +1,5 @@
 /**
- * VaadPro – SaaS Server v1.0
+ * VaadPro – SaaS Server v1.9.0
  * Multi-tenant ועד הבית management
  */
 
@@ -1332,11 +1332,216 @@ app.get('/api/admin/trials', adminAuthMiddleware, (req, res) => {
   res.json({ trials });
 });
 
+// ═══════════════════════════════════════════════════════════════
+// ── תחזוקת בניין (Maintenance Module) ──────────────────────────
+// ═══════════════════════════════════════════════════════════════
+
+const DEFAULT_MAINTENANCE_TASKS = [
+  { name: 'בדיקת מעלית',            frequencyMonths: 12, alertDaysBefore: 30, icon: '🛗' },
+  { name: 'בדיקת מטפי כיבוי',       frequencyMonths: 12, alertDaysBefore: 30, icon: '🧯' },
+  { name: 'בדיקת גלאי עשן',          frequencyMonths: 12, alertDaysBefore: 30, icon: '🔔' },
+  { name: 'חידוש ביטוח בניין',       frequencyMonths: 12, alertDaysBefore: 45, icon: '📋' },
+  { name: 'בדיקת גנרטור',            frequencyMonths: 6,  alertDaysBefore: 14, icon: '⚡' },
+  { name: 'ניקוי מאגר / מיכל מים',  frequencyMonths: 6,  alertDaysBefore: 14, icon: '💧' },
+  { name: 'בדיקת דוד שמש',           frequencyMonths: 6,  alertDaysBefore: 14, icon: '☀️' },
+  { name: 'בדיקת תאורת חירום',       frequencyMonths: 3,  alertDaysBefore: 14, icon: '💡' },
+  { name: 'ניקוי גג וביוב',          frequencyMonths: 6,  alertDaysBefore: 14, icon: '🏠' },
+  { name: 'טיפול גינה',              frequencyMonths: 1,  alertDaysBefore: 3,  icon: '🌿' },
+];
+
+function loadMaintenance(tenantId) {
+  const d = loadTenantData(tenantId);
+  return d.maintenance || [];
+}
+
+function saveMaintenance(tenantId, tasks) {
+  saveTenantData(tenantId, { maintenance: tasks });
+}
+
+function calcNextDue(lastDone, frequencyMonths) {
+  if (!lastDone) return null;
+  const d = new Date(lastDone);
+  d.setMonth(d.getMonth() + frequencyMonths);
+  return d.toISOString().split('T')[0];
+}
+
+// GET — רשימת משימות תחזוקה
+app.get('/api/maintenance', authMiddleware, (req, res) => {
+  const tasks = loadMaintenance(req.user.tenantId);
+  res.json({ tasks });
+});
+
+// GET — ברירת מחדל מוצעת
+app.get('/api/maintenance/defaults', authMiddleware, (req, res) => {
+  res.json({ defaults: DEFAULT_MAINTENANCE_TASKS });
+});
+
+// POST — הוסף משימה
+app.post('/api/maintenance', authMiddleware, (req, res) => {
+  const tasks = loadMaintenance(req.user.tenantId);
+  const { name, frequencyMonths, alertDaysBefore, alertTo, alertMethod, notes, icon, lastDone } = req.body;
+  if (!name || !frequencyMonths) return res.json({ ok: false, error: 'שם ותדירות הם שדות חובה' });
+  const task = {
+    id: uuidv4(),
+    name, icon: icon || '🔧',
+    frequencyMonths: Number(frequencyMonths),
+    alertDaysBefore: Number(alertDaysBefore) || 14,
+    alertTo: alertTo || [],
+    alertMethod: alertMethod || ['whatsapp'],
+    notes: notes || '',
+    lastDone: lastDone || null,
+    nextDue: lastDone ? calcNextDue(lastDone, Number(frequencyMonths)) : null,
+    createdAt: new Date().toISOString()
+  };
+  tasks.push(task);
+  saveMaintenance(req.user.tenantId, tasks);
+  res.json({ ok: true, task });
+});
+
+// PUT — עדכון משימה
+app.put('/api/maintenance/:id', authMiddleware, (req, res) => {
+  const tasks = loadMaintenance(req.user.tenantId);
+  const idx = tasks.findIndex(t => t.id === req.params.id);
+  if (idx === -1) return res.json({ ok: false, error: 'משימה לא נמצאה' });
+  const updated = Object.assign(tasks[idx], req.body);
+  updated.nextDue = updated.lastDone ? calcNextDue(updated.lastDone, updated.frequencyMonths) : null;
+  tasks[idx] = updated;
+  saveMaintenance(req.user.tenantId, tasks);
+  res.json({ ok: true, task: updated });
+});
+
+// POST — סמן "בוצע" → מחשב תאריך הבא
+app.post('/api/maintenance/:id/done', authMiddleware, (req, res) => {
+  const tasks = loadMaintenance(req.user.tenantId);
+  const task = tasks.find(t => t.id === req.params.id);
+  if (!task) return res.json({ ok: false, error: 'משימה לא נמצאה' });
+  const doneDate = req.body.date || new Date().toISOString().split('T')[0];
+  task.lastDone = doneDate;
+  task.nextDue  = calcNextDue(doneDate, task.frequencyMonths);
+  saveMaintenance(req.user.tenantId, tasks);
+  res.json({ ok: true, task });
+});
+
+// DELETE — מחק משימה
+app.delete('/api/maintenance/:id', authMiddleware, (req, res) => {
+  let tasks = loadMaintenance(req.user.tenantId);
+  tasks = tasks.filter(t => t.id !== req.params.id);
+  saveMaintenance(req.user.tenantId, tasks);
+  res.json({ ok: true });
+});
+
+// POST — שלח תזכורת ידנית
+app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
+  const tasks = loadMaintenance(req.user.tenantId);
+  const task  = tasks.find(t => t.id === req.params.id);
+  if (!task) return res.json({ ok: false, error: 'משימה לא נמצאה' });
+
+  const d = loadTenantData(req.user.tenantId);
+  const nextDueStr = task.nextDue || '(לא נקבע)';
+  const msg = `🔧 תזכורת תחזוקה — VaadPro\n\n${task.icon || '🔧'} *${task.name}*\nתאריך יעד: ${nextDueStr}\n\n${task.notes ? 'הערות: ' + task.notes : ''}`.trim();
+
+  let sentWa = 0, sentEmail = 0, errors = [];
+
+  for (const recipient of (task.alertTo || [])) {
+    // recipient יכול להיות tenant id או אובייקט {phone, email, name}
+    let phone = null, email = null, name = '';
+    if (typeof recipient === 'string') {
+      // חפש בדיירים
+      const tenant = (d.tenants || []).find(t => t.id === recipient);
+      if (tenant) { phone = tenant.phone; email = tenant.email; name = tenant.name; }
+    } else {
+      phone = recipient.phone; email = recipient.email; name = recipient.name || '';
+    }
+
+    if ((task.alertMethod || []).includes('whatsapp') && phone) {
+      try { await sendWaMsg(req.user.tenantId, phone, msg); sentWa++; }
+      catch(e) { errors.push(`WA ${name}: ${e.message}`); }
+    }
+    if ((task.alertMethod || []).includes('email') && email) {
+      try {
+        await sendEmailResend(email, `תזכורת תחזוקה: ${task.name}`, msg.replace(/\n/g, '<br>'));
+        sentEmail++;
+      } catch(e) { errors.push(`Email ${name}: ${e.message}`); }
+    }
+  }
+
+  // לוג התראה
+  task.lastAlertSent = new Date().toISOString();
+  saveMaintenance(req.user.tenantId, tasks);
+
+  res.json({ ok: true, sentWa, sentEmail, errors });
+});
+
+// ── Cron יומי — בדיקת תחזוקה ───────────────────────────────────
+async function runMaintenanceCron() {
+  const users = loadUsers();
+  const today = new Date();
+  today.setHours(0,0,0,0);
+  let alertsSent = 0;
+
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const tasks = loadMaintenance(user.tenantId);
+      const d = loadTenantData(user.tenantId);
+
+      for (const task of tasks) {
+        if (!task.nextDue || !task.alertTo || task.alertTo.length === 0) continue;
+
+        const due = new Date(task.nextDue);
+        due.setHours(0,0,0,0);
+        const daysUntil = Math.ceil((due - today) / (1000*60*60*24));
+
+        // שלח התראה אם הגיע יום ההתראה ועוד לא נשלחה היום
+        if (daysUntil <= task.alertDaysBefore && daysUntil >= 0) {
+          const lastAlertDate = task.lastAlertSent ? new Date(task.lastAlertSent).toDateString() : null;
+          if (lastAlertDate === today.toDateString()) continue; // כבר נשלח היום
+
+          const msg = `🔧 תזכורת תחזוקה — VaadPro\n\n${task.icon || '🔧'} *${task.name}*\nתאריך יעד: ${task.nextDue}\nנותרו: ${daysUntil} ימים\n\n${task.notes ? 'הערות: ' + task.notes : ''}`.trim();
+
+          for (const recipient of task.alertTo) {
+            let phone = null, email = null;
+            if (typeof recipient === 'string') {
+              const tenant = (d.tenants || []).find(t => t.id === recipient);
+              if (tenant) { phone = tenant.phone; email = tenant.email; }
+            } else { phone = recipient.phone; email = recipient.email; }
+
+            if ((task.alertMethod || []).includes('whatsapp') && phone) {
+              try { await sendWaMsg(user.tenantId, phone, msg); alertsSent++; } catch(e) {}
+            }
+            if ((task.alertMethod || []).includes('email') && email) {
+              try { await sendEmailResend(email, `תזכורת תחזוקה: ${task.name}`, msg.replace(/\n/g, '<br>')); alertsSent++; } catch(e) {}
+            }
+          }
+          task.lastAlertSent = new Date().toISOString();
+        }
+      }
+      saveMaintenance(user.tenantId, tasks);
+    } catch(e) { console.error(`[MaintenanceCron:${user.tenantId}]`, e.message); }
+  }
+  if (alertsSent > 0) console.log(`[MaintenanceCron] נשלחו ${alertsSent} התראות תחזוקה`);
+}
+
+// הרץ cron כל יום ב-08:00
+function scheduleDailyCron() {
+  const now  = new Date();
+  const next = new Date();
+  next.setHours(8, 0, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const delay = next - now;
+  setTimeout(() => {
+    runMaintenanceCron();
+    setInterval(runMaintenanceCron, 24 * 60 * 60 * 1000);
+  }, delay);
+  console.log(`[MaintenanceCron] יופעל ב-${next.toLocaleTimeString('he-IL')}`);
+}
+scheduleDailyCron();
+
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v1.4 – SaaS Server         ║');
+  console.log('║   VaadPro v2.1 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
@@ -1351,4 +1556,3 @@ app.listen(PORT, () => {
   }
   console.log('');
 });
- 
