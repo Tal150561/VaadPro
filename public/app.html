@@ -917,7 +917,7 @@ function vpLogout() {
 
 
 <!-- Maintenance Modal -->
-<div class="help-modal-overlay" id="mntModal" style="display:none;" onclick="if(event.target===this)mntCloseModal()">
+<div class="help-modal-overlay" id="mntModal" onclick="if(event.target===this)mntCloseModal()">
   <div class="help-modal" style="max-width:560px;max-height:90vh;overflow-y:auto;">
     <button class="help-close" onclick="mntCloseModal()">✕</button>
     <h2 id="mntModalTitle">➕ הוספת משימת תחזוקה</h2>
@@ -999,7 +999,7 @@ function vpLogout() {
 </div>
 
 <!-- Maintenance Done Modal -->
-<div class="help-modal-overlay" id="mntDoneModal" style="display:none;" onclick="if(event.target===this)mntCloseDoneModal()">
+<div class="help-modal-overlay" id="mntDoneModal" onclick="if(event.target===this)mntCloseDoneModal()">
   <div class="help-modal" style="max-width:400px;">
     <button class="help-close" onclick="mntCloseDoneModal()">✕</button>
     <h2>✅ סמן כבוצע</h2>
@@ -4299,7 +4299,7 @@ function mntOpenAdd() {
   document.getElementById('mntExtEmail').value = '';
   mntRenderRecipients([]);
   mntRenderExternalList();
-  document.getElementById('mntModal').style.display = 'flex';
+  document.getElementById('mntModal').classList.add('show');
 }
 
 function mntOpenEdit(id) {
@@ -4327,11 +4327,11 @@ function mntOpenEdit(id) {
   const tenantIds = (task.alertTo || []).filter(r => typeof r === 'string');
   mntRenderRecipients(tenantIds);
   mntRenderExternalList();
-  document.getElementById('mntModal').style.display = 'flex';
+  document.getElementById('mntModal').classList.add('show');
 }
 
 function mntCloseModal() {
-  document.getElementById('mntModal').style.display = 'none';
+  document.getElementById('mntModal').classList.remove('show');
 }
 
 function mntRenderRecipients(selectedIds) {
@@ -4423,10 +4423,10 @@ function mntOpenDone(id) {
   mntDoneTaskId = id;
   document.getElementById('mntDoneTaskName').textContent = (task.icon||'🔧') + ' ' + task.name;
   document.getElementById('mntDoneDate').value = new Date().toISOString().split('T')[0];
-  document.getElementById('mntDoneModal').style.display = 'flex';
+  document.getElementById('mntDoneModal').classList.add('show');
 }
 function mntCloseDoneModal() {
-  document.getElementById('mntDoneModal').style.display = 'none';
+  document.getElementById('mntDoneModal').classList.remove('show');
 }
 async function mntConfirmDone() {
   const date = document.getElementById('mntDoneDate').value;
