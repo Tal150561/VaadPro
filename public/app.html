@@ -4178,7 +4178,7 @@ let mntExternalRecipients = [];
 
 async function mntLoad() {
   try {
-    const r = await apiFetch('/api/maintenance');
+    const r = await fetch(API+'/maintenance').then(r=>r.json());
     mntTasks = r.tasks || [];
     mntRender();
     mntUpdateBadge();
@@ -4404,9 +4404,9 @@ async function mntSave() {
   try {
     let r;
     if (mntEditId) {
-      r = await apiFetch('/api/maintenance/' + mntEditId, { method: 'PUT', body: JSON.stringify(payload) });
+      r = await fetch(API+'/maintenance/' + mntEditId, { method: 'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r=>r.json());
     } else {
-      r = await apiFetch('/api/maintenance', { method: 'POST', body: JSON.stringify(payload) });
+      r = await fetch(API+'/maintenance', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(payload) }).then(r=>r.json());
     }
     if (!r.ok) { toast('❌ ' + (r.error || 'שגיאה'), 'error'); return; }
     toast(mntEditId ? '✅ משימה עודכנה' : '✅ משימה נוספה', 'success');
@@ -4432,9 +4432,7 @@ async function mntConfirmDone() {
   const date = document.getElementById('mntDoneDate').value;
   if (!date) { toast('⚠️ בחר תאריך', 'error'); return; }
   try {
-    const r = await apiFetch('/api/maintenance/' + mntDoneTaskId + '/done', {
-      method: 'POST', body: JSON.stringify({ date })
-    });
+    const r = await fetch(API+'/maintenance/' + mntDoneTaskId + '/done', { method: 'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ date }) }).then(r=>r.json());
     if (!r.ok) { toast('❌ ' + (r.error||'שגיאה'), 'error'); return; }
     toast('✅ בוצע! תאריך הבא: ' + r.task.nextDue, 'success');
     mntCloseDoneModal();
@@ -4451,7 +4449,7 @@ async function mntSendAlert(id) {
   }
   if (!confirm('לשלוח התראה על "' + task.name + '"?')) return;
   try {
-    const r = await apiFetch('/api/maintenance/' + id + '/alert', { method: 'POST', body: '{}' });
+    const r = await fetch(API+'/maintenance/' + id + '/alert', { method: 'POST', headers:{'Content-Type':'application/json'}, body: '{}' }).then(r=>r.json());
     if (r.ok) toast('✅ נשלח! WA: ' + r.sentWa + ' מייל: ' + r.sentEmail, 'success');
     else toast('❌ ' + (r.error||'שגיאה'), 'error');
   } catch(e) { toast('❌ ' + e.message, 'error'); }
@@ -4463,7 +4461,7 @@ async function mntDelete(id) {
   if (!task) return;
   if (!confirm('למחוק את "' + task.name + '"?')) return;
   try {
-    await apiFetch('/api/maintenance/' + id, { method: 'DELETE' });
+    await fetch(API+'/maintenance/' + id, { method: 'DELETE', headers:{'Content-Type':'application/json'} }).then(r=>r.json());
     toast('🗑️ משימה נמחקה', 'success');
     await mntLoad();
   } catch(e) { toast('❌ ' + e.message, 'error'); }
@@ -4473,14 +4471,15 @@ async function mntDelete(id) {
 async function mntLoadDefaults() {
   if (mntTasks.length > 0 && !confirm('הרשימה תתווסף מעל המשימות הקיימות. להמשיך?')) return;
   try {
-    const r = await apiFetch('/api/maintenance/defaults');
+    const r = await fetch(API+'/maintenance/defaults').then(r=>r.json());
     for (const def of r.defaults) {
       const exists = mntTasks.some(t => t.name === def.name);
       if (!exists) {
-        await apiFetch('/api/maintenance', {
+        await fetch(API+'/maintenance', {
           method: 'POST',
+          headers: {'Content-Type':'application/json'},
           body: JSON.stringify({ ...def, alertTo: [], alertMethod: ['whatsapp'] })
-        });
+        }).then(r=>r.json());
       }
     }
     toast('✅ רשימה מוצעת נטענה', 'success');
