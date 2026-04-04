@@ -28,7 +28,7 @@ const BRIDGE_README = "# VaadPro Bridge\n\n## \u05d4\u05ea\u05e7\u05e0\u05d4 (\u
 const JWT_SECRET = process.env.JWT_SECRET || 'vaadpro-secret-change-in-production';
 
 // ── Directories ──────────────────────────────────────────────────
-const DATA_DIR  = path.join(__dirname, 'data');
+const DATA_DIR  = process.env.DATA_DIR || path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, '_users.json');
 const WA_AUTH_DIR = path.join(__dirname, '.wwebjs_auth');
 [DATA_DIR, WA_AUTH_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
@@ -1541,7 +1541,7 @@ scheduleDailyCron();
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.1 – SaaS Server         ║');
+  console.log('║   VaadPro v2.1.2 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
