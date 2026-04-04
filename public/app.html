@@ -4247,10 +4247,10 @@ function mntRender() {
       '<td><strong>' + (task.nextDue || '<span style="color:var(--text2);">—</span>') + '</strong></td>' +
       '<td>' + task.alertDaysBefore + ' ימים</td>' +
       '<td style="white-space:nowrap;">' +
-        '<button class="btn btn-green btn-sm" onclick="mntOpenDone('' + task.id + '')" title="סמן כבוצע">✅</button> ' +
-        '<button class="btn btn-secondary btn-sm" onclick="mntSendAlert('' + task.id + '')" title="שלח התראה">🔔</button> ' +
-        '<button class="btn btn-secondary btn-sm" onclick="mntOpenEdit('' + task.id + '')" title="עריכה">✏️</button> ' +
-        '<button class="btn btn-danger btn-sm" onclick="mntDelete('' + task.id + '')" title="מחיקה">🗑️</button>' +
+        '<button class="btn btn-green btn-sm" onclick="mntOpenDone(\'' + task.id + '\')" title="סמן כבוצע">✅</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="mntSendAlert(\'' + task.id + '\')" title="שלח התראה">🔔</button> ' +
+        '<button class="btn btn-secondary btn-sm" onclick="mntOpenEdit(\'' + task.id + '\')" title="עריכה">✏️</button> ' +
+        '<button class="btn btn-danger btn-sm" onclick="mntDelete(\'' + task.id + '\')" title="מחיקה">🗑️</button>' +
       '</td></tr>';
   }).join('');
 
@@ -4340,7 +4340,7 @@ function mntRenderRecipients(selectedIds) {
   const tenants = data.tenants || [];
   if (!tenants.length) { el.innerHTML = '<div style="color:var(--text2);font-size:0.82rem;">אין דיירים רשומים</div>'; return; }
   el.innerHTML = tenants.map(t =>
-    '<label style="display:flex;align-items:center;gap:8px;padding:4px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='var(--card2)'" onmouseout="this.style.background=''">'+
+    '<label style="display:flex;align-items:center;gap:8px;padding:4px;cursor:pointer;border-radius:4px;">'+
     '<input type="checkbox" class="mntRecipCheck" value="' + t.id + '" ' + (selectedIds.includes(t.id) ? 'checked' : '') + '> ' +
     t.name + (t.phone ? ' <span style="color:var(--text2);font-size:0.78rem;">(' + t.phone + ')</span>' : '') +
     '</label>'
