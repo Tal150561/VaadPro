@@ -1506,9 +1506,9 @@ app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
   for (const recipient of (task.alertTo || [])) {
     // recipient יכול להיות tenant id או אובייקט {phone, email, name}
     let phone = null, email = null, name = '';
-    if (typeof recipient === 'string') {
-      // חפש בדיירים
-      const tenant = (d.tenants || []).find(t => t.id === recipient);
+    if (typeof recipient !== 'object') {
+      // חפש בדיירים — השווה כstring כי id יכול להיות number או string
+      const tenant = (d.tenants || []).find(t => String(t.id) === String(recipient));
       if (tenant) { phone = tenant.phone; email = tenant.email; name = tenant.name; }
     } else {
       phone = recipient.phone; email = recipient.email; name = recipient.name || '';
@@ -1562,8 +1562,8 @@ async function runMaintenanceCron() {
 
           for (const recipient of task.alertTo) {
             let phone = null, email = null;
-            if (typeof recipient === 'string') {
-              const tenant = (d.tenants || []).find(t => t.id === recipient);
+            if (typeof recipient !== 'object') {
+              const tenant = (d.tenants || []).find(t => String(t.id) === String(recipient));
               if (tenant) { phone = tenant.phone; email = tenant.email; }
             } else { phone = recipient.phone; email = recipient.email; }
 

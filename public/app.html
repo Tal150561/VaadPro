@@ -4422,7 +4422,7 @@ function mntOpenEdit(id) {
   document.getElementById('mntMethodWA').checked = (task.alertMethod||[]).includes('whatsapp');
   document.getElementById('mntMethodEmail').checked = (task.alertMethod||[]).includes('email');
   document.getElementById('mntNotes').value = task.notes || '';
-  const tenantIds = (task.alertTo || []).filter(r => typeof r === 'string');
+  const tenantIds = (task.alertTo || []).filter(r => typeof r !== 'object').map(String);
   mntRenderRecipients(tenantIds);
   mntRenderExternalList();
   document.getElementById('mntModal').classList.add('show');
@@ -4439,7 +4439,7 @@ function mntRenderRecipients(selectedIds) {
   if (!tenants.length) { el.innerHTML = '<div style="color:var(--text2);font-size:0.82rem;">אין דיירים רשומים</div>'; return; }
   el.innerHTML = tenants.map(t =>
     '<label style="display:flex;align-items:center;gap:8px;padding:4px;cursor:pointer;border-radius:4px;">'+
-    '<input type="checkbox" class="mntRecipCheck" value="' + t.id + '" ' + (selectedIds.includes(t.id) ? 'checked' : '') + '> ' +
+    '<input type="checkbox" class="mntRecipCheck" value="' + t.id + '" ' + (selectedIds.map(String).includes(String(t.id)) ? 'checked' : '') + '> ' +
     t.name + (t.phone ? ' <span style="color:var(--text2);font-size:0.78rem;">(' + t.phone + ')</span>' : '') +
     '</label>'
   ).join('');
@@ -4485,7 +4485,7 @@ async function mntSave() {
   if (document.getElementById('mntMethodWA').checked)    alertMethod.push('whatsapp');
   if (document.getElementById('mntMethodEmail').checked) alertMethod.push('email');
 
-  const tenantIds = [...document.querySelectorAll('.mntRecipCheck:checked')].map(c => c.value);
+  const tenantIds = [...document.querySelectorAll('.mntRecipCheck:checked')].map(c => String(c.value));
   const alertTo   = [...tenantIds, ...mntExternalRecipients];
 
   const payload = {
