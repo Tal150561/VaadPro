@@ -947,7 +947,7 @@ app.post('/api/send-email-tenant', authMiddleware, async (req, res) => {
     const adminEmail = process.env.ADMIN_EMAIL || '';
     const isHtml = /<(html|body|img|div|p|br|h[1-6]|table|span)[^>]*>/i.test(body);
     const payload = { from: fromAddr, to, subject };
-    if (isHtml) { payload.html = body; } else { payload.text = body; }
+    if (isHtml) { payload.html = body.replace(/\n/g, '<br>'); } else { payload.text = body; }
     if (adminEmail) payload.reply_to = adminEmail;
     if (attachment && attachment.content && attachment.filename) {
       payload.attachments = [{
