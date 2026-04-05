@@ -801,6 +801,7 @@
 
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('planModal')">ביטול</button>
+      <button class="btn btn-ghost" style="color:var(--red);border-color:var(--red);" onclick="openResetPasswordModal()">🔑 איפוס סיסמה</button>
       <button class="btn btn-blue" id="planSaveBtn" onclick="savePlan()">שמור</button>
     </div>
   </div>
@@ -2023,6 +2024,36 @@ function toast(msg, type='ok') {
   setTimeout(() => el.className = '', 3000);
 }
 
+function openResetPasswordModal() {
+  const email = document.getElementById('planEmail').value;
+  document.getElementById('resetPassEmail').textContent = 'איפוס סיסמה עבור: ' + email;
+  document.getElementById('newPassInput').value = '';
+  document.getElementById('confirmPassInput').value = '';
+  closeModal('planModal');
+  openModal('resetPassModal');
+}
+
+async function doAdminResetPassword() {
+  const email = document.getElementById('planEmail').value ||
+    document.getElementById('resetPassEmail').textContent.replace('איפוס סיסמה עבור: ', '');
+  const newPass     = document.getElementById('newPassInput').value;
+  const confirmPass = document.getElementById('confirmPassInput').value;
+  if (newPass.length < 6) { toast('הסיסמה חייבת להכיל לפחות 6 תווים', 'err'); return; }
+  if (newPass !== confirmPass) { toast('הסיסמאות אינן תואמות', 'err'); return; }
+  const res = await fetch('/api/admin/reset-password', {
+    method: 'POST',
+    headers: adminHeaders(),
+    body: JSON.stringify({ email, newPassword: newPass })
+  });
+  const data = await res.json();
+  if (data.ok) {
+    toast('סיסמה אופסה בהצלחה ✓', 'ok');
+    closeModal('resetPassModal');
+  } else {
+    toast(data.error || 'שגיאה', 'err');
+  }
+}
+
 function planLabel(plan) {
   const map = { trial:'Trial', basic:'Basic', advanced:'Advanced', premium:'Premium', unlimited:'ללא הגבלה', suspended:'מושהה', expired:'פג תוקף', expiring:'Trial' };
   return map[plan] || plan;
@@ -2033,5 +2064,31 @@ function formatDate(iso) {
   return new Date(iso).toLocaleDateString('he-IL');
 }
 </script>
+
+<!-- Reset Password Modal -->
+<div class="modal-bg" id="resetPassModal">
+  <div class="modal" style="max-width:400px;">
+    <div class="modal-header">
+      <h3>🔑 איפוס סיסמה</h3>
+      <button class="btn btn-ghost btn-sm" onclick="closeModal('resetPassModal')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:13px;color:var(--text2);margin-bottom:16px;" id="resetPassEmail"></p>
+      <div class="field">
+        <label>סיסמה חדשה</label>
+        <input type="password" id="newPassInput" placeholder="לפחות 6 תווים" style="width:100%;">
+      </div>
+      <div class="field">
+        <label>אימות סיסמה</label>
+        <input type="password" id="confirmPassInput" placeholder="הכנס שוב" style="width:100%;">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('resetPassModal')">ביטול</button>
+      <button class="btn btn-blue" onclick="doAdminResetPassword()">שמור סיסמה</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

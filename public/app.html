@@ -244,7 +244,7 @@
 // ── VaadPro Auth Layer (חלק 1 – מוקדם: הגנה + token interceptor) ────
 (function(){
   const token = localStorage.getItem('vp_token');
-  if (!token) { window.location.href = '/'; return; }
+  if (!token) { window.location.href = '/app.html'; return; }
 
   // עטוף את fetch עם ה-token — חייב לקרות לפני כל קריאה אחרת
   const _origFetch = window.fetch;
@@ -263,7 +263,7 @@
 function vpLogout() {
   localStorage.removeItem('vp_token');
   localStorage.removeItem('vp_building');
-  window.location.href = '/';
+  window.location.href = '/app.html';
 }
 </script>
 

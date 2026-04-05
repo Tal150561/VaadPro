@@ -1597,11 +1597,86 @@ function scheduleDailyCron() {
 }
 scheduleDailyCron();
 
+
+// ── שכחתי סיסמה ─────────────────────────────────────────────────
+const resetTokens = {}; // token → { email, expires }
+
+app.post('/api/auth/forgot', async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.json({ ok: false, error: 'יש להזין אימייל' });
+  const users = loadUsers();
+  const user = users.find(u => u.email === email.toLowerCase());
+  // Always return ok to prevent email enumeration
+  if (!user) return res.json({ ok: true });
+
+  const token   = uuidv4();
+  const expires = Date.now() + 60 * 60 * 1000; // 1 hour
+  resetTokens[token] = { email: email.toLowerCase(), expires };
+
+  const appUrl  = process.env.APP_URL || 'https://vaadpro.org';
+  const resetUrl = `${appUrl}/reset-password.html?token=${token}`;
+
+  try {
+    await sendEmailResend(email, 'איפוס סיסמה — VaadPro', `שלום,
+
+קיבלנו בקשה לאיפוס הסיסמה שלך ב-VaadPro.
+
+לחץ על הלינק הבא לאיפוס הסיסמה:
+${resetUrl}
+
+הלינק תקף לשעה אחת.
+
+אם לא ביקשת איפוס סיסמה — התעלם ממייל זה.
+
+צוות VaadPro`);
+    console.log(`[Reset] sent to ${email}`);
+  } catch(e) {
+    console.error('[Reset] email failed:', e.message);
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/reset', async (req, res) => {
+  const { token, password } = req.body;
+  if (!token || !password) return res.json({ ok: false, error: 'פרמטרים חסרים' });
+  if (password.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
+
+  const entry = resetTokens[token];
+  if (!entry) return res.json({ ok: false, error: 'הלינק אינו תקין' });
+  if (Date.now() > entry.expires) {
+    delete resetTokens[token];
+    return res.json({ ok: false, error: 'הלינק פג תוקף — בקש לינק חדש' });
+  }
+
+  const users = loadUsers();
+  const user  = users.find(u => u.email === entry.email);
+  if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
+
+  user.passHash = await bcrypt.hash(password, 10);
+  saveUsers(users);
+  delete resetTokens[token];
+  console.log(`[Reset] password reset for ${entry.email}`);
+  res.json({ ok: true });
+});
+
+// ── Admin: איפוס סיסמה ידני ──────────────────────────────────────
+app.post('/api/admin/reset-password', superAdminMiddleware, async (req, res) => {
+  const { email, newPassword } = req.body;
+  if (!email || !newPassword) return res.json({ ok: false, error: 'פרמטרים חסרים' });
+  if (newPassword.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
+  const users = loadUsers();
+  const user  = users.find(u => u.email === email.toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'משתמש לא נמצא' });
+  user.passHash = await bcrypt.hash(newPassword, 10);
+  saveUsers(users);
+  res.json({ ok: true });
+});
+
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.2.1 – SaaS Server         ║');
+  console.log('║   VaadPro v2.2.3 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
