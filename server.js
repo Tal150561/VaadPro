@@ -945,7 +945,9 @@ app.post('/api/send-email-tenant', authMiddleware, async (req, res) => {
   try {
     const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
     const adminEmail = process.env.ADMIN_EMAIL || '';
-    const payload = { from: fromAddr, to, subject, text: body };
+    const isHtml = /<(html|body|img|div|p|br|h[1-6]|table|span)[^>]*>/i.test(body);
+    const payload = { from: fromAddr, to, subject };
+    if (isHtml) { payload.html = body; } else { payload.text = body; }
     if (adminEmail) payload.reply_to = adminEmail;
     if (attachment && attachment.content && attachment.filename) {
       payload.attachments = [{
@@ -979,7 +981,9 @@ app.post('/api/admin/send-email', adminAuthMiddleware, viewerBlockMiddleware, as
       // שלח דרך Resend עם קובץ מצורף אם יש
       const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
       const adminEmail = process.env.ADMIN_EMAIL || '';
-      const payload = { from: fromAddr, to, subject, text: body };
+      const isHtml = /<(html|body|img|div|p|br|h[1-6]|table|span)[^>]*>/i.test(body);
+      const payload = { from: fromAddr, to, subject };
+      if (isHtml) { payload.html = body; } else { payload.text = body; }
       if (adminEmail) payload.reply_to = adminEmail;
       if (attachment && attachment.content && attachment.filename) {
         payload.attachments = [{ filename: attachment.filename, content: attachment.content, type: attachment.type||'application/octet-stream' }];
