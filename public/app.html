@@ -675,14 +675,11 @@ function vpLogout() {
         <div class="divider"></div>
         <div>
           <label>חודש לשליחה</label>
-          <div style="display:flex;gap:8px;margin:6px 0 8px;">
-            <button id="btnModeAuto" class="btn btn-green btn-sm" onclick="setMonthMode('auto')" style="flex:1;justify-content:center;">🔄 אוטומטי</button>
-            <button id="btnModeManual" class="btn btn-secondary btn-sm" onclick="setMonthMode('manual')" style="flex:1;justify-content:center;">✏️ ידני</button>
-          </div>
-          <select id="cfgMonth" onchange="saveConfig();render();" disabled style="opacity:.4;max-width:200px;">
+          <select id="cfgMonth" onchange="saveConfig();render();" style="max-width:220px;margin-top:6px;">
+            <option value="">🔄 אוטומטי (חודש נוכחי)</option>
             <option>ינואר</option><option>פברואר</option><option>מרץ</option><option>אפריל</option><option>מאי</option><option>יוני</option><option>יולי</option><option>אוגוסט</option><option>ספטמבר</option><option>אוקטובר</option><option>נובמבר</option><option>דצמבר</option>
           </select>
-          <div class="hint" id="monthHint" style="margin-top:5px;">החודש יזוהה אוטומטית</div>
+          <div class="hint" id="monthHint" style="margin-top:5px;">ריק = חודש נוכחי אוטומטית</div>
         </div>
         <div class="schedule-box" style="margin-top:16px;">📅 <span id="scheduleText">הגדר תזמון</span></div>
       </div>
@@ -1056,7 +1053,7 @@ function vpLogout() {
 
 <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
 const API = '/api';
-let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,monthMode:'auto',manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
+let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
 let vpPlan = { plan:'trial', features:'all', maxTenants:20, currentTenants:0 };
 
@@ -1187,8 +1184,9 @@ function fillForm() {
   const mn=String(c.sendMinute!=null?c.sendMinute:0).padStart(2,'0');
   document.getElementById('cfgTime').value=h+':'+mn;
   if(c.template) document.getElementById('cfgTemplate').value=c.template;
-  setMonthMode(c.monthMode||'auto',true);
-  if(c.manualMonth){ const sel=document.getElementById('cfgMonth'); for(let o of sel.options){if(o.text===c.manualMonth){o.selected=true;break;}} }
+  const sel=document.getElementById('cfgMonth');
+  if(c.manualMonth){ for(let o of sel.options){if(o.text===c.manualMonth){o.selected=true;break;}} }
+  else { sel.value=''; }
   updateSchedule(); updatePreview();
 }
 
@@ -1256,27 +1254,12 @@ function closeQR() {
 
 document.getElementById('qrModal').addEventListener('click',function(e){ if(e.target===this) this.classList.remove('show'); });
 
-function setMonthMode(mode,silent) {
-  const sel=document.getElementById('cfgMonth'),hint=document.getElementById('monthHint');
-  const bA=document.getElementById('btnModeAuto'),bM=document.getElementById('btnModeManual');
-  if(mode==='auto'){
-    sel.disabled=true;sel.style.opacity='.4';
-    bA.className='btn btn-green btn-sm';bM.className='btn btn-secondary btn-sm';
-    hint.textContent='החודש יזוהה אוטומטית ('+( data.currentAutoMonth||'')+')';hint.style.color='var(--accent)';
-  } else {
-    sel.disabled=false;sel.style.opacity='1';
-    bA.className='btn btn-secondary btn-sm';bM.className='btn btn-green btn-sm';
-    hint.textContent='בחר חודש ידנית';hint.style.color='var(--warn)';
-  }
-  data.config=data.config||{}; data.config.monthMode=mode;
-  if(!silent) saveConfig();
-}
+// setMonthMode removed — replaced by simple select
 
 async function saveConfig() {
   const tv=document.getElementById('cfgTime').value||'09:00';
   const [h,m]=tv.split(':');
-  const mode=(data.config&&data.config.monthMode)||'auto';
-  const config={amount:parseInt(document.getElementById('cfgAmount').value)||300,sendDay:parseInt(document.getElementById('cfgDay').value)||1,sendHour:parseInt(h)||9,sendMinute:parseInt(m)||0,monthMode:mode,manualMonth:mode==='manual'?document.getElementById('cfgMonth').value:'',template:document.getElementById('cfgTemplate').value};
+  const config={amount:parseInt(document.getElementById('cfgAmount').value)||300,sendDay:parseInt(document.getElementById('cfgDay').value)||1,sendHour:parseInt(h)||9,sendMinute:parseInt(m)||0,manualMonth:document.getElementById('cfgMonth').value||'',template:document.getElementById('cfgTemplate').value};
   data.config=Object.assign({},data.config,config);
   updateSchedule();updatePreview();
   clearTimeout(saveTimer);
@@ -1289,7 +1272,7 @@ function updateSchedule() {
   const c=data.config||{};
   const h=String(c.sendHour!=null?c.sendHour:9).padStart(2,'0');
   const m=String(c.sendMinute!=null?c.sendMinute:0).padStart(2,'0');
-  const ml=(c.monthMode==='manual'&&c.manualMonth)?c.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
+  const ml=c.manualMonth?c.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
   const el=document.getElementById('scheduleText');
   if(el) el.innerHTML='הודעות ישלחו ב-<strong>'+(c.sendDay||1)+'</strong> לחודש בשעה <strong>'+h+':'+m+'</strong> — חודש: <strong>'+ml+'</strong>';
 }
@@ -1297,7 +1280,7 @@ function updateSchedule() {
 function updatePreview() {
   const t=document.getElementById('cfgTemplate').value;
   const name=(data.tenants&&data.tenants.length)?data.tenants[0].name:'ישראל ישראלי';
-  const month=(data.config&&data.config.monthMode==='manual'&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
+  const month=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
   const amount=document.getElementById('cfgAmount').value||300;
   const el=document.getElementById('msgPreview');
   if(el) el.textContent=t.replace(/{שם}/g,name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
@@ -1683,7 +1666,7 @@ async function sendAll() {
 }
 
 async function sendUnpaidOnly() {
-  const em=(data.config&&data.config.monthMode==='manual'&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
+  const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
   const unpaid=data.tenants.filter(function(t){return !data.sentLog[t.id+'_'+em];});
   if(!unpaid.length){toast('✅ כולם כבר שילמו!','success');return;}
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
@@ -1710,21 +1693,21 @@ async function resetSent() {
 }
 
 async function markPaid(id) {
-  const em=(data.config&&data.config.monthMode==='manual'&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
+  const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
   data.sentLog[id+'_'+em]='manual_paid_'+new Date().toISOString();
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});}catch(e){}
   render(); toast('💵 סומן כשילם','success');
 }
 
 async function markUnpaid(id) {
-  const em=(data.config&&data.config.monthMode==='manual'&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
+  const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
   delete data.sentLog[id+'_'+em];
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});}catch(e){}
   render(); toast('↩️ סומן כלא שילם');
 }
 
 function getEffectiveMonth() {
-  return (data.config&&data.config.monthMode==='manual'&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
+  return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
 }
 
 function render() {

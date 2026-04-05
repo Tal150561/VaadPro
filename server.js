@@ -287,10 +287,10 @@ app.post('/api/bridge/ack', (req, res) => {
 
 // ── Helpers ──────────────────────────────────────────────────────
 function getEffectiveMonth(config) {
-  const now = new Date(), day = now.getDate();
+  const now = new Date();
   const names = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-  if (config && config.monthMode === 'manual' && config.manualMonth) return config.manualMonth;
-  return names[day < 10 ? (now.getMonth()-1+12)%12 : now.getMonth()];
+  if (config && config.manualMonth) return config.manualMonth;
+  return names[now.getMonth()];
 }
 
 // ════════════════════════════════════════════════════════════════
