@@ -308,7 +308,9 @@ const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 async function sendEmailResend(to, subject, body) {
   const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
   const adminEmail = process.env.ADMIN_EMAIL || '';
-  const payload = { from: fromAddr, to, subject, text: body };
+  const isHtml = /<img|<div|<p |<br|<h[1-6]|<table/i.test(body);
+  const payload = { from: fromAddr, to, subject };
+  if (isHtml) { payload.html = body; } else { payload.text = body; }
   if (adminEmail) payload.reply_to = adminEmail;
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
