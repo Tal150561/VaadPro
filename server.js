@@ -248,6 +248,7 @@ app.post('/api/bridge/status', (req, res) => {
   wa.status = status || 'disconnected';
   wa.qrData = qrDataUrl || null;
   wa.phone  = phone || null;
+  wa.lastSeen = Date.now(); // heartbeat timestamp
   // שמור lastConnectedAt בקובץ המשתמש בכל חיבור
   if (status === 'ready' && phone) {
     const users = loadUsers();
@@ -1678,11 +1679,25 @@ app.post('/api/admin/reset-password', superAdminMiddleware, async (req, res) => 
   res.json({ ok: true });
 });
 
+
+// ── Bridge heartbeat timeout ─────────────────────────────────────
+// אם ה-Bridge לא שלח heartbeat תוך 3 דקות → סמן כמנותק
+setInterval(() => {
+  const now = Date.now();
+  const TIMEOUT = 3 * 60 * 1000; // 3 minutes
+  for (const [tid, wa] of Object.entries(waClients)) {
+    if (wa.status === 'ready' && wa.lastSeen && (now - wa.lastSeen) > TIMEOUT) {
+      console.log(`[Bridge:${tid}] heartbeat timeout — marking disconnected`);
+      wa.status = 'disconnected';
+    }
+  }
+}, 60 * 1000); // check every minute
+
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.2.3 – SaaS Server         ║');
+  console.log('║   VaadPro v2.4.0 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
