@@ -3751,11 +3751,12 @@ const TS_ITEMS = [
   },
   {
     cat: "WhatsApp / Bridge",
-    q: "install.bat לא עושה כלום / נסגר מיד",
+    q: "VaadPro-Setup.bat לא עושה כלום / נסגר מיד",
     a: [
-      "ודא שהתקנת Node.js (nodejs.org) לפני הפעלת install.bat",
-      "לחץ ימני על install.bat ← 'הפעל כמנהל'",
-      "Mac/Linux: פתח Terminal בתיקייה והרץ: chmod +x install.sh && ./install.sh"
+      "לחץ ימני על VaadPro-Setup.bat ← Properties ← סמן Unblock ← OK",
+      "לחץ ימני ← 'הפעל כמנהל'",
+      "ודא שיש חיבור אינטרנט — המתקין מוריד קבצים",
+      "Mac: פתח Terminal ← הרץ: chmod +x VaadPro-Setup.sh && ./VaadPro-Setup.sh"
     ]
   },
   {
@@ -3763,8 +3764,8 @@ const TS_ITEMS = [
     q: "ווטסאפ התנתק לאחר ימים / שבועות",
     a: [
       "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
-      "פתח שוב את start.bat — אם מתבקש QR, סרוק שוב",
-      "אין צורך להריץ install.bat שוב — רק VaadPro-Start.bat"
+      "לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ — אם מתבקש QR, סרוק שוב",
+      "אין צורך להריץ את המתקין שוב — רק VaadPro-Start.bat"
     ]
   },
   {
@@ -4136,17 +4137,13 @@ const HELP_CONTENT = {
       <h3>למה צריך את ה-Bridge?</h3>
       <p>ווטסאפ מחייב חיבור לטלפון שלך. ה-Bridge הוא תוכנה קטנה שרצה על המחשב ומחברת בין הטלפון לאפליקציה בענן.</p>
       <h3>Windows — צעדים</h3>
-      <div class="step"><div class="step-num">1</div><div>התקן <a href="https://nodejs.org" target="_blank" style="color:var(--accent);">Node.js</a> (גרסת LTS)</div></div>
-      <div class="step"><div class="step-num">2</div><div>הגדרות ← "הורד חבילת Bridge המלאה" ← חלץ ZIP</div></div>
-      <div class="step"><div class="step-num">3</div><div>לחץ פעמיים על <strong>install.bat</strong> ← המתן ~2 דקות</div></div>
-      <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>start.bat</strong> — אל תסגור!</div></div>
+      <div class="step"><div class="step-num">1</div><div>הגדרות ← הורד <strong>VaadPro-Setup.bat</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div>לחץ ימני ← Properties ← Unblock ← OK</div></div>
+      <div class="step"><div class="step-num">3</div><div>הגדרות ← לחץ <strong>"קבל קוד התקנה"</strong></div></div>
+      <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>VaadPro-Setup.bat</strong> ← הכנס קוד ← Install</div></div>
       <div class="step"><div class="step-num">5</div><div>חזור לאפליקציה ← "חיבור ווטסאפ" ← סרוק QR</div></div>
-      <h3>Mac/Linux — צעדים</h3>
-      <p>אחרי הורדת ה-ZIP, פתח Terminal בתיקייה:</p>
-      <p><code style="background:var(--surface2);padding:2px 8px;border-radius:4px;">chmod +x install.sh && ./install.sh</code></p>
-      <p>הפעלה: <code style="background:var(--surface2);padding:2px 8px;border-radius:4px;">./start.sh</code></p>
       <h3>כל יום</h3>
-      <p>הפעל את start.bat (Windows) או start.sh (Mac) לפני שליחת הודעות.</p>
+      <p>לחץ פעמיים על קיצור הדרך <strong>VaadPro Bridge</strong> על הדסקטופ.</p>
     `
   }
 };
