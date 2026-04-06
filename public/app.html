@@ -634,17 +634,24 @@ function vpLogout() {
           <div class="wa-setup-step">
             <div class="wa-setup-num">5</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <strong>Windows:</strong> לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">install.bat</code><br>
-              <strong>Mac/Linux:</strong> פתח Terminal בתיקייה ← הרץ <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">chmod +x install.sh && ./install.sh</code>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ממתין כ-2 דקות — פעם אחת בלבד</div>
+              <strong>Windows:</strong>
+              <ol style="margin:6px 0 0 16px;padding:0;">
+                <li>לחץ ימני על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">VaadPro-Start.bat</code> ← <strong>Properties</strong></li>
+                <li>בתחתית: סמן <strong>Unblock</strong> ← לחץ <strong>OK</strong></li>
+                <li>לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">VaadPro-Start.bat</code></li>
+              </ol>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">✅ מתקין אוטומטית + יוצר קיצור דרך על הדסקטופ — פעם אחת בלבד</div>
             </div>
           </div>
           <div class="wa-setup-step">
             <div class="wa-setup-num">6</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <strong>Windows:</strong> לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">start.bat</code><br>
-              <strong>Mac/Linux:</strong> הרץ <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">./start.sh</code> ב-Terminal
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⚠️ <strong>אל תסגור את החלון!</strong> הוא צריך להישאר פתוח</div>
+              <strong>Mac/Linux:</strong>
+              <ol style="margin:6px 0 0 16px;padding:0;">
+                <li>פתח Terminal בתיקיית VaadPro-Bridge</li>
+                <li>הרץ: <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">chmod +x VaadPro-Start.sh && ./VaadPro-Start.sh</code></li>
+              </ol>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.7;">⚠️ <strong>אל תסגור את החלון!</strong> הוא צריך להישאר פתוח</div>
             </div>
           </div>
           <div class="wa-setup-step">
@@ -657,7 +664,9 @@ function vpLogout() {
           </div>
         </div>
         <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(59,130,246,.08);padding:10px;border-radius:8px;border:1px solid rgba(59,130,246,.2);">
-          💡 <strong>כל יום שרוצים לשלוח הודעות:</strong> פתח את תיקיית VaadPro-Bridge ← לחץ פעמיים על <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">start.bat</code> ← השאר את החלון פתוח
+          💡 <strong>כל יום שרוצים לשלוח הודעות:</strong>
+Windows: לחץ פעמיים על קיצור הדרך <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">VaadPro Bridge</code> על הדסקטופ ← השאר את החלון פתוח<br>
+Mac: פתח Terminal ← הרץ <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">./VaadPro-Start.sh</code> בתיקיית VaadPro-Bridge
         </div>
       </div>
     </div>
@@ -3714,7 +3723,7 @@ const TS_ITEMS = [
     a: [
       "ודא שחלון ה-Bridge (החלון השחור) פתוח ולא מוזער",
       "לחץ רענן בדף — לפעמים הסטטוס מתעדכן באיחור של 30 שניות",
-      "סגור את start.bat ופתח שוב",
+      "סגור את VaadPro-Start.bat ופתח שוב",
       "אם עדיין לא עובד — מחק את תיקיית wa-auth בתוך VaadPro-Bridge וסרוק QR מחדש"
     ]
   },
@@ -3752,7 +3761,7 @@ const TS_ITEMS = [
     a: [
       "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
       "פתח שוב את start.bat — אם מתבקש QR, סרוק שוב",
-      "אין צורך להריץ install.bat שוב — רק start.bat"
+      "אין צורך להריץ install.bat שוב — רק VaadPro-Start.bat"
     ]
   },
   {

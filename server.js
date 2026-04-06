@@ -22,8 +22,10 @@ const BRIDGE_PKG_CONTENT = "{\n  \"name\": \"vaadpro-bridge\",\n  \"version\": \
 const BRIDGE_INSTALL_BAT = '@echo off\ntitle VaadPro Bridge - Install\necho.\necho  VaadPro Bridge - Installation\necho  ==============================\necho.\necho  Installing... please wait (~2 min)\necho.\nnpm install\nif %errorlevel% neq 0 (\n    echo  ERROR: Installation failed.\n    pause\n    exit /b 1\n)\necho.\necho  Done! Now double-click start.bat to run.\necho.\npause\n';
 const BRIDGE_START_BAT = '@echo off\ntitle VaadPro Bridge\ncolor 0A\necho.\necho  VaadPro Bridge - Running\necho  Do NOT close this window!\necho.\nnode bridge.js\necho.\necho  Bridge stopped.\npause\ngoto :eof\n';
 const BRIDGE_INSTALL_SH = '#!/bin/bash\necho \necho VaadPro Bridge - Installation\necho ==============================\necho \necho Installing... please wait\necho \nnpm install\necho \necho Done! Run: ./start.sh\necho \n';
-const BRIDGE_START_SH = '#!/bin/bash\necho \necho VaadPro Bridge - Starting\necho Do NOT close this window!\necho \nnode bridge.js\n';
-const BRIDGE_README = '# VaadPro Bridge\n\n## Installation (one-time)\n1. Double-click install.bat\n2. Wait ~2 minutes\n\n## Daily use\n1. Double-click start.bat\n2. Do NOT close the window!\n3. Scan QR in the app (first time only)\n\n## Support: vaadpro15@gmail.com\n';
+const BRIDGE_START_SH = '#!/bin/bash\nBRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"\n\necho ""\necho " ========================================"\necho "   VaadPro Bridge Launcher"\necho " ========================================"\necho ""\n\n# Check Node.js\nif ! command -v node &>/dev/null; then\n    echo " ERROR: Node.js is not installed."\n    echo " Go to https://nodejs.org and install the LTS version."\n    echo ""\n    exit 1\nfi\n\n# Check bridge.js\nif [ ! -f "$BRIDGE_DIR/bridge.js" ]; then\n    echo " ERROR: bridge.js not found in $BRIDGE_DIR"\n    exit 1\nfi\n\n# Install if needed\nif [ ! -d "$BRIDGE_DIR/node_modules" ]; then\n    echo " Installing dependencies (one-time, ~2 min)..."\n    cd "$BRIDGE_DIR" && npm install\n    echo " Done!"\n    echo ""\nfi\n\n# Create Desktop shortcut (Mac only, one-time)\nSHORTCUT="$HOME/Desktop/VaadPro Bridge.command"\nif [ ! -f "$SHORTCUT" ]; then\n    echo "#!/bin/bash" > "$SHORTCUT"\n    echo "cd \\"$BRIDGE_DIR\\" && ./VaadPro-Start.sh" >> "$SHORTCUT"\n    chmod +x "$SHORTCUT"\n    echo " Shortcut created on Desktop: VaadPro Bridge"\n    echo ""\nfi\n\n# Start Bridge\necho " Starting VaadPro Bridge..."\necho " Do NOT close this window!"\necho ""\n\ncd "$BRIDGE_DIR"\nnode bridge.js\n\necho ""\necho " Bridge stopped. Press Enter to restart or Ctrl+C to exit."\nread\nexec "$0"\n';const BRIDGE_README = '# VaadPro Bridge\n\n## Installation (one-time)\n1. Double-click install.bat\n2. Wait ~2 minutes\n\n## Daily use\n1. Double-click start.bat\n2. Do NOT close the window!\n3. Scan QR in the app (first time only)\n\n## Support: vaadpro15@gmail.com\n';
+
+const VAADPRO_START_BAT = '@echo off\nsetlocal enabledelayedexpansion\ntitle VaadPro Bridge Launcher\n\nset BRIDGE_DIR=%~dp0\nset BRIDGE_DIR=%BRIDGE_DIR:~0,-1%\n\nif not exist "%BRIDGE_DIR%\\bridge.js" (\n    echo  ERROR: bridge.js not found.\n    pause & exit /b 1\n)\n\nnode --version >nul 2>&1\nif %errorlevel% neq 0 (\n    echo  ERROR: Node.js is not installed.\n    echo  Go to https://nodejs.org and install LTS.\n    start https://nodejs.org\n    pause & exit /b 1\n)\n\nif not exist "%BRIDGE_DIR%\\node_modules" (\n    echo  Installing... please wait ~2 minutes\n    pushd "%BRIDGE_DIR%"\n    call npm install\n    if %errorlevel% neq 0 ( echo  ERROR: Installation failed. & popd & pause & exit /b 1 )\n    popd\n    echo  Done!\n)\n\nset SHORTCUT=%USERPROFILE%\\Desktop\\VaadPro Bridge.lnk\nif not exist "%SHORTCUT%" (\n    powershell -NoProfile -Command "$ws=New-Object -ComObject WScript.Shell;$s=$ws.CreateShortcut(\'%SHORTCUT%\');$s.TargetPath=\'%BRIDGE_DIR%\\VaadPro-Start.bat\';$s.WorkingDirectory=\'%BRIDGE_DIR%\';$s.Description=\'VaadPro Bridge\';$s.Save()"\n    if exist "%SHORTCUT%" echo  Shortcut created on Desktop!\n)\n\ntasklist /FI "WINDOWTITLE eq VaadPro Bridge*" 2>nul | find /I "cmd.exe" >nul\nif %errorlevel%==0 (\n    echo  VaadPro Bridge is already running. Check your taskbar.\n    pause & exit /b 0\n)\n\nstart "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && node bridge.js"\nexit /b 0\n';
+const VAADPRO_START_SH = '#!/bin/bash\nBRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"\n\necho ""\necho " ========================================"\necho "   VaadPro Bridge Launcher"\necho " ========================================"\necho ""\n\n# Check Node.js\nif ! command -v node &>/dev/null; then\n    echo " ERROR: Node.js is not installed."\n    echo " Go to https://nodejs.org and install the LTS version."\n    echo ""\n    exit 1\nfi\n\n# Check bridge.js\nif [ ! -f "$BRIDGE_DIR/bridge.js" ]; then\n    echo " ERROR: bridge.js not found in $BRIDGE_DIR"\n    exit 1\nfi\n\n# Install if needed\nif [ ! -d "$BRIDGE_DIR/node_modules" ]; then\n    echo " Installing dependencies (one-time, ~2 min)..."\n    cd "$BRIDGE_DIR" && npm install\n    echo " Done!"\n    echo ""\nfi\n\n# Create Desktop shortcut (Mac only, one-time)\nSHORTCUT="$HOME/Desktop/VaadPro Bridge.command"\nif [ ! -f "$SHORTCUT" ]; then\n    echo "#!/bin/bash" > "$SHORTCUT"\n    echo "cd \\"$BRIDGE_DIR\\" && ./VaadPro-Start.sh" >> "$SHORTCUT"\n    chmod +x "$SHORTCUT"\n    echo " Shortcut created on Desktop: VaadPro Bridge"\n    echo ""\nfi\n\n# Start Bridge\necho " Starting VaadPro Bridge..."\necho " Do NOT close this window!"\necho ""\n\ncd "$BRIDGE_DIR"\nnode bridge.js\n\necho ""\necho " Bridge stopped. Press Enter to restart or Ctrl+C to exit."\nread\nexec "$0"\n';
 const JWT_SECRET = process.env.JWT_SECRET || 'vaadpro-secret-change-in-production';
 
 // ── Directories ──────────────────────────────────────────────────
@@ -591,14 +593,16 @@ app.get('/api/bridge/download', authMiddleware, (req, res) => {
 
   // קבצי ה-Bridge מוטמעים בקוד
   const BRIDGE_FILES = {
-    'config.json':   configJson,
-    'bridge.js':     BRIDGE_JS_CONTENT,
-    'package.json':  BRIDGE_PKG_CONTENT,
-    'install.bat':   BRIDGE_INSTALL_BAT,
-    'start.bat':     BRIDGE_START_BAT,
-    'install.sh':    BRIDGE_INSTALL_SH,
-    'start.sh':      BRIDGE_START_SH,
-    'README.md':     BRIDGE_README
+    'config.json':        configJson,
+    'bridge.js':          BRIDGE_JS_CONTENT,
+    'package.json':       BRIDGE_PKG_CONTENT,
+    'install.bat':        BRIDGE_INSTALL_BAT,
+    'start.bat':          BRIDGE_START_BAT,
+    'install.sh':         BRIDGE_INSTALL_SH,
+    'start.sh':           BRIDGE_START_SH,
+    'VaadPro-Start.bat':  VAADPRO_START_BAT,
+    'VaadPro-Start.sh':   VAADPRO_START_SH,
+    'README.md':          BRIDGE_README
   };
 
   // בנה ZIP ידנית (פורמט ZIP פשוט ללא דחיסה - Stored)
