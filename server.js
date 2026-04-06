@@ -1697,6 +1697,231 @@ setInterval(() => {
   }
 }, 60 * 1000); // check every minute
 
+
+// ── Installer Token System ───────────────────────────────────────
+const installTokens = {}; // token → { tenantId, expires }
+
+// Generate install token (called from app - requires auth)
+app.post('/api/installer/token', authMiddleware, (req, res) => {
+  const token = Math.random().toString(36).substring(2, 8).toUpperCase(); // 6-char code e.g. "X7K2M9"
+  installTokens[token] = {
+    tenantId: req.user.tenantId,
+    expires:  Date.now() + 30 * 60 * 1000 // 30 minutes
+  };
+  console.log(`[Installer] token generated for ${req.user.tenantId}: ${token}`);
+  res.json({ ok: true, token });
+});
+
+// Redeem install token → return config.json (public, no auth)
+app.post('/api/installer/redeem', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.json({ ok: false, error: 'Missing token' });
+  const entry = installTokens[token.toUpperCase()];
+  if (!entry) return res.json({ ok: false, error: 'Invalid code' });
+  if (Date.now() > entry.expires) {
+    delete installTokens[token.toUpperCase()];
+    return res.json({ ok: false, error: 'Code expired — generate a new one' });
+  }
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const config = {
+    cloudUrl:     appUrl,
+    bridgeSecret: BRIDGE_SECRET,
+    tenantId:     entry.tenantId
+  };
+  delete installTokens[token.toUpperCase()]; // one-time use
+  console.log(`[Installer] token redeemed for ${entry.tenantId}`);
+  res.json({ ok: true, config });
+});
+
+// Serve VaadPro-Setup.bat (public)
+app.get('/vaadpro-setup.bat', (req, res) => {
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const bat = generateSetupBat(appUrl);
+  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.bat"');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.send(bat);
+});
+
+function generateSetupBat(appUrl) {
+  return `@echo off
+title VaadPro Setup
+powershell -NoProfile -ExecutionPolicy Bypass -Command "& {
+  Add-Type -AssemblyName System.Windows.Forms
+  Add-Type -AssemblyName System.Drawing
+
+  $form = New-Object System.Windows.Forms.Form
+  $form.Text = 'VaadPro Setup'
+  $form.Size = New-Object System.Drawing.Size(420, 220)
+  $form.StartPosition = 'CenterScreen'
+  $form.FormBorderStyle = 'FixedDialog'
+  $form.MaximizeBox = $false
+
+  $lbl = New-Object System.Windows.Forms.Label
+  $lbl.Text = 'Enter your installation code from VaadPro Settings:'
+  $lbl.Location = New-Object System.Drawing.Point(20, 20)
+  $lbl.Size = New-Object System.Drawing.Size(380, 30)
+  $form.Controls.Add($lbl)
+
+  $lbl2 = New-Object System.Windows.Forms.Label
+  $lbl2.Text = 'Open vaadpro.org > Settings > Get Installation Code'
+  $lbl2.Location = New-Object System.Drawing.Point(20, 45)
+  $lbl2.Size = New-Object System.Drawing.Size(380, 20)
+  $lbl2.ForeColor = [System.Drawing.Color]::Gray
+  $form.Controls.Add($lbl2)
+
+  $txt = New-Object System.Windows.Forms.TextBox
+  $txt.Location = New-Object System.Drawing.Point(20, 75)
+  $txt.Size = New-Object System.Drawing.Size(200, 30)
+  $txt.Font = New-Object System.Drawing.Font('Arial', 14, [System.Drawing.FontStyle]::Bold)
+  $txt.CharacterCasing = 'Upper'
+  $txt.MaxLength = 6
+  $form.Controls.Add($txt)
+
+  $btn = New-Object System.Windows.Forms.Button
+  $btn.Text = 'Install'
+  $btn.Location = New-Object System.Drawing.Point(230, 73)
+  $btn.Size = New-Object System.Drawing.Size(80, 32)
+  $btn.BackColor = [System.Drawing.Color]::FromArgb(37, 211, 102)
+  $form.AcceptButton = $btn
+  $form.Controls.Add($btn)
+
+  $status = New-Object System.Windows.Forms.Label
+  $status.Location = New-Object System.Drawing.Point(20, 115)
+  $status.Size = New-Object System.Drawing.Size(380, 50)
+  $status.Text = ''
+  $form.Controls.Add($status)
+
+  $btn.Add_Click({
+    $code = $txt.Text.Trim().ToUpper()
+    if ($code.Length -lt 4) { $status.Text = 'Please enter your code'; return }
+
+    $status.Text = 'Connecting to VaadPro...'
+    $form.Refresh()
+
+    try {
+      $body = '{"token":"' + $code + '"}'
+      $resp = Invoke-RestMethod -Uri '${appUrl}/api/installer/redeem' -Method POST -Body $body -ContentType 'application/json'
+
+      if (-not $resp.ok) {
+        $status.Text = 'Error: ' + $resp.error
+        return
+      }
+
+      $installDir = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), 'VaadPro-Bridge')
+      New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+
+      $status.Text = 'Saving configuration...'
+      $form.Refresh()
+      $resp.config | ConvertTo-Json | Out-File -FilePath ([System.IO.Path]::Combine($installDir, 'config.json')) -Encoding UTF8
+
+      $status.Text = 'Downloading Bridge files...'
+      $form.Refresh()
+      Invoke-WebRequest '${appUrl}/api/bridge/download-files' -OutFile ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -UseBasicParsing
+      Expand-Archive -Path ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -DestinationPath $installDir -Force
+      Remove-Item ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -Force
+
+      $status.Text = 'Checking Node.js...'
+      $form.Refresh()
+      $nodeExists = $null -ne (Get-Command node -ErrorAction SilentlyContinue)
+      if (-not $nodeExists) {
+        $status.Text = 'Installing Node.js (2-3 min)...'
+        $form.Refresh()
+        Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')) -UseBasicParsing
+        Start-Process msiexec -ArgumentList '/i', ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')), '/quiet', '/norestart' -Wait
+        Remove-Item ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')) -Force
+      }
+
+      $status.Text = 'Installing Bridge dependencies...'
+      $form.Refresh()
+      $env:PATH += ';C:\Program Files\nodejs'
+      Set-Location $installDir
+      Start-Process 'npm' -ArgumentList 'install' -WorkingDirectory $installDir -Wait -NoNewWindow
+
+      $status.Text = 'Creating Desktop shortcut...'
+      $form.Refresh()
+      $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
+      $shortcutPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), 'VaadPro Bridge.lnk')
+      $ws = New-Object -ComObject WScript.Shell
+      $s = $ws.CreateShortcut($shortcutPath)
+      $s.TargetPath = $batPath
+      $s.WorkingDirectory = $installDir
+      $s.Description = 'VaadPro Bridge'
+      $s.Save()
+
+      $status.Text = 'Installation complete!'
+      $form.Refresh()
+      Start-Sleep 1
+
+      $form.Close()
+      Start-Process $batPath
+    } catch {
+      $status.Text = 'Error: ' + $_.Exception.Message
+    }
+  })
+
+  $form.ShowDialog() | Out-Null
+}"
+`;
+}
+
+// Serve bridge files without config (for installer)
+app.get('/api/bridge/download-files', (req, res) => {
+  const FILES = {
+    'bridge.js':         BRIDGE_JS_CONTENT,
+    'package.json':      BRIDGE_PKG_CONTENT,
+    'VaadPro-Start.bat': VAADPRO_START_BAT,
+    'VaadPro-Start.sh':  VAADPRO_START_SH,
+  };
+  const buildZipSimple = (files) => {
+    const parts = [], centralDir = [];
+    let offset = 0;
+    const crc32 = (buf) => {
+      let crc = 0xFFFFFFFF;
+      const table = [];
+      for (let i = 0; i < 256; i++) {
+        let c = i;
+        for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+        table[i] = c;
+      }
+      for (let i = 0; i < buf.length; i++) crc = table[(crc ^ buf[i]) & 0xFF] ^ (crc >>> 8);
+      return (crc ^ 0xFFFFFFFF) >>> 0;
+    };
+    for (const [name, content] of Object.entries(files)) {
+      const nameBuf = Buffer.from(name, 'utf8');
+      const dataBuf = Buffer.from(content, 'utf8');
+      const crc = crc32(dataBuf);
+      const now = new Date();
+      const dosDate = ((now.getFullYear()-1980)<<9)|((now.getMonth()+1)<<5)|now.getDate();
+      const dosTime = (now.getHours()<<11)|(now.getMinutes()<<5)|(Math.floor(now.getSeconds()/2));
+      const lh = Buffer.alloc(30 + nameBuf.length);
+      lh.writeUInt32LE(0x04034b50,0); lh.writeUInt16LE(20,4); lh.writeUInt16LE(0,6);
+      lh.writeUInt16LE(0,8); lh.writeUInt16LE(dosTime,10); lh.writeUInt16LE(dosDate,12);
+      lh.writeUInt32LE(crc,14); lh.writeUInt32LE(dataBuf.length,18); lh.writeUInt32LE(dataBuf.length,22);
+      lh.writeUInt16LE(nameBuf.length,26); lh.writeUInt16LE(0,28); nameBuf.copy(lh,30);
+      parts.push(lh, dataBuf);
+      const cd = Buffer.alloc(46 + nameBuf.length);
+      cd.writeUInt32LE(0x02014b50,0); cd.writeUInt16LE(20,4); cd.writeUInt16LE(20,6);
+      cd.writeUInt16LE(0,8); cd.writeUInt16LE(0,10); cd.writeUInt16LE(dosTime,12);
+      cd.writeUInt16LE(dosDate,14); cd.writeUInt32LE(crc,16); cd.writeUInt32LE(dataBuf.length,20);
+      cd.writeUInt32LE(dataBuf.length,24); cd.writeUInt16LE(nameBuf.length,28);
+      cd.writeUInt16LE(0,30); cd.writeUInt16LE(0,32); cd.writeUInt16LE(0,34);
+      cd.writeUInt16LE(0,36); cd.writeUInt32LE(0,38); cd.writeUInt32LE(offset,42);
+      nameBuf.copy(cd,46);
+      centralDir.push(cd);
+      offset += lh.length + dataBuf.length;
+    }
+    const cdBuf = Buffer.concat(centralDir);
+    const eocd = Buffer.alloc(22);
+    eocd.writeUInt32LE(0x06054b50,0); eocd.writeUInt16LE(0,4); eocd.writeUInt16LE(0,6);
+    eocd.writeUInt16LE(centralDir.length,8); eocd.writeUInt16LE(centralDir.length,10);
+    eocd.writeUInt32LE(cdBuf.length,12); eocd.writeUInt32LE(offset,16); eocd.writeUInt16LE(0,20);
+    return Buffer.concat([...parts, cdBuf, eocd]);
+  };
+  const zipBuf = buildZipSimple(FILES);
+  res.setHeader('Content-Type', 'application/zip');
+  res.send(zipBuf);
+});
+
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');

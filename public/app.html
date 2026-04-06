@@ -581,22 +581,22 @@ function vpLogout() {
       <div class="card-body">
         <div class="wa-setup-card">
           <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step1')">
-            <span>📦 שלב 1 — התקנת Node.js (פעם אחת בלבד)</span>
+            <span>📥 שלב 1 — הורד את מתקין VaadPro</span>
             <span id="step1Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
           </h3>
           <div id="step1Body">
           <div class="wa-setup-step">
             <div class="wa-setup-num">1</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              עבור לאתר: <a href="https://nodejs.org" target="_blank" style="color:var(--accent);">nodejs.org</a>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.85;">📌 לחץ על הכפתור הירוק הגדול שכתוב עליו <strong>"LTS"</strong> — יורד קובץ התקנה</div>
+              <a href="/vaadpro-setup.bat" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת VaadPro-Setup</a>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Setup.bat</strong> — מתקין הכל אוטומטית</div>
             </div>
           </div>
           <div class="wa-setup-step">
             <div class="wa-setup-num">2</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              פתח את הקובץ שהורד ← לחץ <strong>Next</strong> בכל המסכים ← לחץ <strong>Install</strong> ← לחץ <strong>Finish</strong>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ההתקנה לוקחת כ-2 דקות — אל תסגור את החלון ✔️ פעם אחת בלבד</div>
+              לחץ ימני על <strong>VaadPro-Setup.bat</strong> ← <strong>Properties</strong> ← סמן <strong>Unblock</strong> ← <strong>OK</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">🔓 נדרש פעם אחת בלבד — Windows חוסם קבצים שהורדו מהאינטרנט</div>
             </div>
           </div>
           </div>
@@ -604,22 +604,19 @@ function vpLogout() {
 
         <div class="wa-setup-card">
           <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step2')">
-            <span>📥 שלב 2 — הורד את חבילת ה-Bridge</span>
+            <span>🔑 שלב 2 — קבל קוד התקנה</span>
             <span id="step2Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
           </h3>
           <div id="step2Body">
           <div class="wa-setup-step">
             <div class="wa-setup-num">3</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <a href="#" onclick="downloadBridgeZip()" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת חבילת VaadPro-Bridge המלאה</a>
-              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Bridge.zip</strong> — כולל הכל: הגדרות אישיות + תוכנת חיבור</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">4</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              פתח את תיקיית <strong>Downloads</strong> ← לחץ ימני על <strong>VaadPro-Bridge.zip</strong> ← <strong>חלץ הכל</strong>
-              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📁 תיצור תיקייה בשם VaadPro-Bridge — לא תצטרך להזיז כלום</div>
+              <button onclick="getInstallCode()" class="btn btn-green btn-sm" style="font-size:0.9rem;padding:8px 16px;">🔑 קבל קוד התקנה</button>
+              <div id="installCodeDisplay" style="margin-top:10px;display:none;">
+                <div style="font-size:0.75rem;color:var(--text2);margin-bottom:4px;">הקוד שלך (תקף 30 דקות):</div>
+                <div id="installCodeValue" style="font-size:2rem;font-weight:900;color:var(--accent);letter-spacing:8px;"></div>
+              </div>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.7;">הקוד מזהה את החשבון שלך — הכנס אותו במתקין</div>
             </div>
           </div>
           </div>
@@ -627,35 +624,26 @@ function vpLogout() {
 
         <div class="wa-setup-card">
           <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step3')">
-            <span>▶️ שלב 3 — הפעלה (פעם אחת)</span>
+            <span>▶️ שלב 3 — הפעל את המתקין</span>
             <span id="step3Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
           </h3>
           <div id="step3Body">
           <div class="wa-setup-step">
+            <div class="wa-setup-num">4</div>
+            <div style="font-size:0.84rem;color:var(--text2);">
+              לחץ פעמיים על <strong>VaadPro-Setup.bat</strong>
+              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">✅ מוריד, מתקין ומפעיל הכל אוטומטית — כולל Node.js אם חסר</div>
+            </div>
+          </div>
+          <div class="wa-setup-step">
             <div class="wa-setup-num">5</div>
             <div style="font-size:0.84rem;color:var(--text2);">
-              <strong>Windows:</strong>
-              <ol style="margin:6px 0 0 16px;padding:0;">
-                <li>לחץ ימני על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">VaadPro-Start.bat</code> ← <strong>Properties</strong></li>
-                <li>בתחתית: סמן <strong>Unblock</strong> ← לחץ <strong>OK</strong></li>
-                <li>לחץ פעמיים על <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">VaadPro-Start.bat</code></li>
-              </ol>
-              <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">✅ מתקין אוטומטית + יוצר קיצור דרך על הדסקטופ — פעם אחת בלבד</div>
+              בחלון שנפתח — הכנס את <strong>קוד ההתקנה</strong> מהשלב הקודם ← לחץ <strong>Install</strong>
+              <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ממתין כ-2 דקות — פעם אחת בלבד</div>
             </div>
           </div>
           <div class="wa-setup-step">
             <div class="wa-setup-num">6</div>
-            <div style="font-size:0.84rem;color:var(--text2);">
-              <strong>Mac/Linux:</strong>
-              <ol style="margin:6px 0 0 16px;padding:0;">
-                <li>פתח Terminal בתיקיית VaadPro-Bridge</li>
-                <li>הרץ: <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">chmod +x VaadPro-Start.sh && ./VaadPro-Start.sh</code></li>
-              </ol>
-              <div style="font-size:0.76rem;margin-top:6px;opacity:.7;">⚠️ <strong>אל תסגור את החלון!</strong> הוא צריך להישאר פתוח</div>
-            </div>
-          </div>
-          <div class="wa-setup-step">
-            <div class="wa-setup-num">7</div>
             <div style="font-size:0.84rem;color:var(--text2);">
               חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק את הברקוד עם הטלפון
               <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">📱 פתח ווטסאפ בטלפון ← הגדרות ← מכשירים מקושרים ← קשר מכשיר</div>
@@ -1166,6 +1154,16 @@ function switchTab(name) {
 }
 
 async function init() { pollStatus(); loadPlan(); }
+
+async function getInstallCode() {
+  try {
+    const r = await fetch(API+'/installer/token', { method: 'POST', headers: {'Content-Type':'application/json'} }).then(r=>r.json());
+    if (!r.ok) { toast('❌ שגיאה בקבלת קוד', 'error'); return; }
+    document.getElementById('installCodeValue').textContent = r.token;
+    document.getElementById('installCodeDisplay').style.display = 'block';
+    toast('✅ קוד התקנה נוצר — תקף 30 דקות', 'success');
+  } catch(e) { toast('❌ שגיאה: ' + e.message, 'error'); }
+}
 
 async function loadData() {
   try {
