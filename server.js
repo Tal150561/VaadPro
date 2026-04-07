@@ -333,56 +333,47 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
     console.log('[Email] Email not configured — skipping welcome email');
     return;
   }
-  if (RESEND_API_KEY) {
-    try {
-      await sendEmailResend(email, `ברוך הבא ל-VaadPro! 🏢`, `שלום!
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const subject = 'ברוכים הבאים ל-VaadPro! 🏢';
+  const body = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:15px;line-height:1.8;color:#222;max-width:560px;">
+<img src="${appUrl}/VaadPro-Logo.png" width="220" style="display:block;margin-bottom:24px;">
 
-החשבון שלך ל-${buildingName} נוצר בהצלחה.
+שלום,
 
-כניסה:
-https://web-production-f2db5.up.railway.app
+תודה שנרשמת ל-VaadPro! 🎉
+החשבון עבור <strong>${buildingName}</strong> נוצר בהצלחה.
+יש לך <strong>30 יום ניסיון חינם</strong> עם כל הפיצ'רים פתוחים.
 
-30 יום ניסיון חינם!
+<hr style="margin:16px 0;border:none;border-top:1px solid #eee;">
+<strong>כדי להתחבר לוואטסאפ:</strong>
+<hr style="margin:8px 0;border:none;border-top:1px solid #eee;">
 
-צוות VaadPro`);
-      console.log('[Email] welcome sent via Resend to ' + email);
-    } catch(e) { console.error('[Email] Resend welcome failed:', e.message); }
-    return;
-  }
+<strong>1. קבל קוד התקנה</strong>
+כנס לאפליקציה ← הגדרות ← לחץ "קבל קוד התקנה"
+
+<strong>2. הורד את המתקין</strong>
+הגדרות ← הורד VaadPro-Setup.bat ← לחץ ימני ← Unblock ← OK
+
+<strong>3. הפעל והתקן</strong>
+לחץ פעמיים על VaadPro-Setup.bat ← הכנס קוד ← Install
+
+<strong>4. חבר ווטסאפ</strong>
+סרוק QR עם הטלפון ← מחובר ✅
+
+<a href="${appUrl}" style="display:inline-block;background:#25D366;color:#000;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin-top:16px;">כנס לאפליקציה ←</a>
+
+<br><br>
+לשאלות: <a href="mailto:vaadpro15@gmail.com" style="color:#25D366;">vaadpro15@gmail.com</a>
+
+<hr style="margin:24px 0;border:none;border-top:1px solid #eee;">
+<p style="font-size:12px;color:#999;">VaadPro — ניהול ועד הבית החכם | <a href="${appUrl}" style="color:#999;">vaadpro.org</a></p>
+</div>`;
+
   try {
-    const nodemailer = require('nodemailer');
-    const transporter = nodemailer.createTransport({
-      host: SMTP_HOST, port: SMTP_PORT,
-      secure: SMTP_PORT === 465,
-      auth: { user: SMTP_USER, pass: SMTP_PASS }
-    });
-    const appUrl = process.env.APP_URL || 'https://your-app.railway.app';
-    await transporter.sendMail({
-      from: SMTP_FROM,
-      to: email,
-      subject: `ברוכים הבאים ל-VaadPro! 🏢`,
-      html: `
-        <div dir="rtl" style="font-family:Arial,sans-serif;max-width:560px;margin:0 auto;background:#0d1117;color:#e6edf3;padding:32px;border-radius:12px;">
-          <h1 style="color:#25D366;">ברוכים הבאים ל-VaadPro! 🎉</h1>
-          <p>שלום,</p>
-          <p>החשבון עבור <strong>${buildingName}</strong> נוצר בהצלחה.</p>
-          <p>יש לך <strong>30 יום ניסיון חינם</strong> — ללא כרטיס אשראי.</p>
-          <h2 style="color:#25D366;">צעדים ראשונים:</h2>
-          <ol>
-            <li>התחבר לאפליקציה: <a href="${appUrl}/app.html" style="color:#25D366;">${appUrl}</a></li>
-            <li>הוסף דיירים בטאב "דיירים"</li>
-            <li>חבר את הווטסאפ שלך (יש הוראות בתוך האפליקציה)</li>
-            <li>שלח תזכורות תשלום בלחיצה אחת!</li>
-          </ol>
-          <p style="margin-top:24px;color:#8b949e;font-size:0.85rem;">
-            לכל שאלה: <a href="mailto:support@vaadpro.co.il" style="color:#25D366;">support@vaadpro.co.il</a>
-          </p>
-        </div>
-      `
-    });
-    console.log(`[Email] welcome sent to ${email}`);
+    await sendEmailResend(email, subject, body);
+    console.log('[Email] welcome sent to ' + email);
   } catch(e) {
-    console.error('[Email] failed:', e.message);
+    console.error('[Email] welcome failed:', e.message);
   }
 }
 
@@ -1926,7 +1917,7 @@ app.get('/api/bridge/download-files', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.4.2 – SaaS Server         ║');
+  console.log('║   VaadPro v2.5.0 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
