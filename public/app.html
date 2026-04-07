@@ -254,7 +254,9 @@
     opts.headers = opts.headers || {};
     if (typeof opts.headers === 'object') opts.headers['Authorization'] = 'Bearer ' + token;
     return _origFetch(url, opts).then(function(res) {
-      if (res.status === 401) { vpLogout(); }
+      if (res.status === 401) { vpLogout(); return; }
+      if (res.status === 402) { window.location.href = '/pricing.html?reason=expired'; return; }
+      if (res.status === 403) { window.location.href = '/pricing.html?reason=suspended'; return; }
       return res;
     });
   };

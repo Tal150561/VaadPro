@@ -37,8 +37,8 @@ const WA_AUTH_DIR = path.join(__dirname, '.wwebjs_auth');
 // ── Plans ────────────────────────────────────────────────────────
 const PLANS = {
   trial:    { maxTenants: 20,  features: 'all' },
-  basic:    { maxTenants: 50,  features: ['tenants','payments','whatsapp','maintenance','bulletin'] },
-  advanced: { maxTenants: 150, features: ['tenants','payments','whatsapp','maintenance','bulletin','email','reports','trends'] },
+  basic:    { maxTenants: 20,  features: ['tenants','payments','whatsapp','maintenance','bulletin'] },
+  advanced: { maxTenants: 50,  features: ['tenants','payments','whatsapp','maintenance','bulletin','email','reports','trends'] },
   premium:  { maxTenants: 999, features: 'all' },
   unlimited:{ maxTenants: 999, features: 'all' },
   suspended:{ maxTenants: 0,   features: [] }

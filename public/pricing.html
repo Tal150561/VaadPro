@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>שדרג את VaadPro שלך</title>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;700;900&display=swap" rel="stylesheet">
+<style>
+  :root { --bg:#0d1117; --surface:#161b22; --border:#30363d; --accent:#25D366; --text:#e6edf3; --text2:#8b949e; --danger:#f85149; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:'Heebo',sans-serif; background:var(--bg); color:var(--text); min-height:100vh; padding:40px 20px; }
+  .wrap { max-width:900px; margin:0 auto; }
+  .logo-area { display:flex; align-items:center; gap:12px; margin-bottom:40px; justify-content:center; }
+  .logo-icon { width:48px; height:48px; background:var(--accent); border-radius:12px; display:flex; align-items:center; justify-content:center; font-size:24px; }
+  .logo-text h1 { font-size:1.7rem; font-weight:900; }
+  .logo-text h1 span { color:var(--accent); }
+  .alert { background:rgba(248,81,73,.1); border:1px solid rgba(248,81,73,.3); border-radius:12px; padding:16px 20px; margin-bottom:32px; text-align:center; }
+  .alert h2 { color:var(--danger); font-size:1.1rem; margin-bottom:4px; }
+  .alert p { color:var(--text2); font-size:0.88rem; }
+  .plans { display:grid; grid-template-columns:repeat(3,1fr); gap:16px; margin-bottom:32px; }
+  @media(max-width:640px){ .plans { grid-template-columns:1fr; } }
+  .plan { background:var(--surface); border:1px solid var(--border); border-radius:14px; padding:24px 20px; position:relative; transition:border-color .2s; }
+  .plan:hover { border-color:rgba(37,211,102,.4); }
+  .plan.popular { border:2px solid var(--accent); }
+  .popular-badge { position:absolute; top:-12px; right:50%; transform:translateX(50%); background:var(--accent); color:#000; font-size:0.72rem; font-weight:800; padding:3px 14px; border-radius:20px; white-space:nowrap; }
+  .plan-name { font-size:1.1rem; font-weight:700; margin-bottom:4px; }
+  .plan-desc { font-size:0.8rem; color:var(--text2); margin-bottom:16px; }
+  .plan-price { font-size:2.2rem; font-weight:900; color:var(--accent); line-height:1; margin-bottom:4px; }
+  .plan-price span { font-size:0.9rem; font-weight:400; color:var(--text2); }
+  .plan-tenants { font-size:0.8rem; color:var(--text2); margin-bottom:20px; padding-bottom:16px; border-bottom:1px solid var(--border); }
+  .plan-features { list-style:none; margin-bottom:24px; }
+  .plan-features li { font-size:0.84rem; color:var(--text2); padding:5px 0; display:flex; gap:8px; align-items:flex-start; }
+  .plan-features li::before { content:"✓"; color:var(--accent); font-weight:700; flex-shrink:0; }
+  .btn-plan { width:100%; padding:11px; border:none; border-radius:8px; font-family:'Heebo',sans-serif; font-size:0.95rem; font-weight:700; cursor:pointer; transition:opacity .2s; }
+  .btn-green { background:var(--accent); color:#000; }
+  .btn-outline { background:none; border:1px solid var(--border); color:var(--text); }
+  .btn-plan:hover { opacity:0.85; }
+  .contact-box { background:var(--surface); border:1px solid var(--border); border-radius:12px; padding:24px; text-align:center; margin-bottom:24px; }
+  .contact-box h3 { font-size:1rem; margin-bottom:8px; }
+  .contact-box p { color:var(--text2); font-size:0.85rem; margin-bottom:16px; }
+  .contact-box a { color:var(--accent); text-decoration:none; font-weight:700; }
+  .back { text-align:center; font-size:0.85rem; color:var(--text2); }
+  .back a { color:var(--accent); text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="logo-area">
+    <div class="logo-icon">🏠</div>
+    <div class="logo-text"><h1>Vaad<span>Pro</span></h1></div>
+  </div>
+
+  <div class="alert" id="alertBox">
+    <h2>⏰ תקופת הניסיון הסתיימה</h2>
+    <p>בחר חבילה כדי להמשיך להשתמש ב-VaadPro</p>
+  </div>
+
+  <div class="plans">
+    <div class="plan">
+      <div class="plan-name">Basic</div>
+      <div class="plan-desc">לבניינים קטנים</div>
+      <div class="plan-price">₪49 <span>/ חודש</span></div>
+      <div class="plan-tenants">עד 20 דיירים</div>
+      <ul class="plan-features">
+        <li>תזכורות תשלום בוואטסאפ</li>
+        <li>ייבוא קובץ בנק</li>
+        <li>דוחות חודשיים</li>
+        <li>ניהול תחזוקה</li>
+      </ul>
+      <button class="btn-plan btn-outline" onclick="contactPlan('Basic')">בחר Basic</button>
+    </div>
+
+    <div class="plan popular">
+      <div class="popular-badge">הכי פופולרי</div>
+      <div class="plan-name">Advanced</div>
+      <div class="plan-desc">לרוב הבניינים</div>
+      <div class="plan-price">₪89 <span>/ חודש</span></div>
+      <div class="plan-tenants">עד 50 דיירים</div>
+      <ul class="plan-features">
+        <li>הכל ב-Basic</li>
+        <li>דוחות שנתיים</li>
+        <li>ייצוא לאקסל מתקדם</li>
+        <li>תמיכה מועדפת</li>
+      </ul>
+      <button class="btn-plan btn-green" onclick="contactPlan('Advanced')">בחר Advanced</button>
+    </div>
+
+    <div class="plan">
+      <div class="plan-name">Premium</div>
+      <div class="plan-desc">ללא הגבלה</div>
+      <div class="plan-price">₪149 <span>/ חודש</span></div>
+      <div class="plan-tenants">דיירים ללא הגבלה</div>
+      <ul class="plan-features">
+        <li>הכל ב-Advanced</li>
+        <li>דיירים ללא הגבלה</li>
+        <li>תמיכה אישית</li>
+        <li>התאמות מיוחדות</li>
+      </ul>
+      <button class="btn-plan btn-outline" onclick="contactPlan('Premium')">בחר Premium</button>
+    </div>
+  </div>
+
+  <div class="contact-box">
+    <h3>רוצה לדבר עם אדם אמיתי?</h3>
+    <p>אני זמין לכל שאלה — נמצא את החבילה הנכונה עבורך</p>
+    <a href="mailto:vaadpro15@gmail.com">vaadpro15@gmail.com</a>
+    &nbsp;&nbsp;|&nbsp;&nbsp;
+    <a href="https://wa.me/972502146510" target="_blank">וואטסאפ</a>
+  </div>
+
+  <div class="back"><a href="/index.html">← חזור לכניסה</a></div>
+</div>
+
+<script>
+const params = new URLSearchParams(window.location.search);
+const reason = params.get('reason');
+if (reason === 'suspended') {
+  document.getElementById('alertBox').innerHTML = '<h2>🔒 החשבון מושהה</h2><p>צור קשר לחידוש החשבון</p>';
+  document.getElementById('alertBox').style.background = 'rgba(227,179,65,.1)';
+  document.getElementById('alertBox').style.borderColor = 'rgba(227,179,65,.3)';
+}
+
+function contactPlan(plan) {
+  const email = params.get('email') || '';
+  const subject = encodeURIComponent('VaadPro — שדרוג לחבילה ' + plan);
+  const body = encodeURIComponent('שלום,\n\nאני מעוניין/ת לשדרג לחבילה ' + plan + (email ? '\nאימייל: ' + email : '') + '\n\nתודה');
+  window.location.href = 'mailto:vaadpro15@gmail.com?subject=' + subject + '&body=' + body;
+}
+</script>
+</body>
+</html>
