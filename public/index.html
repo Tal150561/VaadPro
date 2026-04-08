@@ -111,6 +111,10 @@ async function doLogin() {
       localStorage.setItem('vp_token', d.token);
       localStorage.setItem('vp_building', d.buildingName || '');
       window.location.href = '/app.html';
+    } else if (d.expired) {
+      window.location.href = '/pricing.html?reason=expired&email=' + encodeURIComponent(document.getElementById('loginEmail').value.trim());
+    } else if (d.suspended) {
+      window.location.href = '/pricing.html?reason=suspended&email=' + encodeURIComponent(document.getElementById('loginEmail').value.trim());
     } else {
       showMsg('msgLogin', d.error || 'שגיאה בהתחברות', 'err');
       btn.disabled = false; btn.textContent = 'כניסה';
