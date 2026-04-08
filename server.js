@@ -1897,6 +1897,101 @@ del "%PS1%" 2>nul
 `;
 }
 
+
+// Serve Mac setup script (public)
+app.get('/vaadpro-setup.sh', (req, res) => {
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const sh = `#!/bin/bash
+set -e
+LOG="$HOME/Desktop/VaadPro-Setup-Log.txt"
+echo "VaadPro Setup Log - $(date)" > "$LOG"
+INSTALL_DIR="$HOME/Documents/VaadPro-Bridge"
+
+echo ""
+echo " ========================================"
+echo "   VaadPro Setup for Mac"
+echo " ========================================"
+echo ""
+
+# Get install code
+echo -n "Enter your installation code from VaadPro Settings: "
+read CODE
+CODE=$(echo "$CODE" | tr '[:lower:]' '[:upper:]')
+
+echo "$(date +%H:%M:%S) Connecting to VaadPro..." >> "$LOG"
+echo "Connecting to VaadPro..."
+
+# Redeem token
+RESP=$(curl -s -X POST "${appUrl}/api/installer/redeem" \\
+  -H "Content-Type: application/json" \\
+  -d "{\"token\":\"$CODE\"}")
+
+OK=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok','false'))" 2>/dev/null)
+if [ "$OK" != "True" ] && [ "$OK" != "true" ]; then
+  ERR=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error','Unknown error'))" 2>/dev/null)
+  echo "Error: $ERR"
+  echo "$(date +%H:%M:%S) ERROR: $ERR" >> "$LOG"
+  exit 1
+fi
+
+echo "$(date +%H:%M:%S) Step 1: Connected OK" >> "$LOG"
+echo "Step 1/5: Connected OK"
+
+# Save config
+mkdir -p "$INSTALL_DIR"
+echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(json.dumps(d['config'], indent=2))" > "$INSTALL_DIR/config.json"
+echo "$(date +%H:%M:%S) Step 2: Config saved" >> "$LOG"
+echo "Step 2/5: Config saved"
+
+# Download bridge files
+echo "Step 3/5: Downloading Bridge files..."
+curl -s "${appUrl}/api/bridge/download-files" -o "$INSTALL_DIR/bridge.zip"
+cd "$INSTALL_DIR" && unzip -o bridge.zip && rm bridge.zip
+echo "$(date +%H:%M:%S) Step 3: Bridge downloaded" >> "$LOG"
+
+# Check Node.js
+echo "Step 4/5: Checking Node.js..."
+if ! command -v node &>/dev/null; then
+  echo "Installing Node.js..."
+  echo "$(date +%H:%M:%S) Step 4: Installing Node.js..." >> "$LOG"
+  if command -v brew &>/dev/null; then
+    brew install node
+  else
+    curl -s "https://nodejs.org/dist/v20.11.1/node-v20.11.1.pkg" -o /tmp/node.pkg
+    sudo installer -pkg /tmp/node.pkg -target /
+    rm /tmp/node.pkg
+  fi
+fi
+echo "$(date +%H:%M:%S) Step 4: Node.js OK" >> "$LOG"
+
+# npm install
+echo "Step 5/5: Installing Bridge dependencies..."
+cd "$INSTALL_DIR" && npm install >> "$LOG" 2>&1
+echo "$(date +%H:%M:%S) Step 5: npm install done" >> "$LOG"
+
+# Create Desktop shortcut
+SHORTCUT="$HOME/Desktop/VaadPro Bridge.command"
+echo "#!/bin/bash" > "$SHORTCUT"
+echo "cd \"$INSTALL_DIR\" && ./VaadPro-Start.sh" >> "$SHORTCUT"
+chmod +x "$SHORTCUT"
+echo "$(date +%H:%M:%S) Shortcut created" >> "$LOG"
+
+echo ""
+echo " ========================================"
+echo "   Installation complete!"
+echo "   Starting VaadPro Bridge..."
+echo " ========================================"
+echo ""
+echo "$(date +%H:%M:%S) Installation complete!" >> "$LOG"
+
+# Start bridge
+"$INSTALL_DIR/VaadPro-Start.sh"
+`;
+  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.sh"');
+  res.setHeader('Content-Type', 'application/x-sh');
+  res.send(sh);
+});
+
 // Serve setup PS1 (public)
 app.get('/vaadpro-setup.ps1', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
@@ -1966,7 +2061,7 @@ app.get('/api/bridge/download-files', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.5.5 – SaaS Server         ║');
+  console.log('║   VaadPro v2.5.6 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
