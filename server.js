@@ -1850,7 +1850,8 @@ $btn.Add_Click({
     Log 'Installation complete!'
     Start-Sleep -Seconds 2
     $form.Close()
-    Start-Process $batPath
+    # Open new CMD with refreshed PATH so Node.js is found
+    Start-Process 'cmd' -ArgumentList ('/c "' + $batPath + '"')
   } catch {
     Log ('ERROR: ' + $_.Exception.Message)
     $status.ForeColor = [System.Drawing.Color]::Red
