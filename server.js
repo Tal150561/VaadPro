@@ -524,7 +524,8 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const tenant = d.tenants.find(t => String(t.id) === req.params.id);
   if (!tenant) return res.json({ ok: false, error: 'דייר לא נמצא' });
   const month  = getEffectiveMonth(d.config);
-  const amount = (d.config||{}).amount || 300;
+  const globalAmount = (d.config||{}).amount || 300;
+  const amount = tenant.customAmount || globalAmount;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   const msg    = tmpl.replace(/{שם}/g,tenant.name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
   try {
@@ -539,10 +540,11 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
 app.post('/api/send-all', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
   const month  = getEffectiveMonth(d.config);
-  const amount = (d.config||{}).amount || 300;
+  const globalAmount = (d.config||{}).amount || 300;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   let sent = 0;
   for (const tenant of d.tenants) {
+    const amount = tenant.customAmount || globalAmount;
     const msg = tmpl.replace(/{שם}/g,tenant.name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
     try { await sendWaMsg(req.user.tenantId, tenant.phone, msg); d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString(); sent++; await new Promise(r=>setTimeout(r,1200)); }
     catch(e) { console.error(`[send-all:${req.user.tenantId}]`, tenant.name, e.message); }

@@ -329,7 +329,7 @@ function vpLogout() {
       </div>
       <div class="wz-body" id="wzBody2" style="display:none;">
         <div class="wz-desc">טאב "הגדרות" ← הכנס סכום חודשי + יום שליחה + שעה</div>
-        <div class="wz-tip">💡 אפשר לקבוע סכום שונה לכל דייר בנפרד בטאב "דיירים"</div>
+        <div class="wz-tip">💡 ניתן לשנות את הסכום בכל עת מטאב "הגדרות"</div>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
           <button class="btn btn-green btn-sm" onclick="wzGo('settings');closeWizard()">⚙️ עבור להגדרות</button>
           <button class="btn btn-secondary btn-sm" onclick="wzDone(2)">✅ סיימתי</button>
@@ -426,6 +426,7 @@ function vpLogout() {
           <div><label>טלפון</label><input type="tel" id="inPhone" placeholder="0501234567" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>מילות חיפוש לבנק <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inKeywords" placeholder="כהן י, העברה 052" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div><label>סכום אישי ₪ <span style="opacity:.5;">(אופציונלי — ברירת מחדל מהגדרות)</span></label><input type="number" id="inCustomAmount" placeholder="ריק = ברירת מחדל" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
         </div>
         <div class="hint" style="margin-top:8px;">מילות חיפוש: ביטויים מופרדים בפסיקים שמופיעים בקובץ הבנק עבור דייר זה</div>
@@ -1509,8 +1510,10 @@ async function addTenant() {
     toast('⚠️ הגעת למגבלת ' + vpPlan.maxTenants + ' דיירים בתוכנית ' + planLabel + ' — צור קשר לשדרוג', 'error');
     return;
   }
-  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw});
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';
+  const ca=document.getElementById('inCustomAmount').value.trim();
+  const customAmount = ca ? parseInt(ca) : null;
+  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null});
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
   if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');
@@ -1535,6 +1538,7 @@ function startEdit(id) {
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מילות חיפוש">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
+  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1">';
   cells[5].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
   document.getElementById('en-'+id).focus();
 }
@@ -1550,9 +1554,11 @@ async function saveEdit(id) {
   const p=document.getElementById('ep-'+id).value.trim().replace(/\D/g,'');
   const k=document.getElementById('ek-'+id).value.trim();
   const e=document.getElementById('ee-'+id) ? document.getElementById('ee-'+id).value.trim() : (t.email||'');
+  const aEl=document.getElementById('ea-'+id);
+  const ca = aEl ? (aEl.value.trim() ? parseInt(aEl.value) : null) : (t.customAmount||null);
   if(!n){toast('⚠️ שם לא יכול להיות ריק','error');return;}
   if(!/^0[0-9]{8,9}$/.test(p)){toast('⚠️ מספר טלפון לא תקין','error');return;}
-  t.name=n;t.phone=p;t.keywords=k;t.email=e;
+  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -1915,13 +1921,14 @@ function getEffectiveMonth() {
 function render() {
   if (isEditing) return; // אל תחדש את הטבלה בזמן עריכה
   const em=getEffectiveMonth();
-  const amount=parseInt(document.getElementById('cfgAmount').value)||300;
+  const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
   const paidCount=data.tenants.filter(function(t){return data.sentLog[t.id+'_'+em];}).length;
   const pending=data.tenants.length-paidCount;
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;
   document.getElementById('sPending').textContent=pending;
-  document.getElementById('sAmount').textContent=(data.tenants.length*amount).toLocaleString()+'₪';
+  const totalAmount=data.tenants.reduce(function(s,t){return s+(t.customAmount||globalAmount);},0);
+  document.getElementById('sAmount').textContent=totalAmount.toLocaleString()+'₪';
   document.getElementById('tbT').textContent=data.tenants.length;
   document.getElementById('tbP').textContent=pending;
   document.getElementById('tbP').className=pending>0?'tbadge':'tbadge green';
@@ -1931,7 +1938,7 @@ function render() {
   const tw=document.getElementById('tenantsWrap');
   if(!data.tenants.length){ tw.innerHTML='<div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div>'; }
   else {
-    let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>מילות חיפוש</th><th>טלפון</th><th>מייל</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>';
+    let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>מילות חיפוש</th><th>טלפון</th><th>מייל</th><th>סכום</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>';
     data.tenants.forEach(function(t){
       const key=t.id+'_'+em, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
@@ -1947,6 +1954,8 @@ function render() {
       h+='<td style="font-size:0.77rem;color:var(--text2);">'+(t.keywords||'<span style="opacity:.4;">—</span>')+'</td>';
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
+      const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
+      h+='<td style="font-size:0.82rem;">'+displayAmount+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td style="white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="startEdit('+t.id+')" title="ערוך">✏️</button> <button class="btn btn-danger-soft" onclick="removeTenant('+t.id+')" title="מחק">🗑️</button></td>';
       h+='</tr>';
@@ -3946,6 +3955,7 @@ const TS_ITEMS = [
       "לחץ ימני על VaadPro-Setup.bat ← Properties ← סמן Unblock ← OK",
       "לחץ ימני ← 'הפעל כמנהל'",
       "ודא שיש חיבור אינטרנט — המתקין מוריד קבצים",
+      "בדוק קובץ לוג על הדסקטופ: VaadPro-Setup-Log.txt — מכיל פרטי שגיאה מדויקים",
       "Mac: פתח Terminal ← הרץ: chmod +x VaadPro-Setup.sh && ./VaadPro-Setup.sh"
     ]
   },
