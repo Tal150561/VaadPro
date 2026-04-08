@@ -1807,7 +1807,7 @@ $btn.Add_Click({
     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 
     $status.Text = 'Step 2/5: Saving configuration...'; $form.Refresh()
-    $resp.config | ConvertTo-Json -Depth 5 | Out-File -FilePath ([System.IO.Path]::Combine($installDir, 'config.json')) -Encoding UTF8
+    $resp.config | ConvertTo-Json -Depth 5 | Set-Content -Path ([System.IO.Path]::Combine($installDir, 'config.json')) -Encoding UTF8 -NoNewline:$false; [System.IO.File]::WriteAllText([System.IO.Path]::Combine($installDir, 'config.json'), ($resp.config | ConvertTo-Json -Depth 5), [System.Text.UTF8Encoding]::new($false))
     Log 'Step 2: Config saved'
 
     $status.Text = 'Step 3/5: Downloading Bridge files...'; $form.Refresh()
