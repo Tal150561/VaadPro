@@ -45,6 +45,17 @@
   .plan-premium{background:rgba(236,72,153,0.2);color:#ec4899;}
   .plan-unlimited{background:rgba(37,211,102,0.2);color:#22c55e;}
   .tbadge{background:var(--warn);color:#000;border-radius:20px;padding:1px 7px;font-size:0.69rem;font-weight:700;}
+  .wz-step{background:var(--surface2);border:1px solid var(--border);border-radius:10px;margin-bottom:10px;overflow:hidden;}
+  .wz-step-header{display:flex;align-items:center;gap:10px;padding:12px 14px;cursor:pointer;user-select:none;}
+  .wz-step-header:hover{background:rgba(255,255,255,.03);}
+  .wz-check{font-size:1.1rem;flex-shrink:0;width:22px;}
+  .wz-title{flex:1;font-size:0.9rem;font-weight:600;}
+  .wz-arrow{font-size:0.7rem;color:var(--text2);}
+  .wz-body{padding:0 14px 14px;}
+  .wz-desc{font-size:0.84rem;color:var(--text2);line-height:1.6;margin-bottom:8px;}
+  .wz-tip{font-size:0.78rem;color:var(--text2);background:rgba(37,211,102,.08);border:1px solid rgba(37,211,102,.2);border-radius:6px;padding:7px 10px;}
+  .wz-step.done .wz-step-header{opacity:.6;}
+  .wz-step.done .wz-check{color:var(--accent);}
   .tbadge.green{background:var(--accent);}
   main{max-width:1100px;margin:0 auto;padding:20px;}
   .tab-panel{display:none;}
@@ -236,6 +247,7 @@
   <div style="display:flex;align-items:center;gap:12px;">
     <span id="authBarPlan" style="background:rgba(37,211,102,.1);color:var(--accent);border-radius:20px;padding:2px 10px;font-weight:600;"></span>
     <span id="authBarEmail"></span>
+    <button onclick="showWizard()" id="wizardBtn" style="background:none;border:1px solid rgba(37,211,102,.4);color:var(--accent);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:Heebo,sans-serif;font-size:0.78rem;">🚀 מדריך התחלה</button>
     <button onclick="vpLogout()" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:3px 10px;cursor:pointer;font-family:Heebo,sans-serif;font-size:0.78rem;">התנתק</button>
   </div>
 </div>
@@ -280,6 +292,92 @@ function vpLogout() {
     </div>
   </div>
 </header>
+
+<!-- Onboarding Wizard Modal -->
+<div class="modal-overlay" id="wizardModal" style="z-index:200;">
+  <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;">
+      <h2 style="font-size:1.2rem;">🚀 מדריך התחלה מהירה</h2>
+      <button onclick="closeWizard()" style="background:none;border:none;color:var(--text2);font-size:1.3rem;cursor:pointer;">✕</button>
+    </div>
+    <p style="font-size:0.85rem;color:var(--text2);margin-bottom:20px;">עקוב אחר השלבים הבאים כדי להפעיל את VaadPro במלואו:</p>
+
+    <!-- Step 1 -->
+    <div class="wz-step" id="wzStep1">
+      <div class="wz-step-header" onclick="toggleWzStep(1)">
+        <div class="wz-check" id="wzCheck1">☐</div>
+        <div class="wz-title">שלב 1 — הוסף דיירים</div>
+        <div class="wz-arrow" id="wzArrow1">▼</div>
+      </div>
+      <div class="wz-body" id="wzBody1">
+        <div class="wz-desc">טאב "דיירים" ← לחץ "הוסף דייר" ← מלא שם + טלפון + קומה</div>
+        <div class="wz-tip">💡 יש לך קובץ אקסל? ייבא את כולם בבת אחת — לחץ "ייבוא דיירים מאקסל"</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <button class="btn btn-green btn-sm" onclick="wzGo('tenants');closeWizard()">➕ הוסף דייר</button>
+          <button class="btn btn-secondary btn-sm" onclick="wzGo('tenants');closeWizard()">📥 ייבוא מאקסל</button>
+          <button class="btn btn-secondary btn-sm" onclick="wzDone(1)">✅ סיימתי</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 2 -->
+    <div class="wz-step" id="wzStep2">
+      <div class="wz-step-header" onclick="toggleWzStep(2)">
+        <div class="wz-check" id="wzCheck2">☐</div>
+        <div class="wz-title">שלב 2 — הגדר תשלום חודשי</div>
+        <div class="wz-arrow" id="wzArrow2">▶</div>
+      </div>
+      <div class="wz-body" id="wzBody2" style="display:none;">
+        <div class="wz-desc">טאב "הגדרות" ← הכנס סכום חודשי + יום שליחה + שעה</div>
+        <div class="wz-tip">💡 אפשר לקבוע סכום שונה לכל דייר בנפרד בטאב "דיירים"</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <button class="btn btn-green btn-sm" onclick="wzGo('settings');closeWizard()">⚙️ עבור להגדרות</button>
+          <button class="btn btn-secondary btn-sm" onclick="wzDone(2)">✅ סיימתי</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 3 -->
+    <div class="wz-step" id="wzStep3">
+      <div class="wz-step-header" onclick="toggleWzStep(3)">
+        <div class="wz-check" id="wzCheck3">☐</div>
+        <div class="wz-title">שלב 3 — חבר ווטסאפ</div>
+        <div class="wz-arrow" id="wzArrow3">▶</div>
+      </div>
+      <div class="wz-body" id="wzBody3" style="display:none;">
+        <div class="wz-desc">הגדרות ← לחץ "קבל קוד התקנה" ← הורד VaadPro-Setup ← הכנס קוד ← סרוק QR</div>
+        <div class="wz-tip">💡 ה-Bridge צריך להישאר פתוח בזמן שליחת הודעות</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <button class="btn btn-green btn-sm" onclick="wzGo('settings');closeWizard()">📱 עבור להגדרות</button>
+          <button class="btn btn-secondary btn-sm" onclick="wzDone(3)">✅ סיימתי</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Step 4 -->
+    <div class="wz-step" id="wzStep4">
+      <div class="wz-step-header" onclick="toggleWzStep(4)">
+        <div class="wz-check" id="wzCheck4">☐</div>
+        <div class="wz-title">שלב 4 — שלח תזכורת ראשונה</div>
+        <div class="wz-arrow" id="wzArrow4">▶</div>
+      </div>
+      <div class="wz-body" id="wzBody4" style="display:none;">
+        <div class="wz-desc">טאב "שליחה" ← בחר חודש ← לחץ "שלח הכל"</div>
+        <div class="wz-tip">💡 אפשר לשלוח לדייר בודד קודם לבדיקה — לחץ על כפתור השליחה ליד שמו</div>
+        <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
+          <button class="btn btn-green btn-sm" onclick="wzGo('messages');closeWizard()">📤 עבור לשליחה</button>
+          <button class="btn btn-secondary btn-sm" onclick="wzDone(4)">✅ סיימתי</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Progress -->
+    <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;">
+      <div style="font-size:0.82rem;color:var(--text2);" id="wzProgress">0 מתוך 4 שלבים הושלמו</div>
+      <button class="btn btn-secondary btn-sm" onclick="closeWizard()">סגור</button>
+    </div>
+  </div>
+</div>
 
 <div class="modal-overlay" id="qrModal">
   <div class="modal">
@@ -1155,7 +1253,94 @@ function switchTab(name) {
   if (name === 'trends') { trendRenderSaved(); }
 }
 
-async function init() { pollStatus(); loadPlan(); }
+
+// ── Onboarding Wizard ────────────────────────────────────────────
+const WZ_KEY = 'vp_wizard_done';
+
+function initWizard() {
+  loadWzState();
+  updateWzProgress();
+  // Show automatically for new users (first login)
+  const done = JSON.parse(localStorage.getItem(WZ_KEY) || '{}');
+  const allDone = done[1] && done[2] && done[3] && done[4];
+  if (!allDone && !localStorage.getItem('vp_wizard_seen')) {
+    setTimeout(showWizard, 1500);
+    localStorage.setItem('vp_wizard_seen', '1');
+  }
+}
+
+function showWizard() {
+  loadWzState();
+  updateWzProgress();
+  document.getElementById('wizardModal').classList.add('show');
+}
+
+function closeWizard() {
+  document.getElementById('wizardModal').classList.remove('show');
+}
+
+function toggleWzStep(n) {
+  const body = document.getElementById('wzBody' + n);
+  const arrow = document.getElementById('wzArrow' + n);
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  arrow.textContent = open ? '▶' : '▼';
+}
+
+function wzGo(tab) {
+  switchTab(tab);
+}
+
+function wzDone(n) {
+  const done = JSON.parse(localStorage.getItem(WZ_KEY) || '{}');
+  done[n] = true;
+  localStorage.setItem(WZ_KEY, JSON.stringify(done));
+  loadWzState();
+  updateWzProgress();
+  // Auto-open next step
+  const next = n + 1;
+  if (next <= 4) {
+    const nextBody = document.getElementById('wzBody' + next);
+    const nextArrow = document.getElementById('wzArrow' + next);
+    if (nextBody && nextBody.style.display === 'none') {
+      nextBody.style.display = 'block';
+      nextArrow.textContent = '▼';
+    }
+  }
+}
+
+function loadWzState() {
+  const done = JSON.parse(localStorage.getItem(WZ_KEY) || '{}');
+  for (let i = 1; i <= 4; i++) {
+    const step = document.getElementById('wzStep' + i);
+    const check = document.getElementById('wzCheck' + i);
+    if (!step || !check) continue;
+    if (done[i]) {
+      step.classList.add('done');
+      check.textContent = '✅';
+    } else {
+      step.classList.remove('done');
+      check.textContent = '☐';
+    }
+  }
+}
+
+function updateWzProgress() {
+  const done = JSON.parse(localStorage.getItem(WZ_KEY) || '{}');
+  const count = [1,2,3,4].filter(i => done[i]).length;
+  const el = document.getElementById('wzProgress');
+  if (!el) return;
+  if (count === 4) {
+    el.textContent = '✅ כל השלבים הושלמו! VaadPro מוכן לשימוש';
+    el.style.color = 'var(--accent)';
+    document.getElementById('wizardBtn').textContent = '✅ מדריך';
+  } else {
+    el.textContent = count + ' מתוך 4 שלבים הושלמו';
+    el.style.color = '';
+  }
+}
+
+async function init() { pollStatus(); loadPlan(); initWizard(); }
 
 async function getInstallCode() {
   try {
