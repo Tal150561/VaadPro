@@ -1832,8 +1832,16 @@ $btn.Add_Click({
 
     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
     $npmPath = 'C:\Program Files\nodejs\npm.cmd'
-    if (-not (Test-Path $npmPath)) { $npmPath = 'npm' }
-    Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmPath + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
+    $nodeExe = 'C:\Program Files\nodejs\node.exe'
+    # Wait for npm to be available after MSI install
+    $waited = 0
+    while (-not (Test-Path $npmPath) -and $waited -lt 30) { Start-Sleep -Seconds 2; $waited += 2 }
+    if (Test-Path $npmPath) {
+      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmPath + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
+    } else {
+      Log 'npm not found, trying node-based install...'
+      Start-Process $nodeExe -ArgumentList ('"' + $installDir + '\node_modules\.bin\npm" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden
+    }
     Log 'Step 5: npm install done'
 
     $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
