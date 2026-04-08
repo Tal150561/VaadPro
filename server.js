@@ -1831,16 +1831,21 @@ $btn.Add_Click({
     Log 'Step 4: Node.js OK'
 
     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
-    $npmPath = 'C:\Program Files\nodejs\npm.cmd'
+    # Use node to run npm directly — avoids PATH issues after fresh install
     $nodeExe = 'C:\Program Files\nodejs\node.exe'
-    # Wait for npm to be available after MSI install
+    $npmScript = 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
+    # Wait up to 30s for node to be available
     $waited = 0
-    while (-not (Test-Path $npmPath) -and $waited -lt 30) { Start-Sleep -Seconds 2; $waited += 2 }
-    if (Test-Path $npmPath) {
-      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmPath + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
+    while (-not (Test-Path $nodeExe) -and $waited -lt 30) { Start-Sleep -Seconds 2; $waited += 2 }
+    if (Test-Path $npmScript) {
+      Log 'Running npm install via node...'
+      Start-Process $nodeExe -ArgumentList ('"' + $npmScript + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $logFile
+    } elseif (Test-Path 'C:\Program Files\nodejs\npm.cmd') {
+      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "C:\Program Files\nodejs\npm.cmd" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
     } else {
-      Log 'npm not found, trying node-based install...'
-      Start-Process $nodeExe -ArgumentList ('"' + $installDir + '\node_modules\.bin\npm" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden
+      Log 'Waiting for npm...'
+      Start-Sleep -Seconds 10
+      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && npm install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
     }
     Log 'Step 5: npm install done'
 
@@ -2061,7 +2066,7 @@ app.get('/api/bridge/download-files', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.5.6 – SaaS Server         ║');
+  console.log('║   VaadPro v2.5.7 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
