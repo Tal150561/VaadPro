@@ -381,10 +381,13 @@ function vpLogout() {
 
 <div class="modal-overlay" id="qrModal">
   <div class="modal">
-    <h2>📱 חיבור ווטסאפ</h2>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+      <h2 style="margin:0;">📱 חיבור ווטסאפ</h2>
+      <button onclick="document.getElementById('qrModal').classList.remove('show')" style="background:none;border:1px solid var(--border);color:var(--text2);border-radius:6px;padding:3px 10px;cursor:pointer;font-size:0.85rem;">✕ סגור</button>
+    </div>
     <p>פתח ווטסאפ בטלפון ← הגדרות ← מכשירים מקושרים ← קשר מכשיר:</p>
     <div id="qrContainer"><div class="qr-loading">⏳</div></div>
-    <p style="margin-top:12px;font-size:0.77rem;color:var(--text2);">לאחר הסריקה החלון ייסגר אוטומטית</p>
+    <p style="margin-top:12px;font-size:0.77rem;color:var(--text2);">לאחר הסריקה החלון ייסגר אוטומטית — או לחץ "סגור" לביטול</p>
   </div>
 </div>
 

@@ -1734,124 +1734,163 @@ app.get('/vaadpro-setup.bat', (req, res) => {
 });
 
 function generateSetupBat(appUrl) {
+  // The BAT writes a PS1 file and runs it — avoids CMD escaping issues
   return `@echo off
 title VaadPro Setup
-powershell -NoProfile -ExecutionPolicy Bypass -Command "& {
-  Add-Type -AssemblyName System.Windows.Forms
-  Add-Type -AssemblyName System.Drawing
+set LOG=%USERPROFILE%\Desktop\VaadPro-Setup-Log.txt
+echo VaadPro Setup Log - %DATE% %TIME% > "%LOG%"
+echo ======================================== >> "%LOG%"
 
-  $form = New-Object System.Windows.Forms.Form
-  $form.Text = 'VaadPro Setup'
-  $form.Size = New-Object System.Drawing.Size(420, 220)
-  $form.StartPosition = 'CenterScreen'
-  $form.FormBorderStyle = 'FixedDialog'
-  $form.MaximizeBox = $false
+echo.
+echo  ========================================
+echo   VaadPro Setup
+echo  ========================================
+echo.
+echo  Log file: %USERPROFILE%\Desktop\VaadPro-Setup-Log.txt
+echo.
 
-  $lbl = New-Object System.Windows.Forms.Label
-  $lbl.Text = 'Enter your installation code from VaadPro Settings:'
-  $lbl.Location = New-Object System.Drawing.Point(20, 20)
-  $lbl.Size = New-Object System.Drawing.Size(380, 30)
-  $form.Controls.Add($lbl)
+:: Write PowerShell script to temp file
+set PS1=%TEMP%\vaadpro_setup.ps1
+(
+echo Add-Type -AssemblyName System.Windows.Forms
+echo Add-Type -AssemblyName System.Drawing
+echo $appUrl = '${appUrl}'
+echo $form = New-Object System.Windows.Forms.Form
+echo $form.Text = 'VaadPro Setup'
+echo $form.Size = New-Object System.Drawing.Size(440, 260)
+echo $form.StartPosition = 'CenterScreen'
+echo $form.FormBorderStyle = 'FixedDialog'
+echo $form.MaximizeBox = $false
+echo $form.TopMost = $true
+echo.
+echo $lbl = New-Object System.Windows.Forms.Label
+echo $lbl.Text = 'Enter your installation code from VaadPro Settings:'
+echo $lbl.Location = New-Object System.Drawing.Point(20, 20)
+echo $lbl.Size = New-Object System.Drawing.Size(400, 30)
+echo $form.Controls.Add($lbl)
+echo.
+echo $lbl2 = New-Object System.Windows.Forms.Label
+echo $lbl2.Text = 'Settings page -> Get Installation Code'
+echo $lbl2.Location = New-Object System.Drawing.Point(20, 48)
+echo $lbl2.Size = New-Object System.Drawing.Size(400, 20)
+echo $lbl2.ForeColor = [System.Drawing.Color]::Gray
+echo $form.Controls.Add($lbl2)
+echo.
+echo $txt = New-Object System.Windows.Forms.TextBox
+echo $txt.Location = New-Object System.Drawing.Point(20, 80)
+echo $txt.Size = New-Object System.Drawing.Size(220, 28)
+echo $txt.Font = New-Object System.Drawing.Font('Consolas', 16, [System.Drawing.FontStyle]::Bold)
+echo $txt.CharacterCasing = 'Upper'
+echo $txt.MaxLength = 6
+echo $form.Controls.Add($txt)
+echo.
+echo $btn = New-Object System.Windows.Forms.Button
+echo $btn.Text = 'Install'
+echo $btn.Location = New-Object System.Drawing.Point(250, 78)
+echo $btn.Size = New-Object System.Drawing.Size(90, 32)
+echo $btn.BackColor = [System.Drawing.Color]::FromArgb(37, 211, 102)
+echo $btn.FlatStyle = 'Flat'
+echo $form.AcceptButton = $btn
+echo $form.Controls.Add($btn)
+echo.
+echo $status = New-Object System.Windows.Forms.Label
+echo $status.Location = New-Object System.Drawing.Point(20, 125)
+echo $status.Size = New-Object System.Drawing.Size(400, 90)
+echo $status.Text = ''
+echo $status.Font = New-Object System.Drawing.Font('Arial', 9)
+echo $form.Controls.Add($status)
+echo.
+echo $btn.Add_Click({
+echo   $code = $txt.Text.Trim().ToUpper()
+echo   if ($code.Length -lt 4) { $status.Text = 'Please enter your 6-digit code'; return }
+echo   $btn.Enabled = $false
+echo   $status.ForeColor = [System.Drawing.Color]::Black
+echo.
+echo   try {
+echo     $logFile = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), 'VaadPro-Setup-Log.txt')
+echo     function Log($msg) { Add-Content -Path $logFile -Value ((Get-Date -Format 'HH:mm:ss') + ' ' + $msg) }
+echo     Log 'Starting installation...'
+echo     $status.Text = 'Step 1/5: Connecting to VaadPro...'; $form.Refresh()
+echo     Log 'Step 1: Connecting...'
+echo     $body = '{"token":"' + $code + '"}'
+echo     $resp = Invoke-RestMethod -Uri ($appUrl + '/api/installer/redeem') -Method POST -Body $body -ContentType 'application/json' -UseBasicParsing
+echo     if (-not $resp.ok) { $status.ForeColor = [System.Drawing.Color]::Red; $status.Text = 'Error: ' + $resp.error; $btn.Enabled = $true; return }
+echo.
+echo     $installDir = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), 'VaadPro-Bridge')
+echo     New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+echo.
+echo     Log 'Step 1: Connected OK'
+ echo     $status.Text = 'Step 2/5: Saving configuration...'; $form.Refresh()
+ echo     Log 'Step 2: Saving config...'
+echo     $resp.config | ConvertTo-Json -Depth 5 | Out-File -FilePath ([System.IO.Path]::Combine($installDir, 'config.json')) -Encoding UTF8
+echo.
+echo     Log 'Step 2: Config saved OK'
+ echo     $status.Text = 'Step 3/5: Downloading Bridge files...'; $form.Refresh()
+ echo     Log 'Step 3: Downloading Bridge...'
+echo     $zipPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')
+echo     Invoke-WebRequest -Uri ($appUrl + '/api/bridge/download-files') -OutFile $zipPath -UseBasicParsing
+echo     Expand-Archive -Path $zipPath -DestinationPath $installDir -Force
+echo     Remove-Item $zipPath -Force
+echo.
+echo     Log 'Step 3: Bridge downloaded OK'
+ echo     $status.Text = 'Step 4/5: Checking Node.js...'; $form.Refresh()
+ echo     Log 'Step 4: Checking Node.js...'
+echo     $nodePath = 'C:\Program Files\nodejs\node.exe'
+echo     if (-not (Test-Path $nodePath)) {
+echo       $status.Text = 'Step 4/5: Installing Node.js (2-3 min)...'; $form.Refresh()
+echo       $msiPath = [System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')
+echo       Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile $msiPath -UseBasicParsing
+echo       Start-Process msiexec -ArgumentList "/i $msiPath /quiet /norestart" -Wait
+echo       Remove-Item $msiPath -Force
+echo     }
+echo     $env:PATH = $env:PATH + ';C:\Program Files\nodejs'
+echo.
+echo     Log 'Step 4: Node.js OK'
+ echo     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
+ echo     Log 'Step 5: npm install...'
+echo     Start-Process 'cmd' -ArgumentList "/c cd /d $installDir && npm install" -Wait -NoNewWindow
+echo.
+echo     $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
+echo     $shortcutPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), 'VaadPro Bridge.lnk')
+echo     $ws = New-Object -ComObject WScript.Shell
+echo     $s = $ws.CreateShortcut($shortcutPath)
+echo     $s.TargetPath = $batPath
+echo     $s.WorkingDirectory = $installDir
+echo     $s.Description = 'VaadPro Bridge'
+echo     $s.Save()
+echo.
+echo     Log 'Installation completed successfully!'
+ echo     $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 150, 50)
+echo     $status.Text = 'Installation complete! Starting VaadPro Bridge...'; $form.Refresh()
+echo     Start-Sleep -Seconds 2
+echo     $form.Close()
+echo     Start-Process $batPath
+echo   } catch {
+echo     $status.ForeColor = [System.Drawing.Color]::Red
+echo     $status.Text = 'Error: ' + $_.Exception.Message
+echo     $btn.Enabled = $true
+echo   }
+echo })
+echo.
+echo $form.ShowDialog() ^| Out-Null
+) > "%PS1%"
 
-  $lbl2 = New-Object System.Windows.Forms.Label
-  $lbl2.Text = 'Open vaadpro.org > Settings > Get Installation Code'
-  $lbl2.Location = New-Object System.Drawing.Point(20, 45)
-  $lbl2.Size = New-Object System.Drawing.Size(380, 20)
-  $lbl2.ForeColor = [System.Drawing.Color]::Gray
-  $form.Controls.Add($lbl2)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%PS1%" >> "%LOG%" 2>&1
+set PS_EXIT=%ERRORLEVEL%
+del "%PS1%" 2>nul
 
-  $txt = New-Object System.Windows.Forms.TextBox
-  $txt.Location = New-Object System.Drawing.Point(20, 75)
-  $txt.Size = New-Object System.Drawing.Size(200, 30)
-  $txt.Font = New-Object System.Drawing.Font('Arial', 14, [System.Drawing.FontStyle]::Bold)
-  $txt.CharacterCasing = 'Upper'
-  $txt.MaxLength = 6
-  $form.Controls.Add($txt)
-
-  $btn = New-Object System.Windows.Forms.Button
-  $btn.Text = 'Install'
-  $btn.Location = New-Object System.Drawing.Point(230, 73)
-  $btn.Size = New-Object System.Drawing.Size(80, 32)
-  $btn.BackColor = [System.Drawing.Color]::FromArgb(37, 211, 102)
-  $form.AcceptButton = $btn
-  $form.Controls.Add($btn)
-
-  $status = New-Object System.Windows.Forms.Label
-  $status.Location = New-Object System.Drawing.Point(20, 115)
-  $status.Size = New-Object System.Drawing.Size(380, 50)
-  $status.Text = ''
-  $form.Controls.Add($status)
-
-  $btn.Add_Click({
-    $code = $txt.Text.Trim().ToUpper()
-    if ($code.Length -lt 4) { $status.Text = 'Please enter your code'; return }
-
-    $status.Text = 'Connecting to VaadPro...'
-    $form.Refresh()
-
-    try {
-      $body = '{"token":"' + $code + '"}'
-      $resp = Invoke-RestMethod -Uri '${appUrl}/api/installer/redeem' -Method POST -Body $body -ContentType 'application/json'
-
-      if (-not $resp.ok) {
-        $status.Text = 'Error: ' + $resp.error
-        return
-      }
-
-      $installDir = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('MyDocuments'), 'VaadPro-Bridge')
-      New-Item -ItemType Directory -Force -Path $installDir | Out-Null
-
-      $status.Text = 'Saving configuration...'
-      $form.Refresh()
-      $resp.config | ConvertTo-Json | Out-File -FilePath ([System.IO.Path]::Combine($installDir, 'config.json')) -Encoding UTF8
-
-      $status.Text = 'Downloading Bridge files...'
-      $form.Refresh()
-      Invoke-WebRequest '${appUrl}/api/bridge/download-files' -OutFile ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -UseBasicParsing
-      Expand-Archive -Path ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -DestinationPath $installDir -Force
-      Remove-Item ([System.IO.Path]::Combine($installDir, 'VaadPro-Bridge.zip')) -Force
-
-      $status.Text = 'Checking Node.js...'
-      $form.Refresh()
-      $nodeExists = $null -ne (Get-Command node -ErrorAction SilentlyContinue)
-      if (-not $nodeExists) {
-        $status.Text = 'Installing Node.js (2-3 min)...'
-        $form.Refresh()
-        Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')) -UseBasicParsing
-        Start-Process msiexec -ArgumentList '/i', ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')), '/quiet', '/norestart' -Wait
-        Remove-Item ([System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')) -Force
-      }
-
-      $status.Text = 'Installing Bridge dependencies...'
-      $form.Refresh()
-      $env:PATH += ';C:\Program Files\nodejs'
-      Set-Location $installDir
-      Start-Process 'npm' -ArgumentList 'install' -WorkingDirectory $installDir -Wait -NoNewWindow
-
-      $status.Text = 'Creating Desktop shortcut...'
-      $form.Refresh()
-      $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
-      $shortcutPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), 'VaadPro Bridge.lnk')
-      $ws = New-Object -ComObject WScript.Shell
-      $s = $ws.CreateShortcut($shortcutPath)
-      $s.TargetPath = $batPath
-      $s.WorkingDirectory = $installDir
-      $s.Description = 'VaadPro Bridge'
-      $s.Save()
-
-      $status.Text = 'Installation complete!'
-      $form.Refresh()
-      Start-Sleep 1
-
-      $form.Close()
-      Start-Process $batPath
-    } catch {
-      $status.Text = 'Error: ' + $_.Exception.Message
-    }
-  })
-
-  $form.ShowDialog() | Out-Null
-}"
+if %PS_EXIT% neq 0 (
+    echo.
+    echo  ========================================
+    echo   Setup failed! Error code: %PS_EXIT%
+    echo   Check log file on your Desktop:
+    echo   VaadPro-Setup-Log.txt
+    echo  ========================================
+    echo.
+    pause
+) else (
+    echo Setup completed. >> "%LOG%"
+)
 `;
 }
 
@@ -1917,7 +1956,7 @@ app.get('/api/bridge/download-files', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.5.0 – SaaS Server         ║');
+  console.log('║   VaadPro v2.5.2 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
