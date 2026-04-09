@@ -1827,9 +1827,15 @@ $btn.Add_Click({
       Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile $msiPath -UseBasicParsing
       Start-Process msiexec.exe -ArgumentList ('/i "' + $msiPath + '" /quiet /norestart') -Wait -Verb RunAs
       Remove-Item $msiPath -Force
-      # Add to Windows Startup so Bridge runs after restart
+      # Add shortcut to Windows Startup with correct WorkingDirectory
       $startupDir = [System.Environment]::GetFolderPath('Startup')
-      Copy-Item $batPath ([System.IO.Path]::Combine($startupDir, 'VaadPro-Start.bat')) -Force
+      $startupShortcut = [System.IO.Path]::Combine($startupDir, 'VaadPro Bridge.lnk')
+      $ws2 = New-Object -ComObject WScript.Shell
+      $s2 = $ws2.CreateShortcut($startupShortcut)
+      $s2.TargetPath = $batPath
+      $s2.WorkingDirectory = $installDir
+      $s2.Description = 'VaadPro Bridge'
+      $s2.Save()
       Log 'Step 4: Node.js installed - restart required'
       $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 100, 200)
       $status.Text = 'Node.js installed successfully!' + [char]13 + [char]10 + [char]13 + [char]10 + 'IMPORTANT: Please restart your computer.' + [char]13 + [char]10 + 'VaadPro Bridge will start automatically after restart.'
