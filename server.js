@@ -1825,7 +1825,7 @@ $btn.Add_Click({
       Log 'Step 4: Installing Node.js...'
       $msiPath = [System.IO.Path]::Combine($env:TEMP, 'node_setup.msi')
       Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile $msiPath -UseBasicParsing
-      Start-Process msiexec -ArgumentList ('/i ' + $msiPath + ' /quiet /norestart') -Wait
+      Start-Process msiexec.exe -ArgumentList ('/i "' + $msiPath + '" /quiet /norestart') -Wait -Verb RunAs
       Remove-Item $msiPath -Force
       # Add to Windows Startup so Bridge runs after restart
       $startupDir = [System.Environment]::GetFolderPath('Startup')
