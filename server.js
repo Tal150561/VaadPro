@@ -1817,6 +1817,7 @@ $btn.Add_Click({
     Remove-Item $zipPath -Force
     Log 'Step 3: Bridge downloaded'
 
+    $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
     $status.Text = 'Step 4/5: Checking Node.js...'; $form.Refresh()
     $nodePath = 'C:\\Program Files\\nodejs\\node.exe'
     if (-not (Test-Path $nodePath)) {
