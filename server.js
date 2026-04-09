@@ -1848,30 +1848,28 @@ $btn.Add_Click({
     Log 'Step 4: Node.js OK'
 
     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
-    $pf      = [System.Environment]::GetFolderPath('ProgramFiles')
-    $npmCmd2 = [System.IO.Path]::Combine($pf, 'nodejs', 'npm.cmd')
-    $npmCli  = [System.IO.Path]::Combine($pf, 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js')
-    $nodeEx2 = [System.IO.Path]::Combine($pf, 'nodejs', 'node.exe')
-    Log 'Waiting for npm.cmd...'
-    $waited = 0
-    while ((-not (Test-Path -LiteralPath $npmCmd2)) -and $waited -lt 120) { Start-Sleep -Seconds 5; $waited += 5 }
-    $npmFound = (Test-Path -LiteralPath $npmCmd2)
-    Log ('npm found after ' + $waited + 's: ' + $npmFound)
-    if ($npmFound) {
-      Log 'Running npm install...'
-      Set-Location -Path $installDir
-      $proc = Start-Process $npmCmd2 -ArgumentList 'install','--no-optional' -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru -RedirectStandardOutput ([System.IO.Path]::Combine($installDir, 'npm-out.txt')) -RedirectStandardError ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))
-      Log ('npm exit code: ' + $proc.ExitCode)
-      if (Test-Path ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))) {
-        $npmErr = Get-Content ([System.IO.Path]::Combine($installDir, 'npm-err.txt')) -Raw -ErrorAction SilentlyContinue
-        if ($npmErr) { Log ('npm stderr: ' + $npmErr.Substring(0, [Math]::Min(200, $npmErr.Length))) }
+    Log 'Downloading pre-built node_modules...'
+    $nmZipPath = [System.IO.Path]::Combine($installDir, 'node_modules.zip')
+    try {
+      Invoke-WebRequest -Uri ($appUrl + '/api/bridge/node-modules') -OutFile $nmZipPath -UseBasicParsing
+      if (Test-Path -LiteralPath $nmZipPath) {
+        Expand-Archive -Path $nmZipPath -DestinationPath $installDir -Force
+        Remove-Item $nmZipPath -Force
+        Log 'node_modules downloaded and extracted OK'
+      } else {
+        Log 'node_modules zip not found - falling back to npm install'
+        throw 'Download failed'
       }
-    } elseif (Test-Path -LiteralPath $npmCli) {
-      Log 'Running npm via node...'
-      $proc2 = Start-Process $nodeEx2 -ArgumentList ('"' + $npmCli + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru
-      Log ('node npm exit code: ' + $proc2.ExitCode)
-    } else {
-      Log 'ERROR: npm not found after 120s - manual install required'
+    } catch {
+      Log ('node_modules download failed: ' + $_.Exception.Message + ' - trying npm install')
+      $pf = [System.Environment]::GetFolderPath('ProgramFiles')
+      $npmCmd2 = [System.IO.Path]::Combine($pf, 'nodejs', 'npm.cmd')
+      if (Test-Path -LiteralPath $npmCmd2) {
+        $proc = Start-Process $npmCmd2 -ArgumentList 'install' -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru
+        Log ('npm exit code: ' + $proc.ExitCode)
+      } else {
+        Log 'ERROR: npm not found - please run npm install manually in VaadPro-Bridge folder'
+      }
     }
     Log 'Step 5: npm install done'
 
@@ -2036,6 +2034,57 @@ app.get('/vaadpro-setup.ps1', (req, res) => {
 });
 
 // Serve bridge files without config (for installer)
+// Auto-download node_modules on first start
+const MODULES_ZIP_URL = 'https://github.com/Tal150561/VaadPro/releases/download/v1.0-modules/bridge-node-modules.zip';
+const MODULES_ZIP_PATH = path.join(DATA_DIR, 'bridge-node-modules.zip');
+
+async function ensureNodeModulesZip() {
+  if (fs.existsSync(MODULES_ZIP_PATH)) {
+    console.log('[modules] bridge-node-modules.zip already exists');
+    return;
+  }
+  console.log('[modules] Downloading bridge-node-modules.zip from GitHub...');
+  try {
+    await new Promise((resolve, reject) => {
+      const file = fs.createWriteStream(MODULES_ZIP_PATH);
+      const follow = (url) => {
+        const lib = url.startsWith('https') ? require('https') : require('http');
+        lib.get(url, (res) => {
+          if (res.statusCode === 301 || res.statusCode === 302) {
+            return follow(res.headers.location);
+          }
+          res.pipe(file);
+          file.on('finish', () => { file.close(); resolve(); });
+        }).on('error', (e) => { fs.unlink(MODULES_ZIP_PATH, () => {}); reject(e); });
+      };
+      follow(MODULES_ZIP_URL);
+    });
+    console.log('[modules] Downloaded successfully');
+  } catch(e) {
+    console.error('[modules] Download failed:', e.message);
+  }
+}
+ensureNodeModulesZip();
+
+// Admin endpoint to re-download manually
+app.get('/api/admin/init-modules', async (req, res) => {
+  if (req.query.secret !== process.env.BRIDGE_SECRET) return res.status(403).json({ error: 'forbidden' });
+  if (fs.existsSync(MODULES_ZIP_PATH)) fs.unlinkSync(MODULES_ZIP_PATH);
+  await ensureNodeModulesZip();
+  res.json({ ok: fs.existsSync(MODULES_ZIP_PATH), path: MODULES_ZIP_PATH });
+});
+
+// Serve pre-built node_modules (uploaded to DATA_DIR)
+app.get('/api/bridge/node-modules', (req, res) => {
+  const nmZip = path.join(DATA_DIR, 'bridge-node-modules.zip');
+  if (!fs.existsSync(nmZip)) {
+    return res.status(404).json({ error: 'node_modules not available' });
+  }
+  res.setHeader('Content-Type', 'application/zip');
+  res.setHeader('Content-Disposition', 'attachment; filename="node_modules.zip"');
+  fs.createReadStream(nmZip).pipe(res);
+});
+
 app.get('/api/bridge/download-files', (req, res) => {
   const FILES = {
     'bridge.js':         BRIDGE_JS_CONTENT,
