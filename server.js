@@ -1860,7 +1860,7 @@ $btn.Add_Click({
     if ($npmFound) {
       Log 'Running npm install...'
       Set-Location -Path $installDir
-      $proc = Start-Process $npmCmd2 -ArgumentList 'install','--ignore-scripts','--no-optional','--prefer-offline' -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru -RedirectStandardOutput ([System.IO.Path]::Combine($installDir, 'npm-out.txt')) -RedirectStandardError ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))
+      $proc = Start-Process $npmCmd2 -ArgumentList 'install','--no-optional' -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru -RedirectStandardOutput ([System.IO.Path]::Combine($installDir, 'npm-out.txt')) -RedirectStandardError ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))
       Log ('npm exit code: ' + $proc.ExitCode)
       if (Test-Path ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))) {
         $npmErr = Get-Content ([System.IO.Path]::Combine($installDir, 'npm-err.txt')) -Raw -ErrorAction SilentlyContinue
