@@ -1859,8 +1859,13 @@ $btn.Add_Click({
     Log ('npm found after ' + $waited + 's: ' + $npmFound)
     if ($npmFound) {
       Log 'Running npm install...'
-      $proc = Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmCmd2 + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden -PassThru
+      Set-Location -Path $installDir
+      $proc = Start-Process $npmCmd2 -ArgumentList 'install' -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru -RedirectStandardOutput ([System.IO.Path]::Combine($installDir, 'npm-out.txt')) -RedirectStandardError ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))
       Log ('npm exit code: ' + $proc.ExitCode)
+      if (Test-Path ([System.IO.Path]::Combine($installDir, 'npm-err.txt'))) {
+        $npmErr = Get-Content ([System.IO.Path]::Combine($installDir, 'npm-err.txt')) -Raw -ErrorAction SilentlyContinue
+        if ($npmErr) { Log ('npm stderr: ' + $npmErr.Substring(0, [Math]::Min(200, $npmErr.Length))) }
+      }
     } elseif (Test-Path -LiteralPath $npmCli) {
       Log 'Running npm via node...'
       $proc2 = Start-Process $nodeEx2 -ArgumentList ('"' + $npmCli + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru
