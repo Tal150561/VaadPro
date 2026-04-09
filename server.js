@@ -1849,20 +1849,24 @@ $btn.Add_Click({
 
     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
     # Use node to run npm directly — avoids PATH issues after fresh install
+    # Wait for Node.js to be fully available
     $nodeExe = 'C:\Program Files\nodejs\node.exe'
+    $npmCmd  = 'C:\Program Files\nodejs\npm.cmd'
     $npmScript = 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
-    # Wait up to 30s for node to be available
     $waited = 0
-    while (-not (Test-Path $nodeExe) -and $waited -lt 30) { Start-Sleep -Seconds 2; $waited += 2 }
-    if (Test-Path $npmScript) {
+    while ((-not (Test-Path $npmCmd)) -and $waited -lt 60) { Start-Sleep -Seconds 3; $waited += 3 }
+    Log ('npm available after ' + $waited + 's')
+
+    if (Test-Path $npmCmd) {
+      Log 'Running npm install via npm.cmd...'
+      $proc = Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmCmd + '" install') -Wait -WindowStyle Normal -PassThru
+      Log ('npm exit code: ' + $proc.ExitCode)
+    } elseif (Test-Path $npmScript) {
       Log 'Running npm install via node...'
-      Start-Process $nodeExe -ArgumentList ('"' + $npmScript + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -RedirectStandardOutput $logFile -RedirectStandardError $logFile
-    } elseif (Test-Path 'C:\Program Files\nodejs\npm.cmd') {
-      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "C:\Program Files\nodejs\npm.cmd" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
+      $proc = Start-Process $nodeExe -ArgumentList ('"' + $npmScript + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Normal -PassThru
+      Log ('npm exit code: ' + $proc.ExitCode)
     } else {
-      Log 'Waiting for npm...'
-      Start-Sleep -Seconds 10
-      Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && npm install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden
+      Log 'ERROR: npm not found after waiting!'
     }
     Log 'Step 5: npm install done'
 
