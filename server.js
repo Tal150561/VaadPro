@@ -2035,7 +2035,7 @@ app.get('/vaadpro-setup.ps1', (req, res) => {
 
 // Serve bridge files without config (for installer)
 // Auto-download node_modules on first start
-const MODULES_ZIP_URL = 'https://github.com/Tal150561/VaadPro/releases/download/v1.0-modules/bridge-node-modules.zip';
+const MODULES_ZIP_URL = 'https://github.com/Tal150561/VaadPro/releases/download/v1.0-modules/node_modules.zip';
 const MODULES_ZIP_PATH = path.join(DATA_DIR, 'bridge-node-modules.zip');
 
 async function ensureNodeModulesZip() {
