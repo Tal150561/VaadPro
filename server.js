@@ -1819,7 +1819,7 @@ $btn.Add_Click({
 
     $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
     $status.Text = 'Step 4/5: Checking Node.js...'; $form.Refresh()
-    $nodePath = 'C:\\Program Files\\nodejs\\node.exe'
+    $nodePath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('ProgramFiles'), 'nodejs', 'node.exe')
     if (-not (Test-Path $nodePath)) {
       $status.Text = 'Step 4/5: Installing Node.js (2-3 min)...'; $form.Refresh()
       Log 'Step 4: Installing Node.js...'
@@ -1844,34 +1844,29 @@ $btn.Add_Click({
       $form.Close()
       return
     }
-    $env:PATH = $env:PATH + ';C:\\Program Files\\nodejs'
+    $env:PATH = $env:PATH + ';' + [System.IO.Path]::Combine([System.Environment]::GetFolderPath('ProgramFiles'), 'nodejs')
     Log 'Step 4: Node.js OK'
 
     $status.Text = 'Step 5/5: Installing Bridge dependencies...'; $form.Refresh()
-    # Use node to run npm directly — avoids PATH issues after fresh install
-    # Wait for npm.cmd — MSI installs node.exe first, then npm
-    $nodeExe = 'C:\Program Files\nodejs\node.exe'
-    $npmCmd  = 'C:\Program Files\nodejs\npm.cmd'
+    $pf      = [System.Environment]::GetFolderPath('ProgramFiles')
+    $npmCmd2 = [System.IO.Path]::Combine($pf, 'nodejs', 'npm.cmd')
+    $npmCli  = [System.IO.Path]::Combine($pf, 'nodejs', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    $nodeEx2 = [System.IO.Path]::Combine($pf, 'nodejs', 'node.exe')
     Log 'Waiting for npm.cmd...'
     $waited = 0
-    while ((-not (Test-Path $npmCmd)) -and $waited -lt 120) { Start-Sleep -Seconds 5; $waited += 5 }
-    Log ('npm found after ' + $waited + 's: ' + (Test-Path $npmCmd).ToString())
-
-    if (Test-Path $npmCmd) {
+    while ((-not (Test-Path -LiteralPath $npmCmd2)) -and $waited -lt 120) { Start-Sleep -Seconds 5; $waited += 5 }
+    $npmFound = (Test-Path -LiteralPath $npmCmd2)
+    Log ('npm found after ' + $waited + 's: ' + $npmFound)
+    if ($npmFound) {
       Log 'Running npm install...'
-      $proc = Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmCmd + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden -PassThru
+      $proc = Start-Process 'cmd' -ArgumentList ('/c cd /d "' + $installDir + '" && "' + $npmCmd2 + '" install >> "' + $logFile + '" 2>&1') -Wait -WindowStyle Hidden -PassThru
       Log ('npm exit code: ' + $proc.ExitCode)
-      if ($proc.ExitCode -ne 0) { Log 'WARNING: npm install returned non-zero exit code' }
+    } elseif (Test-Path -LiteralPath $npmCli) {
+      Log 'Running npm via node...'
+      $proc2 = Start-Process $nodeEx2 -ArgumentList ('"' + $npmCli + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru
+      Log ('node npm exit code: ' + $proc2.ExitCode)
     } else {
-      Log 'npm.cmd not found — trying node directly'
-      $npmScript = 'C:\Program Files\nodejs\node_modules\npm\bin\npm-cli.js'
-      if (Test-Path $npmScript) {
-        $proc2 = Start-Process $nodeExe -ArgumentList ('"' + $npmScript + '" install') -WorkingDirectory $installDir -Wait -WindowStyle Hidden -PassThru
-        Log ('node npm exit code: ' + $proc2.ExitCode)
-      } else {
-        Log 'ERROR: Cannot find npm or npm-cli.js'
-        Log ('node_modules contents: ' + (Get-ChildItem 'C:\Program Files\nodejs\node_modules' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Join-String -Separator ', '))
-      }
+      Log 'ERROR: npm not found after 120s - manual install required'
     }
     Log 'Step 5: npm install done'
 
