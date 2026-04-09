@@ -1826,6 +1826,16 @@ $btn.Add_Click({
       Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile $msiPath -UseBasicParsing
       Start-Process msiexec -ArgumentList ('/i ' + $msiPath + ' /quiet /norestart') -Wait
       Remove-Item $msiPath -Force
+      # Add to Windows Startup so Bridge runs after restart
+      $startupDir = [System.Environment]::GetFolderPath('Startup')
+      Copy-Item $batPath ([System.IO.Path]::Combine($startupDir, 'VaadPro-Start.bat')) -Force
+      Log 'Step 4: Node.js installed - restart required'
+      $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 100, 200)
+      $status.Text = 'Node.js installed successfully!' + [char]13 + [char]10 + [char]13 + [char]10 + 'IMPORTANT: Please restart your computer.' + [char]13 + [char]10 + 'VaadPro Bridge will start automatically after restart.'
+      $form.Refresh()
+      [System.Windows.Forms.MessageBox]::Show('Node.js has been installed.' + [char]13 + [char]10 + [char]13 + [char]10 + 'Please restart your computer now.' + [char]13 + [char]10 + 'VaadPro Bridge will start automatically after restart.', 'Restart Required', [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Information) | Out-Null
+      $form.Close()
+      return
     }
     $env:PATH = $env:PATH + ';C:\\Program Files\\nodejs'
     Log 'Step 4: Node.js OK'
@@ -2066,7 +2076,7 @@ app.get('/api/bridge/download-files', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.5.7 – SaaS Server         ║');
+  console.log('║   VaadPro v2.5.8 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
