@@ -2385,7 +2385,8 @@ function analyzeBankRows(rows,fileName){
           amount:m.amount,
           matchType:type,
           date:m.dateVal||'',
-          note:m.noteVal||''
+          note:m.noteVal||'',
+          payerName:m.nameVal||''
         });
       }
     });
@@ -2400,7 +2401,8 @@ function analyzeBankRows(rows,fileName){
         payments:tenantMatches  // כל התשלומים עם תאריך וסכום
       });
       const k=tenant.id+'_'+em;
-      data.sentLog[k]='bank_import_'+new Date().toISOString()+'_'+totalAmount;
+      const payerName = tenantMatches[0].payerName || '';
+      data.sentLog[k]='bank_import_'+new Date().toISOString()+'_'+totalAmount+'_payer_'+payerName;
     } else {
       unmatched.push(tenant);
     }

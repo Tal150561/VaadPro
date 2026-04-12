@@ -329,9 +329,15 @@ function switchMonth(monthKey) {
   document.getElementById('currentAmount').innerHTML = (amount || '—') + ' <span>₪</span>';
 
   let meta = '';
-  if (status === 'paid' && typeLabel) meta = 'שולם באמצעות: ' + typeLabel;
-  else if (status === 'reminded') meta = 'נשלחה אליך תזכורת לתשלום';
-  else meta = isCurrent ? 'טרם בוצע תשלום לחודש זה' : 'לא בוצע תשלום לחודש זה';
+  if (status === 'paid') {
+    if (typeLabel) meta = 'שולם באמצעות: ' + typeLabel;
+    const payer = isCurrent ? (allData.current.payerName||'') : (hist && hist.payerName||'');
+    if (payer) meta += ' · שם המשלם: ' + payer;
+  } else if (status === 'reminded') {
+    meta = 'נשלחה אליך תזכורת לתשלום';
+  } else {
+    meta = isCurrent ? 'טרם בוצע תשלום לחודש זה' : 'לא בוצע תשלום לחודש זה';
+  }
   document.getElementById('currentMeta').textContent = meta;
 }
 
@@ -400,9 +406,14 @@ function render(d) {
   document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
 
   let meta = '';
-  if (c.status === 'paid' && c.typeLabel) meta = 'שולם באמצעות: ' + c.typeLabel;
-  else if (c.status === 'reminded') meta = 'נשלחה אליך תזכורת לתשלום';
-  else meta = 'טרם בוצע תשלום לחודש זה';
+  if (c.status === 'paid') {
+    if (c.typeLabel) meta = 'שולם באמצעות: ' + c.typeLabel;
+    if (c.payerName) meta += ' · שם המשלם: ' + c.payerName;
+  } else if (c.status === 'reminded') {
+    meta = 'נשלחה אליך תזכורת לתשלום';
+  } else {
+    meta = 'טרם בוצע תשלום לחודש זה';
+  }
   document.getElementById('currentMeta').textContent = meta;
 
   // History
@@ -421,6 +432,7 @@ function render(d) {
     if (isPaid) {
       if (r.date) meta += r.date.split('T')[0];
       if (r.typeLabel) meta += (meta ? ' · ' : '') + r.typeLabel;
+      if (r.payerName) meta += ' · ' + r.payerName;
     } else {
       meta = 'לא שולם';
     }

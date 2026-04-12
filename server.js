@@ -312,18 +312,19 @@ function getMonthKey(config) {
 }
 
 // Write a payment record to paymentHistory (permanent archive, never reset)
-function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName) {
+function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName, payerName) {
   if (!tenantData.paymentHistory) tenantData.paymentHistory = {};
   if (!tenantData.paymentHistory[tenantId]) tenantData.paymentHistory[tenantId] = [];
   // Avoid duplicate for same month
   const existing = tenantData.paymentHistory[tenantId].findIndex(r => r.month === monthKey);
   const record = {
-    month:  monthKey,
-    paid:   true,
-    amount: amount || 0,
-    date:   new Date().toISOString().split('T')[0],
-    type:   type, // 'wa_sent' | 'manual' | 'bank'
-    name:   tenantName || ''
+    month:     monthKey,
+    paid:      true,
+    amount:    amount || 0,
+    date:      new Date().toISOString().split('T')[0],
+    type:      type, // 'wa_sent' | 'manual' | 'bank'
+    name:      tenantName || '',
+    payerName: payerName || ''  // actual payer name from bank file
   };
   if (existing >= 0) {
     tenantData.paymentHistory[tenantId][existing] = record;
@@ -539,9 +540,15 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (!tenant) return;
       const amount = tenant.customAmount || (config.amount || 300);
       let type = null;
+      let payerName = '';
       if (String(val).startsWith('manual_paid')) type = 'manual';
-      else if (String(val).startsWith('bank_import')) type = 'bank';
-      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name);
+      else if (String(val).startsWith('bank_import')) {
+        type = 'bank';
+        // Extract payer name stored as: bank_import_..._amount_payer_NAME
+        const payerMatch = String(val).match(/_payer_(.+)$/);
+        if (payerMatch) payerName = payerMatch[1];
+      }
+      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name, payerName);
     });
     req.body.paymentHistory = current.paymentHistory;
   }
@@ -2327,6 +2334,11 @@ app.get('/api/portal/:token', (req, res) => {
     return '';
   };
 
+  // Get payerName for current month from paymentHistory if available
+  const currentRecord = ((d.paymentHistory || {})[entry.tenantId] || [])
+    .find(r => r.month === currentMonthKey);
+  const currentPayerName = currentRecord ? (currentRecord.payerName || '') : '';
+
   res.json({
     ok: true,
     tenant: { name: tenant.name },
@@ -2337,7 +2349,8 @@ app.get('/api/portal/:token', (req, res) => {
       amount,
       status:     currentStatus,
       type:       currentType,
-      typeLabel:  typeLabel(currentType)
+      typeLabel:  typeLabel(currentType),
+      payerName:  currentPayerName
     },
     history: history.map(r => ({
       monthKey:   r.month,
@@ -2347,7 +2360,8 @@ app.get('/api/portal/:token', (req, res) => {
       date:       r.date,
       type:       r.type,
       typeLabel:  typeLabel(r.type),
-      name:       r.name
+      name:       r.name,
+      payerName:  r.payerName || ''
     }))
   });
 });
