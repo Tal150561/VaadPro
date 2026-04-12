@@ -2268,21 +2268,49 @@ app.get('/api/bridge/download-files', (req, res) => {
 });
 
 // ── Tenant Portal ────────────────────────────────────────────────
-const portalTokens = {}; // token → { tenantDataId, tenantId, expires }
+const PORTAL_TOKENS_FILE = path.join(DATA_DIR, '_portal_tokens.json');
+
+function loadPortalTokens() {
+  if (!fs.existsSync(PORTAL_TOKENS_FILE)) return {};
+  try { return JSON.parse(fs.readFileSync(PORTAL_TOKENS_FILE, 'utf8')); } catch(e) { return {}; }
+}
+
+function savePortalTokens(tokens) {
+  fs.writeFileSync(PORTAL_TOKENS_FILE, JSON.stringify(tokens, null, 2));
+}
 
 // Generate portal token for a specific tenant (called from app)
 app.post('/api/portal/token', authMiddleware, (req, res) => {
-  const { tenantId } = req.body; // the tenant's id (not tenantDataId)
+  const { tenantId } = req.body;
   if (!tenantId) return res.json({ ok: false, error: 'Missing tenantId' });
   const d = loadTenantData(req.user.tenantId);
   const tenant = d.tenants.find(t => String(t.id) === String(tenantId));
   if (!tenant) return res.json({ ok: false, error: 'Tenant not found' });
+
+  const tokens = loadPortalTokens();
+  const now = Date.now();
+
+  // Clean expired tokens
+  Object.keys(tokens).forEach(k => { if (tokens[k].expires < now) delete tokens[k]; });
+
+  // Reuse existing valid token for this tenant if exists
+  const existingEntry = Object.entries(tokens).find(([, v]) =>
+    v.tenantDataId === req.user.tenantId &&
+    v.tenantId === String(tenantId) &&
+    v.expires > now
+  );
+  if (existingEntry) {
+    const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+    return res.json({ ok: true, token: existingEntry[0], url: appUrl + '/tenant-portal.html?token=' + existingEntry[0] });
+  }
+
   const token = require('uuid').v4().replace(/-/g,'').substring(0,20);
-  portalTokens[token] = {
+  tokens[token] = {
     tenantDataId: req.user.tenantId,
     tenantId:     String(tenantId),
-    expires:      Date.now() + 365 * 24 * 60 * 60 * 1000 // 1 year
+    expires:      now + 365 * 24 * 60 * 60 * 1000 // 1 year
   };
+  savePortalTokens(tokens);
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const url = appUrl + '/tenant-portal.html?token=' + token;
   res.json({ ok: true, token, url });
@@ -2290,13 +2318,15 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
 
 // Get portal data (public - token only)
 app.get('/api/portal/:token', (req, res) => {
-  const entry = portalTokens[req.params.token];
+  const tokens = loadPortalTokens();
+  const entry = tokens[req.params.token];
   if (!entry) return res.status(404).json({ ok: false, error: 'לינק לא תקין' });
   if (Date.now() > entry.expires) {
-    delete portalTokens[req.params.token];
+    delete tokens[req.params.token];
+    savePortalTokens(tokens);
     return res.status(410).json({ ok: false, error: 'לינק פג תוקף' });
   }
-  const d = loadTenantData(entry.tenantDataId);
+    const d = loadTenantData(entry.tenantDataId);
   const tenant = d.tenants.find(t => String(t.id) === entry.tenantId);
   if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
 
