@@ -256,6 +256,11 @@
       </div>
     </div>
 
+    <!-- Month selector -->
+    <div id="monthSelectorWrap" style="display:none;margin-bottom:12px;">
+      <select id="monthSelector" onchange="switchMonth(this.value)" style="width:100%;background:var(--surface);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;direction:rtl;"></select>
+    </div>
+
     <!-- Current month -->
     <div id="currentCard" class="current-card">
       <div class="current-header">
@@ -279,6 +284,56 @@
 
 <script>
 const token = new URLSearchParams(window.location.search).get('token');
+
+let allData = null;
+
+function switchMonth(monthKey) {
+  if (!allData) return;
+  // Find in history
+  const hist = allData.history.find(function(r){ return r.monthKey === monthKey; });
+  const isCurrent = monthKey === allData.current.monthKey;
+
+  let status, type, typeLabel, amount, monthLabel;
+  if (isCurrent) {
+    status = allData.current.status;
+    type = allData.current.type;
+    typeLabel = allData.current.typeLabel;
+    amount = allData.current.amount;
+    monthLabel = allData.current.monthLabel;
+  } else if (hist) {
+    status = hist.paid ? 'paid' : 'unpaid';
+    type = hist.type;
+    typeLabel = hist.typeLabel;
+    amount = hist.amount;
+    monthLabel = hist.monthLabel;
+  } else { return; }
+
+  const card = document.getElementById('currentCard');
+  const badge = document.getElementById('statusBadge');
+
+  if (status === 'paid') {
+    card.className = 'current-card paid';
+    badge.className = 'status-badge paid';
+    badge.textContent = '✅ שולם';
+  } else if (status === 'reminded') {
+    card.className = 'current-card reminded';
+    badge.className = 'status-badge reminded';
+    badge.textContent = '📱 נשלחה תזכורת';
+  } else {
+    card.className = 'current-card unpaid';
+    badge.className = 'status-badge unpaid';
+    badge.textContent = isCurrent ? '⏳ ממתין לתשלום' : '❌ לא שולם';
+  }
+
+  document.getElementById('currentMonth').textContent = monthLabel;
+  document.getElementById('currentAmount').innerHTML = (amount || '—') + ' <span>₪</span>';
+
+  let meta = '';
+  if (status === 'paid' && typeLabel) meta = 'שולם באמצעות: ' + typeLabel;
+  else if (status === 'reminded') meta = 'נשלחה אליך תזכורת לתשלום';
+  else meta = isCurrent ? 'טרם בוצע תשלום לחודש זה' : 'לא בוצע תשלום לחודש זה';
+  document.getElementById('currentMeta').textContent = meta;
+}
 
 async function load() {
   if (!token) { showError('לא צוין טוקן בלינק.'); return; }
@@ -305,6 +360,22 @@ function render(d) {
   // Greeting
   document.getElementById('tenantName').textContent = 'שלום, ' + d.tenant.name + '!';
   document.getElementById('buildingName').textContent = d.building.name || 'פורטל תשלומי ועד בית';
+
+  // Build month selector if history exists
+  allData = d;
+  const sel = document.getElementById('monthSelector');
+  const wrap = document.getElementById('monthSelectorWrap');
+  if (d.history && d.history.length > 0) {
+    wrap.style.display = 'block';
+    // Build options: current month first, then history
+    const options = [{ key: d.current.monthKey, label: d.current.monthLabel + ' (נוכחי)', isCurrent: true }];
+    d.history.forEach(function(r) {
+      if (r.monthKey !== d.current.monthKey) options.push({ key: r.monthKey, label: r.monthLabel, isCurrent: false });
+    });
+    sel.innerHTML = options.map(function(o) {
+      return '<option value="' + o.key + '">' + o.label + '</option>';
+    }).join('');
+  }
 
   // Current month
   const c = d.current;

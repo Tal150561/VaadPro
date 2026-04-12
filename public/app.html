@@ -493,6 +493,7 @@ function vpLogout() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
           <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">💬 WA לכולם</button>
           <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA רק לממתינים</button>
+          <button class="btn btn-secondary btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()">🔗 שלח פורטל לנבחרים</button>
           <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
           <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
         </div>
@@ -2009,6 +2010,40 @@ function getEffectiveMonth() {
   return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
 }
 
+function togglePaySelectAll(cb) {
+  document.querySelectorAll('.pay-select').forEach(function(c){ c.checked = cb.checked; });
+}
+
+async function sendPortalToSelected() {
+  const selected = Array.from(document.querySelectorAll('.pay-select:checked'));
+  if (!selected.length) { toast('בחר דיירים תחילה', 'error'); return; }
+  let sent = 0, failed = 0;
+  for (var i = 0; i < selected.length; i++) {
+    const id   = selected[i].dataset.id;
+    const name = selected[i].dataset.name;
+    const phone = selected[i].dataset.phone;
+    try {
+      const r = await fetch(API+'/portal/token', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ tenantId: id })
+      });
+      const d = await r.json();
+      if (!d.ok) { failed++; continue; }
+      const msg = 'שלום ' + name + '! 👋
+הנה הלינק לצפייה בסטטוס התשלומים שלך:
+' + d.url;
+      const sr = await fetch(API+'/send-message', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone, message: msg })
+      });
+      const sd = await sr.json();
+      if (sd.ok) sent++; else failed++;
+    } catch(e) { failed++; }
+  }
+  if (sent > 0) toast('✅ לינק נשלח ל-' + sent + ' דיירים', 'success');
+  if (failed > 0) toast('⚠️ ' + failed + ' שליחות נכשלו', 'error');
+}
+
 async function sendPortalLink(tenantId, tenantName) {
   try {
     const r = await fetch(API+'/portal/token', {
@@ -2083,7 +2118,18 @@ function render() {
   const pw=document.getElementById('paymentsWrap');
   if(!data.tenants.length){ pw.innerHTML='<div class="empty"><div class="empty-icon">💳</div><div>אין דיירים רשומים</div></div>'; }
   else {
-    let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>טלפון</th><th>סטטוס תשלום</th><th>סימון ידני</th><th>שליחה</th></tr></thead><tbody>';
+        // Calculate debt per tenant from paymentHistory (months not paid, last 12)
+    const ph = data.paymentHistory || {};
+    const now = new Date();
+    const last12 = [];
+    for(var i=11; i>=0; i--) {
+      var d2 = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      last12.push(d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0'));
+    }
+    let h='<div class="table-wrap"><table><thead><tr>' +
+      '<th><input type="checkbox" id="paySelectAll" onchange="togglePaySelectAll(this)" title="בחר הכל"></th>' +
+      '<th>שם</th><th>חוב</th><th>סטטוס תשלום</th><th>סימון ידני</th><th>שליחה</th>' +
+      '</tr></thead><tbody>';
     data.tenants.forEach(function(t){
       const key=t.id+'_'+em, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
@@ -2098,12 +2144,22 @@ function render() {
       const toggle=paid
         ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
         :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>';
+      // Debt calculation from paymentHistory
+      const tHistory = ph[String(t.id)] || [];
+      const paidMonths = new Set(tHistory.filter(function(r){return r.paid;}).map(function(r){return r.month;}));
+      const amount = t.customAmount || (data.config && data.config.amount) || 300;
+      const debtMonths = last12.filter(function(mk){ return !paidMonths.has(mk); }).length;
+      const debtAmount = debtMonths * amount;
+      const debtCell = debtMonths > 0
+        ? '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+debtAmount+'₪</span><span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">('+debtMonths+' חודשים)</span>'
+        : '<span style="color:var(--accent);font-size:0.82rem;">✓ מעודכן</span>';
       h+='<tr>';
+      h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"></td>';
       h+='<td><strong>'+t.name+'</strong></td>';
-      h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
+      h+='<td>'+debtCell+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td>'+toggle+'</td>';
-      h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\'' + t.name.replace(/'/g,"\'") + '\')" title="שלח לינק פורטל אישי">🔗</button></td>';
+      h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
       h+='</tr>';
     });
     h+='</tbody></table></div>';
