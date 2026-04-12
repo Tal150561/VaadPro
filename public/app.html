@@ -3164,7 +3164,7 @@ async function blSend() {
   toast('✅ נשלח ל-' + sent + ' מתוך ' + recipients.length + ' נמענים!', 'success');
 }
 
-function blSaveDraft() {
+async function blSaveDraft() {
   const body = document.getElementById('blBody').value.trim();
   if (!body) { toast('⚠️ אין מה לשמור', 'error'); return; }
   const draft = {
