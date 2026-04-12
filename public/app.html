@@ -1448,6 +1448,7 @@ async function loadData() {
   try {
     const r = await fetch(API+'/data');
     data = await r.json();
+    if (data.blMessages) blMessages = data.blMessages;
     if (data.reports) savedReports = data.reports;
     if (data.rptLayouts) {
       // מיזוג עם מה שיש ב-localStorage
@@ -2981,7 +2982,15 @@ function rptCopyChartSummary() {
 // ── Bulletin (הודעות ועד הבית) ───────────────────────────────────
 let blMessages = [];
 
-function blSaveStorage() { /* in-memory only */ }
+async function await blSaveStorage() {
+  try {
+    await fetch(API+'/data', {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ blMessages: blMessages })
+    });
+  } catch(e) { /* silent */ }
+}
 
 function blRenderTenantGrid() {
   const grid = document.getElementById('blTenantGrid');
@@ -3147,7 +3156,7 @@ async function blSend() {
   }
 
   blMessages.unshift(record);
-  blSaveStorage();
+  await blSaveStorage();
   blRenderHistory();
 
   btn.disabled = false; btn.innerHTML = '📤 שלח הודעה';
@@ -3168,7 +3177,7 @@ function blSaveDraft() {
     results: []
   };
   blMessages.unshift(draft);
-  blSaveStorage();
+  await blSaveStorage();
   blRenderHistory();
   toast('💾 טיוטה נשמרה!', 'success');
 }
@@ -3190,10 +3199,10 @@ function blLoadDraft(id) {
   toast('📝 טיוטה נטענה לעריכה', 'success');
 }
 
-function blDeleteMessage(id) {
+async function blDeleteMessage(id) {
   if (!confirm('למחוק הודעה זו?')) return;
   blMessages = blMessages.filter(function(m){ return m.id !== id; });
-  blSaveStorage();
+  await blSaveStorage();
   blRenderHistory();
   toast('🗑️ הודעה נמחקה');
 }
@@ -4049,11 +4058,21 @@ const TS_ITEMS = [
   },
   {
     cat: "WhatsApp / Bridge",
+    q: "Bridge לא עולה אחרי ההתקנה — חלון נסגר מיד",
+    a: [
+      "אם Node.js הותקן זה עתה — חובה לעשות Restart למחשב לפני הפעלת Bridge",
+      "אחרי Restart לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ",
+      "אם עדיין לא עובד — בדוק קובץ לוג: VaadPro-Setup-Log.txt על הדסקטופ",
+      "ניתן להריץ Setup מחדש עם קוד חדש מהגדרות — יזהה Node.js קיים וידלג על ההתקנה"
+    ]
+  },
+  {
+    cat: "WhatsApp / Bridge",
     q: "ווטסאפ התנתק לאחר ימים / שבועות",
     a: [
       "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
       "לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ — אם מתבקש QR, סרוק שוב",
-      "אין צורך להריץ את המתקין שוב — רק VaadPro-Start.bat"
+      "אין צורך להריץ את המתקין שוב — רק לחץ על קיצור הדרך 'VaadPro Bridge' על הדסקטופ"
     ]
   },
   {

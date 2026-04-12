@@ -1010,6 +1010,8 @@ function showApp() {
   loadWaitingInstall();
   renderLeads();
   renderRecipients();
+  // Auto-refresh waiting install list every 30 seconds
+  setInterval(loadWaitingInstall, 30000);
 }
 
 async function loadBridges() {
@@ -1581,9 +1583,7 @@ async function setInstallStatus(email, status) {
       method: 'POST', headers: adminHeaders(),
       body: JSON.stringify({ email, status })
     });
-    if (status === 'installed' || status === 'not_interested') {
-      await loadWaitingInstall();
-    }
+    await loadWaitingInstall();
   } catch(e) { toast('שגיאה בעדכון סטטוס', 'err'); }
 }
 
