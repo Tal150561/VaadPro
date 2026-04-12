@@ -2036,7 +2036,7 @@ async function sendPortalToSelected() {
       });
       const d = await r.json();
       if (!d.ok) { failed++; continue; }
-      const msg = 'שלום ' + name + '! 👋\nהנה הלינק לצפייה בסטטוס התשלומים שלך:\n' + d.url;
+      const msg = 'שלום ' + name + '! 👋\nהנה הלינק האישי שלך לצפייה בסטטוס התשלומים:\n' + d.url + '\n\n💡 שמור את הלינק הזה — הוא תמיד עדכני\n📱 עובד מהטלפון ומהמחשב\n🔖 מומלץ לשמור כסימניה';
       const sr = await fetch(API+'/send-message', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone, message: msg })
@@ -2058,7 +2058,7 @@ async function sendPortalLink(tenantId, tenantName) {
     const d = await r.json();
     if (!d.ok) { toast('שגיאה: ' + d.error, 'error'); return; }
     const tenant = data.tenants.find(function(t){ return t.id == tenantId; });
-    const msg = 'שלום ' + tenantName + '! 👋\nהנה הלינק לצפייה בסטטוס התשלומים שלך:\n' + d.url;
+    const msg = 'שלום ' + tenantName + '! 👋\nהנה הלינק האישי שלך לצפייה בסטטוס התשלומים:\n' + d.url + '\n\n💡 שמור את הלינק הזה — הוא תמיד עדכני\n📱 עובד מהטלפון ומהמחשב\n🔖 מומלץ לשמור כסימניה';
     if (tenant && tenant.phone) {
       const sendR = await fetch(API+'/send-message', {
         method:'POST', headers:{'Content-Type':'application/json'},
