@@ -2116,14 +2116,8 @@ function render() {
   const pw=document.getElementById('paymentsWrap');
   if(!data.tenants.length){ pw.innerHTML='<div class="empty"><div class="empty-icon">💳</div><div>אין דיירים רשומים</div></div>'; }
   else {
-        // Calculate debt per tenant from paymentHistory (months not paid, last 12)
+        // Debt per tenant - based only on actual paymentHistory records
     const ph = data.paymentHistory || {};
-    const now = new Date();
-    const last12 = [];
-    for(var i=11; i>=0; i--) {
-      var d2 = new Date(now.getFullYear(), now.getMonth()-i, 1);
-      last12.push(d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0'));
-    }
     let h='<div class="table-wrap"><table><thead><tr>' +
       '<th><input type="checkbox" id="paySelectAll" onchange="togglePaySelectAll(this)" title="בחר הכל"></th>' +
       '<th>שם</th><th>חוב</th><th>סטטוס תשלום</th><th>סימון ידני</th><th>שליחה</th>' +
@@ -2143,14 +2137,20 @@ function render() {
         ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
         :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>';
       // Debt calculation from paymentHistory
+      // Only count months that actually have a record (paid or unpaid) - not phantom months
       const tHistory = ph[String(t.id)] || [];
-      const paidMonths = new Set(tHistory.filter(function(r){return r.paid;}).map(function(r){return r.month;}));
       const amount = t.customAmount || (data.config && data.config.amount) || 300;
-      const debtMonths = last12.filter(function(mk){ return !paidMonths.has(mk); }).length;
+      const debtMonths = tHistory.filter(function(r){ return !r.paid; }).length;
       const debtAmount = debtMonths * amount;
-      const debtCell = debtMonths > 0
-        ? '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+debtAmount+'₪</span><span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">('+debtMonths+' חודשים)</span>'
-        : '<span style="color:var(--accent);font-size:0.82rem;">✓ מעודכן</span>';
+      let debtCell;
+      if (!tHistory.length) {
+        // No history yet - don't show debt
+        debtCell = '<span style="color:var(--text3);font-size:0.8rem;">אין היסטוריה</span>';
+      } else if (debtMonths > 0) {
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+debtAmount+'₪</span><span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">('+debtMonths+' חודשים)</span>';
+      } else {
+        debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ מעודכן</span>';
+      }
       h+='<tr>';
       h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"></td>';
       h+='<td><strong>'+t.name+'</strong></td>';
