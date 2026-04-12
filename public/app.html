@@ -2079,6 +2079,8 @@ async function sendPortalLink(tenantId, tenantName) {
 
 function render() {
   if (isEditing) return; // אל תחדש את הטבלה בזמן עריכה
+  // Save checked state before re-render
+  const checkedIds = new Set(Array.from(document.querySelectorAll('.pay-select:checked')).map(function(el){return el.dataset.id;}));
   const em=getEffectiveMonth();
   const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
   const paidCount=data.tenants.filter(function(t){return data.sentLog[t.id+'_'+em];}).length;
@@ -2173,6 +2175,16 @@ function render() {
     });
     h+='</tbody></table></div>';
     pw.innerHTML=h;
+    // Restore checked state after re-render
+    if (checkedIds.size > 0) {
+      document.querySelectorAll('.pay-select').forEach(function(el){
+        if (checkedIds.has(el.dataset.id)) el.checked = true;
+      });
+      // Sync select-all checkbox
+      const allChecked = document.querySelectorAll('.pay-select').length === document.querySelectorAll('.pay-select:checked').length;
+      const selectAll = document.getElementById('paySelectAll');
+      if (selectAll) selectAll.checked = allChecked;
+    }
   }
 }
 
