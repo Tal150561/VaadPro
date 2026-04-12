@@ -530,7 +530,8 @@ app.post('/api/data', authMiddleware, (req, res) => {
   if (req.body.sentLog) {
     const current = loadTenantData(req.user.tenantId);
     const config  = current.config || {};
-    const mk      = getMonthKey(config);
+    // Use bankMonthOverride if provided (from bank import month selector), else current month
+    const mk = req.body.bankMonthOverride || getMonthKey(config);
     const tenants = current.tenants || [];
     if (!current.paymentHistory) current.paymentHistory = {};
     Object.entries(req.body.sentLog).forEach(([key, val]) => {
@@ -551,6 +552,7 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name, payerName);
     });
     req.body.paymentHistory = current.paymentHistory;
+    delete req.body.bankMonthOverride; // don't save this field to tenant data
   }
   const merged = saveTenantData(req.user.tenantId, req.body);
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });

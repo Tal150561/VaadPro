@@ -544,6 +544,13 @@ function vpLogout() {
             <div style="flex:1;min-width:120px;"><label style="font-size:0.8rem;">סבילות (±₪)</label>
               <input type="number" id="bankTolerance" value="5" min="0" style="margin-top:3px;font-size:0.82rem;"></div>
           </div>
+          <!-- Month selector for history -->
+          <div style="margin-top:12px;">
+            <label style="font-size:0.8rem;">חודש שייך לקובץ זה</label>
+            <select id="bankMonth" style="width:100%;margin-top:3px;font-size:0.82rem;">
+            </select>
+            <div class="hint">בחר את החודש שאליו שייכים התשלומים בקובץ זה</div>
+          </div>
           <button class="btn btn-accent" onclick="runBankAnalysis()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
         </div>
 
@@ -2245,6 +2252,24 @@ function showMappingPanel(rows, fileName){
   // תצוגה מקדימה
   renderBankPreview(rows, headers);
   document.getElementById('bankMappingPanel').style.display='block';
+  // Populate month selector - last 12 months, current month selected by default
+  (function() {
+    const sel = document.getElementById('bankMonth');
+    const MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    const now = new Date();
+    const currentKey = now.getFullYear()+'-'+String(now.getMonth()+1).padStart(2,'0');
+    sel.innerHTML = '';
+    for (var i=11; i>=0; i--) {
+      var d2 = new Date(now.getFullYear(), now.getMonth()-i, 1);
+      var key = d2.getFullYear()+'-'+String(d2.getMonth()+1).padStart(2,'0');
+      var label = MONTHS[d2.getMonth()] + ' ' + d2.getFullYear();
+      var opt = document.createElement('option');
+      opt.value = key;
+      opt.textContent = label + (key === currentKey ? ' (נוכחי)' : '');
+      if (key === currentKey) opt.selected = true;
+      sel.appendChild(opt);
+    }
+  })();
 }
 
 function renderBankPreview(rows, headers){
@@ -2332,7 +2357,18 @@ function analyzeBankRows(rows,fileName){
     }
   });
 
-  const em=getEffectiveMonth();
+  // Use selected bank month (YYYY-MM) for paymentHistory, and Hebrew name for sentLog key
+  const bankMonthKey = document.getElementById('bankMonth') ? document.getElementById('bankMonth').value : null;
+  const MONTH_NAMES_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  let em, selectedMonthKey;
+  if (bankMonthKey) {
+    const [y, m] = bankMonthKey.split('-');
+    em = MONTH_NAMES_HE[parseInt(m)-1]; // Hebrew name for sentLog key
+    selectedMonthKey = bankMonthKey;     // YYYY-MM for paymentHistory
+  } else {
+    em = getEffectiveMonth();
+    selectedMonthKey = null; // will use server's getMonthKey()
+  }
   const matched=[],unmatched=[];
 
   data.tenants.forEach(function(tenant){
@@ -2408,7 +2444,9 @@ function analyzeBankRows(rows,fileName){
     }
   });
 
-  fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})}).catch(function(){});
+  const payload = { sentLog: data.sentLog };
+  if (selectedMonthKey) payload.bankMonthOverride = selectedMonthKey;
+  fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(function(){});
   render();showBankResult(matched,unmatched,mr.length,ta,fileName,filterByAmount);resetDropZone();
 }
 
