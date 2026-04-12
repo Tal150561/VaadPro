@@ -2022,13 +2022,17 @@ function togglePaySelectAll(cb) {
 }
 
 async function sendPortalToSelected() {
-  const selected = Array.from(document.querySelectorAll('.pay-select:checked'));
+  // Snapshot selected data BEFORE any async ops (render() can wipe the DOM)
+  const selected = Array.from(document.querySelectorAll('.pay-select:checked')).map(function(el) {
+    return { id: el.dataset.id, name: el.dataset.name, phone: el.dataset.phone };
+  });
   if (!selected.length) { toast('בחר דיירים תחילה', 'error'); return; }
+  toast('📤 שולח לינקים ל-' + selected.length + ' דיירים...', 'success');
   let sent = 0, failed = 0;
   for (var i = 0; i < selected.length; i++) {
-    const id   = selected[i].dataset.id;
-    const name = selected[i].dataset.name;
-    const phone = selected[i].dataset.phone;
+    const id    = selected[i].id;
+    const name  = selected[i].name;
+    const phone = selected[i].phone;
     try {
       const r = await fetch(API+'/portal/token', {
         method:'POST', headers:{'Content-Type':'application/json'},
