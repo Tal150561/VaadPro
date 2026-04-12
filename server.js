@@ -1945,7 +1945,6 @@ del "%PS1%" 2>nul
 app.get('/vaadpro-setup.sh', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const sh = `#!/bin/bash
-set -e
 LOG="$HOME/Desktop/VaadPro-Setup-Log.txt"
 echo "VaadPro Setup Log - $(date)" > "$LOG"
 INSTALL_DIR="$HOME/Documents/VaadPro-Bridge"
@@ -1962,7 +1961,7 @@ read CODE
 CODE=$(echo "$CODE" | tr '[:lower:]' '[:upper:]')
 
 echo "$(date +%H:%M:%S) Connecting to VaadPro..." >> "$LOG"
-echo "Connecting to VaadPro..."
+echo "Step 1/5: Connecting to VaadPro..."
 
 # Redeem token
 RESP=$(curl -s -X POST "${appUrl}/api/installer/redeem" \\
@@ -1972,7 +1971,8 @@ RESP=$(curl -s -X POST "${appUrl}/api/installer/redeem" \\
 OK=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('ok','false'))" 2>/dev/null)
 if [ "$OK" != "True" ] && [ "$OK" != "true" ]; then
   ERR=$(echo "$RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('error','Unknown error'))" 2>/dev/null)
-  echo "Error: $ERR"
+  echo ""
+  echo " ERROR: $ERR"
   echo "$(date +%H:%M:%S) ERROR: $ERR" >> "$LOG"
   exit 1
 fi
@@ -1989,13 +1989,19 @@ echo "Step 2/5: Config saved"
 # Download bridge files
 echo "Step 3/5: Downloading Bridge files..."
 curl -s "${appUrl}/api/bridge/download-files" -o "$INSTALL_DIR/bridge.zip"
+if [ ! -f "$INSTALL_DIR/bridge.zip" ]; then
+  echo " ERROR: Failed to download Bridge files."
+  echo "$(date +%H:%M:%S) ERROR: bridge.zip download failed" >> "$LOG"
+  exit 1
+fi
 cd "$INSTALL_DIR" && unzip -o bridge.zip && rm bridge.zip
 echo "$(date +%H:%M:%S) Step 3: Bridge downloaded" >> "$LOG"
+echo "Step 3/5: Bridge files downloaded"
 
-# Check Node.js
+# Check / install Node.js
 echo "Step 4/5: Checking Node.js..."
 if ! command -v node &>/dev/null; then
-  echo "Installing Node.js..."
+  echo " Node.js not found. Installing... (this may take 2-3 minutes)"
   echo "$(date +%H:%M:%S) Step 4: Installing Node.js..." >> "$LOG"
   if command -v brew &>/dev/null; then
     brew install node
@@ -2004,13 +2010,48 @@ if ! command -v node &>/dev/null; then
     sudo installer -pkg /tmp/node.pkg -target /
     rm /tmp/node.pkg
   fi
+  # Reload PATH so node/npm are available immediately
+  export PATH="/usr/local/bin:/opt/homebrew/bin:$PATH"
 fi
-echo "$(date +%H:%M:%S) Step 4: Node.js OK" >> "$LOG"
+if ! command -v node &>/dev/null; then
+  echo " ERROR: Node.js installation failed."
+  echo " Please install manually from https://nodejs.org and run this script again."
+  echo "$(date +%H:%M:%S) ERROR: Node.js not found after install" >> "$LOG"
+  exit 1
+fi
+echo "$(date +%H:%M:%S) Step 4: Node.js OK ($(node -v))" >> "$LOG"
+echo "Step 4/5: Node.js OK ($(node -v))"
 
-# npm install
+# Install dependencies
 echo "Step 5/5: Installing Bridge dependencies..."
-cd "$INSTALL_DIR" && npm install >> "$LOG" 2>&1
-echo "$(date +%H:%M:%S) Step 5: npm install done" >> "$LOG"
+echo " This may take 2-3 minutes. Please wait."
+echo "$(date +%H:%M:%S) Running npm install..." >> "$LOG"
+cd "$INSTALL_DIR"
+
+# Try downloading pre-built node_modules first (faster)
+NM_ZIP="$INSTALL_DIR/node_modules.zip"
+curl -s --fail "${appUrl}/api/bridge/node-modules" -o "$NM_ZIP" 2>/dev/null
+if [ -f "$NM_ZIP" ] && [ -s "$NM_ZIP" ]; then
+  echo " Extracting pre-built dependencies..."
+  unzip -o "$NM_ZIP" -d "$INSTALL_DIR" >> "$LOG" 2>&1 && rm "$NM_ZIP"
+  echo "$(date +%H:%M:%S) node_modules extracted from zip" >> "$LOG"
+else
+  rm -f "$NM_ZIP"
+  echo " Running npm install..."
+  npm install 2>&1 | tee -a "$LOG"
+fi
+
+# Verify node_modules
+if [ ! -d "$INSTALL_DIR/node_modules" ]; then
+  echo ""
+  echo " ERROR: node_modules missing after install!"
+  echo " Please open Terminal and run:"
+  echo "   cd \"$INSTALL_DIR\" && npm install"
+  echo "$(date +%H:%M:%S) ERROR: node_modules missing" >> "$LOG"
+  exit 1
+fi
+echo "$(date +%H:%M:%S) Step 5: dependencies installed OK" >> "$LOG"
+echo "Step 5/5: Dependencies installed"
 
 # Create Desktop shortcut
 SHORTCUT="$HOME/Desktop/VaadPro Bridge.command"
