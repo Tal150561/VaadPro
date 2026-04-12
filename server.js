@@ -1087,6 +1087,15 @@ app.post('/api/admin/crm/:id', adminAuthMiddleware, viewerBlockMiddleware, (req,
   const card = getCRMCard(req.params.id);
   const updated = Object.assign(card, req.body);
   saveCRMCard(req.params.id, updated);
+  // If status changed, sync it to _leads.json as well
+  if (req.body.status !== undefined) {
+    const leads = loadLeads();
+    const lead = leads.find(l => l.id === req.params.id);
+    if (lead) {
+      lead.status = req.body.status;
+      saveLeads(leads);
+    }
+  }
   res.json({ ok: true });
 });
 
