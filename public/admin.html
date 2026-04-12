@@ -1961,6 +1961,8 @@ async function saveCRMStatus() {
     method: 'POST', headers: adminHeaders(),
     body: JSON.stringify({ status })
   });
+  // Refresh leads table so status badge updates immediately
+  await loadLeads();
   toast('סטטוס עודכן ✓', 'ok');
 }
 
