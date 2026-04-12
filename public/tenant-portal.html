@@ -1,0 +1,370 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VaadPro — פורטל דיירים</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #0d1117;
+    --surface:  #161b22;
+    --surface2: #21262d;
+    --border:   rgba(48,54,61,.8);
+    --text:     #e6edf3;
+    --text2:    #8b949e;
+    --text3:    #6e7681;
+    --accent:   #25d366;
+    --danger:   #f85149;
+    --warn:     #e3b341;
+    --info:     #58a6ff;
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Heebo', sans-serif;
+    min-height: 100vh;
+    direction: rtl;
+  }
+
+  .top-bar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 14px 20px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .logo-icon { font-size: 1.4rem; }
+  .logo-text { font-size: 1rem; font-weight: 900; }
+  .logo-text span { color: var(--accent); }
+  .logo-sub { font-size: 0.72rem; color: var(--text3); margin-top: 1px; }
+
+  .container { max-width: 480px; margin: 0 auto; padding: 24px 16px; }
+
+  /* Loading / Error */
+  .state-box {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text2);
+  }
+  .state-box .icon { font-size: 3rem; margin-bottom: 16px; }
+  .state-box h2 { font-size: 1.1rem; font-weight: 700; color: var(--text); margin-bottom: 8px; }
+  .state-box p { font-size: 0.88rem; line-height: 1.6; }
+
+  /* Greeting */
+  .greeting {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .greeting-icon {
+    width: 48px; height: 48px;
+    background: rgba(37,211,102,.15);
+    border-radius: 12px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1.5rem;
+    flex-shrink: 0;
+  }
+  .greeting h2 { font-size: 1.1rem; font-weight: 800; margin-bottom: 2px; }
+  .greeting p { font-size: 0.82rem; color: var(--text2); }
+
+  /* Current month card */
+  .current-card {
+    border-radius: 14px;
+    padding: 20px;
+    margin-bottom: 16px;
+    border: 1px solid var(--border);
+  }
+  .current-card.paid {
+    background: rgba(37,211,102,.06);
+    border-color: rgba(37,211,102,.3);
+  }
+  .current-card.unpaid {
+    background: rgba(248,81,73,.05);
+    border-color: rgba(248,81,73,.25);
+  }
+  .current-card.reminded {
+    background: rgba(88,166,255,.05);
+    border-color: rgba(88,166,255,.2);
+  }
+
+  .current-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+  }
+  .current-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text3);
+  }
+  .status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 12px;
+    border-radius: 20px;
+    font-size: 0.8rem;
+    font-weight: 700;
+  }
+  .status-badge.paid   { background: rgba(37,211,102,.15); color: var(--accent); }
+  .status-badge.unpaid { background: rgba(248,81,73,.12); color: var(--danger); }
+  .status-badge.reminded { background: rgba(88,166,255,.12); color: var(--info); }
+
+  .current-month {
+    font-size: 1.5rem;
+    font-weight: 900;
+    margin-bottom: 4px;
+  }
+  .current-amount {
+    font-size: 2.2rem;
+    font-weight: 900;
+    color: var(--accent);
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .current-amount span { font-size: 1rem; font-weight: 400; color: var(--text2); }
+  .current-meta {
+    font-size: 0.78rem;
+    color: var(--text3);
+    margin-top: 8px;
+  }
+
+  /* History */
+  .section-title {
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--text3);
+    margin-bottom: 12px;
+  }
+
+  .history-list {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+
+  .history-item {
+    display: flex;
+    align-items: center;
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    gap: 12px;
+  }
+  .history-item:last-child { border-bottom: none; }
+
+  .hi-icon {
+    width: 36px; height: 36px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 1rem;
+    flex-shrink: 0;
+  }
+  .hi-icon.paid    { background: rgba(37,211,102,.12); }
+  .hi-icon.unpaid  { background: rgba(248,81,73,.08); }
+
+  .hi-content { flex: 1; min-width: 0; }
+  .hi-month {
+    font-size: 0.9rem;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .hi-meta {
+    font-size: 0.75rem;
+    color: var(--text3);
+  }
+
+  .hi-amount {
+    font-size: 0.95rem;
+    font-weight: 700;
+    text-align: left;
+    flex-shrink: 0;
+  }
+  .hi-amount.paid   { color: var(--accent); }
+  .hi-amount.unpaid { color: var(--text3); }
+
+  .empty-history {
+    padding: 32px 20px;
+    text-align: center;
+    color: var(--text3);
+    font-size: 0.85rem;
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center;
+    padding: 32px 0 16px;
+    font-size: 0.75rem;
+    color: var(--text3);
+  }
+  .footer a { color: var(--text3); text-decoration: none; }
+
+  .spinner {
+    width: 32px; height: 32px;
+    border: 3px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: spin .8s linear infinite;
+    margin: 0 auto 16px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="top-bar">
+  <div class="logo-icon">🏠</div>
+  <div>
+    <div class="logo-text">Vaad<span>Pro</span></div>
+    <div class="logo-sub">פורטל דיירים</div>
+  </div>
+</div>
+
+<div class="container">
+  <div id="loadingState" class="state-box">
+    <div class="spinner"></div>
+    <p>טוען נתונים...</p>
+  </div>
+
+  <div id="errorState" class="state-box" style="display:none;">
+    <div class="icon">⚠️</div>
+    <h2>לינק לא תקין</h2>
+    <p id="errorMsg">הלינק שקיבלת אינו תקין או פג תוקפו.<br>פנה לועד הבית לקבלת לינק חדש.</p>
+  </div>
+
+  <div id="portalContent" style="display:none;">
+    <!-- Greeting -->
+    <div class="greeting">
+      <div class="greeting-icon">👋</div>
+      <div>
+        <h2 id="tenantName">שלום!</h2>
+        <p id="buildingName"></p>
+      </div>
+    </div>
+
+    <!-- Current month -->
+    <div id="currentCard" class="current-card">
+      <div class="current-header">
+        <div class="current-title">חודש נוכחי</div>
+        <div id="statusBadge" class="status-badge"></div>
+      </div>
+      <div id="currentMonth" class="current-month"></div>
+      <div id="currentAmount" class="current-amount"></div>
+      <div id="currentMeta" class="current-meta"></div>
+    </div>
+
+    <!-- History -->
+    <div class="section-title">היסטוריית תשלומים — 12 חודשים אחרונים</div>
+    <div class="history-list" id="historyList"></div>
+
+    <div class="footer">
+      <a href="https://vaadpro.org">VaadPro — ניהול ועד הבית החכם</a>
+    </div>
+  </div>
+</div>
+
+<script>
+const token = new URLSearchParams(window.location.search).get('token');
+
+async function load() {
+  if (!token) { showError('לא צוין טוקן בלינק.'); return; }
+  try {
+    const r = await fetch('/api/portal/' + token);
+    const d = await r.json();
+    if (!d.ok) { showError(d.error || 'שגיאה בטעינת הנתונים.'); return; }
+    render(d);
+  } catch(e) {
+    showError('לא ניתן להתחבר לשרת. נסה שוב.');
+  }
+}
+
+function showError(msg) {
+  document.getElementById('loadingState').style.display = 'none';
+  document.getElementById('errorMsg').textContent = msg;
+  document.getElementById('errorState').style.display = 'block';
+}
+
+function render(d) {
+  document.getElementById('loadingState').style.display = 'none';
+  document.getElementById('portalContent').style.display = 'block';
+
+  // Greeting
+  document.getElementById('tenantName').textContent = 'שלום, ' + d.tenant.name + '!';
+  document.getElementById('buildingName').textContent = d.building.name || 'פורטל תשלומי ועד בית';
+
+  // Current month
+  const c = d.current;
+  const card = document.getElementById('currentCard');
+  const badge = document.getElementById('statusBadge');
+
+  if (c.status === 'paid') {
+    card.className = 'current-card paid';
+    badge.className = 'status-badge paid';
+    badge.textContent = '✅ שולם';
+  } else if (c.status === 'reminded') {
+    card.className = 'current-card reminded';
+    badge.className = 'status-badge reminded';
+    badge.textContent = '📱 נשלחה תזכורת';
+  } else {
+    card.className = 'current-card unpaid';
+    badge.className = 'status-badge unpaid';
+    badge.textContent = '⏳ ממתין לתשלום';
+  }
+
+  document.getElementById('currentMonth').textContent = c.monthLabel;
+  document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
+
+  let meta = '';
+  if (c.status === 'paid' && c.typeLabel) meta = 'שולם באמצעות: ' + c.typeLabel;
+  else if (c.status === 'reminded') meta = 'נשלחה אליך תזכורת לתשלום';
+  else meta = 'טרם בוצע תשלום לחודש זה';
+  document.getElementById('currentMeta').textContent = meta;
+
+  // History
+  const list = document.getElementById('historyList');
+  if (!d.history || !d.history.length) {
+    list.innerHTML = '<div class="empty-history">אין היסטוריית תשלומים עדיין</div>';
+    return;
+  }
+  list.innerHTML = d.history.map(function(r) {
+    const isPaid = r.paid;
+    const iconClass = isPaid ? 'paid' : 'unpaid';
+    const icon = isPaid ? '✅' : '❌';
+    const amountClass = isPaid ? 'paid' : 'unpaid';
+    const amountText = isPaid ? r.amount + ' ₪' : '—';
+    let meta = '';
+    if (isPaid) {
+      if (r.date) meta += r.date.split('T')[0];
+      if (r.typeLabel) meta += (meta ? ' · ' : '') + r.typeLabel;
+    } else {
+      meta = 'לא שולם';
+    }
+    return '<div class="history-item">' +
+      '<div class="hi-icon ' + iconClass + '">' + icon + '</div>' +
+      '<div class="hi-content">' +
+        '<div class="hi-month">' + r.monthLabel + '</div>' +
+        '<div class="hi-meta">' + meta + '</div>' +
+      '</div>' +
+      '<div class="hi-amount ' + amountClass + '">' + amountText + '</div>' +
+    '</div>';
+  }).join('');
+}
+
+load();
+</script>
+</body>
+</html>

@@ -296,6 +296,42 @@ function getEffectiveMonth(config) {
   return names[now.getMonth()];
 }
 
+// Returns YYYY-MM key for paymentHistory (independent of display month name)
+const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+function getMonthKey(config) {
+  // If manual month is set, map Hebrew name back to YYYY-MM
+  if (config && config.manualMonth) {
+    const idx = HEBREW_MONTHS.indexOf(config.manualMonth);
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = idx >= 0 ? idx + 1 : now.getMonth() + 1;
+    return year + '-' + String(month).padStart(2,'0');
+  }
+  const now = new Date();
+  return now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+}
+
+// Write a payment record to paymentHistory (permanent archive, never reset)
+function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName) {
+  if (!tenantData.paymentHistory) tenantData.paymentHistory = {};
+  if (!tenantData.paymentHistory[tenantId]) tenantData.paymentHistory[tenantId] = [];
+  // Avoid duplicate for same month
+  const existing = tenantData.paymentHistory[tenantId].findIndex(r => r.month === monthKey);
+  const record = {
+    month:  monthKey,
+    paid:   true,
+    amount: amount || 0,
+    date:   new Date().toISOString().split('T')[0],
+    type:   type, // 'wa_sent' | 'manual' | 'bank'
+    name:   tenantName || ''
+  };
+  if (existing >= 0) {
+    tenantData.paymentHistory[tenantId][existing] = record;
+  } else {
+    tenantData.paymentHistory[tenantId].push(record);
+  }
+}
+
 // ════════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ════════════════════════════════════════════════════════════════
@@ -489,6 +525,26 @@ app.post('/api/data', authMiddleware, (req, res) => {
       }
     }
   }
+  // If sentLog is being updated, sync manual/bank payments to paymentHistory
+  if (req.body.sentLog) {
+    const current = loadTenantData(req.user.tenantId);
+    const config  = current.config || {};
+    const mk      = getMonthKey(config);
+    const tenants = current.tenants || [];
+    if (!current.paymentHistory) current.paymentHistory = {};
+    Object.entries(req.body.sentLog).forEach(([key, val]) => {
+      if (!val) return;
+      const [tenantId] = key.split('_');
+      const tenant = tenants.find(t => String(t.id) === tenantId);
+      if (!tenant) return;
+      const amount = tenant.customAmount || (config.amount || 300);
+      let type = null;
+      if (String(val).startsWith('manual_paid')) type = 'manual';
+      else if (String(val).startsWith('bank_import')) type = 'bank';
+      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name);
+    });
+    req.body.paymentHistory = current.paymentHistory;
+  }
   const merged = saveTenantData(req.user.tenantId, req.body);
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
 });
@@ -531,8 +587,11 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
     const key = tenant.id+'_'+month; d.sentLog[key]='sent_'+new Date().toISOString();
-    saveTenantData(req.user.tenantId, { sentLog: d.sentLog });
-    res.json({ ok: true });
+    // Record to permanent history
+    const mk = getMonthKey(d.config);
+    recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
+    saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+    res.json({ ok: true, month });
   } catch(e) { res.json({ ok: false, error: e.message }); }
 });
 
@@ -542,14 +601,21 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   const month  = getEffectiveMonth(d.config);
   const globalAmount = (d.config||{}).amount || 300;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
+  const mk = getMonthKey(d.config);
   let sent = 0;
   for (const tenant of d.tenants) {
     const amount = tenant.customAmount || globalAmount;
     const msg = tmpl.replace(/{שם}/g,tenant.name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
-    try { await sendWaMsg(req.user.tenantId, tenant.phone, msg); d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString(); sent++; await new Promise(r=>setTimeout(r,1200)); }
+    try {
+      await sendWaMsg(req.user.tenantId, tenant.phone, msg);
+      d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString();
+      recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
+      sent++;
+      await new Promise(r=>setTimeout(r,1200));
+    }
     catch(e) { console.error(`[send-all:${req.user.tenantId}]`, tenant.name, e.message); }
   }
-  saveTenantData(req.user.tenantId, { sentLog: d.sentLog });
+  saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
   res.json({ ok: true, sent });
 });
 
@@ -2190,6 +2256,100 @@ app.get('/api/bridge/download-files', (req, res) => {
   const zipBuf = buildZipSimple(FILES);
   res.setHeader('Content-Type', 'application/zip');
   res.send(zipBuf);
+});
+
+// ── Tenant Portal ────────────────────────────────────────────────
+const portalTokens = {}; // token → { tenantDataId, tenantId, expires }
+
+// Generate portal token for a specific tenant (called from app)
+app.post('/api/portal/token', authMiddleware, (req, res) => {
+  const { tenantId } = req.body; // the tenant's id (not tenantDataId)
+  if (!tenantId) return res.json({ ok: false, error: 'Missing tenantId' });
+  const d = loadTenantData(req.user.tenantId);
+  const tenant = d.tenants.find(t => String(t.id) === String(tenantId));
+  if (!tenant) return res.json({ ok: false, error: 'Tenant not found' });
+  const token = require('uuid').v4().replace(/-/g,'').substring(0,20);
+  portalTokens[token] = {
+    tenantDataId: req.user.tenantId,
+    tenantId:     String(tenantId),
+    expires:      Date.now() + 365 * 24 * 60 * 60 * 1000 // 1 year
+  };
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const url = appUrl + '/tenant-portal.html?token=' + token;
+  res.json({ ok: true, token, url });
+});
+
+// Get portal data (public - token only)
+app.get('/api/portal/:token', (req, res) => {
+  const entry = portalTokens[req.params.token];
+  if (!entry) return res.status(404).json({ ok: false, error: 'לינק לא תקין' });
+  if (Date.now() > entry.expires) {
+    delete portalTokens[req.params.token];
+    return res.status(410).json({ ok: false, error: 'לינק פג תוקף' });
+  }
+  const d = loadTenantData(entry.tenantDataId);
+  const tenant = d.tenants.find(t => String(t.id) === entry.tenantId);
+  if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+
+  const config = d.config || {};
+  const globalAmount = config.amount || 300;
+  const amount = tenant.customAmount || globalAmount;
+  const currentMonthKey = getMonthKey(config);
+  const currentMonthName = getEffectiveMonth(config);
+
+  // Get payment history for this tenant (last 12 months)
+  const history = ((d.paymentHistory || {})[entry.tenantId] || [])
+    .sort((a, b) => b.month.localeCompare(a.month))
+    .slice(0, 12);
+
+  // Current month status from sentLog
+  const sentKey = entry.tenantId + '_' + currentMonthName;
+  const sentVal = (d.sentLog || {})[sentKey] || null;
+  let currentStatus = 'unpaid';
+  let currentType = null;
+  if (sentVal) {
+    if (String(sentVal).startsWith('manual_paid')) { currentStatus = 'paid'; currentType = 'manual'; }
+    else if (String(sentVal).startsWith('bank_import')) { currentStatus = 'paid'; currentType = 'bank'; }
+    else if (String(sentVal).startsWith('sent_')) { currentStatus = 'reminded'; currentType = 'wa_sent'; }
+  }
+
+  // Build Hebrew month label for display
+  const MONTH_NAMES = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const monthLabel = (mk) => {
+    const [y, m] = mk.split('-');
+    return MONTH_NAMES[parseInt(m)-1] + ' ' + y;
+  };
+
+  const typeLabel = (t) => {
+    if (t === 'bank') return 'ייבוא בנק';
+    if (t === 'manual') return 'סומן ידנית';
+    if (t === 'wa_sent') return 'נשלחה תזכורת';
+    return '';
+  };
+
+  res.json({
+    ok: true,
+    tenant: { name: tenant.name },
+    building: { name: d.config?.buildingName || '' },
+    current: {
+      monthKey:   currentMonthKey,
+      monthLabel: currentMonthName,
+      amount,
+      status:     currentStatus,
+      type:       currentType,
+      typeLabel:  typeLabel(currentType)
+    },
+    history: history.map(r => ({
+      monthKey:   r.month,
+      monthLabel: monthLabel(r.month),
+      paid:       r.paid,
+      amount:     r.amount,
+      date:       r.date,
+      type:       r.type,
+      typeLabel:  typeLabel(r.type),
+      name:       r.name
+    }))
+  });
 });
 
 // ── Start ────────────────────────────────────────────────────────

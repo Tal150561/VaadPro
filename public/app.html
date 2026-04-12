@@ -1983,9 +1983,11 @@ async function sendUnpaidOnly() {
 }
 
 async function resetSent() {
-  if(!confirm('לאפס את סטטוס התשלומים?')) return;
-  data.sentLog={};
-  await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:{}})});
+  if(!confirm('לאפס את סטטוס התשלומים לחודש הנוכחי?')) return;
+  const em = getEffectiveMonth();
+  // Only delete keys for current month - keep other months intact
+  Object.keys(data.sentLog).forEach(function(k){ if(k.endsWith('_'+em)) delete data.sentLog[k]; });
+  await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});
   render(); toast('🔄 סטטוס אופס');
 }
 
@@ -2005,6 +2007,30 @@ async function markUnpaid(id) {
 
 function getEffectiveMonth() {
   return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
+}
+
+async function sendPortalLink(tenantId, tenantName) {
+  try {
+    const r = await fetch(API+'/portal/token', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ tenantId: String(tenantId) })
+    });
+    const d = await r.json();
+    if (!d.ok) { toast('שגיאה: ' + d.error, 'error'); return; }
+    const tenant = data.tenants.find(function(t){ return t.id == tenantId; });
+    const msg = 'שלום ' + tenantName + '! 👋\nהנה הלינק לצפייה בסטטוס התשלומים שלך:\n' + d.url;
+    if (tenant && tenant.phone) {
+      const sendR = await fetch(API+'/send-message', {
+        method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ phone: tenant.phone, message: msg })
+      });
+      const sd = await sendR.json();
+      if (sd.ok) { toast('✅ לינק נשלח ל-' + tenantName + ' בוואטסאפ!', 'success'); return; }
+    }
+    // Fallback - copy to clipboard
+    try { await navigator.clipboard.writeText(d.url); toast('📋 לינק הועתק — שלח ידנית ל-' + tenantName, 'success'); }
+    catch(e2) { toast('🔗 ' + d.url, 'success'); }
+  } catch(e) { toast('שגיאה בשליחת לינק', 'error'); }
 }
 
 function render() {
@@ -2077,7 +2103,7 @@ function render() {
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td>'+toggle+'</td>';
-      h+='<td><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button></td>';
+      h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\'' + t.name.replace(/'/g,"\'") + '\')" title="שלח לינק פורטל אישי">🔗</button></td>';
       h+='</tr>';
     });
     h+='</tbody></table></div>';
