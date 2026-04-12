@@ -2029,9 +2029,7 @@ async function sendPortalToSelected() {
       });
       const d = await r.json();
       if (!d.ok) { failed++; continue; }
-      const msg = 'שלום ' + name + '! 👋
-הנה הלינק לצפייה בסטטוס התשלומים שלך:
-' + d.url;
+      const msg = 'שלום ' + name + '! 👋\nהנה הלינק לצפייה בסטטוס התשלומים שלך:\n' + d.url;
       const sr = await fetch(API+'/send-message', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ phone, message: msg })
