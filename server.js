@@ -2472,11 +2472,200 @@ app.get('/api/portal/:token', (req, res) => {
   });
 });
 
+
+// ── Tickets (תיעוד תקלות) ─────────────────────────────────────────
+
+const TICKET_CATEGORIES = ['אינסטלטור','חשמל','מעלית','גנרטור','שערים/דלתות','ניקיון','נזילה','תאורה','אינטרנט/תקשורת','אחר'];
+const TICKET_STATUSES   = ['פתוח','בטיפול','ממתין לחומרים','נקבע תור','נסגר','לא רלוונטי'];
+
+function ticketsFile(tenantDataId) {
+  return path.join(DATA_DIR, tenantDataId + '_tickets.json');
+}
+function loadTickets(tenantDataId) {
+  const f = ticketsFile(tenantDataId);
+  if (!fs.existsSync(f)) return [];
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch(e) { return []; }
+}
+function saveTickets(tenantDataId, tickets) {
+  fs.writeFileSync(ticketsFile(tenantDataId), JSON.stringify(tickets, null, 2));
+}
+function nextTicketId(tickets) {
+  const year = new Date().getFullYear();
+  const existing = tickets
+    .map(t => { const m = String(t.id||'').match(/^(\d{4})-(\d+)$/); return m ? parseInt(m[2]) : 0; })
+    .filter(n => tickets.find(t => String(t.id||'').startsWith(year+'-')));
+  const nums = tickets
+    .map(t => { const m = String(t.id||'').match(/^\d{4}-(\d+)$/); return m && String(t.id).startsWith(year+'-') ? parseInt(m[1]) : 0; });
+  const max = nums.length ? Math.max(...nums) : 0;
+  return year + '-' + String(max + 1).padStart(3, '0');
+}
+
+const STATUS_MESSAGES = {
+  'פתוח':               (t) => `קיבלנו את הדיווח שלך על ${t.category}. מספר טיקט: #${t.id}.\nנעדכן אותך בהתקדמות 🙏`,
+  'בטיפול':             (t) => `הטיקט #${t.id} (${t.category}) נמצא בטיפול.${t.lastNote?' '+t.lastNote:''}`,
+  'ממתין לחומרים':      (t) => `הטיקט #${t.id} (${t.category}) ממתין לחומרים/ספק.${t.lastNote?' '+t.lastNote:''}`,
+  'נקבע תור':           (t) => `נקבע תור לטיפול בטיקט #${t.id} (${t.category}).${t.lastNote?' '+t.lastNote:''}`,
+  'נסגר':               (t) => `הטיקט #${t.id} (${t.category}) נסגר. ✅${t.lastNote?' '+t.lastNote:''}\nאם הבעיה חזרה — פתח טיקט חדש.`,
+  'לא רלוונטי':         (t) => `הטיקט #${t.id} (${t.category}) סומן כלא רלוונטי.${t.lastNote?' '+t.lastNote:''}`
+};
+
+// GET /api/tickets — list all tickets (ועד)
+app.get('/api/tickets', authMiddleware, (req, res) => {
+  let tickets = loadTickets(req.user.tenantId);
+  // Clean tickets older than 12 months
+  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear() - 1);
+  tickets = tickets.filter(t => new Date(t.createdAt) > cutoff);
+  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES, statuses: TICKET_STATUSES });
+});
+
+// POST /api/tickets — open new ticket (ועד)
+app.post('/api/tickets', authMiddleware, (req, res) => {
+  const { category, description, location, floor, entrance, priority, vendor, openedByVaad, tenantId: reportingTenantId } = req.body;
+  if (!category || !description) return res.json({ ok: false, error: 'חסרים פרטים' });
+  const tickets = loadTickets(req.user.tenantId);
+  const d = loadTenantData(req.user.tenantId);
+  const tenant = reportingTenantId ? d.tenants.find(t => String(t.id) === String(reportingTenantId)) : null;
+  const ticket = {
+    id:          nextTicketId(tickets),
+    category:    category,
+    description: description,
+    location:    location || 'כללי', // 'דירה' | 'כללי'
+    floor:       floor || '',
+    entrance:    entrance || '',
+    priority:    priority || 'רגיל', // 'דחוף' | 'רגיל'
+    status:      'פתוח',
+    vendor:      vendor || '',
+    cost:        null,
+    tenantId:    reportingTenantId || null,
+    tenantName:  tenant ? tenant.name : (openedByVaad ? 'ועד הבית' : ''),
+    tenantPhone: tenant ? tenant.phone : '',
+    openedByVaad: !!openedByVaad,
+    createdAt:   new Date().toISOString(),
+    updatedAt:   new Date().toISOString(),
+    lastNote:    '',
+    history:     [{ status: 'פתוח', note: '', ts: new Date().toISOString(), by: 'ועד' }]
+  };
+  tickets.unshift(ticket);
+  saveTickets(req.user.tenantId, tickets);
+  // Send WA to tenant if has phone
+  if (ticket.tenantPhone) {
+    const msg = STATUS_MESSAGES['פתוח'](ticket);
+    sendWaMsg(req.user.tenantId, ticket.tenantPhone, msg).catch(() => {});
+  }
+  res.json({ ok: true, ticket });
+});
+
+// PATCH /api/tickets/:id — update status/note/cost (ועד)
+app.patch('/api/tickets/:id', authMiddleware, async (req, res) => {
+  const tickets = loadTickets(req.user.tenantId);
+  const ticket  = tickets.find(t => t.id === req.params.id);
+  if (!ticket) return res.status(404).json({ ok: false, error: 'טיקט לא נמצא' });
+  const { status, note, cost, vendor, sendWa } = req.body;
+  const oldStatus = ticket.status;
+  if (status)  ticket.status   = status;
+  if (note !== undefined) ticket.lastNote = note;
+  if (cost  !== undefined) ticket.cost    = cost;
+  if (vendor !== undefined) ticket.vendor = vendor;
+  ticket.updatedAt = new Date().toISOString();
+  ticket.history.push({ status: ticket.status, note: note || '', ts: new Date().toISOString(), by: 'ועד' });
+  saveTickets(req.user.tenantId, tickets);
+  // Send WA if requested or status changed
+  if (ticket.tenantPhone && (sendWa || status !== oldStatus)) {
+    const msgFn = STATUS_MESSAGES[ticket.status];
+    if (msgFn) {
+      try { await sendWaMsg(req.user.tenantId, ticket.tenantPhone, msgFn(ticket)); }
+      catch(e) { console.error('[Tickets] WA send failed:', e.message); }
+    }
+  }
+  res.json({ ok: true, ticket });
+});
+
+// DELETE /api/tickets/:id — delete ticket (ועד)
+app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
+  let tickets = loadTickets(req.user.tenantId);
+  tickets = tickets.filter(t => t.id !== req.params.id);
+  saveTickets(req.user.tenantId, tickets);
+  res.json({ ok: true });
+});
+
+// POST /api/portal/ticket — tenant opens ticket via portal
+app.post('/api/portal/ticket', (req, res) => {
+  const { token, category, description, location, floor, entrance, priority } = req.body;
+  if (!token || !category || !description) return res.json({ ok: false, error: 'חסרים פרטים' });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  const d      = loadTenantData(entry.tenantDataId);
+  const tenant = d.tenants.find(t => String(t.id) === entry.tenantId);
+  if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+  const tickets = loadTickets(entry.tenantDataId);
+  const ticket = {
+    id:          nextTicketId(tickets),
+    category,
+    description,
+    location:    location || 'כללי',
+    floor:       floor || '',
+    entrance:    entrance || '',
+    priority:    priority || 'רגיל',
+    status:      'פתוח',
+    vendor:      '',
+    cost:        null,
+    tenantId:    entry.tenantId,
+    tenantName:  tenant.name,
+    tenantPhone: tenant.phone,
+    openedByVaad: false,
+    createdAt:   new Date().toISOString(),
+    updatedAt:   new Date().toISOString(),
+    lastNote:    '',
+    history:     [{ status: 'פתוח', note: '', ts: new Date().toISOString(), by: tenant.name }]
+  };
+  tickets.unshift(ticket);
+  saveTickets(entry.tenantDataId, tickets);
+  res.json({ ok: true, ticketId: ticket.id });
+});
+
+// GET /api/portal/tickets — tenant views own tickets via portal
+app.get('/api/portal/tickets', (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(401).json({ ok: false, error: 'חסר token' });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  let tickets = loadTickets(entry.tenantDataId);
+  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear() - 1);
+  tickets = tickets
+    .filter(t => String(t.tenantId) === entry.tenantId && new Date(t.createdAt) > cutoff)
+    .map(t => ({
+      id: t.id, category: t.category, description: t.description,
+      location: t.location, floor: t.floor, entrance: t.entrance,
+      priority: t.priority, status: t.status, cost: t.cost,
+      createdAt: t.createdAt, updatedAt: t.updatedAt, lastNote: t.lastNote
+    }));
+  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES });
+});
+
+// PATCH /api/portal/ticket/:id/close — tenant closes own ticket
+app.patch('/api/portal/ticket/:id/close', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(401).json({ ok: false });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false });
+  const tickets = loadTickets(entry.tenantDataId);
+  const ticket  = tickets.find(t => t.id === req.params.id && String(t.tenantId) === entry.tenantId);
+  if (!ticket) return res.status(404).json({ ok: false, error: 'טיקט לא נמצא' });
+  ticket.status    = 'נסגר';
+  ticket.lastNote  = req.body.note || 'נסגר על ידי הדייר';
+  ticket.updatedAt = new Date().toISOString();
+  ticket.history.push({ status: 'נסגר', note: ticket.lastNote, ts: new Date().toISOString(), by: entry.tenantId });
+  saveTickets(entry.tenantDataId, tickets);
+  res.json({ ok: true });
+});
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.6.0 – SaaS Server         ║');
+  console.log('║   VaadPro v2.7.0 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

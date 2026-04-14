@@ -414,6 +414,7 @@ function vpLogout() {
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
     <button class="tab-btn" onclick="switchTab('maintenance')">🏗️ תחזוקה <span class="tbadge red" id="tbM" style="display:none">0</span></button>
     <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
+    <button class="tab-btn" onclick="switchTab('tickets')">🔨 תקלות <span class="tbadge red" id="tbTk" style="display:none">0</span></button>
   </div>
 </div>
 
@@ -1239,6 +1240,125 @@ function vpLogout() {
     <div class="chart-note">💡 לשלוח לדיירים: השתמש ב"העתק סיכום" ← הדבק בהודעה, או שמור כתמונה ושלח ידנית</div>
   </div>
 </div>
+
+  <!-- ── TICKETS TAB ───────────────────────────────────────────── -->
+  <div class="tab-panel" id="tab-tickets">
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;gap:10px;">
+        🔨 תיעוד תקלות
+        <button class="btn btn-green btn-sm" onclick="tktOpenNew()" style="margin-right:auto;">+ תקלה חדשה</button>
+      </div>
+      <div class="card-body">
+        <!-- Filters -->
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+          <select id="tktFilterStatus" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+            <option value="">כל הסטטוסים</option>
+            <option>פתוח</option><option>בטיפול</option><option>ממתין לחומרים</option><option>נקבע תור</option><option>נסגר</option><option>לא רלוונטי</option>
+          </select>
+          <select id="tktFilterPriority" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+            <option value="">כל העדיפויות</option>
+            <option>דחוף</option><option>רגיל</option>
+          </select>
+          <select id="tktFilterCat" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+            <option value="">כל הקטגוריות</option>
+          </select>
+        </div>
+        <div id="tktList"><div class="empty"><div class="empty-icon">🔨</div><div>אין תקלות</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- New Ticket Modal -->
+  <div class="modal-bg" id="tktNewModal" style="display:none;">
+    <div class="modal" style="max-width:500px;">
+      <h2>🔨 תקלה חדשה</h2>
+      <div style="display:grid;gap:12px;">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label>קטגוריה *</label>
+            <select id="tktCat" style="width:100%;">
+              <option value="">בחר קטגוריה</option>
+            </select>
+          </div>
+          <div>
+            <label>עדיפות</label>
+            <select id="tktPriority" style="width:100%;">
+              <option value="רגיל">רגיל</option>
+              <option value="דחוף">🔴 דחוף</option>
+            </select>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label>מיקום</label>
+            <select id="tktLocation" onchange="tktToggleLocation()" style="width:100%;">
+              <option value="כללי">בניין כללי</option>
+              <option value="דירה">דירה ספציפית</option>
+            </select>
+          </div>
+          <div id="tktTenantWrap">
+            <label>דייר (אופציונלי)</label>
+            <select id="tktTenantId" style="width:100%;"><option value="">ועד הבית</option></select>
+          </div>
+        </div>
+        <div id="tktFloorWrap" style="display:none;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div><label>קומה</label><input type="text" id="tktFloor" placeholder="לדוגמה: 3"></div>
+          <div><label>כניסה</label><input type="text" id="tktEntrance" placeholder="לדוגמה: א׳"></div>
+        </div>
+        <div>
+          <label>תיאור התקלה *</label>
+          <textarea id="tktDesc" style="min-height:80px;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;resize:vertical;" placeholder="תאר את התקלה בפירוט..."></textarea>
+        </div>
+        <div>
+          <label>ספק/קבלן (אופציונלי)</label>
+          <input type="text" id="tktVendor" placeholder="שם הספק">
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px;">
+        <button class="btn btn-green" onclick="tktSubmitNew()">פתח טיקט</button>
+        <button class="btn btn-secondary" onclick="closeModal('tktNewModal')">ביטול</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit Ticket Modal -->
+  <div class="modal-bg" id="tktEditModal" style="display:none;">
+    <div class="modal" style="max-width:520px;">
+      <h2>✏️ עדכון טיקט <span id="tktEditId" style="color:var(--accent);"></span></h2>
+      <div style="display:grid;gap:12px;">
+        <div id="tktEditInfo" style="background:var(--surface2);border-radius:8px;padding:12px;font-size:0.85rem;color:var(--text2);"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label>סטטוס</label>
+            <select id="tktEditStatus" style="width:100%;">
+              <option>פתוח</option><option>בטיפול</option><option>ממתין לחומרים</option><option>נקבע תור</option><option>נסגר</option><option>לא רלוונטי</option>
+            </select>
+          </div>
+          <div>
+            <label>עלות טיפול (₪)</label>
+            <input type="number" id="tktEditCost" placeholder="ריק = לא ידוע" min="0">
+          </div>
+        </div>
+        <div>
+          <label>ספק/קבלן</label>
+          <input type="text" id="tktEditVendor" placeholder="שם הספק">
+        </div>
+        <div>
+          <label>הערה לדייר (תישלח ב-WA)</label>
+          <textarea id="tktEditNote" style="min-height:70px;width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;resize:vertical;" placeholder="הערה שתישלח לדייר..."></textarea>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+          <input type="checkbox" id="tktEditSendWa" checked> שלח עדכון בוואטסאפ לדייר
+        </label>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px;">
+        <button class="btn btn-green" onclick="tktSubmitEdit()">שמור</button>
+        <button class="btn btn-danger-soft" onclick="tktDelete()">🗑️ מחק</button>
+        <button class="btn btn-secondary" onclick="closeModal('tktEditModal')">ביטול</button>
+      </div>
+    </div>
+  </div>
+
 <div id="toast"></div>
 
 <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
@@ -1332,6 +1452,7 @@ function switchTab(name) {
   }
   if (name === 'troubleshoot') setTimeout(tsInit, 50);
   if (name === 'maintenance') { mntLoad(); }
+  if (name === 'tickets') { tktLoad(); }
   if (name === 'settings') setTimeout(shareInitMsg, 50);
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
@@ -4149,6 +4270,171 @@ async function trendExportHTML() {
 }
 
 // ────────────────────────────────────────────────────────────────
+
+
+// ── Tickets ──────────────────────────────────────────────────────
+let tktData = [];
+let tktCategories = [];
+let tktCurrentId = null;
+
+const TKT_STATUS_COLOR = {
+  'פתוח':            '#f59e0b',
+  'בטיפול':          '#3b82f6',
+  'ממתין לחומרים':   '#8b5cf6',
+  'נקבע תור':        '#06b6d4',
+  'נסגר':            '#22c55e',
+  'לא רלוונטי':      '#6b7280'
+};
+
+async function tktLoad() {
+  try {
+    const r = await fetch(API+'/tickets');
+    const d = await r.json();
+    if (!d.ok) return;
+    tktData = d.tickets || [];
+    tktCategories = d.categories || [];
+    // Populate category filters
+    const fc = document.getElementById('tktFilterCat');
+    if (fc) { fc.innerHTML = '<option value="">כל הקטגוריות</option>' + tktCategories.map(c => '<option>'+c+'</option>').join(''); }
+    const nc = document.getElementById('tktCat');
+    if (nc) { nc.innerHTML = '<option value="">בחר קטגוריה</option>' + tktCategories.map(c => '<option>'+c+'</option>').join(''); }
+    // Populate tenant select
+    const ts = document.getElementById('tktTenantId');
+    if (ts) { ts.innerHTML = '<option value="">ועד הבית</option>' + (data.tenants||[]).map(t => '<option value="'+t.id+'">'+t.name+'</option>').join(''); }
+    tktRender();
+    // Update badge
+    const open = tktData.filter(t => t.status !== 'נסגר' && t.status !== 'לא רלוונטי').length;
+    const badge = document.getElementById('tbTk');
+    if (badge) { badge.textContent = open; badge.style.display = open > 0 ? 'inline' : 'none'; }
+  } catch(e) { console.error('tktLoad:', e); }
+}
+
+function tktRender() {
+  const statusF   = document.getElementById('tktFilterStatus')?.value || '';
+  const priorityF = document.getElementById('tktFilterPriority')?.value || '';
+  const catF      = document.getElementById('tktFilterCat')?.value || '';
+  let list = tktData.filter(t => {
+    if (statusF   && t.status   !== statusF)   return false;
+    if (priorityF && t.priority !== priorityF) return false;
+    if (catF      && t.category !== catF)      return false;
+    return true;
+  });
+  const el = document.getElementById('tktList');
+  if (!list.length) { el.innerHTML = '<div class="empty"><div class="empty-icon">🔨</div><div>אין תקלות התואמות את הסינון</div></div>'; return; }
+  el.innerHTML = list.map(t => {
+    const color = TKT_STATUS_COLOR[t.status] || '#818cf8';
+    const urgent = t.priority === 'דחוף' ? '<span style="background:rgba(248,81,73,.15);color:#f85149;border-radius:4px;padding:1px 7px;font-size:0.72rem;font-weight:700;margin-left:6px;">🔴 דחוף</span>' : '';
+    const cost = t.cost !== null && t.cost !== '' ? '<span style="color:var(--accent);font-size:0.8rem;">₪'+t.cost+'</span>' : '';
+    const loc = t.location === 'דירה' ? (t.floor?'קומה '+t.floor+' ':''+(t.entrance?'כניסה '+t.entrance:'')) : 'בניין כללי';
+    const d = new Date(t.createdAt).toLocaleDateString('he-IL');
+    return '<div style="border:1px solid var(--border);border-right:3px solid '+color+';border-radius:8px;padding:12px 14px;margin-bottom:8px;cursor:pointer;background:var(--surface);" onclick="tktOpenEdit(''+t.id+'')">'+
+      '<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;">'+
+        '<span style="font-size:0.75rem;font-weight:700;color:'+color+';">'+t.status+'</span>'+
+        urgent +
+        '<span style="font-size:0.75rem;color:var(--text3);margin-right:auto;">#'+t.id+' · '+d+'</span>'+
+        cost +
+      '</div>'+
+      '<div style="font-weight:700;font-size:0.9rem;margin-bottom:2px;">'+t.category+' — '+t.description.substring(0,60)+(t.description.length>60?'...':'')+'</div>'+
+      '<div style="font-size:0.78rem;color:var(--text3);">'+
+        (t.tenantName?'👤 '+t.tenantName+' · ':'')+
+        '📍 '+loc+
+        (t.vendor?' · 🔧 '+t.vendor:'')+
+      '</div>'+
+    '</div>';
+  }).join('');
+}
+
+function tktToggleLocation() {
+  const isFlat = document.getElementById('tktLocation').value === 'דירה';
+  document.getElementById('tktFloorWrap').style.display = isFlat ? 'grid' : 'none';
+}
+
+function tktOpenNew() {
+  document.getElementById('tktCat').value = '';
+  document.getElementById('tktPriority').value = 'רגיל';
+  document.getElementById('tktLocation').value = 'כללי';
+  document.getElementById('tktFloorWrap').style.display = 'none';
+  document.getElementById('tktFloor').value = '';
+  document.getElementById('tktEntrance').value = '';
+  document.getElementById('tktDesc').value = '';
+  document.getElementById('tktVendor').value = '';
+  document.getElementById('tktTenantId').value = '';
+  // Repopulate tenants
+  const ts = document.getElementById('tktTenantId');
+  ts.innerHTML = '<option value="">ועד הבית</option>' + (data.tenants||[]).map(t => '<option value="'+t.id+'">'+t.name+'</option>').join('');
+  openModal('tktNewModal');
+}
+
+async function tktSubmitNew() {
+  const cat  = document.getElementById('tktCat').value;
+  const desc = document.getElementById('tktDesc').value.trim();
+  if (!cat)  { toast('בחר קטגוריה', 'error'); return; }
+  if (!desc) { toast('הוסף תיאור', 'error'); return; }
+  const tenantIdVal = document.getElementById('tktTenantId').value;
+  const body = {
+    category:    cat,
+    description: desc,
+    location:    document.getElementById('tktLocation').value,
+    floor:       document.getElementById('tktFloor').value.trim(),
+    entrance:    document.getElementById('tktEntrance').value.trim(),
+    priority:    document.getElementById('tktPriority').value,
+    vendor:      document.getElementById('tktVendor').value.trim(),
+    tenantId:    tenantIdVal || null,
+    openedByVaad: !tenantIdVal
+  };
+  const r = await fetch(API+'/tickets', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+  const d = await r.json();
+  if (d.ok) { closeModal('tktNewModal'); tktData.unshift(d.ticket); tktRender(); toast('✅ טיקט #'+d.ticket.id+' נפתח', 'success'); }
+  else toast('שגיאה: '+d.error, 'error');
+}
+
+function tktOpenEdit(id) {
+  const t = tktData.find(x => x.id === id);
+  if (!t) return;
+  tktCurrentId = id;
+  document.getElementById('tktEditId').textContent = '#'+t.id;
+  document.getElementById('tktEditStatus').value = t.status;
+  document.getElementById('tktEditCost').value = t.cost !== null ? t.cost : '';
+  document.getElementById('tktEditVendor').value = t.vendor || '';
+  document.getElementById('tktEditNote').value = '';
+  document.getElementById('tktEditSendWa').checked = !!t.tenantPhone;
+  const d = new Date(t.createdAt).toLocaleDateString('he-IL');
+  const loc = t.location === 'דירה' ? 'קומה '+(t.floor||'?')+(t.entrance?' כניסה '+t.entrance:'') : 'בניין כללי';
+  document.getElementById('tktEditInfo').innerHTML =
+    '<strong>'+t.category+'</strong> · '+t.description+'<br>'+
+    '📍 '+loc+(t.tenantName?' · 👤 '+t.tenantName:'')+' · 📅 '+d+
+    (t.lastNote?'<br>💬 הערה אחרונה: '+t.lastNote:'');
+  openModal('tktEditModal');
+}
+
+async function tktSubmitEdit() {
+  const id     = tktCurrentId;
+  const status = document.getElementById('tktEditStatus').value;
+  const note   = document.getElementById('tktEditNote').value.trim();
+  const costV  = document.getElementById('tktEditCost').value;
+  const vendor = document.getElementById('tktEditVendor').value.trim();
+  const sendWa = document.getElementById('tktEditSendWa').checked;
+  const r = await fetch(API+'/tickets/'+id, {
+    method:'PATCH', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ status, note, cost: costV !== '' ? parseFloat(costV) : null, vendor, sendWa })
+  });
+  const d = await r.json();
+  if (d.ok) {
+    const idx = tktData.findIndex(t => t.id === id);
+    if (idx >= 0) tktData[idx] = d.ticket;
+    closeModal('tktEditModal'); tktRender(); toast('✅ טיקט עודכן', 'success');
+  } else toast('שגיאה', 'error');
+}
+
+async function tktDelete() {
+  if (!confirm('למחוק טיקט #'+tktCurrentId+'?')) return;
+  const r = await fetch(API+'/tickets/'+tktCurrentId, { method:'DELETE' });
+  const d = await r.json();
+  if (d.ok) {
+    tktData = tktData.filter(t => t.id !== tktCurrentId);
+    closeModal('tktEditModal'); tktRender(); toast('טיקט נמחק', 'success');
+  }
+}
 
 // ── פתרון בעיות ─────────────────────────────────────────────
 const TS_ITEMS = [

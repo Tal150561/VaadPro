@@ -226,11 +226,17 @@
 </head>
 <body>
 
-<div class="top-bar">
-  <div class="logo-icon">🏠</div>
-  <div>
-    <div class="logo-text">Vaad<span>Pro</span></div>
-    <div class="logo-sub">פורטל דיירים</div>
+<div class="top-bar" style="justify-content:space-between;">
+  <div style="display:flex;align-items:center;gap:10px;">
+    <div class="logo-icon">🏠</div>
+    <div>
+      <div class="logo-text">Vaad<span>Pro</span></div>
+      <div class="logo-sub">פורטל דיירים</div>
+    </div>
+  </div>
+  <div style="display:flex;gap:6px;">
+    <button id="tabPayBtn" onclick="portalSwitchTab('payments')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-family:'Heebo',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;">💳 תשלומים</button>
+    <button id="tabTktBtn" onclick="portalSwitchTab('tickets')" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-family:'Heebo',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;">🔨 תקלות</button>
   </div>
 </div>
 
@@ -247,6 +253,7 @@
   </div>
 
   <div id="portalContent" style="display:none;">
+    <div id="paymentsSection">
     <!-- Greeting -->
     <div class="greeting">
       <div class="greeting-icon">👋</div>
@@ -276,6 +283,62 @@
     <div class="section-title">היסטוריית תשלומים — 12 חודשים אחרונים</div>
     <div class="history-list" id="historyList"></div>
 
+    </div><!-- /paymentsSection -->
+
+    <!-- Tickets Section -->
+    <div id="ticketsSection" style="display:none;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="font-size:0.72rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text3);">תקלות שלי</div>
+        <button onclick="tktPortalOpenNew()" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">+ דווח תקלה</button>
+      </div>
+      <div id="tktPortalList" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">
+        <div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">טוען...</div>
+      </div>
+
+      <!-- New ticket form -->
+      <div id="tktPortalForm" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-top:16px;">
+        <div style="font-weight:700;margin-bottom:14px;">🔨 דיווח תקלה חדשה</div>
+        <div style="display:grid;gap:12px;">
+          <div>
+            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">קטגוריה *</div>
+            <select id="tktPCat" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;"></select>
+          </div>
+          <div>
+            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">מיקום</div>
+            <select id="tktPLocation" onchange="tktPortalToggleLoc()" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;">
+              <option value="כללי">בניין כללי</option>
+              <option value="דירה">הדירה שלי</option>
+            </select>
+          </div>
+          <div id="tktPFloorWrap" style="display:none;display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+            <div>
+              <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">קומה</div>
+              <input id="tktPFloor" type="text" placeholder="לדוגמה: 3" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;">
+            </div>
+            <div>
+              <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">כניסה</div>
+              <input id="tktPEntrance" type="text" placeholder="לדוגמה: א׳" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;">
+            </div>
+          </div>
+          <div>
+            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">עדיפות</div>
+            <select id="tktPPriority" style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;">
+              <option value="רגיל">רגיל</option>
+              <option value="דחוף">🔴 דחוף</option>
+            </select>
+          </div>
+          <div>
+            <div style="font-size:0.78rem;color:var(--text2);margin-bottom:5px;">תיאור התקלה *</div>
+            <textarea id="tktPDesc" placeholder="תאר את התקלה בפירוט..." style="width:100%;min-height:80px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;padding:9px 12px;resize:vertical;"></textarea>
+          </div>
+          <div style="display:flex;gap:10px;">
+            <button onclick="tktPortalSubmit()" style="flex:1;background:var(--accent);color:#000;border:none;border-radius:8px;padding:11px;font-family:'Heebo',sans-serif;font-size:0.9rem;font-weight:700;cursor:pointer;">שלח דיווח</button>
+            <button onclick="document.getElementById('tktPortalForm').style.display='none'" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:8px;padding:11px 18px;font-family:'Heebo',sans-serif;font-size:0.9rem;cursor:pointer;">ביטול</button>
+          </div>
+        </div>
+      </div>
+    </div><!-- /ticketsSection -->
+
     <div class="footer">
       <a href="https://vaadpro.org">VaadPro — ניהול ועד הבית החכם</a>
     </div>
@@ -284,6 +347,18 @@
 
 <script>
 const token = new URLSearchParams(window.location.search).get('token');
+let portalCurrentTab = 'payments';
+
+function portalSwitchTab(tab) {
+  portalCurrentTab = tab;
+  document.getElementById('paymentsSection').style.display = tab === 'payments' ? 'block' : 'none';
+  document.getElementById('ticketsSection').style.display  = tab === 'tickets'  ? 'block' : 'none';
+  document.getElementById('tabPayBtn').style.background = tab === 'payments' ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
+  document.getElementById('tabPayBtn').style.color      = tab === 'payments' ? 'var(--accent)'        : 'var(--text2)';
+  document.getElementById('tabTktBtn').style.background = tab === 'tickets'  ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
+  document.getElementById('tabTktBtn').style.color      = tab === 'tickets'  ? 'var(--accent)'        : 'var(--text2)';
+  if (tab === 'tickets') tktPortalLoad();
+}
 
 let allData = null;
 
@@ -448,6 +523,107 @@ function render(d) {
 }
 
 load();
+
+// ── Tickets (portal) ─────────────────────────────────────────────
+let tktPortalCategories = [];
+
+async function tktPortalLoad() {
+  try {
+    const r = await fetch('/api/portal/tickets?token=' + token);
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('tktPortalList').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);">שגיאה בטעינת תקלות</div>'; return; }
+    tktPortalCategories = d.categories || [];
+    // Populate category select
+    const sel = document.getElementById('tktPCat');
+    if (sel) sel.innerHTML = '<option value="">בחר קטגוריה</option>' + tktPortalCategories.map(c => '<option>'+c+'</option>').join('');
+    renderTktPortalList(d.tickets || []);
+  } catch(e) {
+    document.getElementById('tktPortalList').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);">לא ניתן לטעון תקלות</div>';
+  }
+}
+
+const TKT_STATUS_COLOR_P = {
+  'פתוח':'#f59e0b','בטיפול':'#3b82f6','ממתין לחומרים':'#8b5cf6',
+  'נקבע תור':'#06b6d4','נסגר':'#22c55e','לא רלוונטי':'#6b7280'
+};
+
+function renderTktPortalList(tickets) {
+  const el = document.getElementById('tktPortalList');
+  if (!tickets.length) {
+    el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">אין תקלות מדווחות</div>';
+    return;
+  }
+  el.innerHTML = tickets.map(function(t) {
+    const color = TKT_STATUS_COLOR_P[t.status] || '#818cf8';
+    const d = new Date(t.createdAt).toLocaleDateString('he-IL');
+    const urgent = t.priority === 'דחוף' ? ' · <span style="color:#f85149;font-weight:700;">🔴 דחוף</span>' : '';
+    const cost = t.cost !== null && t.cost !== '' ? '<div style="font-size:0.8rem;color:var(--accent);margin-top:4px;">עלות טיפול: ₪'+t.cost+'</div>' : '';
+    const note = t.lastNote ? '<div style="font-size:0.78rem;color:var(--text2);margin-top:4px;">💬 '+t.lastNote+'</div>' : '';
+    const canClose = t.status !== 'נסגר' && t.status !== 'לא רלוונטי';
+    return '<div style="padding:14px 16px;border-bottom:1px solid var(--border);border-right:3px solid '+color+';">'+
+      '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">'+
+        '<span style="font-size:0.78rem;font-weight:700;color:'+color+';">'+t.status+'</span>'+
+        '<span style="font-size:0.72rem;color:var(--text3);">#'+t.id+' · '+d+'</span>'+
+      '</div>'+
+      '<div style="font-weight:700;font-size:0.88rem;">'+t.category+urgent+'</div>'+
+      '<div style="font-size:0.8rem;color:var(--text2);margin-top:2px;">'+t.description+'</div>'+
+      cost + note +
+      (canClose ? '<button onclick="tktPortalClose(''+t.id+'')" style="margin-top:8px;background:rgba(248,81,73,.1);color:#f85149;border:1px solid rgba(248,81,73,.2);border-radius:6px;padding:4px 12px;font-family:'Heebo',sans-serif;font-size:0.78rem;cursor:pointer;">✓ סגור תקלה</button>' : '') +
+    '</div>';
+  }).join('');
+}
+
+function tktPortalOpenNew() {
+  document.getElementById('tktPortalForm').style.display = 'block';
+  document.getElementById('tktPortalForm').scrollIntoView({ behavior:'smooth' });
+}
+
+function tktPortalToggleLoc() {
+  const isFlat = document.getElementById('tktPLocation').value === 'דירה';
+  document.getElementById('tktPFloorWrap').style.display = isFlat ? 'grid' : 'none';
+}
+
+async function tktPortalSubmit() {
+  const cat  = document.getElementById('tktPCat').value;
+  const desc = document.getElementById('tktPDesc').value.trim();
+  if (!cat)  { alert('בחר קטגוריה'); return; }
+  if (!desc) { alert('הוסף תיאור לתקלה'); return; }
+  const body = {
+    token,
+    category:    cat,
+    description: desc,
+    location:    document.getElementById('tktPLocation').value,
+    floor:       document.getElementById('tktPFloor').value.trim(),
+    entrance:    document.getElementById('tktPEntrance').value.trim(),
+    priority:    document.getElementById('tktPPriority').value
+  };
+  try {
+    const r = await fetch('/api/portal/ticket', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (d.ok) {
+      document.getElementById('tktPortalForm').style.display = 'none';
+      document.getElementById('tktPDesc').value = '';
+      document.getElementById('tktPCat').value = '';
+      tktPortalLoad();
+      alert('✅ הדיווח נשלח! מספר טיקט: #' + d.ticketId);
+    } else {
+      alert('שגיאה: ' + (d.error || 'נסה שוב'));
+    }
+  } catch(e) { alert('שגיאת תקשורת, נסה שוב'); }
+}
+
+async function tktPortalClose(id) {
+  if (!confirm('לסגור את הטיקט? (הבעיה נפתרה)')) return;
+  try {
+    const r = await fetch('/api/portal/ticket/'+id+'/close', {
+      method:'PATCH', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ token, note: 'נסגר על ידי הדייר' })
+    });
+    const d = await r.json();
+    if (d.ok) tktPortalLoad();
+    else alert('שגיאה בסגירת הטיקט');
+  } catch(e) { alert('שגיאת תקשורת'); }
+}
 </script>
 </body>
 </html>
