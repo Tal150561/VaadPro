@@ -430,7 +430,8 @@ async function load() {
 
 function showError(msg) {
   document.getElementById('loadingState').style.display = 'none';
-  document.getElementById('errorMsg').textContent = msg;
+  document.getElementById('portalContent').style.display = 'none';
+  document.getElementById('errorMsg').innerHTML = msg + '<br><br><span style="font-size:0.82rem;color:var(--text3);">פתח את האפליקציה ושלח לינק חדש מטאב תשלומים</span>';
   document.getElementById('errorState').style.display = 'block';
 }
 
