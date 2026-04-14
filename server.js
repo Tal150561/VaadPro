@@ -1670,7 +1670,75 @@ async function runMaintenanceCron() {
   if (alertsSent > 0) console.log(`[MaintenanceCron] נשלחו ${alertsSent} התראות תחזוקה`);
 }
 
-// הרץ cron כל יום ב-08:00
+// ── Auto-send cron — runs every minute, checks each tenant's schedule ──
+async function runAutoSendCron() {
+  const now = new Date();
+  const currentDay  = now.getDate();
+  const currentHour = now.getHours();
+  const currentMin  = now.getMinutes();
+  const users = loadUsers();
+
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    if (user.plan === 'suspended') continue;
+
+    try {
+      const d = loadTenantData(user.tenantId);
+      const config = d.config || {};
+      const sendDay    = parseInt(config.sendDay)    || 1;
+      const sendHour   = parseInt(config.sendHour)   || 9;
+      const sendMinute = parseInt(config.sendMinute) || 0;
+
+      // Check if now matches the configured day + hour + minute (within same minute)
+      if (currentDay !== sendDay)   continue;
+      if (currentHour !== sendHour) continue;
+      if (currentMin  !== sendMinute) continue;
+
+      // Already sent this month? Check sentLog for any entry this month
+      const month  = getEffectiveMonth(config);
+      const mk     = getMonthKey(config);
+      const alreadySentThisMonth = Object.keys(d.sentLog || {}).some(k =>
+        k.endsWith('_' + month) && String(d.sentLog[k]).startsWith('sent_')
+      );
+      if (alreadySentThisMonth) {
+        console.log(`[AutoSend] ${user.email} — already sent for ${month}, skipping`);
+        continue;
+      }
+
+      // Send only to unpaid tenants
+      const globalAmount = config.amount || 300;
+      const tmpl = config.template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
+      let sent = 0;
+
+      for (const tenant of (d.tenants || [])) {
+        const key = tenant.id + '_' + month;
+        if (d.sentLog[key]) continue; // already paid or reminded — skip
+        const amount = tenant.customAmount || globalAmount;
+        const msg = tmpl.replace(/{שם}/g, tenant.name).replace(/{חודש}/g, month).replace(/{סכום}/g, amount);
+        try {
+          await sendWaMsg(user.tenantId, tenant.phone, msg);
+          d.sentLog[key] = 'sent_' + new Date().toISOString();
+          recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
+          sent++;
+          await new Promise(r => setTimeout(r, 1200));
+        } catch(e) {
+          console.error(`[AutoSend] ${user.email} → ${tenant.name}: ${e.message}`);
+        }
+      }
+
+      if (sent > 0) {
+        saveTenantData(user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+        console.log(`[AutoSend] ✅ ${user.email} — sent to ${sent} unpaid tenants for ${month}`);
+      } else {
+        console.log(`[AutoSend] ${user.email} — no unpaid tenants for ${month}`);
+      }
+    } catch(e) {
+      console.error(`[AutoSend] error for ${user.email}:`, e.message);
+    }
+  }
+}
+
+// הרץ cron כל יום ב-08:00 (maintenance) + כל דקה (auto-send scheduler)
 function scheduleDailyCron() {
   const now  = new Date();
   const next = new Date();
@@ -1684,6 +1752,12 @@ function scheduleDailyCron() {
   console.log(`[MaintenanceCron] יופעל ב-${next.toLocaleTimeString('he-IL')}`);
 }
 scheduleDailyCron();
+
+// Auto-send: check every minute
+setInterval(runAutoSendCron, 60 * 1000);
+// Also run once at startup (after 10s) to catch any missed sends
+setTimeout(runAutoSendCron, 10 * 1000);
+console.log('[AutoSend] scheduler active — checking every minute');
 
 
 // ── שכחתי סיסמה ─────────────────────────────────────────────────
@@ -2402,7 +2476,7 @@ app.get('/api/portal/:token', (req, res) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.5.9 – SaaS Server         ║');
+  console.log('║   VaadPro v2.6.0 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
