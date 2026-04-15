@@ -118,6 +118,7 @@
   #toast.error{background:var(--danger);color:#fff;border-color:var(--danger);}
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;display:flex;align-items:center;justify-content:center;opacity:0;pointer-events:none;transition:opacity .25s;}
   .modal-overlay.show{opacity:1;pointer-events:all;}
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:100;display:none;}
   .modal{background:var(--surface);border:1px solid var(--border);border-radius:16px;padding:30px;max-width:360px;width:90%;text-align:center;transform:scale(.9);transition:transform .25s;}
   .modal-overlay.show .modal{transform:scale(1);}
   .modal h2{font-size:1.25rem;margin-bottom:8px;}
@@ -413,8 +414,8 @@ function vpLogout() {
     <button class="tab-btn" onclick="switchTab('bulletin')">📣 הודעות ועד הבית</button>
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
     <button class="tab-btn" onclick="switchTab('maintenance')">🏗️ תחזוקה <span class="tbadge red" id="tbM" style="display:none">0</span></button>
-    <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
     <button class="tab-btn" onclick="switchTab('tickets')">🔨 תקלות <span class="tbadge red" id="tbTk" style="display:none">0</span></button>
+    <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
   </div>
 </div>
 
@@ -1269,7 +1270,7 @@ function vpLogout() {
   </div>
 
   <!-- New Ticket Modal -->
-  <div class="modal-bg" id="tktNewModal" style="display:none;">
+  <div class="modal-bg" id="tktNewModal" style="display:none;" onclick="if(event.target===this)closeModal('tktNewModal')">
     <div class="modal" style="max-width:500px;">
       <h2>🔨 תקלה חדשה</h2>
       <div style="display:grid;gap:12px;">
@@ -1322,7 +1323,7 @@ function vpLogout() {
   </div>
 
   <!-- Edit Ticket Modal -->
-  <div class="modal-bg" id="tktEditModal" style="display:none;">
+  <div class="modal-bg" id="tktEditModal" style="display:none;" onclick="if(event.target===this)closeModal('tktEditModal')">
     <div class="modal" style="max-width:520px;">
       <h2>✏️ עדכון טיקט <span id="tktEditId" style="color:var(--accent);"></span></h2>
       <div style="display:grid;gap:12px;">
@@ -2138,6 +2139,20 @@ function getEffectiveMonth() {
   return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
 }
 
+function openModal(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.style.display = 'flex';
+  el.style.alignItems = 'flex-start';
+  el.style.justifyContent = 'center';
+  el.style.padding = '20px';
+  el.style.overflowY = 'auto';
+}
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (el) el.style.display = 'none';
+}
+
 function togglePaySelectAll(cb) {
   document.querySelectorAll('.pay-select').forEach(function(c){ c.checked = cb.checked; });
 }
@@ -2181,21 +2196,35 @@ async function sendPortalLink(tenantId, tenantName) {
       body: JSON.stringify({ tenantId: String(tenantId) })
     });
     const d = await r.json();
-    if (!d.ok) { toast('שגיאה: ' + d.error, 'error'); return; }
+    if (!d.ok) {
+      // Token failed — still try to copy URL if partial
+      toast('שגיאה ביצירת לינק: ' + d.error, 'error');
+      return;
+    }
     const tenant = data.tenants.find(function(t){ return t.id == tenantId; });
     const msg = 'שלום ' + tenantName + '! 👋\nהנה הלינק האישי שלך לצפייה בסטטוס התשלומים:\n' + d.url + '\n\n💡 שמור את הלינק הזה — הוא תמיד עדכני\n📱 עובד מהטלפון ומהמחשב\n🔖 מומלץ לשמור כסימניה';
+    // Try WA first
     if (tenant && tenant.phone) {
-      const sendR = await fetch(API+'/send-message', {
-        method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({ phone: tenant.phone, message: msg })
-      });
-      const sd = await sendR.json();
-      if (sd.ok) { toast('✅ לינק נשלח ל-' + tenantName + ' בוואטסאפ!', 'success'); return; }
+      try {
+        const sendR = await fetch(API+'/send-message', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ phone: tenant.phone, message: msg })
+        });
+        const sd = await sendR.json();
+        if (sd.ok) { toast('✅ לינק נשלח ל-' + tenantName + ' בוואטסאפ!', 'success'); return; }
+      } catch(waErr) { /* WA not connected, fall through to clipboard */ }
     }
     // Fallback - copy to clipboard
-    try { await navigator.clipboard.writeText(d.url); toast('📋 לינק הועתק — שלח ידנית ל-' + tenantName, 'success'); }
-    catch(e2) { toast('🔗 ' + d.url, 'success'); }
-  } catch(e) { toast('שגיאה בשליחת לינק', 'error'); }
+    try {
+      await navigator.clipboard.writeText(d.url);
+      toast('📋 לינק הועתק ללוח — שלח ידנית ל-' + tenantName, 'success');
+    } catch(e2) {
+      // Last resort - show in toast
+      prompt('העתק את הלינק:', d.url);
+    }
+  } catch(e) {
+    toast('שגיאת רשת: ' + e.message, 'error');
+  }
 }
 
 function render() {
