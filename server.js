@@ -2447,6 +2447,10 @@ app.delete('/api/portal/tokens', authMiddleware, (req, res) => {
 });
 
 // Debug endpoint — check token status without exposing tenant data (admin-only via ADMIN_JWT_SECRET)
+// ── IMPORTANT: All specific /api/portal/* routes must be declared BEFORE
+//    the wildcard GET /api/portal/:token, otherwise Express will match
+//    e.g. "tickets" as the :token param and return "לינק לא תקין".
+
 app.get('/api/portal/debug/:token', (req, res) => {
   const adminToken = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
   let isAdmin = false;
@@ -2463,6 +2467,80 @@ app.get('/api/portal/debug/:token', (req, res) => {
     tenantDataId: isAdmin ? entry.tenantDataId : '***',
     total: Object.keys(tokens).length
   });
+});
+
+// POST /api/portal/ticket — tenant opens ticket via portal
+app.post('/api/portal/ticket', (req, res) => {
+  const { token, category, description, location, floor, entrance, priority } = req.body;
+  if (!token || !category || !description) return res.json({ ok: false, error: 'חסרים פרטים' });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  const d      = loadTenantData(entry.tenantDataId);
+  const tenant = d.tenants.find(t => String(t.id) === entry.tenantId);
+  if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+  const tickets = loadTickets(entry.tenantDataId);
+  const ticket = {
+    id:          nextTicketId(tickets),
+    category,
+    description,
+    location:    location || 'כללי',
+    floor:       floor || '',
+    entrance:    entrance || '',
+    priority:    priority || 'רגיל',
+    status:      'פתוח',
+    vendor:      '',
+    cost:        null,
+    tenantId:    entry.tenantId,
+    tenantName:  tenant.name,
+    tenantPhone: tenant.phone,
+    openedByVaad: false,
+    createdAt:   new Date().toISOString(),
+    updatedAt:   new Date().toISOString(),
+    lastNote:    '',
+    history:     [{ status: 'פתוח', note: '', ts: new Date().toISOString(), by: tenant.name }]
+  };
+  tickets.unshift(ticket);
+  saveTickets(entry.tenantDataId, tickets);
+  res.json({ ok: true, ticketId: ticket.id });
+});
+
+// GET /api/portal/tickets — tenant views own tickets via portal
+app.get('/api/portal/tickets', (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(401).json({ ok: false, error: 'חסר token' });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  let tickets = loadTickets(entry.tenantDataId);
+  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear() - 1);
+  tickets = tickets
+    .filter(t => String(t.tenantId) === entry.tenantId && new Date(t.createdAt) > cutoff)
+    .map(t => ({
+      id: t.id, category: t.category, description: t.description,
+      location: t.location, floor: t.floor, entrance: t.entrance,
+      priority: t.priority, status: t.status, cost: t.cost,
+      createdAt: t.createdAt, updatedAt: t.updatedAt, lastNote: t.lastNote
+    }));
+  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES });
+});
+
+// PATCH /api/portal/ticket/:id/close — tenant closes own ticket
+app.patch('/api/portal/ticket/:id/close', (req, res) => {
+  const { token } = req.body;
+  if (!token) return res.status(401).json({ ok: false });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false });
+  const tickets = loadTickets(entry.tenantDataId);
+  const ticket  = tickets.find(t => t.id === req.params.id && String(t.tenantId) === entry.tenantId);
+  if (!ticket) return res.status(404).json({ ok: false, error: 'טיקט לא נמצא' });
+  ticket.status    = 'נסגר';
+  ticket.lastNote  = req.body.note || 'נסגר על ידי הדייר';
+  ticket.updatedAt = new Date().toISOString();
+  ticket.history.push({ status: 'נסגר', note: ticket.lastNote, ts: new Date().toISOString(), by: entry.tenantId });
+  saveTickets(entry.tenantDataId, tickets);
+  res.json({ ok: true });
 });
 
 // Get portal data (public - token only)
@@ -2663,84 +2741,12 @@ app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
-// POST /api/portal/ticket — tenant opens ticket via portal
-app.post('/api/portal/ticket', (req, res) => {
-  const { token, category, description, location, floor, entrance, priority } = req.body;
-  if (!token || !category || !description) return res.json({ ok: false, error: 'חסרים פרטים' });
-  const tokens = loadPortalTokens();
-  const entry  = tokens[token];
-  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
-  const d      = loadTenantData(entry.tenantDataId);
-  const tenant = d.tenants.find(t => String(t.id) === entry.tenantId);
-  if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
-  const tickets = loadTickets(entry.tenantDataId);
-  const ticket = {
-    id:          nextTicketId(tickets),
-    category,
-    description,
-    location:    location || 'כללי',
-    floor:       floor || '',
-    entrance:    entrance || '',
-    priority:    priority || 'רגיל',
-    status:      'פתוח',
-    vendor:      '',
-    cost:        null,
-    tenantId:    entry.tenantId,
-    tenantName:  tenant.name,
-    tenantPhone: tenant.phone,
-    openedByVaad: false,
-    createdAt:   new Date().toISOString(),
-    updatedAt:   new Date().toISOString(),
-    lastNote:    '',
-    history:     [{ status: 'פתוח', note: '', ts: new Date().toISOString(), by: tenant.name }]
-  };
-  tickets.unshift(ticket);
-  saveTickets(entry.tenantDataId, tickets);
-  res.json({ ok: true, ticketId: ticket.id });
-});
 
-// GET /api/portal/tickets — tenant views own tickets via portal
-app.get('/api/portal/tickets', (req, res) => {
-  const { token } = req.query;
-  if (!token) return res.status(401).json({ ok: false, error: 'חסר token' });
-  const tokens = loadPortalTokens();
-  const entry  = tokens[token];
-  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
-  let tickets = loadTickets(entry.tenantDataId);
-  const cutoff = new Date(); cutoff.setFullYear(cutoff.getFullYear() - 1);
-  tickets = tickets
-    .filter(t => String(t.tenantId) === entry.tenantId && new Date(t.createdAt) > cutoff)
-    .map(t => ({
-      id: t.id, category: t.category, description: t.description,
-      location: t.location, floor: t.floor, entrance: t.entrance,
-      priority: t.priority, status: t.status, cost: t.cost,
-      createdAt: t.createdAt, updatedAt: t.updatedAt, lastNote: t.lastNote
-    }));
-  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES });
-});
-
-// PATCH /api/portal/ticket/:id/close — tenant closes own ticket
-app.patch('/api/portal/ticket/:id/close', (req, res) => {
-  const { token } = req.body;
-  if (!token) return res.status(401).json({ ok: false });
-  const tokens = loadPortalTokens();
-  const entry  = tokens[token];
-  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false });
-  const tickets = loadTickets(entry.tenantDataId);
-  const ticket  = tickets.find(t => t.id === req.params.id && String(t.tenantId) === entry.tenantId);
-  if (!ticket) return res.status(404).json({ ok: false, error: 'טיקט לא נמצא' });
-  ticket.status    = 'נסגר';
-  ticket.lastNote  = req.body.note || 'נסגר על ידי הדייר';
-  ticket.updatedAt = new Date().toISOString();
-  ticket.history.push({ status: 'נסגר', note: ticket.lastNote, ts: new Date().toISOString(), by: entry.tenantId });
-  saveTickets(entry.tenantDataId, tickets);
-  res.json({ ok: true });
-});
 // ── Start ────────────────────────────────────────────────────────
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.7.0 – SaaS Server         ║');
+  console.log('║   VaadPro v2.7.1 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
