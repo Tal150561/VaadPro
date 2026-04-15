@@ -527,6 +527,7 @@ load();
 
 // ── Tickets (portal) ─────────────────────────────────────────────
 let tktPortalCategories = [];
+const DEFAULT_CATEGORIES = ['אינסטלטור','חשמל','מעלית','גנרטור','שערים/דלתות','ניקיון','נזילה','תאורה','אינטרנט/תקשורת','אחר'];
 
 async function tktPortalLoad() {
   try {
@@ -586,10 +587,11 @@ async function tktPortalOpenNew() {
       }
     } catch(e) {}
   }
-  // Populate category select
+  // Populate category select — use loaded or default categories
+  const cats = tktPortalCategories.length ? tktPortalCategories : DEFAULT_CATEGORIES;
   const sel = document.getElementById('tktPCat');
-  if (sel && tktPortalCategories.length) {
-    sel.innerHTML = '<option value="">בחר קטגוריה</option>' + tktPortalCategories.map(function(c){ return '<option>'+c+'</option>'; }).join('');
+  if (sel) {
+    sel.innerHTML = '<option value="">בחר קטגוריה</option>' + cats.map(function(c){ return '<option>'+c+'</option>'; }).join('');
   }
   document.getElementById('tktPortalForm').style.display = 'block';
   document.getElementById('tktPortalForm').scrollIntoView({ behavior:'smooth' });
