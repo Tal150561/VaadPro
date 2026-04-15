@@ -533,7 +533,14 @@ async function tktPortalLoad() {
   try {
     const r = await fetch('/api/portal/tickets?token=' + token);
     const d = await r.json();
-    if (!d.ok) { document.getElementById('tktPortalList').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text3);">שגיאה בטעינת תקלות</div>'; return; }
+    if (!d.ok) {
+      const isExpired = r.status === 401;
+      document.getElementById('tktPortalList').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--text3);line-height:1.7;">' +
+        (isExpired ? '🔗 הלינק פג תוקף.<br>בקש לינק חדש מנציג ועד הבית.' : 'שגיאה בטעינת תקלות') +
+        '</div>';
+      return;
+    }
     tktPortalCategories = d.categories || [];
     // Populate category select
     const sel = document.getElementById('tktPCat');
