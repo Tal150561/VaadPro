@@ -2235,7 +2235,7 @@ function render() {
   const checkedIds = new Set(Array.from(document.querySelectorAll('.pay-select:checked')).map(function(el){return el.dataset.id;}));
   const em=getEffectiveMonth();
   const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
-  const paidCount=data.tenants.filter(function(t){return data.sentLog[t.id+'_'+em];}).length;
+  const paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+em];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
   const pending=data.tenants.length-paidCount;
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;

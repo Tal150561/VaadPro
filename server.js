@@ -1694,14 +1694,12 @@ async function runAutoSendCron() {
       if (currentHour !== sendHour) continue;
       if (currentMin  !== sendMinute) continue;
 
-      // Already sent this month? Check sentLog for any entry this month
+      // Check if there are any unpaid tenants who haven't been reminded yet this month
       const month  = getEffectiveMonth(config);
       const mk     = getMonthKey(config);
-      const alreadySentThisMonth = Object.keys(d.sentLog || {}).some(k =>
-        k.endsWith('_' + month) && String(d.sentLog[k]).startsWith('sent_')
-      );
-      if (alreadySentThisMonth) {
-        console.log(`[AutoSend] ${user.email} — already sent for ${month}, skipping`);
+      const hasUnsentUnpaid = (d.tenants || []).some(t => !d.sentLog[t.id + '_' + month]);
+      if (!hasUnsentUnpaid) {
+        console.log(`[AutoSend] ${user.email} — all tenants already paid or reminded for ${month}, skipping`);
         continue;
       }
 
