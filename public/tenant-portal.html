@@ -288,27 +288,22 @@
     <!-- Tickets Section -->
     <div id="ticketsSection" style="display:none;">
 
-      <!-- Accordion header -->
-      <div id="tktAccordionHeader" onclick="tktToggleAccordion()" style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px;cursor:pointer;user-select:none;">
-        <div style="display:flex;align-items:center;gap:10px;">
-          <span style="font-size:1rem;">🔨</span>
-          <span style="font-weight:700;font-size:0.92rem;">תקלות שלי</span>
-          <span id="tktOpenBadge" style="display:none;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:20px;font-size:0.72rem;font-weight:700;padding:2px 9px;"></span>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;">
-          <button onclick="event.stopPropagation();tktPortalOpenNew()" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:5px 13px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">+ דווח תקלה</button>
-          <span id="tktChevron" style="color:var(--text3);font-size:0.75rem;transition:transform .25s;display:inline-block;">▼</span>
+      <!-- Row: report button + history accordion toggle -->
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px;">
+
+        <!-- "דווח תקלה" — opens ONLY the form, not the history -->
+        <button onclick="tktPortalOpenNew()" style="flex:1;background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:10px;padding:11px 0;font-family:'Heebo',sans-serif;font-size:0.9rem;font-weight:700;cursor:pointer;">🔨 + דווח תקלה</button>
+
+        <!-- History accordion toggle -->
+        <div onclick="tktToggleAccordion()" style="display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px 14px;cursor:pointer;user-select:none;white-space:nowrap;">
+          <span style="font-size:0.85rem;font-weight:700;color:var(--text2);">היסטוריית תקלות</span>
+          <span id="tktOpenBadge" style="display:none;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:20px;font-size:0.7rem;font-weight:700;padding:2px 8px;"></span>
+          <span id="tktChevron" style="color:var(--text3);font-size:0.7rem;transition:transform .25s;display:inline-block;">▼</span>
         </div>
       </div>
 
-      <!-- Collapsible body -->
-      <div id="tktAccordionBody" style="display:none;margin-top:8px;">
-        <div id="tktPortalList" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">
-          <div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">טוען...</div>
-        </div>
-
-      <!-- New ticket form -->
-      <div id="tktPortalForm" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-top:16px;">
+      <!-- New ticket form — standalone, NOT inside accordion -->
+      <div id="tktPortalForm" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-bottom:8px;">
         <div style="font-weight:700;margin-bottom:14px;">🔨 דיווח תקלה חדשה</div>
         <div style="display:grid;gap:12px;">
           <div>
@@ -349,6 +344,13 @@
           </div>
         </div>
       </div>
+
+      <!-- History collapsible -->
+      <div id="tktAccordionBody" style="display:none;margin-top:0;">
+        <div id="tktPortalList" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">
+          <div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">טוען...</div>
+        </div>
+
     </div><!-- /ticketsSection -->
 
     <div class="footer">
@@ -625,7 +627,7 @@ async function tktPortalOpenNew() {
       const d = await r.json();
       if (d.ok) {
         tktPortalCategories = d.categories || [];
-        renderTktPortalList(d.tickets || []);
+        // Don't render list here — history accordion handles its own load
       }
     } catch(e) {}
   }
@@ -665,13 +667,11 @@ async function tktPortalSubmit() {
       document.getElementById('tktPortalForm').style.display = 'none';
       document.getElementById('tktPDesc').value = '';
       document.getElementById('tktPCat').value = '';
-      // Ensure accordion is open so user sees the new ticket
+      // Open history accordion so user sees the new ticket
       const body = document.getElementById('tktAccordionBody');
       const chevron = document.getElementById('tktChevron');
-      if (body && body.style.display === 'none') {
-        body.style.display = 'block';
-        if (chevron) chevron.style.transform = 'rotate(180deg)';
-      }
+      if (body) { body.style.display = 'block'; }
+      if (chevron) { chevron.style.transform = 'rotate(180deg)'; }
       tktPortalLoad();
       alert('✅ הדיווח נשלח! מספר טיקט: #' + d.ticketId);
     } else {
