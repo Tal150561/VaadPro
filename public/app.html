@@ -1248,6 +1248,7 @@ function vpLogout() {
       <div class="card-header" style="display:flex;align-items:center;gap:10px;">
         🔨 תיעוד תקלות
         <button class="btn btn-green btn-sm" onclick="tktOpenNew()" style="margin-right:auto;">+ תקלה חדשה</button>
+        <button class="btn btn-sm" onclick="tktLoad(this)" title="רענן תקלות" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);padding:5px 10px;">↻</button>
       </div>
       <div class="card-body">
         <!-- Filters -->
@@ -4321,7 +4322,13 @@ const TKT_STATUS_COLOR = {
   'לא רלוונטי':      '#6b7280'
 };
 
-async function tktLoad() {
+async function tktLoad(btnEl) {
+  // Spin the refresh button if called from it
+  if (btnEl && btnEl.tagName === 'BUTTON') {
+    btnEl.style.transition = 'transform .6s';
+    btnEl.style.transform  = 'rotate(360deg)';
+    setTimeout(() => { btnEl.style.transition=''; btnEl.style.transform=''; }, 650);
+  }
   try {
     const r = await fetch(API+'/tickets');
     const d = await r.json();
