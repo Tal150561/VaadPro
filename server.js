@@ -2346,16 +2346,45 @@ const PORTAL_TOKENS_FILE = path.join(DATA_DIR, '_portal_tokens.json');
 
 function loadPortalTokens() {
   if (!fs.existsSync(PORTAL_TOKENS_FILE)) return {};
-  try { return JSON.parse(fs.readFileSync(PORTAL_TOKENS_FILE, 'utf8')); } catch(e) { return {}; }
+  try {
+    const raw = fs.readFileSync(PORTAL_TOKENS_FILE, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || Array.isArray(parsed)) {
+      console.error('[Portal] _portal_tokens.json has unexpected format — returning empty');
+      return {};
+    }
+    return parsed;
+  } catch(e) {
+    console.error('[Portal] Failed to parse _portal_tokens.json:', e.message);
+    // Try backup file before giving up
+    const backup = PORTAL_TOKENS_FILE + '.bak';
+    if (fs.existsSync(backup)) {
+      try {
+        const raw2 = fs.readFileSync(backup, 'utf8');
+        const parsed2 = JSON.parse(raw2);
+        console.log('[Portal] Recovered tokens from backup file');
+        return parsed2;
+      } catch(e2) { /* backup also bad */ }
+    }
+    return {};
+  }
 }
 
 function savePortalTokens(tokens) {
-  fs.writeFileSync(PORTAL_TOKENS_FILE, JSON.stringify(tokens, null, 2));
+  const tmp = PORTAL_TOKENS_FILE + '.tmp';
+  const backup = PORTAL_TOKENS_FILE + '.bak';
+  const data = JSON.stringify(tokens, null, 2);
+  // Atomic write: write to .tmp, backup existing, rename
+  fs.writeFileSync(tmp, data);
+  if (fs.existsSync(PORTAL_TOKENS_FILE)) {
+    try { fs.copyFileSync(PORTAL_TOKENS_FILE, backup); } catch(e) { /* non-fatal */ }
+  }
+  fs.renameSync(tmp, PORTAL_TOKENS_FILE);
 }
 
 // Generate portal token for a specific tenant (called from app)
 app.post('/api/portal/token', authMiddleware, (req, res) => {
-  const { tenantId } = req.body;
+  const { tenantId, forceNew } = req.body;
   if (!tenantId) return res.json({ ok: false, error: 'Missing tenantId' });
   const d = loadTenantData(req.user.tenantId);
   const tenant = d.tenants.find(t => String(t.id) === String(tenantId));
@@ -2363,31 +2392,41 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
 
   const tokens = loadPortalTokens();
   const now = Date.now();
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
 
   // Clean expired tokens
   Object.keys(tokens).forEach(k => { if (tokens[k].expires < now) delete tokens[k]; });
 
-  // Reuse existing valid token for this tenant if exists IN FILE
-  const existingEntry = Object.entries(tokens).find(([, v]) =>
-    v.tenantDataId === req.user.tenantId &&
-    v.tenantId === String(tenantId) &&
-    v.expires > now
-  );
-  if (existingEntry) {
-    const appUrl = process.env.APP_URL || 'https://vaadpro.org';
-    console.log('[Portal] reusing existing token for tenant', tenantId);
-    return res.json({ ok: true, token: existingEntry[0], url: appUrl + '/tenant-portal.html?token=' + existingEntry[0] });
+  if (forceNew) {
+    // Delete all existing tokens for this tenant before creating a new one
+    Object.keys(tokens).forEach(k => {
+      if (tokens[k].tenantDataId === req.user.tenantId && tokens[k].tenantId === String(tenantId)) {
+        delete tokens[k];
+      }
+    });
+    console.log('[Portal] forceNew — deleted old tokens for tenant', tenantId);
+  } else {
+    // Reuse existing valid token if present
+    const existingEntry = Object.entries(tokens).find(([, v]) =>
+      v.tenantDataId === req.user.tenantId &&
+      v.tenantId === String(tenantId) &&
+      v.expires > now
+    );
+    if (existingEntry) {
+      console.log('[Portal] reusing existing token for tenant', tenantId);
+      return res.json({ ok: true, token: existingEntry[0], url: appUrl + '/tenant-portal.html?token=' + existingEntry[0] });
+    }
   }
-  console.log('[Portal] creating new token for tenant', tenantId, '- file has', Object.keys(tokens).length, 'tokens');
 
+  console.log('[Portal] creating new token for tenant', tenantId, '- file has', Object.keys(tokens).length, 'tokens');
   const token = require('uuid').v4().replace(/-/g,'').substring(0,20);
   tokens[token] = {
     tenantDataId: req.user.tenantId,
     tenantId:     String(tenantId),
+    createdAt:    now,
     expires:      now + 365 * 24 * 60 * 60 * 1000 // 1 year
   };
   savePortalTokens(tokens);
-  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const url = appUrl + '/tenant-portal.html?token=' + token;
   res.json({ ok: true, token, url });
 });
@@ -2405,6 +2444,25 @@ app.delete('/api/portal/tokens', authMiddleware, (req, res) => {
   savePortalTokens(tokens);
   console.log('[Portal] Reset', removed, 'tokens for', req.user.tenantId);
   res.json({ ok: true, removed });
+});
+
+// Debug endpoint — check token status without exposing tenant data (admin-only via ADMIN_JWT_SECRET)
+app.get('/api/portal/debug/:token', (req, res) => {
+  const adminToken = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
+  let isAdmin = false;
+  try { jwt.verify(adminToken, ADMIN_JWT_SECRET); isAdmin = true; } catch(e) {}
+  const tokens = loadPortalTokens();
+  const entry = tokens[req.params.token];
+  if (!entry) return res.json({ found: false, total: Object.keys(tokens).length });
+  return res.json({
+    found: true,
+    expired: Date.now() > entry.expires,
+    expiresAt: new Date(entry.expires).toISOString(),
+    createdAt: entry.createdAt ? new Date(entry.createdAt).toISOString() : 'unknown',
+    tenantId: isAdmin ? entry.tenantId : '***',
+    tenantDataId: isAdmin ? entry.tenantDataId : '***',
+    total: Object.keys(tokens).length
+  });
 });
 
 // Get portal data (public - token only)
