@@ -287,13 +287,25 @@
 
     <!-- Tickets Section -->
     <div id="ticketsSection" style="display:none;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-        <div style="font-size:0.72rem;font-weight:700;letter-spacing:1px;text-transform:uppercase;color:var(--text3);">תקלות שלי</div>
-        <button onclick="tktPortalOpenNew()" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">+ דווח תקלה</button>
+
+      <!-- Accordion header -->
+      <div id="tktAccordionHeader" onclick="tktToggleAccordion()" style="display:flex;align-items:center;justify-content:space-between;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px;cursor:pointer;user-select:none;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <span style="font-size:1rem;">🔨</span>
+          <span style="font-weight:700;font-size:0.92rem;">תקלות שלי</span>
+          <span id="tktOpenBadge" style="display:none;background:rgba(245,158,11,.15);color:#f59e0b;border:1px solid rgba(245,158,11,.3);border-radius:20px;font-size:0.72rem;font-weight:700;padding:2px 9px;"></span>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;">
+          <button onclick="event.stopPropagation();tktPortalOpenNew()" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:5px 13px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">+ דווח תקלה</button>
+          <span id="tktChevron" style="color:var(--text3);font-size:0.75rem;transition:transform .25s;display:inline-block;">▼</span>
+        </div>
       </div>
-      <div id="tktPortalList" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">
-        <div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">טוען...</div>
-      </div>
+
+      <!-- Collapsible body -->
+      <div id="tktAccordionBody" style="display:none;margin-top:8px;">
+        <div id="tktPortalList" style="background:var(--surface);border:1px solid var(--border);border-radius:14px;overflow:hidden;">
+          <div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">טוען...</div>
+        </div>
 
       <!-- New ticket form -->
       <div id="tktPortalForm" style="display:none;background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:20px;margin-top:16px;">
@@ -357,7 +369,7 @@ function portalSwitchTab(tab) {
   document.getElementById('tabPayBtn').style.color      = tab === 'payments' ? 'var(--accent)'        : 'var(--text2)';
   document.getElementById('tabTktBtn').style.background = tab === 'tickets'  ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
   document.getElementById('tabTktBtn').style.color      = tab === 'tickets'  ? 'var(--accent)'        : 'var(--text2)';
-  if (tab === 'tickets') tktPortalLoad();
+  // tickets load deferred to accordion open
 }
 
 let allData = null;
@@ -526,6 +538,18 @@ function render(d) {
 load();
 
 // ── Tickets (portal) ─────────────────────────────────────────────
+function tktToggleAccordion() {
+  const body    = document.getElementById('tktAccordionBody');
+  const chevron = document.getElementById('tktChevron');
+  const open    = body.style.display === 'none';
+  body.style.display    = open ? 'block' : 'none';
+  chevron.style.transform = open ? 'rotate(180deg)' : 'rotate(0deg)';
+  // Load tickets on first open
+  if (open && document.getElementById('tktPortalList').innerText.includes('טוען')) {
+    tktPortalLoad();
+  }
+}
+
 let tktPortalCategories = [];
 const DEFAULT_CATEGORIES = ['אינסטלטור','חשמל','מעלית','גנרטור','שערים/דלתות','ניקיון','נזילה','תאורה','אינטרנט/תקשורת','אחר'];
 
@@ -558,6 +582,17 @@ const TKT_STATUS_COLOR_P = {
 
 function renderTktPortalList(tickets) {
   const el = document.getElementById('tktPortalList');
+  // Update open-tickets badge in accordion header
+  const openCount = tickets.filter(t => t.status !== 'נסגר' && t.status !== 'לא רלוונטי').length;
+  const badge = document.getElementById('tktOpenBadge');
+  if (badge) {
+    if (openCount > 0) {
+      badge.style.display = 'inline';
+      badge.textContent   = openCount + ' פתוחות';
+    } else {
+      badge.style.display = 'none';
+    }
+  }
   if (!tickets.length) {
     el.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text3);font-size:0.85rem;">אין תקלות מדווחות</div>';
     return;
@@ -630,6 +665,13 @@ async function tktPortalSubmit() {
       document.getElementById('tktPortalForm').style.display = 'none';
       document.getElementById('tktPDesc').value = '';
       document.getElementById('tktPCat').value = '';
+      // Ensure accordion is open so user sees the new ticket
+      const body = document.getElementById('tktAccordionBody');
+      const chevron = document.getElementById('tktChevron');
+      if (body && body.style.display === 'none') {
+        body.style.display = 'block';
+        if (chevron) chevron.style.transform = 'rotate(180deg)';
+      }
       tktPortalLoad();
       alert('✅ הדיווח נשלח! מספר טיקט: #' + d.ticketId);
     } else {
