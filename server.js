@@ -2641,7 +2641,9 @@ app.get('/api/portal/tickets', (req, res) => {
       priority: t.priority, status: t.status, cost: t.cost,
       createdAt: t.createdAt, updatedAt: t.updatedAt, lastNote: t.lastNote
     }));
-  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES });
+  // Debug: also return total count before filter
+  const allTickets = loadTickets(entry.tenantDataId);
+  res.json({ ok: true, tickets, categories: TICKET_CATEGORIES, _debug: { total: allTickets.length, tenantId: entry.tenantId } });
 });
 
 // PATCH /api/portal/ticket/:id/close — tenant closes own ticket
