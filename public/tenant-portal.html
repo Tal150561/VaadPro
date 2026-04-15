@@ -574,7 +574,23 @@ function renderTktPortalList(tickets) {
   }).join('');
 }
 
-function tktPortalOpenNew() {
+async function tktPortalOpenNew() {
+  // Load categories if not yet loaded
+  if (!tktPortalCategories.length) {
+    try {
+      const r = await fetch('/api/portal/tickets?token=' + token);
+      const d = await r.json();
+      if (d.ok) {
+        tktPortalCategories = d.categories || [];
+        renderTktPortalList(d.tickets || []);
+      }
+    } catch(e) {}
+  }
+  // Populate category select
+  const sel = document.getElementById('tktPCat');
+  if (sel && tktPortalCategories.length) {
+    sel.innerHTML = '<option value="">בחר קטגוריה</option>' + tktPortalCategories.map(function(c){ return '<option>'+c+'</option>'; }).join('');
+  }
   document.getElementById('tktPortalForm').style.display = 'block';
   document.getElementById('tktPortalForm').scrollIntoView({ behavior:'smooth' });
 }
