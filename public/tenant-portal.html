@@ -569,7 +569,7 @@ function renderTktPortalList(tickets) {
       '<div style="font-weight:700;font-size:0.88rem;">'+t.category+urgent+'</div>'+
       '<div style="font-size:0.8rem;color:var(--text2);margin-top:2px;">'+t.description+'</div>'+
       cost + note +
-      (canClose ? '<button onclick="tktPortalClose(''+t.id+'')" style="margin-top:8px;background:rgba(248,81,73,.1);color:#f85149;border:1px solid rgba(248,81,73,.2);border-radius:6px;padding:4px 12px;font-family:'Heebo',sans-serif;font-size:0.78rem;cursor:pointer;">✓ סגור תקלה</button>' : '') +
+      (canClose ? '<button onclick="tktPortalClose(this)" data-id="'+t.id+'">✓ סגור תקלה</button>' : '') +
     '</div>';
   }).join('');
 }
@@ -613,7 +613,8 @@ async function tktPortalSubmit() {
   } catch(e) { alert('שגיאת תקשורת, נסה שוב'); }
 }
 
-async function tktPortalClose(id) {
+async function tktPortalClose(elOrId) {
+  const id = (typeof elOrId === 'string' || typeof elOrId === 'number') ? elOrId : elOrId.closest('[data-id]')?.dataset.id;
   if (!confirm('לסגור את הטיקט? (הבעיה נפתרה)')) return;
   try {
     const r = await fetch('/api/portal/ticket/'+id+'/close', {
