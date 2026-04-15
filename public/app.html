@@ -2170,6 +2170,8 @@ async function sendPortalToSelected() {
     const name  = selected[i].name;
     const phone = selected[i].phone;
     try {
+      // Reset first to force fresh token
+      await fetch(API+'/portal/tokens', { method:'DELETE' }).catch(()=>{});
       const r = await fetch(API+'/portal/token', {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({ tenantId: id })
@@ -2191,13 +2193,14 @@ async function sendPortalToSelected() {
 
 async function sendPortalLink(tenantId, tenantName) {
   try {
+    // First reset existing tokens to force fresh generation
+    await fetch(API+'/portal/tokens', { method:'DELETE' }).catch(()=>{});
     const r = await fetch(API+'/portal/token', {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({ tenantId: String(tenantId) })
     });
     const d = await r.json();
     if (!d.ok) {
-      // Token failed — still try to copy URL if partial
       toast('שגיאה ביצירת לינק: ' + d.error, 'error');
       return;
     }

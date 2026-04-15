@@ -2367,7 +2367,7 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
   // Clean expired tokens
   Object.keys(tokens).forEach(k => { if (tokens[k].expires < now) delete tokens[k]; });
 
-  // Reuse existing valid token for this tenant if exists
+  // Reuse existing valid token for this tenant if exists IN FILE
   const existingEntry = Object.entries(tokens).find(([, v]) =>
     v.tenantDataId === req.user.tenantId &&
     v.tenantId === String(tenantId) &&
@@ -2375,8 +2375,10 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
   );
   if (existingEntry) {
     const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+    console.log('[Portal] reusing existing token for tenant', tenantId);
     return res.json({ ok: true, token: existingEntry[0], url: appUrl + '/tenant-portal.html?token=' + existingEntry[0] });
   }
+  console.log('[Portal] creating new token for tenant', tenantId, '- file has', Object.keys(tokens).length, 'tokens');
 
   const token = require('uuid').v4().replace(/-/g,'').substring(0,20);
   tokens[token] = {
@@ -2388,6 +2390,21 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const url = appUrl + '/tenant-portal.html?token=' + token;
   res.json({ ok: true, token, url });
+});
+
+// Reset portal tokens for this account (force new token generation)
+app.delete('/api/portal/tokens', authMiddleware, (req, res) => {
+  const tokens = loadPortalTokens();
+  let removed = 0;
+  Object.keys(tokens).forEach(k => {
+    if (tokens[k].tenantDataId === req.user.tenantId) {
+      delete tokens[k];
+      removed++;
+    }
+  });
+  savePortalTokens(tokens);
+  console.log('[Portal] Reset', removed, 'tokens for', req.user.tenantId);
+  res.json({ ok: true, removed });
 });
 
 // Get portal data (public - token only)
