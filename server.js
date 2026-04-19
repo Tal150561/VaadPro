@@ -2300,8 +2300,9 @@ echo " ========================================"
 echo ""
 echo "$(date +%H:%M:%S) Installation complete!" >> "$LOG"
 
-# Start bridge
-"$INSTALL_DIR/VaadPro-Start.sh"
+# Start bridge directly
+cd "$INSTALL_DIR"
+node bridge.js
 `;
   res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.sh"');
   res.setHeader('Content-Type', 'application/x-sh');
