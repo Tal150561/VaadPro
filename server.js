@@ -2130,7 +2130,8 @@ $btn.Add_Click({
     Start-Sleep -Seconds 2
     $form.Close()
     # Open new CMD with refreshed PATH so Node.js is found
-    Start-Process 'cmd' -ArgumentList ('/k "' + $batPath + '"') -WorkingDirectory $installDir
+    $bridgeJs = [System.IO.Path]::Combine($installDir, 'bridge.js')
+    Start-Process 'cmd' -ArgumentList ('/k node "' + $bridgeJs + '"') -WorkingDirectory $installDir
   } catch {
     $errMsg = $_.Exception.Message
     $errLine = $_.InvocationInfo.ScriptLineNumber
