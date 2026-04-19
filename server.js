@@ -30,6 +30,7 @@ title VaadPro Bridge Launcher
 
 set BRIDGE_DIR=%~dp0
 if "%BRIDGE_DIR:~-1%"=="\" set BRIDGE_DIR=%BRIDGE_DIR:~0,-1%
+if not exist "%BRIDGE_DIR%\bridge.js" set BRIDGE_DIR=%CD%
 
 if not exist "%BRIDGE_DIR%\bridge.js" (
     echo  ERROR: bridge.js not found.
