@@ -30,13 +30,6 @@ title VaadPro Bridge Launcher
 
 set BRIDGE_DIR=%~dp0
 if "%BRIDGE_DIR:~-1%"=="\" set BRIDGE_DIR=%BRIDGE_DIR:~0,-1%
-if not exist "%BRIDGE_DIR%\bridge.js" set BRIDGE_DIR=%CD%
-echo DEBUG dp0=[%~dp0]
-echo DEBUG CD=[%CD%]
-echo DEBUG BRIDGE_DIR=[%BRIDGE_DIR%]
-echo DEBUG exists:
-if exist "%BRIDGE_DIR%\bridge.js" (echo YES) else (echo NO)
-pause
 
 if not exist "%BRIDGE_DIR%\bridge.js" (
     echo  ERROR: bridge.js not found.
