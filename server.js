@@ -24,7 +24,91 @@ const BRIDGE_START_BAT = '@echo off\ntitle VaadPro Bridge\ncolor 0A\necho.\necho
 const BRIDGE_INSTALL_SH = '#!/bin/bash\necho \necho VaadPro Bridge - Installation\necho ==============================\necho \necho Installing... please wait\necho \nnpm install\necho \necho Done! Run: ./start.sh\necho \n';
 const BRIDGE_START_SH = '#!/bin/bash\nBRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"\n\necho ""\necho " ========================================"\necho "   VaadPro Bridge Launcher"\necho " ========================================"\necho ""\n\n# Check Node.js\nif ! command -v node &>/dev/null; then\n    echo " ERROR: Node.js is not installed."\n    echo " Go to https://nodejs.org and install the LTS version."\n    echo ""\n    exit 1\nfi\n\n# Check bridge.js\nif [ ! -f "$BRIDGE_DIR/bridge.js" ]; then\n    echo " ERROR: bridge.js not found in $BRIDGE_DIR"\n    exit 1\nfi\n\n# Install if needed\nif [ ! -d "$BRIDGE_DIR/node_modules" ]; then\n    echo " Installing dependencies (one-time, ~2 min)..."\n    cd "$BRIDGE_DIR" && npm install\n    echo " Done!"\n    echo ""\nfi\n\n# Create Desktop shortcut (Mac only, one-time)\nSHORTCUT="$HOME/Desktop/VaadPro Bridge.command"\nif [ ! -f "$SHORTCUT" ]; then\n    echo "#!/bin/bash" > "$SHORTCUT"\n    echo "cd \\"$BRIDGE_DIR\\" && ./VaadPro-Start.sh" >> "$SHORTCUT"\n    chmod +x "$SHORTCUT"\n    echo " Shortcut created on Desktop: VaadPro Bridge"\n    echo ""\nfi\n\n# Start Bridge\necho " Starting VaadPro Bridge..."\necho " Do NOT close this window!"\necho ""\n\ncd "$BRIDGE_DIR"\nnode bridge.js\n\necho ""\necho " Bridge stopped. Press Enter to restart or Ctrl+C to exit."\nread\nexec "$0"\n';const BRIDGE_README = '# VaadPro Bridge\n\n## Installation (one-time)\n1. Double-click install.bat\n2. Wait ~2 minutes\n\n## Daily use\n1. Double-click start.bat\n2. Do NOT close the window!\n3. Scan QR in the app (first time only)\n\n## Support: vaadpro15@gmail.com\n';
 
-const VAADPRO_START_BAT = '@echo off\nsetlocal enabledelayedexpansion\ntitle VaadPro Bridge Launcher\n\nset BRIDGE_DIR=%~dp0\nset BRIDGE_DIR=%BRIDGE_DIR:~0,-1%\n\nif not exist "%BRIDGE_DIR%\\bridge.js" (\n    echo  ERROR: bridge.js not found.\n    pause & exit /b 1\n)\n\n:: Check Node.js\nset NODE_EXE=\nwhere node >nul 2>&1 && set NODE_EXE=node\nif not defined NODE_EXE if exist "C:\\Program Files\\nodejs\\node.exe" set "NODE_EXE=C:\\Program Files\\nodejs\\node.exe"\nif not defined NODE_EXE if exist "C:\\Program Files (x86)\\nodejs\\node.exe" set "NODE_EXE=C:\\Program Files (x86)\\nodejs\\node.exe"\n\n:: Install Node.js if not found\nif not defined NODE_EXE (\n    echo.\n    echo  Node.js not found. Downloading and installing automatically...\n    echo  This may take 2-3 minutes. Please wait.\n    echo.\n    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest \'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi\' -OutFile \'%TEMP%\\node_setup.msi\' -UseBasicParsing; Start-Process msiexec -ArgumentList \'/i %TEMP%\\node_setup.msi /quiet /norestart\' -Wait; Remove-Item \'%TEMP%\\node_setup.msi\' -Force"\n    set "NODE_EXE=C:\\Program Files\\nodejs\\node.exe"\n    echo.\n    echo  Node.js installed! Please restart your computer and run VaadPro Bridge again.\n    pause\n    exit /b 0\n)\n\n:: Download and extract node_modules if missing\nif not exist "%BRIDGE_DIR%\\node_modules" (\n    echo.\n    echo  ========================================\n    echo   Downloading Bridge dependencies...\n    echo   Please wait ^(~30 seconds^).\n    echo  ========================================\n    echo.\n    set "NM_ZIP=%BRIDGE_DIR%\\node_modules.zip"\n    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest \'https://vaadpro.org/api/bridge/node-modules\' -OutFile \'%BRIDGE_DIR%\\node_modules.zip\' -UseBasicParsing"\n    if exist "%BRIDGE_DIR%\\node_modules.zip" (\n        echo  Extracting...\n        powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.Compression.ZipFile]::ExtractToDirectory(\'%BRIDGE_DIR%\\node_modules.zip\', \'%BRIDGE_DIR%\')"\n        del "%BRIDGE_DIR%\\node_modules.zip" >nul 2>&1\n        echo  Done!\n        echo.\n    )\n)\n\n:: Fallback to npm install if still missing\nif not exist "%BRIDGE_DIR%\\node_modules" (\n    echo.\n    echo  Trying npm install as fallback...\n    pushd "%BRIDGE_DIR%"\n    npm install\n    popd\n)\n\n:: Final check\nif not exist "%BRIDGE_DIR%\\node_modules" (\n    echo.\n    echo  ERROR: Failed to install dependencies!\n    pause\n    exit /b 1\n)\n\n:: Create Desktop shortcut (first time)\nset "SHORTCUT=%USERPROFILE%\\Desktop\\VaadPro Bridge.lnk"\nif not exist "%SHORTCUT%" (\n    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut(\'%SHORTCUT%\'); $s.TargetPath=\'%BRIDGE_DIR%\\VaadPro-Start.bat\'; $s.WorkingDirectory=\'%BRIDGE_DIR%\'; $s.Description=\'VaadPro Bridge\'; $s.Save()"\n)\n\n:: Check if already running\ntasklist /FI "WINDOWTITLE eq VaadPro Bridge*" 2>nul | find /I "cmd.exe" >nul\nif %errorlevel%==0 (\n    echo  VaadPro Bridge is already running. Check your taskbar.\n    pause & exit /b 0\n)\n\n:: Start Bridge\nstart "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"\nexit /b 0\n'; $s.WorkingDirectory=\'%BRIDGE_DIR%\'; $s.Description=\'VaadPro Bridge\'; $s.Save()"\n)\n\n:: Check if already running\ntasklist /FI "WINDOWTITLE eq VaadPro Bridge*" 2>nul | find /I "cmd.exe" >nul\nif %errorlevel%==0 (\n    echo  VaadPro Bridge is already running. Check your taskbar.\n    pause & exit /b 0\n)\n\n:: Start Bridge\nstart "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"\nexit /b 0\n';$s.WorkingDirectory=\'%BRIDGE_DIR%\';$s.Description=\'VaadPro Bridge\';$s.Save()"\n)\n\n:: Check if already running\ntasklist /FI "WINDOWTITLE eq VaadPro Bridge*" 2>nul | find /I "cmd.exe" >nul\nif %errorlevel%==0 (\n    echo  VaadPro Bridge is already running. Check your taskbar.\n    pause & exit /b 0\n)\n\n:: Start Bridge\nstart "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"\nexit /b 0\n';
+const VAADPRO_START_BAT = `@echo off
+setlocal enabledelayedexpansion
+title VaadPro Bridge Launcher
+
+set BRIDGE_DIR=%~dp0
+set BRIDGE_DIR=%BRIDGE_DIR:~0,-1%
+
+if not exist "%BRIDGE_DIR%\bridge.js" (
+    echo  ERROR: bridge.js not found.
+    pause & exit /b 1
+)
+
+:: Check Node.js
+set NODE_EXE=
+where node >nul 2>&1 && set NODE_EXE=node
+if not defined NODE_EXE if exist "C:\Program Files\nodejs\node.exe" set "NODE_EXE=C:\Program Files\nodejs\node.exe"
+if not defined NODE_EXE if exist "C:\Program Files (x86)\nodejs\node.exe" set "NODE_EXE=C:\Program Files (x86)\nodejs\node.exe"
+
+:: Install Node.js if not found
+if not defined NODE_EXE (
+    echo.
+    echo  Node.js not found. Downloading and installing automatically...
+    echo  This may take 2-3 minutes. Please wait.
+    echo.
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_setup.msi' -UseBasicParsing; Start-Process msiexec -ArgumentList '/i %TEMP%\node_setup.msi /quiet /norestart' -Wait; Remove-Item '%TEMP%\node_setup.msi' -Force"
+    set "NODE_EXE=C:\Program Files\nodejs\node.exe"
+    echo.
+    echo  Node.js installed! Please restart your computer and run VaadPro Bridge again.
+    pause
+    exit /b 0
+)
+
+:: Download and extract node_modules if missing
+if not exist "%BRIDGE_DIR%\node_modules" (
+    echo.
+    echo  ========================================
+    echo   Downloading Bridge dependencies...
+    echo   Please wait ^(~30 seconds^).
+    echo  ========================================
+    echo.
+    set "NM_ZIP=%BRIDGE_DIR%\node_modules.zip"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/node-modules' -OutFile '%BRIDGE_DIR%\node_modules.zip' -UseBasicParsing"
+    if exist "%BRIDGE_DIR%\node_modules.zip" (
+        echo  Extracting...
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.Compression.ZipFile]::ExtractToDirectory('%BRIDGE_DIR%\node_modules.zip', '%BRIDGE_DIR%')"
+        del "%BRIDGE_DIR%\node_modules.zip" >nul 2>&1
+        echo  Done!
+        echo.
+    )
+)
+
+:: Fallback to npm install if still missing
+if not exist "%BRIDGE_DIR%\node_modules" (
+    echo.
+    echo  Trying npm install as fallback...
+    pushd "%BRIDGE_DIR%"
+    npm install
+    popd
+)
+
+:: Final check
+if not exist "%BRIDGE_DIR%\node_modules" (
+    echo.
+    echo  ERROR: Failed to install dependencies!
+    pause
+    exit /b 1
+)
+
+:: Create Desktop shortcut (first time)
+set "SHORTCUT=%USERPROFILE%\Desktop\VaadPro Bridge.lnk"
+if not exist "%SHORTCUT%" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$ws=New-Object -ComObject WScript.Shell; $s=$ws.CreateShortcut('%SHORTCUT%'); $s.TargetPath='%BRIDGE_DIR%\VaadPro-Start.bat'; $s.WorkingDirectory='%BRIDGE_DIR%'; $s.Description='VaadPro Bridge'; $s.Save()"
+)
+
+:: Check if already running
+tasklist /FI "WINDOWTITLE eq VaadPro Bridge*" 2>nul | find /I "cmd.exe" >nul
+if %errorlevel%==0 (
+    echo  VaadPro Bridge is already running. Check your taskbar.
+    pause & exit /b 0
+)
+
+:: Start Bridge
+start "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"
+exit /b 0
+`;
 const VAADPRO_START_SH = '#!/bin/bash\nBRIDGE_DIR="$(cd "$(dirname "$0")" && pwd)"\n\necho ""\necho " ========================================"\necho "   VaadPro Bridge Launcher"\necho " ========================================"\necho ""\n\n# Check Node.js\nif ! command -v node &>/dev/null; then\n    echo " ERROR: Node.js is not installed."\n    echo " Go to https://nodejs.org and install the LTS version."\n    echo ""\n    exit 1\nfi\n\n# Check bridge.js\nif [ ! -f "$BRIDGE_DIR/bridge.js" ]; then\n    echo " ERROR: bridge.js not found in $BRIDGE_DIR"\n    exit 1\nfi\n\n# Install if needed\nif [ ! -d "$BRIDGE_DIR/node_modules" ]; then\n    echo " Installing dependencies (one-time, ~2 min)..."\n    cd "$BRIDGE_DIR" && npm install\n    echo " Done!"\n    echo ""\nfi\n\n# Create Desktop shortcut (Mac only, one-time)\nSHORTCUT="$HOME/Desktop/VaadPro Bridge.command"\nif [ ! -f "$SHORTCUT" ]; then\n    echo "#!/bin/bash" > "$SHORTCUT"\n    echo "cd \\"$BRIDGE_DIR\\" && ./VaadPro-Start.sh" >> "$SHORTCUT"\n    chmod +x "$SHORTCUT"\n    echo " Shortcut created on Desktop: VaadPro Bridge"\n    echo ""\nfi\n\n# Start Bridge\necho " Starting VaadPro Bridge..."\necho " Do NOT close this window!"\necho ""\n\ncd "$BRIDGE_DIR"\nnode bridge.js\n\necho ""\necho " Bridge stopped. Press Enter to restart or Ctrl+C to exit."\nread\nexec "$0"\n';
 const JWT_SECRET = process.env.JWT_SECRET || 'vaadpro-secret-change-in-production';
 
