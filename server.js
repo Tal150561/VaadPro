@@ -2130,7 +2130,7 @@ $btn.Add_Click({
     Start-Sleep -Seconds 2
     $form.Close()
     # Open new CMD with refreshed PATH so Node.js is found
-    Start-Process 'cmd' -ArgumentList ('/c "' + $batPath + '"')
+    Start-Process 'cmd' -ArgumentList ('/k "' + $batPath + '"') -WorkingDirectory $installDir
   } catch {
     $errMsg = $_.Exception.Message
     $errLine = $_.InvocationInfo.ScriptLineNumber
