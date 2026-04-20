@@ -34,7 +34,8 @@ if "%BRIDGE_DIR:~-1%"=="\" set BRIDGE_DIR=%BRIDGE_DIR:~0,-1%
 :: Download bridge.js if missing
 if not exist "%BRIDGE_DIR%\bridge.js" (
     echo  Downloading bridge.js...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile '%BRIDGE_DIR%\bridge.js' -UseBasicParsing"
+    set "BJSDEST=%BRIDGE_DIR%\bridge.js"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile '$env:BJSDEST' -UseBasicParsing"
 )
 
 if not exist "%BRIDGE_DIR%\bridge.js" (
