@@ -1990,6 +1990,12 @@ app.post('/api/installer/redeem', (req, res) => {
 });
 
 // Serve VaadPro-Setup.bat (public)
+app.get('/vaadpro-start.bat', (req, res) => {
+  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Start.bat"');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.send(VAADPRO_START_BAT);
+});
+
 app.get('/vaadpro-setup.bat', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const bat = generateSetupBat(appUrl);
