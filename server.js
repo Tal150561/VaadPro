@@ -105,6 +105,13 @@ if %errorlevel%==0 (
     pause & exit /b 0
 )
 
+:: Auto-update bridge.js from server
+echo  Checking for Bridge updates...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile '%BRIDGE_DIR%\bridge.js.tmp' -UseBasicParsing 2>nul" 2>nul
+if exist "%BRIDGE_DIR%\bridge.js.tmp" (
+    move /y "%BRIDGE_DIR%\bridge.js.tmp" "%BRIDGE_DIR%\bridge.js" >nul 2>&1
+)
+
 :: Start Bridge
 start "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"
 exit /b 0
@@ -2382,6 +2389,20 @@ app.get('/api/bridge/node-modules', (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="node_modules.zip"');
   fs.createReadStream(nmZip).pipe(res);
+});
+
+// Serve bridge.js publicly for auto-update in VaadPro-Start.bat
+app.get('/api/bridge/bridge-js-public', (req, res) => {
+  res.setHeader('Content-Disposition', 'attachment; filename="bridge.js"');
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(BRIDGE_JS_CONTENT);
+});
+
+// Serve bridge.js only (for update without reinstall)
+app.get('/api/bridge/bridge-js', authMiddleware, (req, res) => {
+  res.setHeader('Content-Disposition', 'attachment; filename="bridge.js"');
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(BRIDGE_JS_CONTENT);
 });
 
 app.get('/api/bridge/download-files', (req, res) => {

@@ -855,13 +855,20 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">🔄 חיבור WhatsApp מחדש</div>
+      <div class="card-header">🔄 החלפת מספר WhatsApp</div>
       <div class="card-body">
         <p style="font-size:0.84rem;color:var(--text2);margin-bottom:14px;">
-          חבר ועד אחר רוצה לנהל? רוצה לעבור לטלפון אחר? לחץ כאן לאיפוס החיבור — <strong>כל נתוני הבניין נשמרים</strong>, רק ה-WhatsApp מתנתק ומבקש QR חדש.
+          רוצה לעבור למספר אחר? חבר ועד חדש רוצה להתחבר? פעל לפי השלבים:
         </p>
+        <div style="font-size:0.84rem;line-height:2;margin-bottom:16px;">
+          <div>1️⃣ לחץ כאן על "נתק WhatsApp"</div>
+          <div>2️⃣ סגור את חלון ה-Bridge במחשב</div>
+          <div>3️⃣ פתח מחדש את ה-Bridge (לחץ פעמיים על הקיצור בדסקטופ)</div>
+          <div>4️⃣ חזור לכאן ← לחץ "חיבור ווטסאפ" ← סרוק QR עם המספר החדש</div>
+        </div>
+        <p style="font-size:0.8rem;color:var(--text3);margin-bottom:14px;">✅ כל נתוני הבניין, הדיירים והתשלומים נשמרים — רק ה-WhatsApp מתחלף.</p>
         <button class="btn btn-secondary" onclick="resetWaAuth()" id="btnResetAuth">
-          🔄 נתק והתחבר מחדש עם QR חדש
+          🔌 נתק WhatsApp
         </button>
         <div id="resetAuthMsg" style="display:none;margin-top:10px;font-size:0.84rem;"></div>
       </div>
@@ -2096,27 +2103,24 @@ async function sendEmailToTenants(unpaidOnly) {
 async function resetWaAuth() {
   const btn = document.getElementById('btnResetAuth');
   const msg = document.getElementById('resetAuthMsg');
-  if (!confirm('האם לנתק את WhatsApp ולבקש QR חדש?\nכל נתוני הבניין יישמרו.')) return;
+  if (!confirm('האם לנתק את WhatsApp?\nכל נתוני הבניין יישמרו.')) return;
   btn.disabled = true;
-  btn.textContent = '⏳ שולח פקודה...';
+  btn.textContent = '⏳ מנתק...';
   msg.style.display = 'none';
   try {
     const r = await fetch(API+'/wa/reset-auth', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
     const d = await r.json();
-    if (d.ok) {
-      msg.style.color = 'var(--accent)';
-      msg.textContent = '✅ הפקודה נשלחה — ה-Bridge יתנתק ויציג QR חדש תוך כמה שניות. לחץ "חיבור ווטסאפ" לסריקה.';
-      msg.style.display = 'block';
-      btn.textContent = '✅ פקודה נשלחה';
-    } else {
-      throw new Error(d.error || 'שגיאה');
-    }
+    if (!d.ok) throw new Error(d.error || 'שגיאה');
+    msg.style.color = 'var(--accent)';
+    msg.innerHTML = '✅ WhatsApp נותק.<br><br>המשך לשלב 2: סגור את חלון ה-Bridge ← פתח מחדש ← חזור ולחץ "חיבור ווטסאפ"';
+    msg.style.display = 'block';
+    btn.textContent = '✅ נותק';
   } catch(e) {
     msg.style.color = 'var(--danger)';
     msg.textContent = '❌ שגיאה: ' + e.message;
     msg.style.display = 'block';
     btn.disabled = false;
-    btn.textContent = '🔄 נתק והתחבר מחדש עם QR חדש';
+    btn.textContent = '🔌 נתק WhatsApp';
   }
 }
 
@@ -4588,6 +4592,17 @@ const TS_ITEMS = [
       "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
       "לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ — אם מתבקש QR, סרוק שוב",
       "אין צורך להריץ את המתקין שוב — רק לחץ על קיצור הדרך 'VaadPro Bridge' על הדסקטופ"
+    ]
+  },
+  {
+    cat: "ווטסאפ",
+    q: "רוצה להחליף מספר WhatsApp / חבר ועד חדש רוצה להתחבר",
+    a: [
+      "עבור להגדרות ← 'החלפת מספר WhatsApp' ← לחץ 'נתק WhatsApp'",
+      "סגור את חלון ה-Bridge במחשב",
+      "פתח מחדש את ה-Bridge — לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ",
+      "חזור לאפליקציה ← לחץ 'חיבור ווטסאפ' ← סרוק QR עם המספר החדש",
+      "כל נתוני הבניין, הדיירים והתשלומים נשמרים — רק ה-WhatsApp מתחלף"
     ]
   },
   {
