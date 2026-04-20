@@ -855,6 +855,19 @@ function vpLogout() {
     </div>
 
     <div class="card">
+      <div class="card-header">🔄 חיבור WhatsApp מחדש</div>
+      <div class="card-body">
+        <p style="font-size:0.84rem;color:var(--text2);margin-bottom:14px;">
+          חבר ועד אחר רוצה לנהל? רוצה לעבור לטלפון אחר? לחץ כאן לאיפוס החיבור — <strong>כל נתוני הבניין נשמרים</strong>, רק ה-WhatsApp מתנתק ומבקש QR חדש.
+        </p>
+        <button class="btn btn-secondary" onclick="resetWaAuth()" id="btnResetAuth">
+          🔄 נתק והתחבר מחדש עם QR חדש
+        </button>
+        <div id="resetAuthMsg" style="display:none;margin-top:10px;font-size:0.84rem;"></div>
+      </div>
+    </div>
+
+    <div class="card">
       <div class="card-header">⚙️ הגדרות תשלום ותזמון
         <button class="help-btn" onclick="showHelp('settings')">?</button>
       </div>
@@ -2078,6 +2091,33 @@ async function sendEmailToTenants(unpaidOnly) {
 
   statusEl.textContent = '';
   toast('נשלחו ' + sent + ' מיילים' + (failed ? ' | נכשלו ' + failed : ''), sent ? 'success' : 'error');
+}
+
+async function resetWaAuth() {
+  const btn = document.getElementById('btnResetAuth');
+  const msg = document.getElementById('resetAuthMsg');
+  if (!confirm('האם לנתק את WhatsApp ולבקש QR חדש?\nכל נתוני הבניין יישמרו.')) return;
+  btn.disabled = true;
+  btn.textContent = '⏳ שולח פקודה...';
+  msg.style.display = 'none';
+  try {
+    const r = await fetch(API+'/wa/reset-auth', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+    const d = await r.json();
+    if (d.ok) {
+      msg.style.color = 'var(--accent)';
+      msg.textContent = '✅ הפקודה נשלחה — ה-Bridge יתנתק ויציג QR חדש תוך כמה שניות. לחץ "חיבור ווטסאפ" לסריקה.';
+      msg.style.display = 'block';
+      btn.textContent = '✅ פקודה נשלחה';
+    } else {
+      throw new Error(d.error || 'שגיאה');
+    }
+  } catch(e) {
+    msg.style.color = 'var(--danger)';
+    msg.textContent = '❌ שגיאה: ' + e.message;
+    msg.style.display = 'block';
+    btn.disabled = false;
+    btn.textContent = '🔄 נתק והתחבר מחדש עם QR חדש';
+  }
 }
 
 async function sendAll() {
