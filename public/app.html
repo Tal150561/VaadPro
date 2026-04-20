@@ -855,7 +855,11 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">🔄 החלפת מספר WhatsApp</div>
+      <div class="card-header" style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleResetWa()">
+        <span>🔄 החלפת מספר WhatsApp</span>
+        <span id="resetWaIcon" style="font-size:0.75rem;color:var(--text3);">▶</span>
+      </div>
+      <div id="resetWaBody" style="display:none;">
       <div class="card-body">
         <p style="font-size:0.84rem;color:var(--text2);margin-bottom:14px;">
           רוצה לעבור למספר אחר? חבר ועד חדש רוצה להתחבר? פעל לפי השלבים:
@@ -871,6 +875,7 @@ function vpLogout() {
           🔌 נתק WhatsApp
         </button>
         <div id="resetAuthMsg" style="display:none;margin-top:10px;font-size:0.84rem;"></div>
+      </div>
       </div>
     </div>
 
@@ -2100,6 +2105,13 @@ async function sendEmailToTenants(unpaidOnly) {
   toast('נשלחו ' + sent + ' מיילים' + (failed ? ' | נכשלו ' + failed : ''), sent ? 'success' : 'error');
 }
 
+function toggleResetWa() {
+  const body = document.getElementById('resetWaBody');
+  const icon = document.getElementById('resetWaIcon');
+  if (body.style.display === 'none') { body.style.display = 'block'; icon.textContent = '▼'; }
+  else { body.style.display = 'none'; icon.textContent = '▶'; }
+}
+
 async function resetWaAuth() {
   const btn = document.getElementById('btnResetAuth');
   const msg = document.getElementById('resetAuthMsg');
@@ -2115,6 +2127,11 @@ async function resetWaAuth() {
     msg.innerHTML = '✅ WhatsApp נותק.<br><br>המשך לשלב 2: סגור את חלון ה-Bridge ← פתח מחדש ← חזור ולחץ "חיבור ווטסאפ"';
     msg.style.display = 'block';
     btn.textContent = '✅ נותק';
+    // Re-enable after 30 seconds to allow reconnection
+    setTimeout(() => {
+      btn.disabled = false;
+      btn.textContent = '🔌 נתק WhatsApp';
+    }, 30000);
   } catch(e) {
     msg.style.color = 'var(--danger)';
     msg.textContent = '❌ שגיאה: ' + e.message;
