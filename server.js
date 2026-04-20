@@ -34,8 +34,8 @@ if "%BRIDGE_DIR:~-1%"=="\" set BRIDGE_DIR=%BRIDGE_DIR:~0,-1%
 :: Download bridge.js if missing
 if not exist "%BRIDGE_DIR%\bridge.js" (
     echo  Downloading bridge.js...
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile '%TEMP%\bridge.js.tmp' -UseBasicParsing"
-    if exist "%TEMP%\bridge.js.tmp" move /y "%TEMP%\bridge.js.tmp" "%BRIDGE_DIR%\bridge.js" >nul 2>&1
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile 'C:\Windows\Temp\vaadpro_bridge.js' -UseBasicParsing"
+    if exist "C:\Windows\Temp\vaadpro_bridge.js" move /y "C:\Windows\Temp\vaadpro_bridge.js" "%BRIDGE_DIR%\bridge.js" >nul 2>&1
 )
 
 if not exist "%BRIDGE_DIR%\bridge.js" (
@@ -55,7 +55,7 @@ if not defined NODE_EXE (
     echo  Node.js not found. Downloading and installing automatically...
     echo  This may take 2-3 minutes. Please wait.
     echo.
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile '%TEMP%\node_setup.msi' -UseBasicParsing; Start-Process msiexec -ArgumentList '/i %TEMP%\node_setup.msi /quiet /norestart' -Wait; Remove-Item '%TEMP%\node_setup.msi' -Force"
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://nodejs.org/dist/v20.11.1/node-v20.11.1-x64.msi' -OutFile 'C:\Windows\Temp\node_setup.msi' -UseBasicParsing; Start-Process msiexec -ArgumentList '/i C:\Windows\Temp\node_setup.msi /quiet /norestart' -Wait; Remove-Item 'C:\Windows\Temp\node_setup.msi' -Force"
     set "NODE_EXE=C:\Program Files\nodejs\node.exe"
     echo.
     echo  Node.js installed! Please restart your computer and run VaadPro Bridge again.
@@ -71,12 +71,11 @@ if not exist "%BRIDGE_DIR%\node_modules" (
     echo   Please wait ^(~30 seconds^).
     echo  ========================================
     echo.
-    set "NM_ZIP=%BRIDGE_DIR%\node_modules.zip"
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/node-modules' -OutFile '%BRIDGE_DIR%\node_modules.zip' -UseBasicParsing"
-    if exist "%BRIDGE_DIR%\node_modules.zip" (
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/node-modules' -OutFile 'C:\Windows\Temp\vaadpro_nm.zip' -UseBasicParsing"
+    if exist "C:\Windows\Temp\vaadpro_nm.zip" (
         echo  Extracting...
-        powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.Compression.ZipFile]::ExtractToDirectory('%BRIDGE_DIR%\node_modules.zip', '%BRIDGE_DIR%')"
-        del "%BRIDGE_DIR%\node_modules.zip" >nul 2>&1
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "[System.IO.Compression.ZipFile]::ExtractToDirectory('C:\Windows\Temp\vaadpro_nm.zip', '%BRIDGE_DIR%')"
+        del "C:\Windows\Temp\vaadpro_nm.zip" >nul 2>&1
         echo  Done!
         echo.
     )
@@ -99,6 +98,10 @@ if not exist "%BRIDGE_DIR%\node_modules" (
     exit /b 1
 )
 
+:: Auto-update bridge.js from server
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile 'C:\Windows\Temp\vaadpro_bridge.js' -UseBasicParsing" >nul 2>&1
+if exist "C:\Windows\Temp\vaadpro_bridge.js" move /y "C:\Windows\Temp\vaadpro_bridge.js" "%BRIDGE_DIR%\bridge.js" >nul 2>&1
+
 :: Create Desktop shortcut (first time)
 set "SHORTCUT=%USERPROFILE%\Desktop\VaadPro Bridge.lnk"
 if not exist "%SHORTCUT%" (
@@ -111,10 +114,6 @@ if %errorlevel%==0 (
     echo  VaadPro Bridge is already running. Check your taskbar.
     pause & exit /b 0
 )
-
-:: Auto-update bridge.js from server
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest 'https://vaadpro.org/api/bridge/bridge-js-public' -OutFile '%TEMP%\bridge.js.tmp' -UseBasicParsing" >nul 2>&1
-if exist "%TEMP%\bridge.js.tmp" move /y "%TEMP%\bridge.js.tmp" "%BRIDGE_DIR%\bridge.js" >nul 2>&1
 
 :: Start Bridge
 start "VaadPro Bridge" cmd /k "cd /d "%BRIDGE_DIR%" && echo. && echo  ======================================== && echo   VaadPro Bridge - Running && echo   Do NOT close this window! && echo  ======================================== && echo. && "%NODE_EXE%" bridge.js"
