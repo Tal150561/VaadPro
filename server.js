@@ -10,6 +10,8 @@ const fs        = require('fs');
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
+const XLSX   = require('xlsx');
 const { Client, LocalAuth } = require('whatsapp-web.js');
 const qrcode    = require('qrcode');
 
@@ -2779,6 +2781,170 @@ app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
 
 
 // ── Start ────────────────────────────────────────────────────────
+
+// ════════════════════════════════════════════════════════════════════
+// BANK SYNC API
+// ════════════════════════════════════════════════════════════════════
+
+// ── Multer — memory storage ────────────────────────────────────────
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
+
+// ── API key auth middleware ────────────────────────────────────────
+function bankSyncAuth(req, res, next) {
+  const apiKey = req.headers['x-api-key'];
+  if (!apiKey) return res.status(401).json({ ok: false, error: 'Missing x-api-key header' });
+  const users = loadUsers();
+  const user  = users.find(u => {
+    const d = loadTenantData(u.tenantId || u.id);
+    return d.config && d.config.bankSyncApiKey === apiKey;
+  });
+  if (!user) return res.status(401).json({ ok: false, error: 'Invalid API key' });
+  req.user = { tenantId: user.tenantId || user.id };
+  next();
+}
+
+// ── analyzeBankRows (server-side port of client logic) ─────────────
+function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config) {
+  const iName   = parseInt(mapping.colName   ?? -1);
+  const iAmount = parseInt(mapping.colAmount ?? -1);
+  const iDate   = parseInt(mapping.colDate   ?? -1);
+  const iNote   = parseInt(mapping.colNote   ?? -1);
+  const ta      = mapping.bankAmount ? parseFloat(mapping.bankAmount) : null;
+  const tol     = parseFloat(mapping.bankTolerance ?? 5);
+  const filterByAmount = ta !== null && !isNaN(ta) && ta > 0;
+  const min = filterByAmount ? ta - tol : -Infinity;
+  const max = filterByAmount ? ta + tol :  Infinity;
+
+  const dataRows = rows.slice(1);
+  const mr = [];
+
+  dataRows.forEach((row, rowIdx) => {
+    let matchAmount = null;
+    if (iAmount >= 0) {
+      const cell = row[iAmount];
+      if (cell !== null && cell !== '' && cell !== undefined) {
+        const n = parseFloat(String(cell).replace(/[,\s₪]/g, ''));
+        if (!isNaN(n) && n > 0) {
+          if (filterByAmount) { if (n >= min && n <= max) matchAmount = n; }
+          else matchAmount = n;
+        }
+      }
+    } else {
+      row.forEach(cell => {
+        if (matchAmount !== null || (!cell && cell !== 0)) return;
+        const n = parseFloat(String(cell).replace(/[,\s₪]/g, ''));
+        if (isNaN(n) || n <= 0 || n < 10 || n > 500000) return;
+        if (n >= 1900 && n <= 2100) return;
+        if (Number.isInteger(n) && n <= 31) return;
+        if (filterByAmount) { if (n >= min && n <= max) matchAmount = n; }
+        else matchAmount = n;
+      });
+    }
+    if (matchAmount !== null) {
+      mr.push({
+        row, amount: matchAmount, rowIdx,
+        nameVal: iName >= 0 ? String(row[iName] || '') : row.join(' '),
+        dateVal: iDate >= 0 ? String(row[iDate] || '') : '',
+      });
+    }
+  });
+
+  const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  let em;
+  if (monthKey) {
+    const [, m] = monthKey.split('-');
+    em = MONTHS_HE[parseInt(m) - 1];
+  } else {
+    em = getMonthKey(config);
+  }
+
+  function kwMatches(kws, rt) {
+    return kws.some(k => {
+      if (!k || k.length < 2) return false;
+      const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      return new RegExp('(?:^|[\\s,/(-])' + esc + '(?=[\\s,/)-]|$)').test(rt);
+    });
+  }
+
+  const matched = [], unmatched = [];
+  const newSentLog = Object.assign({}, sentLog);
+
+  tenants.forEach(tenant => {
+    const kw = tenant.keywords
+      ? tenant.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
+      : [];
+    const ps = tenant.phone.replace(/\D/g, '').slice(-7);
+    const nameParts = tenant.name.trim().toLowerCase().split(/\s+/).filter(p => p.length > 1);
+    const seenRowIdx = new Set();
+    const tenantMatches = [];
+
+    mr.forEach(m => {
+      if (seenRowIdx.has(m.rowIdx)) return;
+      const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
+      const rtFull = m.row.join(' ').toLowerCase();
+      let type = null;
+      if (kw.length && kwMatches(kw, rt))                          type = 'keyword';
+      if (!type && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';
+      if (!type && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
+      if (type) { seenRowIdx.add(m.rowIdx); tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal }); }
+    });
+
+    if (tenantMatches.length > 0) {
+      const totalAmount = tenantMatches.reduce((s, m) => s + m.amount, 0);
+      const payerName   = tenantMatches[0].payerName || '';
+      newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
+      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType });
+    } else {
+      unmatched.push({ tenantId: tenant.id, name: tenant.name });
+    }
+  });
+
+  return { matched, unmatched, newSentLog, month: em };
+}
+
+// ── GET /api/bank-mapping ──────────────────────────────────────────
+app.get('/api/bank-mapping', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json({ ok: true, mapping: d.bankMapping || null });
+});
+
+// ── POST /api/bank-mapping ─────────────────────────────────────────
+app.post('/api/bank-mapping', authMiddleware, (req, res) => {
+  const { colName, colAmount, colDate, colNote, bankAmount, bankTolerance } = req.body;
+  const d = loadTenantData(req.user.tenantId);
+  if (!d.config.bankSyncApiKey) {
+    d.config.bankSyncApiKey = uuidv4();
+  }
+  const mapping = { colName, colAmount, colDate, colNote, bankAmount, bankTolerance };
+  saveTenantData(req.user.tenantId, { bankMapping: mapping, config: d.config });
+  res.json({ ok: true, mapping, apiKey: d.config.bankSyncApiKey });
+});
+
+// ── POST /api/import-bank ──────────────────────────────────────────
+app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ ok: false, error: 'No file uploaded' });
+    const d = loadTenantData(req.user.tenantId);
+    if (!d.bankMapping) return res.status(400).json({ ok: false, error: 'No bank mapping saved. Open VaadPro and click BankSync button first.' });
+
+    const wb   = XLSX.read(req.file.buffer, { type: 'buffer' });
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
+    const monthKey = req.body.monthKey || null;
+
+    const { matched, unmatched, newSentLog, month } = analyzeBankRowsServer(
+      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
+    );
+
+    saveTenantData(req.user.tenantId, { sentLog: newSentLog });
+
+    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
+  } catch (err) {
+    console.error('[import-bank]', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
