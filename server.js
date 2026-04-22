@@ -2902,6 +2902,12 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   return { matched, unmatched, newSentLog, month: em };
 }
 
+// ── GET /api/last-bank-import ─────────────────────────────────────
+app.get('/api/last-bank-import', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json({ ok: true, result: d.lastBankSyncImport || null });
+});
+
 // ── GET /api/bank-mapping ──────────────────────────────────────────
 app.get('/api/bank-mapping', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
@@ -2936,7 +2942,15 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
     );
 
-    saveTenantData(req.user.tenantId, { sentLog: newSentLog });
+    const importResult = {
+      timestamp: new Date().toISOString(),
+      month,
+      matched: matched.length,
+      unmatched: unmatched.length,
+      matchedTenants: matched,
+      unmatchedTenants: unmatched,
+    };
+    saveTenantData(req.user.tenantId, { sentLog: newSentLog, lastBankSyncImport: importResult });
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
   } catch (err) {
