@@ -506,7 +506,7 @@ function vpLogout() {
     <!-- BankSync Last Import Status -->
     <div id="bankSyncStatus" style="display:none;margin-bottom:12px;padding:12px 16px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;">
       <div style="display:flex;align-items:center;justify-content:space-between;">
-        <span>🤖 <strong>BankSync Agent</strong> — ייבוא אחרון:</span>
+        <span>🤖 <strong>BankSync Agent</strong> — ייבוא אחרון: <button class="help-btn" onclick="showHelp('banksync')" style="margin-right:6px;">?</button></span>
         <span id="bankSyncTime" style="color:var(--text-muted);font-size:0.78rem;"></span>
       </div>
       <div id="bankSyncSummary" style="margin-top:6px;"></div>
@@ -680,29 +680,6 @@ function vpLogout() {
   <!-- TAB SETTINGS -->
   <div class="tab-panel" id="tab-settings">
 
-    <!-- כרטיס שיתוף וירלי -->
-    <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
-      <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
-      <div class="card-body">
-        <p style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;">שלח לחבר שמנהל ועד בית — הוא יקבל 30 יום ניסיון חינם, ואתה עוזר לו לחסוך שעות עבודה 😊</p>
-
-        <div style="margin-bottom:12px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
-            <span style="font-size:0.78rem;color:var(--text3);">תוכן ההודעה (ניתן לעריכה)</span>
-            <button class="btn btn-secondary btn-sm" onclick="shareResetMsg()" style="font-size:0.72rem;padding:2px 8px;">↺ אפס</button>
-          </div>
-          <textarea id="shareMsg" rows="5" style="width:100%;font-size:0.82rem;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);resize:vertical;direction:rtl;"></textarea>
-        </div>
-
-        <div style="display:flex;gap:10px;flex-wrap:wrap;">
-          <button class="btn" style="background:rgba(37,211,102,.15);color:#25d366;border:1px solid rgba(37,211,102,.3);" onclick="shareVaadProWA()">📱 שתף בווטסאפ</button>
-          <button class="btn btn-secondary" onclick="shareVaadProEmail()">📧 שתף במייל</button>
-          <button class="btn btn-secondary btn-sm" onclick="copyShareMsg()">📋 העתק הודעה</button>
-          <button class="btn btn-secondary btn-sm" onclick="copyReferralLink()">🔗 העתק קישור</button>
-        </div>
-        <div id="shareConfirm" style="display:none;font-size:0.82rem;color:#25d366;margin-top:10px;"></div>
-      </div>
-    </div>
 
     <div class="card">
       <div class="card-header">📱 חיבור ווטסאפ — הגדרה ראשונית
@@ -943,6 +920,30 @@ function vpLogout() {
           </div>
         </div>
         <div class="hint" style="margin-top:10px;">⚠️ שחזור יחליף את כל הנתונים הקיימים – גבה קודם!</div>
+      </div>
+    </div>
+
+    <!-- כרטיס שיתוף וירלי -->
+    <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
+      <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
+      <div class="card-body">
+        <p style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;">שלח לחבר שמנהל ועד בית — הוא יקבל 30 יום ניסיון חינם, ואתה עוזר לו לחסוך שעות עבודה 😊</p>
+
+        <div style="margin-bottom:12px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+            <span style="font-size:0.78rem;color:var(--text3);">תוכן ההודעה (ניתן לעריכה)</span>
+            <button class="btn btn-secondary btn-sm" onclick="shareResetMsg()" style="font-size:0.72rem;padding:2px 8px;">↺ אפס</button>
+          </div>
+          <textarea id="shareMsg" rows="5" style="width:100%;font-size:0.82rem;padding:8px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);resize:vertical;direction:rtl;"></textarea>
+        </div>
+
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button class="btn" style="background:rgba(37,211,102,.15);color:#25d366;border:1px solid rgba(37,211,102,.3);" onclick="shareVaadProWA()">📱 שתף בווטסאפ</button>
+          <button class="btn btn-secondary" onclick="shareVaadProEmail()">📧 שתף במייל</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyShareMsg()">📋 העתק הודעה</button>
+          <button class="btn btn-secondary btn-sm" onclick="copyReferralLink()">🔗 העתק קישור</button>
+        </div>
+        <div id="shareConfirm" style="display:none;font-size:0.82rem;color:#25d366;margin-top:10px;"></div>
       </div>
     </div>
 
@@ -4995,6 +4996,32 @@ const HELP_CONTENT = {
       <p><code>{שם}</code> — יוחלף בשם הדייר אוטומטית.</p>
       <h3>היסטוריה</h3>
       <p>כל ההודעות שנשלחו מופיעות בתחתית הטאב.</p>
+    `
+  },
+  banksync: {
+    title: '🤖 BankSync Agent — ייבוא אוטומטי',
+    body: `
+      <h3>מה זה BankSync Agent?</h3>
+      <p>כלי <strong>אופציונלי</strong> המותקן על המחשב שלך. הוא מתחבר אוטומטית לחשבון הבנק, מוריד תנועות ושולח אותן ישירות ל-VaadPro.</p>
+      <p>אם אין לך Agent — ניתן להמשיך לייבא קבצי בנק ידנית כרגיל.</p>
+      <h3>תהליך העבודה</h3>
+      <ol>
+        <li>ה-Agent רץ אוטומטית ב-1 לכל חודש בשעה 08:00</li>
+        <li>מתחבר לבנק ומוריד תנועות כ-XLS</li>
+        <li>שולח את הקובץ ל-VaadPro</li>
+        <li>VaadPro מזהה דיירים ומסמן כ-"שילם"</li>
+        <li>מופיעה התראה ב-Windows עם סיכום</li>
+      </ol>
+      <h3>פקודות Agent</h3>
+      <ul>
+        <li><code>npm start</code> — הורדה ידנית בלבד</li>
+        <li><code>npm run sync</code> — הורדה + שליחה ל-VaadPro</li>
+        <li><code>npm run debug</code> — הרצה עם דפדפן גלוי לבדיקה</li>
+      </ul>
+      <h3>דיירים לא זוהו?</h3>
+      <p>ודא שלכל דייר מוגדרות <strong>מילות חיפוש</strong> תואמות לשם שמופיע בבנק.</p>
+      <h3>הייבוא נכשל?</h3>
+      <p>הקובץ נשמר אוטומטית בתיקיית Downloads לייבוא ידני.</p>
     `
   },
   settings: {
