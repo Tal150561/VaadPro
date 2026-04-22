@@ -2367,9 +2367,15 @@ function render() {
       const isB=paid&&String(lv).startsWith('bank_import');
       const isW=paid&&!isM&&!isB;
       const st=paid?new Date(String(lv).replace('manual_paid_','').replace('bank_import_','')).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'';
+      // Extract amount from bank_import string: bank_import_<iso>_<amount>_payer_<name>
+      let bankAmount = '';
+      if(isB) {
+        const amtMatch = String(lv).match(/_([\d.]+)_payer_/);
+        if(amtMatch) bankAmount = ' · ' + parseFloat(amtMatch[1]).toLocaleString() + '₪';
+      }
       let sb='';
       if(isM) sb='<span class="badge badge-paid-manual">💵 שילם (ידני)</span>';
-      else if(isB) sb='<span class="badge badge-paid-bank">🏦 שילם (בנק)</span>';
+      else if(isB) sb='<span class="badge badge-paid-bank">🏦 שילם (בנק)'+bankAmount+'</span>';
       else if(isW) sb='<span class="badge badge-sent">📱 תזכורת נשלחה '+st+'</span>';
       else sb='<span class="badge badge-pending">⏳ לא שילם</span>';
       const toggle=paid
