@@ -2855,7 +2855,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     const [, m] = monthKey.split('-');
     em = MONTHS_HE[parseInt(m) - 1];
   } else {
-    em = getMonthKey(config);
+    // getMonthKey returns YYYY-MM, convert to Hebrew month name
+    const mk = getMonthKey(config);
+    const [, mm] = mk.split('-');
+    em = MONTHS_HE[parseInt(mm) - 1];
   }
 
   function kwMatches(kws, rt) {

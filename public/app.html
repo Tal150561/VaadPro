@@ -503,6 +503,15 @@ function vpLogout() {
       </div>
     </div>
 
+    <!-- BankSync Last Import Status -->
+    <div id="bankSyncStatus" style="display:none;margin-bottom:12px;padding:12px 16px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;">
+      <div style="display:flex;align-items:center;justify-content:space-between;">
+        <span>🤖 <strong>BankSync Agent</strong> — Last import:</span>
+        <span id="bankSyncTime" style="color:var(--text-muted);font-size:0.78rem;"></span>
+      </div>
+      <div id="bankSyncSummary" style="margin-top:6px;"></div>
+    </div>
+
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleBankSection()">
         🏦 ייבוא קובץ בנק – זיהוי מי שילם
@@ -512,15 +521,6 @@ function vpLogout() {
       <div id="bankSectionBody" style="display:none;">
       <div class="card-body">
         <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הורד קובץ Excel/CSV של תנועות מהבנק וגרור לכאן. האפליקציה תזהה מי שילם לפי עמודות שתבחר.</p>
-
-        <!-- BankSync Last Import Status -->
-        <div id="bankSyncStatus" style="display:none;margin-bottom:12px;padding:12px 16px;border-radius:10px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;">
-          <div style="display:flex;align-items:center;justify-content:space-between;">
-            <span>🤖 <strong>BankSync Agent</strong> — Last import:</span>
-            <span id="bankSyncTime" style="color:var(--text-muted);font-size:0.78rem;"></span>
-          </div>
-          <div id="bankSyncSummary" style="margin-top:6px;"></div>
-        </div>
 
         <!-- Drop Zone -->
         <div class="drop-zone" id="dropZone" onclick="document.getElementById('bankFile').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
@@ -1498,7 +1498,7 @@ function switchTab(name) {
   document.getElementById('tab-'+name).classList.add('active');
   document.querySelectorAll('.tab-btn').forEach(function(b){ if(b.getAttribute('onclick')&&b.getAttribute('onclick').includes(name)) b.classList.add('active'); });
   if (name === 'bulletin') { blRenderTenantGrid(); blRenderHistory(); }
-  if (name === 'bank') { loadBankSyncStatus(); }
+  if (name === 'payments') { loadBankSyncStatus(); }
   if (name === 'trends') { trendRenderSaved(); }
 }
 
