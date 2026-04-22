@@ -425,7 +425,12 @@ function vpLogout() {
   <div class="tab-panel active" id="tab-tenants">
 
     <div class="card">
-      <div class="card-header">➕ הוספת דייר <button class="help-btn" onclick="showHelp('tenants')">?</button></div>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleAddTenant()">
+        ➕ הוספת דייר
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('tenants')">?</button>
+        <span id="addTenantIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div id="addTenantBody" style="display:none;">
       <div class="card-body">
         <div class="add-row">
           <div><label>שם מלא</label><input type="text" id="inName" placeholder="ישראל ישראלי" onkeydown="if(event.key==='Enter')addTenant()"></div>
@@ -436,6 +441,7 @@ function vpLogout() {
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
         </div>
         <div class="hint" style="margin-top:8px;">מילות חיפוש: ביטויים מופרדים בפסיקים שמופיעים בקובץ הבנק עבור דייר זה</div>
+      </div>
       </div>
     </div>
 
@@ -1936,6 +1942,15 @@ function copyReferralLink() {
     el.textContent = '✅ הקישור הועתק! vaadpro.org';
     setTimeout(function() { el.style.display = 'none'; }, 3000);
   });
+}
+
+function toggleAddTenant() {
+  const body = document.getElementById('addTenantBody');
+  const icon = document.getElementById('addTenantIcon');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  icon.textContent = open ? '▶ הרחב' : '▲ כווץ';
 }
 
 function toggleBankSection() {
