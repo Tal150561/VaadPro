@@ -901,7 +901,7 @@ function vpLogout() {
     <div class="card">
       <div class="card-header">✉️ תבנית הודעה</div>
       <div class="card-body">
-        <textarea id="cfgTemplate" onInput="saveConfig()" style="min-height:110px;"></textarea>
+        <textarea id="cfgTemplate" onInput="updatePreview()" style="min-height:110px;"></textarea>
         <div class="var-tags">
           <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
           <span class="var-tag" onclick="insertVar('{שם}')">{ שם }</span>
@@ -911,6 +911,10 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{סה&quot;כ}')">{ סה״כ }</span>
         </div>
         <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח</div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+          <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
+          <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
+        </div>
         <div style="margin-top:16px;"><div class="msg-preview" id="msgPreview"></div></div>
       </div>
     </div>
@@ -1773,7 +1777,23 @@ function insertVar(v) {
   const s=ta.selectionStart,e=ta.selectionEnd;
   ta.value=ta.value.substring(0,s)+v+ta.value.substring(e);
   ta.focus();ta.setSelectionRange(s+v.length,s+v.length);
-  saveConfig();
+  updatePreview();
+}
+
+async function saveTemplate() {
+  const tmpl = document.getElementById('cfgTemplate').value;
+  const statusEl = document.getElementById('templateSaveStatus');
+  statusEl.textContent = '...שומר';
+  data.config = Object.assign({}, data.config, { template: tmpl });
+  try {
+    const r = await fetch(API+'/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: data.config }) });
+    const d = await r.json();
+    if (d.effectiveMonth) data.effectiveMonth = d.effectiveMonth;
+    statusEl.textContent = '✅ נשמר';
+    setTimeout(function(){ statusEl.textContent=''; }, 3000);
+  } catch(e) {
+    statusEl.textContent = '❌ שגיאה בשמירה';
+  }
 }
 
 async function addTenant() {
