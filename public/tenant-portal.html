@@ -276,6 +276,7 @@
       </div>
       <div id="currentMonth" class="current-month"></div>
       <div id="currentAmount" class="current-amount"></div>
+      <div id="openingDebtBanner" style="display:none;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:8px 12px;margin-top:8px;font-size:0.85rem;color:#f85149;font-weight:700;"></div>
       <div id="currentMeta" class="current-meta"></div>
     </div>
 
@@ -494,6 +495,16 @@ function render(d) {
 
   document.getElementById('currentMonth').textContent = c.monthLabel;
   document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
+
+  // Opening debt banner
+  const debtBanner = document.getElementById('openingDebtBanner');
+  const openingDebt = Math.max(0, parseFloat(d.tenant.openingDebt) || 0);
+  if (openingDebt > 0) {
+    debtBanner.style.display = 'block';
+    debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + openingDebt + ' ₪</strong><br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: ' + (c.amount + openingDebt) + ' ₪</span>';
+  } else {
+    debtBanner.style.display = 'none';
+  }
 
   let meta = '';
   if (c.status === 'paid') {

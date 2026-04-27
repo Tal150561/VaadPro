@@ -610,7 +610,14 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const globalAmount = (d.config||{}).amount || 300;
   const amount = tenant.customAmount || globalAmount;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
-  const msg    = tmpl.replace(/{שם}/g,tenant.name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
+  const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+  const total  = amount + debt;
+  const msg    = tmpl
+    .replace(/{שם}/g, tenant.name)
+    .replace(/{חודש}/g, month)
+    .replace(/{סכום}/g, amount)
+    .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+    .replace(/{סה"כ}/g, debt > 0 ? total : amount);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
     const key = tenant.id+'_'+month; d.sentLog[key]='sent_'+new Date().toISOString();
@@ -632,7 +639,14 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   let sent = 0;
   for (const tenant of d.tenants) {
     const amount = tenant.customAmount || globalAmount;
-    const msg = tmpl.replace(/{שם}/g,tenant.name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount);
+    const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+    const total  = amount + debt;
+    const msg = tmpl
+      .replace(/{שם}/g, tenant.name)
+      .replace(/{חודש}/g, month)
+      .replace(/{סכום}/g, amount)
+      .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+      .replace(/{סה"כ}/g, debt > 0 ? total : amount);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
       d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString();
@@ -1730,7 +1744,14 @@ async function runAutoSendCron() {
         const key = tenant.id + '_' + month;
         if (d.sentLog[key]) continue; // already paid or reminded — skip
         const amount = tenant.customAmount || globalAmount;
-        const msg = tmpl.replace(/{שם}/g, tenant.name).replace(/{חודש}/g, month).replace(/{סכום}/g, amount);
+        const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+        const total  = amount + debt;
+        const msg = tmpl
+          .replace(/{שם}/g, tenant.name)
+          .replace(/{חודש}/g, month)
+          .replace(/{סכום}/g, amount)
+          .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+          .replace(/{סה"כ}/g, debt > 0 ? total : amount);
         try {
           await sendWaMsg(user.tenantId, tenant.phone, msg);
           d.sentLog[key] = 'sent_' + new Date().toISOString();
@@ -2638,7 +2659,7 @@ app.get('/api/portal/:token', (req, res) => {
 
   res.json({
     ok: true,
-    tenant: { name: tenant.name },
+    tenant: { name: tenant.name, openingDebt: Math.max(0, parseFloat(tenant.openingDebt) || 0) },
     building: { name: d.config?.buildingName || '' },
     current: {
       monthKey:   currentMonthKey,
@@ -2803,6 +2824,21 @@ function bankSyncAuth(req, res, next) {
   next();
 }
 
+// ── applyPaymentToDebt ─────────────────────────────────────────────
+// Applies a payment amount against a tenant's openingDebt first,
+// then returns how much (if any) remains as credit for the current month.
+// Mutates tenant.openingDebt in-place. Returns { debtReduced, creditForMonth }.
+function applyPaymentToDebt(tenant, amount) {
+  const debt = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+  if (debt === 0) return { debtReduced: 0, creditForMonth: amount };
+  if (amount >= debt) {
+    tenant.openingDebt = 0;
+    return { debtReduced: debt, creditForMonth: amount - debt };
+  }
+  tenant.openingDebt = Math.round((debt - amount) * 100) / 100;
+  return { debtReduced: amount, creditForMonth: 0 };
+}
+
 // ── analyzeBankRows (server-side port of client logic) ─────────────
 function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config) {
   const iName   = parseInt(mapping.colName   ?? -1);
@@ -2871,8 +2907,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
 
   const matched = [], unmatched = [];
   const newSentLog = Object.assign({}, sentLog);
+  // Deep-clone tenants so we can mutate openingDebt safely
+  const updatedTenants = tenants.map(t => Object.assign({}, t));
 
-  tenants.forEach(tenant => {
+  updatedTenants.forEach(tenant => {
     const kw = tenant.keywords
       ? tenant.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
       : [];
@@ -2895,14 +2933,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     if (tenantMatches.length > 0) {
       const totalAmount = tenantMatches.reduce((s, m) => s + m.amount, 0);
       const payerName   = tenantMatches[0].payerName || '';
-      newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
-      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType });
+      // Apply payment to opening debt first, then credit current month if remainder
+      const { creditForMonth } = applyPaymentToDebt(tenant, totalAmount);
+      if (creditForMonth > 0) {
+        newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
+      }
+      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: (parseFloat(tenant.openingDebt)||0) === 0 });
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
     }
   });
 
-  return { matched, unmatched, newSentLog, month: em };
+  return { matched, unmatched, newSentLog, updatedTenants, month: em };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -2941,7 +2983,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     const monthKey = req.body.monthKey || null;
 
-    const { matched, unmatched, newSentLog, month } = analyzeBankRowsServer(
+    const { matched, unmatched, newSentLog, updatedTenants, month } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
     );
 
@@ -2953,7 +2995,8 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       matchedTenants: matched,
       unmatchedTenants: unmatched,
     };
-    saveTenantData(req.user.tenantId, { sentLog: newSentLog, lastBankSyncImport: importResult });
+    // Save updatedTenants so openingDebt reductions are persisted
+    saveTenantData(req.user.tenantId, { sentLog: newSentLog, tenants: updatedTenants, lastBankSyncImport: importResult });
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
   } catch (err) {
