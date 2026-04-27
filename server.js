@@ -316,6 +316,20 @@ function getEffectiveMonth(config) {
 
 // Returns YYYY-MM key for paymentHistory (independent of display month name)
 const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+// Calculate total cumulative debt for a tenant:
+// unpaid paymentHistory months + openingDebt (excludes current month)
+function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
+  const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
+  const openingDebt = Math.max(0, parseFloat(
+    (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
+  ));
+  const historyDebt = history
+    .filter(r => !r.paid && r.month !== currentMonthKey)
+    .reduce((s, r) => s + (r.amount || 0), 0);
+  return historyDebt + openingDebt;
+}
+
 function getMonthKey(config) {
   // If manual month is set, map Hebrew name back to YYYY-MM
   if (config && config.manualMonth) {
@@ -610,7 +624,8 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const globalAmount = (d.config||{}).amount || 300;
   const amount = tenant.customAmount || globalAmount;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
-  const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+  const mk     = getMonthKey(d.config);
+  const debt   = calcTotalDebt(d, tenant.id, mk);
   const total  = amount + debt;
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
@@ -639,7 +654,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   let sent = 0;
   for (const tenant of d.tenants) {
     const amount = tenant.customAmount || globalAmount;
-    const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+    const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
@@ -1652,12 +1667,73 @@ app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
   res.json({ ok: true, sentWa, sentEmail, errors });
 });
 
+// ── סגירת חודש — רישום דיירים שלא שילמו ───────────────────────
+// רץ ב-1 לחודש, כותב paid:false לכל דייר שאין לו רשומה לחודש הקודם.
+// לא נוגע ברשומות קיימות — רק מוסיף חסרות.
+function closeMonthUnpaid() {
+  const now = new Date();
+  // חודש קודם כ-YYYY-MM
+  const prevDate  = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey   = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+
+  const users = loadUsers();
+  let closed = 0;
+
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.tenants || !d.tenants.length) continue;
+      if (!d.paymentHistory) d.paymentHistory = {};
+
+      let changed = false;
+
+      for (const tenant of d.tenants) {
+        const tid = String(tenant.id);
+        if (!d.paymentHistory[tid]) d.paymentHistory[tid] = [];
+
+        // אם כבר יש רשומה לחודש הקודם — לא נוגעים
+        const exists = d.paymentHistory[tid].some(r => r.month === prevKey);
+        if (exists) continue;
+
+        const amount = tenant.customAmount || (d.config && d.config.amount) || 300;
+        d.paymentHistory[tid].push({
+          month:     prevKey,
+          paid:      false,
+          amount:    amount,
+          date:      null,
+          type:      'unpaid',
+          name:      tenant.name || '',
+          payerName: ''
+        });
+        changed = true;
+        closed++;
+      }
+
+      if (changed) {
+        saveTenantData(user.tenantId, { paymentHistory: d.paymentHistory });
+      }
+    } catch(e) {
+      console.error(`[closeMonthUnpaid:${user.tenantId}]`, e.message);
+    }
+  }
+
+  if (closed > 0) console.log(`[closeMonthUnpaid] נרשמו ${closed} דיירים כלא שילמו לחודש ${prevKey}`);
+  else console.log(`[closeMonthUnpaid] כל הדיירים מכוסים לחודש ${prevKey}`);
+}
+
 // ── Cron יומי — בדיקת תחזוקה ───────────────────────────────────
 async function runMaintenanceCron() {
   const users = loadUsers();
   const today = new Date();
   today.setHours(0,0,0,0);
   let alertsSent = 0;
+
+  // ב-1 לחודש — סגור את החודש הקודם (רשום מי לא שילם)
+  if (today.getDate() === 1) {
+    console.log('[runMaintenanceCron] ראשון לחודש — מריץ closeMonthUnpaid');
+    closeMonthUnpaid();
+  }
 
   for (const user of users) {
     if (!user.tenantId) continue;
@@ -1744,7 +1820,7 @@ async function runAutoSendCron() {
         const key = tenant.id + '_' + month;
         if (d.sentLog[key]) continue; // already paid or reminded — skip
         const amount = tenant.customAmount || globalAmount;
-        const debt   = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+        const debt   = calcTotalDebt(d, tenant.id, mk);
         const total  = amount + debt;
         const msg = tmpl
           .replace(/{שם}/g, tenant.name)
