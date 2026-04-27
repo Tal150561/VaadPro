@@ -2370,7 +2370,8 @@ function render() {
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
       const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
-      h+='<td style="font-size:0.82rem;">'+displayAmount+'</td>';
+      const displayDebt = (t.openingDebt && t.openingDebt > 0) ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>' : '';
+      h+='<td style="font-size:0.82rem;">'+displayAmount+displayDebt+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td style="white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="startEdit('+t.id+')" title="ערוך">✏️</button> <button class="btn btn-danger-soft" onclick="removeTenant('+t.id+')" title="מחק">🗑️</button></td>';
       h+='</tr>';
@@ -2394,7 +2395,7 @@ function render() {
       const isM=paid&&String(lv).startsWith('manual_paid');
       const isB=paid&&String(lv).startsWith('bank_import');
       const isW=paid&&!isM&&!isB;
-      const st=paid?new Date(String(lv).replace('manual_paid_','').replace('bank_import_','').replace('sent_','')).toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}):'';
+      const st=paid?new Date(String(lv).replace('manual_paid_','').replace('bank_import_','').replace('sent_','')).toLocaleDateString('he-IL',{day:'2-digit',month:'2-digit'}):'';
       // Extract amount from bank_import string: bank_import_<iso>_<amount>_payer_<name>
       let bankAmount = '';
       if(isB) {
@@ -2409,31 +2410,39 @@ function render() {
       const toggle=paid
         ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
         :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>';
-      // Debt: use paymentHistory if available, else fall back to sentLog for current month
+      // Debt: cumulative = unpaid history months + openingDebt + current month if unpaid
       const tHistory = ph[String(t.id)] || [];
       const amount = t.customAmount || (data.config && data.config.amount) || 300;
       const openingDebt = Math.max(0, parseFloat(t.openingDebt) || 0);
+      const paidThisMonth = isM || isB; // only real payments count, not just reminder sent
+      // paymentHistory only has records when bank-import or manual mark occurred.
+      // Unpaid months in history = months where action was recorded but paid=false.
+      const unpaidHistory = tHistory.filter(function(r){ return !r.paid; });
+      const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (r.amount || amount); }, 0);
+      // Current month debt: only add if not paid AND not already tracked in history
+      const currentMonthInHistory = paidThisMonth || tHistory.some(function(r){ return !r.paid; });
+      const currentMonthDebt = paidThisMonth ? 0 : amount;
+      // Total: history unpaid + opening debt + current month (no double-count since history never has unpaid current month)
+      const totalDebt = historyDebt + openingDebt + currentMonthDebt;
       let debtCell;
-      if (tHistory.length > 0) {
-        const debtMonths = tHistory.filter(function(r){ return !r.paid; }).length;
-        const debtAmount = debtMonths * amount;
-        if (debtMonths > 0 || openingDebt > 0) {
-          let parts = [];
-          if (debtMonths > 0) parts.push('<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+debtAmount+'₪</span><span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">('+debtMonths+' חודשים)</span>');
-          if (openingDebt > 0) parts.push('<span style="color:var(--danger);font-size:0.78rem;display:block;">+'+openingDebt+'₪ חוב פתוח</span>');
-          debtCell = parts.join('');
-        } else {
-          debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ מעודכן</span>';
-        }
+      if (paidThisMonth && totalDebt === 0) {
+        debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
+      } else if (paidThisMonth && totalDebt > 0) {
+        // Paid this month but has prior accumulated debt
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+totalDebt+'₪</span>'
+          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">חוב קודם</span>';
+      } else if (totalDebt === amount && openingDebt === 0 && historyDebt === 0) {
+        // Only owes current month, clean slate
+        debtCell = '<span style="color:var(--warn);font-weight:700;font-size:0.85rem;">'+amount+'₪</span>'
+          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">החודש</span>';
       } else {
-        const paidThisMonth = !!data.sentLog[t.id+'_'+em];
-        if (paidThisMonth && openingDebt === 0) {
-          debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ שילם החודש</span>';
-        } else if (openingDebt > 0) {
-          debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+openingDebt+'₪</span><span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">חוב פתוח</span>';
-        } else {
-          debtCell = '<span style="color:var(--warn);font-size:0.8rem;">לא שילם החודש</span>';
-        }
+        // Owes current month + prior debt — show breakdown
+        let breakdown = [];
+        if (currentMonthDebt > 0) breakdown.push('החודש: '+currentMonthDebt+'₪');
+        if (historyDebt > 0) breakdown.push('חודשים קודמים: '+historyDebt+'₪');
+        if (openingDebt > 0) breakdown.push('חוב פתוח: '+openingDebt+'₪');
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+totalDebt+'₪</span>'
+          + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }
             h+='<tr>';
       h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"></td>';
