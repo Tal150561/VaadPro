@@ -386,7 +386,10 @@ function portalSwitchTab(tab) {
     el.style.color      = t === tab ? 'var(--accent)'        : 'var(--text2)';
     el.style.border     = t === tab ? '1px solid rgba(37,211,102,.3)' : '1px solid var(--border)';
   });
-  if (tab === 'meetings') portalLoadMeetings();
+  if (tab === 'meetings') {
+    console.log('[MTG] switchTab meetings - el:', document.getElementById('meetingsSection')?.style.display);
+    portalLoadMeetings();
+  }
 }
 
 let allData = null;
