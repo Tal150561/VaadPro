@@ -739,51 +739,49 @@ function portalRenderMeetings() {
     el.innerHTML = '<div style="text-align:center;color:var(--text2);padding:30px;">אין אסיפות עדיין</div>';
     return;
   }
-  el.innerHTML = portalMtgData.map(m => {
-    const conf = m.myConfirmation;
-    const confBadge = conf
-      ? `<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-size:0.8rem;color:var(--accent);font-weight:700;">
-           ✅ ${conf.type === 'attended' ? 'אישרת נוכחות' : 'קראת ואישרת'} — ${new Date(conf.confirmedAt).toLocaleDateString('he-IL')}
-         </div>`
-      : `<div style="display:flex;gap:8px;flex-wrap:wrap;">
-           <button onclick="portalConfirmMeeting('${m.id}','attended')"
-             style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:7px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">
-             🙋 הייתי נוכח/ת
-           </button>
-           <button onclick="portalConfirmMeeting('${m.id}','read')"
-             style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">
-             📖 קראתי ואישרתי
-           </button>
-         </div>`;
+  el.innerHTML = portalMtgData.map(function(m) {
+    var conf = m.myConfirmation;
+    var confBadge = conf
+      ? '<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-size:0.8rem;color:var(--accent);font-weight:700;">' +
+        '✅ ' + (conf.type === 'attended' ? 'אישרת נוכחות' : 'קראת ואישרת') + ' — ' + new Date(conf.confirmedAt).toLocaleDateString('he-IL') +
+        '</div>'
+      : '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+          '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'attended\')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:7px 14px;font-family:\'Heebo\',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">🙋 הייתי נוכח/ת</button>' +
+          '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'read\')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-family:\'Heebo\',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">📖 קראתי ואישרתי</button>' +
+        '</div>';
 
-    const decisions = (m.decisions || []);
-    const decisionsHtml = decisions.length
-      ? `<div style="margin-top:12px;">
-           <div style="font-weight:700;font-size:0.85rem;margin-bottom:6px;">✅ החלטות:</div>
-           ${decisions.map((dec,i) => `
-             <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:0.84rem;">
-               <span style="color:var(--accent);font-weight:700;min-width:18px;">${i+1}.</span>
-               <div>
-                 ${dec.text}
-                 ${dec.dueDate ? `<span style="color:var(--text2);font-size:0.78rem;"> — יעד: ${dec.dueDate}</span>` : ''}
-                 ${dec.assignee ? `<span style="color:var(--text2);font-size:0.78rem;"> | אחראי: ${dec.assignee}</span>` : ''}
-                 <span style="font-size:0.75rem;margin-right:4px;padding:1px 6px;border-radius:10px;background:${dec.status==='בוצע'?'rgba(37,211,102,.15)':'rgba(255,200,0,.15)'};color:${dec.status==='בוצע'?'var(--accent)':'#f0a500'};">${dec.status}</span>
-               </div>
-             </div>`).join('')}
-         </div>` : '';
+    var decisions = (m.decisions || []);
+    var decisionsHtml = '';
+    if (decisions.length) {
+      decisionsHtml = '<div style="margin-top:12px;"><div style="font-weight:700;font-size:0.85rem;margin-bottom:6px;">✅ החלטות:</div>';
+      decisions.forEach(function(dec, i) {
+        var statusBg = dec.status === 'בוצע' ? 'rgba(37,211,102,.15)' : 'rgba(255,200,0,.15)';
+        var statusColor = dec.status === 'בוצע' ? 'var(--accent)' : '#f0a500';
+        decisionsHtml +=
+          '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:0.84rem;">' +
+            '<span style="color:var(--accent);font-weight:700;min-width:18px;">' + (i+1) + '.</span>' +
+            '<div>' + dec.text +
+              (dec.dueDate ? '<span style="color:var(--text2);font-size:0.78rem;"> — יעד: '+dec.dueDate+'</span>' : '') +
+              (dec.assignee ? '<span style="color:var(--text2);font-size:0.78rem;"> | אחראי: '+dec.assignee+'</span>' : '') +
+              '<span style="font-size:0.75rem;margin-right:4px;padding:1px 6px;border-radius:10px;background:'+statusBg+';color:'+statusColor+';">'+dec.status+'</span>' +
+            '</div>' +
+          '</div>';
+      });
+      decisionsHtml += '</div>';
+    }
 
-    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
-        <div>
-          <span style="font-weight:700;font-size:0.95rem;">${m.date}</span>
-          <span style="color:var(--text2);font-size:0.82rem;margin-right:8px;">${m.type}</span>
-        </div>
-        ${conf ? '' : '<span style="font-size:0.78rem;color:#f0a500;font-weight:700;">⏳ ממתין לאישורך</span>'}
-      </div>
-      ${m.protocol ? `<div style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;line-height:1.6;white-space:pre-wrap;">${m.protocol}</div>` : ''}
-      ${decisionsHtml}
-      <div style="margin-top:12px;">${confBadge}</div>
-    </div>`;
+    return '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">' +
+        '<div>' +
+          '<span style="font-weight:700;font-size:0.95rem;">' + m.date + '</span>' +
+          '<span style="color:var(--text2);font-size:0.82rem;margin-right:8px;">' + m.type + '</span>' +
+        '</div>' +
+        (conf ? '' : '<span style="font-size:0.78rem;color:#f0a500;font-weight:700;">⏳ ממתין לאישורך</span>') +
+      '</div>' +
+      (m.protocol ? '<div style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;line-height:1.6;white-space:pre-wrap;">' + m.protocol + '</div>' : '') +
+      decisionsHtml +
+      '<div style="margin-top:12px;">' + confBadge + '</div>' +
+    '</div>';
   }).join('');
 }
 
