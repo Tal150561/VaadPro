@@ -3104,33 +3104,71 @@ app.post('/api/meetings/:id/send-summary', authMiddleware, async (req, res) => {
   if (!mtg) return res.status(404).json({ ok: false, error: 'אסיפה לא נמצאה' });
   const d = loadTenantData(req.user.tenantId);
   const tenants = (d.tenants || []).filter(t => t.active !== false);
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+
+  // טען tokens קיימים לכל הדיירים
+  const allTokens = loadPortalTokens();
+  const now = Date.now();
+
+  // בנה מפה: tenantId → token
+  const tokenMap = {};
+  Object.entries(allTokens).forEach(([tok, entry]) => {
+    if (entry.tenantDataId === req.user.tenantId && entry.expires > now) {
+      tokenMap[entry.tenantId] = tok;
+    }
+  });
 
   const decisionsText = (mtg.decisions || []).map((dec, i) =>
     `${i+1}. ${dec.text}${dec.dueDate ? ' (יעד: '+dec.dueDate+')' : ''}${dec.assignee ? ' — '+dec.assignee : ''}`
   ).join('\n');
 
-  const summary =
-    `📋 סיכום אסיפת דיירים\n` +
-    `תאריך: ${mtg.date}\n` +
-    `סוג: ${mtg.type}\n\n` +
-    (mtg.protocol ? `📝 פרוטוקול:\n${mtg.protocol}\n\n` : '') +
-    (decisionsText ? `✅ החלטות:\n${decisionsText}\n` : '') +
-    `\nבברכה, ועד הבית`;
-
   const results = { whatsapp: 0, email: 0, errors: [] };
 
   for (const tenant of tenants) {
     try {
+      // מצא/צור token לדייר זה
+      let tok = tokenMap[String(tenant.id)];
+      if (!tok) {
+        // אין token קיים — צור חדש
+        tok = require('uuid').v4().replace(/-/g,'').substring(0,20);
+        allTokens[tok] = {
+          tenantDataId: req.user.tenantId,
+          tenantId:     String(tenant.id),
+          tenantName:   tenant.name || String(tenant.id),
+          createdAt:    now,
+          expires:      now + 365 * 24 * 60 * 60 * 1000
+        };
+        tokenMap[String(tenant.id)] = tok;
+      }
+
+      const portalLink = `${appUrl}/tenant-portal.html?token=${tok}`;
+
+      const summary =
+        `📋 סיכום אסיפת דיירים\n` +
+        `תאריך: ${mtg.date}\n` +
+        `סוג: ${mtg.type}\n\n` +
+        (mtg.protocol ? `📝 פרוטוקול:\n${mtg.protocol}\n\n` : '') +
+        (decisionsText ? `✅ החלטות:\n${decisionsText}\n\n` : '') +
+        `🔗 לאישור קריאה:\n${portalLink}\n\n` +
+        `בברכה, ועד הבית`;
+
       if ((channel === 'whatsapp' || channel === 'both') && tenant.phone) {
         await sendWaMsg(req.user.tenantId, tenant.phone, summary);
         results.whatsapp++;
       }
       if ((channel === 'email' || channel === 'both') && tenant.email) {
-        await sendEmailResend(tenant.email, `סיכום אסיפת דיירים — ${mtg.date}`, summary.replace(/\n/g, '<br>'));
+        await sendEmailResend(
+          tenant.email,
+          `סיכום אסיפת דיירים — ${mtg.date}`,
+          summary.replace(/\n/g, '<br>').replace(portalLink, `<a href="${portalLink}">${portalLink}</a>`)
+        );
         results.email++;
       }
     } catch(e) { results.errors.push(e.message); }
   }
+
+  // שמור tokens חדשים שנוצרו
+  savePortalTokens(allTokens);
 
   res.json({ ok: true, results });
   // שמור תאריך שליחת הסיכום (לצורך תזכורת אישור אחרי 5 ימים)
