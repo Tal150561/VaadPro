@@ -727,14 +727,17 @@ async function portalLoadMeetings() {
   try {
     const r = await fetch('/api/portal/meetings?token=' + token);
     const d = await r.json();
+    console.log('[MTG] response:', JSON.stringify(d).slice(0,200));
     if (!d.ok) { el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאה בטעינת אסיפות</div>'; return; }
     portalMtgData = d.meetings || [];
+    console.log('[MTG] meetings count:', portalMtgData.length);
     portalRenderMeetings();
-  } catch(e) { el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאת תקשורת</div>'; }
+  } catch(e) { console.error('[MTG] error:', e); el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאת תקשורת</div>'; }
 }
 
 function portalRenderMeetings() {
   const el = document.getElementById('portalMtgList');
+  console.log('[MTG] render called, el:', !!el, 'data:', portalMtgData.length);
   if (!portalMtgData.length) {
     el.innerHTML = '<div style="text-align:center;color:var(--text2);padding:30px;">אין אסיפות עדיין</div>';
     return;
