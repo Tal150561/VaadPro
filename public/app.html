@@ -5900,7 +5900,7 @@ async function mtgOpenConfirmations(id) {
     const { confirmations, total, confirmedCount } = d;
     const confirmedList = confirmations.filter(c => c.confirmation);
     const pendingList   = confirmations.filter(c => !c.confirmation);
-    const typeLabel = t => t === 'attended' ? '🙋 היה נוכח/ת' : '📖 קרא ואישר';
+    const typeLabel = t => t === 'agree' ? '✅ מסכים/ה' : t === 'disagree' ? '❌ לא מסכים/ה' : '📖 קרא';
     document.getElementById('mtgConfList').innerHTML =
       `<div style="margin-bottom:14px;font-size:0.88rem;color:var(--text2);">
         <span style="color:var(--accent);font-weight:700;">${confirmedCount}</span> אישרו מתוך <strong>${total}</strong> דיירים
@@ -5910,7 +5910,10 @@ async function mtgOpenConfirmations(id) {
         ${confirmedList.map(c => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;">
             <span style="font-weight:600;">${c.name}</span>
-            <span style="color:var(--text2);font-size:0.78rem;">${typeLabel(c.confirmation.type)} · ${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>
+            <div style="text-align:left;">
+              <div style="color:${c.confirmation.type==='disagree'?'#f85149':'var(--text2)'};font-size:0.78rem;">${typeLabel(c.confirmation.type)} · ${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
+              ${c.confirmation.note ? '<div style="color:#f0a500;font-size:0.76rem;margin-top:2px;">הערה: '+c.confirmation.note+'</div>' : ''}
+            </div>
           </div>`).join('')}` : '') +
       (pendingList.length ? `
         <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:#f0a500;">⏳ טרם אישרו</div>

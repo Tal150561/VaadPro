@@ -2650,8 +2650,8 @@ app.get('/api/portal/meetings', (req, res) => {
 });
 
 // POST /api/portal/meetings/:id/confirm — tenant confirms meeting
-app.post('/api/portal/meetings/:id/confirm', (req, res) => {
-  const { token, type } = req.body; // type: 'attended' | 'read'
+app.post('/api/portal/meetings/:id/confirm', async (req, res) => {
+  const { token, type, note } = req.body; // type: 'agree' | 'disagree'
   if (!token) return res.status(401).json({ ok: false });
   const tokens = loadPortalTokens();
   const entry  = tokens[token];
@@ -2663,9 +2663,27 @@ app.post('/api/portal/meetings/:id/confirm', (req, res) => {
   mtg.confirmations[entry.tenantId] = {
     name: entry.tenantName || entry.tenantId,
     confirmedAt: new Date().toISOString(),
-    type: type || 'read'
+    type: type || 'agree',
+    note: note || ''
   };
   saveMeetings(entry.tenantDataId, meetings);
+
+  // אם לא מסכים — שלח התראה לוועד
+  if (type === 'disagree') {
+    try {
+      const d = loadTenantData(entry.tenantDataId);
+      const users = loadUsers();
+      const user = users.find(u => (u.tenantId || u.id) === entry.tenantDataId);
+      const tenantName = entry.tenantName || entry.tenantId;
+      const msg = `⚠️ VaadPro — אי-הסכמה לאסיפה\n\nדייר/ת ${tenantName} לא הסכים/ה להחלטות אסיפת ${mtg.date}${note ? '\n\nהערה: ' + note : ''}`;
+      if (user && d.config && d.config.vaadPhone) {
+        await sendWaMsg(entry.tenantDataId, d.config.vaadPhone, msg);
+      } else if (user && user.email) {
+        await sendEmailResend(user.email, `אי-הסכמה לאסיפה — ${mtg.date}`, msg.replace(/\n/g,'<br>'));
+      }
+    } catch(e) { /* התראה נכשלה — לא קריטי */ }
+  }
+
   res.json({ ok: true });
 });
 

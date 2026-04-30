@@ -388,7 +388,6 @@ function portalSwitchTab(tab) {
     el.style.border     = t === tab ? '1px solid rgba(37,211,102,.3)' : '1px solid var(--border)';
   });
   if (tab === 'meetings') {
-    console.log('[MTG] switchTab meetings - el:', document.getElementById('meetingsSection')?.style.display);
     portalLoadMeetings();
   }
 }
@@ -731,31 +730,31 @@ async function portalLoadMeetings() {
   try {
     const r = await fetch('/api/portal/meetings?token=' + token);
     const d = await r.json();
-    console.log('[MTG] response:', JSON.stringify(d).slice(0,200));
     if (!d.ok) { el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאה בטעינת אסיפות</div>'; return; }
     portalMtgData = d.meetings || [];
-    console.log('[MTG] meetings count:', portalMtgData.length);
     portalRenderMeetings();
   } catch(e) { console.error('[MTG] error:', e); el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאת תקשורת</div>'; }
 }
 
 function portalRenderMeetings() {
   const el = document.getElementById('portalMtgList');
-  console.log('[MTG] render called, el:', !!el, 'data:', portalMtgData.length);
   if (!portalMtgData.length) {
     el.innerHTML = '<div style="text-align:center;color:var(--text2);padding:30px;">אין אסיפות עדיין</div>';
     return;
   }
   el.innerHTML = portalMtgData.map(function(m) {
-    var conf = m.myConfirmation;
-    var confBadge = conf
-      ? '<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-size:0.8rem;color:var(--accent);font-weight:700;">' +
-        '✅ ' + (conf.type === 'attended' ? 'אישרת נוכחות' : 'קראת ואישרת') + ' — ' + new Date(conf.confirmedAt).toLocaleDateString('he-IL') +
-        '</div>'
-      : '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
-          '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'attended\')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:7px 14px;font-family:\'Heebo\',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">🙋 הייתי נוכח/ת</button>' +
-          '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'read\')" style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-family:\'Heebo\',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">📖 קראתי ואישרתי</button>' +
-        '</div>';
+     var conf = m.myConfirmation;
+     var confBadge = conf
+       ? (conf.type === 'agree'
+           ? '<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;color:var(--accent);font-weight:700;">✅ אישרת ומסכים/ה להחלטות — ' + new Date(conf.confirmedAt).toLocaleDateString('he-IL') + '</div>'
+           : '<div style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;color:#f85149;font-weight:700;">❌ לא הסכמת' + (conf.note ? '<div style="font-weight:400;font-size:0.8rem;margin-top:4px;color:var(--text2);">הערה: '+conf.note+'</div>' : '') + '</div>')
+       : '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;">' +
+           '<div style="font-size:0.83rem;color:var(--text2);margin-bottom:10px;">קראתי את הפרוטוקול וההחלטות</div>' +
+           '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
+             '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'agree\')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:8px 16px;font-family:\'Heebo\',sans-serif;font-size:0.86rem;font-weight:700;cursor:pointer;">✅ מסכים/ה</button>' +
+             '<button onclick="portalOpenDisagree(\''+m.id+'\')" style="background:rgba(248,81,73,.1);color:#f85149;border:1px solid rgba(248,81,73,.25);border-radius:8px;padding:8px 16px;font-family:\'Heebo\',sans-serif;font-size:0.86rem;font-weight:700;cursor:pointer;">❌ לא מסכים/ה</button>' +
+           '</div>' +
+         '</div>';
 
     var decisions = (m.decisions || []);
     var decisionsHtml = '';
@@ -792,22 +791,58 @@ function portalRenderMeetings() {
   }).join('');
 }
 
-async function portalConfirmMeeting(mtgId, type) {
+async function portalConfirmMeeting(mtgId, type, note) {
   try {
     const r = await fetch('/api/portal/meetings/' + mtgId + '/confirm', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, type })
+      body: JSON.stringify({ token, type, note: note || '' })
     });
     const d = await r.json();
     if (d.ok) {
       const mtg = portalMtgData.find(m => m.id === mtgId);
-      if (mtg) mtg.myConfirmation = { type, confirmedAt: new Date().toISOString() };
+      if (mtg) mtg.myConfirmation = { type, note: note || '', confirmedAt: new Date().toISOString() };
       portalRenderMeetings();
     } else { alert('שגיאה באישור'); }
   } catch(e) { alert('שגיאת תקשורת'); }
 }
+
+// ── modal "לא מסכים" ──────────────────────────────────────────────
+var _disagreeId = null;
+
+function portalOpenDisagree(mtgId) {
+  _disagreeId = mtgId;
+  document.getElementById('disagreeNote').value = '';
+  document.getElementById('disagreeModal').style.display = 'flex';
+}
+
+function portalCloseDisagree() {
+  document.getElementById('disagreeModal').style.display = 'none';
+}
+
+async function portalSubmitDisagree() {
+  const note = document.getElementById('disagreeNote').value.trim();
+  document.getElementById('disagreeModal').style.display = 'none';
+  await portalConfirmMeeting(_disagreeId, 'disagree', note);
+}
 // ── סוף אסיפות ───────────────────────────────────────────────────
 </script>
+<!-- Disagree Modal -->
+<div id="disagreeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:24px;max-width:380px;width:100%;">
+    <div style="font-weight:700;font-size:1rem;margin-bottom:6px;">❌ לא מסכים/ה להחלטות</div>
+    <div style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הוועד יקבל הודעה על אי-הסכמתך.</div>
+    <label style="font-size:0.83rem;color:var(--text2);display:block;margin-bottom:6px;">הערה (אופציונלי)</label>
+    <textarea id="disagreeNote" rows="3" placeholder="פרט את הסיבה..."
+      style="width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.88rem;resize:vertical;box-sizing:border-box;"></textarea>
+    <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px;">
+      <button onclick="portalCloseDisagree()"
+        style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:8px;padding:9px 18px;font-family:'Heebo',sans-serif;font-size:0.86rem;cursor:pointer;">ביטול</button>
+      <button onclick="portalSubmitDisagree()"
+        style="background:rgba(248,81,73,.15);color:#f85149;border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:9px 18px;font-family:'Heebo',sans-serif;font-size:0.86rem;font-weight:700;cursor:pointer;">❌ שלח אי-הסכמה</button>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>
