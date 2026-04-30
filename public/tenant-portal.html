@@ -237,6 +237,7 @@
   <div style="display:flex;gap:6px;">
     <button id="tabPayBtn" onclick="portalSwitchTab('payments')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-family:'Heebo',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;">💳 תשלומים</button>
     <button id="tabTktBtn" onclick="portalSwitchTab('tickets')" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-family:'Heebo',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;">🔨 תקלות</button>
+    <button id="tabMtgBtn" onclick="portalSwitchTab('meetings')" style="background:var(--surface2);color:var(--text2);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-family:'Heebo',sans-serif;font-size:0.8rem;font-weight:700;cursor:pointer;">📋 אסיפות</button>
   </div>
 </div>
 
@@ -354,6 +355,14 @@
 
     </div><!-- /ticketsSection -->
 
+    <!-- Meetings Section -->
+    <div id="meetingsSection" style="display:none;">
+      <div style="margin-bottom:14px;">
+        <div style="font-weight:700;font-size:1rem;margin-bottom:12px;">📋 אסיפות דיירים</div>
+        <div id="portalMtgList"><div style="text-align:center;color:var(--text2);padding:30px;">טוען...</div></div>
+      </div>
+    </div><!-- /meetingsSection -->
+
     <div class="footer">
       <a href="https://vaadpro.org">VaadPro — ניהול ועד הבית החכם</a>
     </div>
@@ -368,11 +377,16 @@ function portalSwitchTab(tab) {
   portalCurrentTab = tab;
   document.getElementById('paymentsSection').style.display = tab === 'payments' ? 'block' : 'none';
   document.getElementById('ticketsSection').style.display  = tab === 'tickets'  ? 'block' : 'none';
-  document.getElementById('tabPayBtn').style.background = tab === 'payments' ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
-  document.getElementById('tabPayBtn').style.color      = tab === 'payments' ? 'var(--accent)'        : 'var(--text2)';
-  document.getElementById('tabTktBtn').style.background = tab === 'tickets'  ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
-  document.getElementById('tabTktBtn').style.color      = tab === 'tickets'  ? 'var(--accent)'        : 'var(--text2)';
-  // tickets load deferred to accordion open
+  document.getElementById('meetingsSection').style.display = tab === 'meetings' ? 'block' : 'none';
+  const btns = { payments: 'tabPayBtn', tickets: 'tabTktBtn', meetings: 'tabMtgBtn' };
+  Object.entries(btns).forEach(([t, id]) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.style.background = t === tab ? 'rgba(37,211,102,.15)' : 'var(--surface2)';
+    el.style.color      = t === tab ? 'var(--accent)'        : 'var(--text2)';
+    el.style.border     = t === tab ? '1px solid rgba(37,211,102,.3)' : '1px solid var(--border)';
+  });
+  if (tab === 'meetings') portalLoadMeetings();
 }
 
 let allData = null;
@@ -704,6 +718,91 @@ async function tktPortalClose(elOrId) {
     else alert('שגיאה בסגירת הטיקט');
   } catch(e) { alert('שגיאת תקשורת'); }
 }
+
+// ── אסיפות דיירים ────────────────────────────────────────────────
+let portalMtgData = [];
+
+async function portalLoadMeetings() {
+  const el = document.getElementById('portalMtgList');
+  try {
+    const r = await fetch('/api/portal/meetings?token=' + token);
+    const d = await r.json();
+    if (!d.ok) { el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאה בטעינת אסיפות</div>'; return; }
+    portalMtgData = d.meetings || [];
+    portalRenderMeetings();
+  } catch(e) { el.innerHTML = '<div style="color:#f85149;padding:20px;text-align:center;">שגיאת תקשורת</div>'; }
+}
+
+function portalRenderMeetings() {
+  const el = document.getElementById('portalMtgList');
+  if (!portalMtgData.length) {
+    el.innerHTML = '<div style="text-align:center;color:var(--text2);padding:30px;">אין אסיפות עדיין</div>';
+    return;
+  }
+  el.innerHTML = portalMtgData.map(m => {
+    const conf = m.myConfirmation;
+    const confBadge = conf
+      ? `<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:6px 12px;font-size:0.8rem;color:var(--accent);font-weight:700;">
+           ✅ ${conf.type === 'attended' ? 'אישרת נוכחות' : 'קראת ואישרת'} — ${new Date(conf.confirmedAt).toLocaleDateString('he-IL')}
+         </div>`
+      : `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+           <button onclick="portalConfirmMeeting('${m.id}','attended')"
+             style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:7px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">
+             🙋 הייתי נוכח/ת
+           </button>
+           <button onclick="portalConfirmMeeting('${m.id}','read')"
+             style="background:var(--surface2);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:7px 14px;font-family:'Heebo',sans-serif;font-size:0.82rem;font-weight:700;cursor:pointer;">
+             📖 קראתי ואישרתי
+           </button>
+         </div>`;
+
+    const decisions = (m.decisions || []);
+    const decisionsHtml = decisions.length
+      ? `<div style="margin-top:12px;">
+           <div style="font-weight:700;font-size:0.85rem;margin-bottom:6px;">✅ החלטות:</div>
+           ${decisions.map((dec,i) => `
+             <div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:0.84rem;">
+               <span style="color:var(--accent);font-weight:700;min-width:18px;">${i+1}.</span>
+               <div>
+                 ${dec.text}
+                 ${dec.dueDate ? `<span style="color:var(--text2);font-size:0.78rem;"> — יעד: ${dec.dueDate}</span>` : ''}
+                 ${dec.assignee ? `<span style="color:var(--text2);font-size:0.78rem;"> | אחראי: ${dec.assignee}</span>` : ''}
+                 <span style="font-size:0.75rem;margin-right:4px;padding:1px 6px;border-radius:10px;background:${dec.status==='בוצע'?'rgba(37,211,102,.15)':'rgba(255,200,0,.15)'};color:${dec.status==='בוצע'?'var(--accent)':'#f0a500'};">${dec.status}</span>
+               </div>
+             </div>`).join('')}
+         </div>` : '';
+
+    return `<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px;margin-bottom:12px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px;">
+        <div>
+          <span style="font-weight:700;font-size:0.95rem;">${m.date}</span>
+          <span style="color:var(--text2);font-size:0.82rem;margin-right:8px;">${m.type}</span>
+        </div>
+        ${conf ? '' : '<span style="font-size:0.78rem;color:#f0a500;font-weight:700;">⏳ ממתין לאישורך</span>'}
+      </div>
+      ${m.protocol ? `<div style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;line-height:1.6;white-space:pre-wrap;">${m.protocol}</div>` : ''}
+      ${decisionsHtml}
+      <div style="margin-top:12px;">${confBadge}</div>
+    </div>`;
+  }).join('');
+}
+
+async function portalConfirmMeeting(mtgId, type) {
+  try {
+    const r = await fetch('/api/portal/meetings/' + mtgId + '/confirm', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, type })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const mtg = portalMtgData.find(m => m.id === mtgId);
+      if (mtg) mtg.myConfirmation = { type, confirmedAt: new Date().toISOString() };
+      portalRenderMeetings();
+    } else { alert('שגיאה באישור'); }
+  } catch(e) { alert('שגיאת תקשורת'); }
+}
+// ── סוף אסיפות ───────────────────────────────────────────────────
 </script>
 </body>
 </html>

@@ -1776,6 +1776,50 @@ async function runMaintenanceCron() {
     } catch(e) { console.error(`[MaintenanceCron:${user.tenantId}]`, e.message); }
   }
   if (alertsSent > 0) console.log(`[MaintenanceCron] נשלחו ${alertsSent} התראות תחזוקה`);
+
+  // ── תזכורת אישור אסיפות — 5 ימים אחרי שליחת הסיכום ──────────────
+  await runMeetingReminderCron();
+}
+
+async function runMeetingReminderCron() {
+  const users = loadUsers();
+  const today = new Date(); today.setHours(0,0,0,0);
+  const REMINDER_DAYS = 5;
+  let remindersSent = 0;
+
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const meetings = loadMeetings(user.tenantId);
+      const d = loadTenantData(user.tenantId);
+      const tenants = (d.tenants || []).filter(t => t.active !== false);
+
+      for (const mtg of meetings) {
+        if (!mtg.summarySentAt) continue; // סיכום טרם נשלח
+        const sentDate = new Date(mtg.summarySentAt); sentDate.setHours(0,0,0,0);
+        const daysSince = Math.floor((today - sentDate) / (1000*60*60*24));
+        if (daysSince !== REMINDER_DAYS) continue;
+        if (mtg.reminderSentAt) continue; // תזכורת כבר נשלחה
+
+        const confirmed = mtg.confirmations || {};
+        const unconfirmed = tenants.filter(t => !confirmed[String(t.id)]);
+        if (!unconfirmed.length) continue;
+
+        const msg = `📋 תזכורת — אסיפת דיירים ${mtg.date}\n\nטרם אישרת קריאת פרוטוקול האסיפה.\nניתן לאשר דרך פורטל הדיירים.\n\nתודה, ועד הבית`;
+
+        for (const tenant of unconfirmed) {
+          try {
+            if (tenant.phone) await sendWaMsg(user.tenantId, tenant.phone, msg);
+            else if (tenant.email) await sendEmailResend(tenant.email, `תזכורת אישור אסיפת דיירים — ${mtg.date}`, msg.replace(/\n/g,'<br>'));
+            remindersSent++;
+          } catch(e) {}
+        }
+        mtg.reminderSentAt = new Date().toISOString();
+      }
+      saveMeetings(user.tenantId, meetings);
+    } catch(e) { console.error(`[MeetingReminder:${user.tenantId}]`, e.message); }
+  }
+  if (remindersSent > 0) console.log(`[MeetingReminder] נשלחו ${remindersSent} תזכורות אישור אסיפות`);
 }
 
 // ── Auto-send cron — runs every minute, checks each tenant's schedule ──
@@ -2558,6 +2602,7 @@ app.post('/api/portal/token', authMiddleware, (req, res) => {
   tokens[token] = {
     tenantDataId: req.user.tenantId,
     tenantId:     String(tenantId),
+    tenantName:   tenant.name || String(tenantId),
     createdAt:    now,
     expires:      now + 365 * 24 * 60 * 60 * 1000 // 1 year
   };
@@ -2582,6 +2627,64 @@ app.delete('/api/portal/tokens', authMiddleware, (req, res) => {
 });
 
 // Debug endpoint — check token status without exposing tenant data (admin-only via ADMIN_JWT_SECRET)
+// GET /api/portal/meetings — tenant views meetings via portal
+app.get('/api/portal/meetings', (req, res) => {
+  const { token } = req.query;
+  if (!token) return res.status(401).json({ ok: false, error: 'חסר token' });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  const meetings = loadMeetings(entry.tenantDataId);
+  // Return meetings with confirmation status for this tenant (without other tenants' data)
+  const result = meetings.map(m => ({
+    id: m.id,
+    date: m.date,
+    type: m.type,
+    attendees: m.attendees,
+    protocol: m.protocol,
+    decisions: m.decisions,
+    createdAt: m.createdAt,
+    myConfirmation: (m.confirmations || {})[entry.tenantId] || null
+  }));
+  res.json({ ok: true, meetings: result });
+});
+
+// POST /api/portal/meetings/:id/confirm — tenant confirms meeting
+app.post('/api/portal/meetings/:id/confirm', (req, res) => {
+  const { token, type } = req.body; // type: 'attended' | 'read'
+  if (!token) return res.status(401).json({ ok: false });
+  const tokens = loadPortalTokens();
+  const entry  = tokens[token];
+  if (!entry || Date.now() > entry.expires) return res.status(401).json({ ok: false, error: 'לינק לא תקין' });
+  const meetings = loadMeetings(entry.tenantDataId);
+  const mtg = meetings.find(m => m.id === req.params.id);
+  if (!mtg) return res.status(404).json({ ok: false, error: 'אסיפה לא נמצאה' });
+  if (!mtg.confirmations) mtg.confirmations = {};
+  mtg.confirmations[entry.tenantId] = {
+    name: entry.tenantName || entry.tenantId,
+    confirmedAt: new Date().toISOString(),
+    type: type || 'read'
+  };
+  saveMeetings(entry.tenantDataId, meetings);
+  res.json({ ok: true });
+});
+
+// GET /api/meetings/:id/confirmations — ועד רואה מי אישר
+app.get('/api/meetings/:id/confirmations', authMiddleware, (req, res) => {
+  const meetings = loadMeetings(req.user.tenantId);
+  const mtg = meetings.find(m => m.id === req.params.id);
+  if (!mtg) return res.status(404).json({ ok: false, error: 'לא נמצא' });
+  const d = loadTenantData(req.user.tenantId);
+  const tenants = (d.tenants || []).filter(t => t.active !== false);
+  const confirmed = mtg.confirmations || {};
+  const result = tenants.map(t => ({
+    tenantId: String(t.id),
+    name: t.name,
+    confirmation: confirmed[String(t.id)] || null
+  }));
+  res.json({ ok: true, confirmations: result, total: tenants.length, confirmedCount: Object.keys(confirmed).length });
+});
+
 // ── IMPORTANT: All specific /api/portal/* routes must be declared BEFORE
 //    the wildcard GET /api/portal/:token, otherwise Express will match
 //    e.g. "tickets" as the :token param and return "לינק לא תקין".
@@ -3012,6 +3115,9 @@ app.post('/api/meetings/:id/send-summary', authMiddleware, async (req, res) => {
   }
 
   res.json({ ok: true, results });
+  // שמור תאריך שליחת הסיכום (לצורך תזכורת אישור אחרי 5 ימים)
+  mtg.summarySentAt = new Date().toISOString();
+  saveMeetings(req.user.tenantId, meetings);
 });
 
 // ── סוף MEETINGS API ──────────────────────────────────────────────

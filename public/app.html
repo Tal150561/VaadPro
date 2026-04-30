@@ -1392,6 +1392,17 @@ function vpLogout() {
     </div>
   </div>
 
+  <!-- ══ Meeting Confirmations Modal ════════════════════════════════ -->
+  <div class="help-modal-overlay" id="mtgConfModal" onclick="if(event.target===this)mtgCloseConfModal()">
+    <div class="help-modal" style="max-width:520px;max-height:85vh;overflow-y:auto;">
+      <h2 id="mtgConfTitle">👥 אישורי קריאה</h2>
+      <div id="mtgConfList" style="margin-bottom:18px;"></div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="mtgCloseConfModal()">סגור</button>
+      </div>
+    </div>
+  </div>
+
   <!-- ══ Meeting Send Modal ══════════════════════════════════════════ -->
   <div class="help-modal-overlay" id="mtgSendModal" onclick="if(event.target===this)mtgCloseSendModal()">
     <div class="help-modal" style="max-width:420px;">
@@ -5728,6 +5739,7 @@ function mtgRender() {
         <td>${pendingBadge}</td>
         <td style="display:flex;gap:6px;flex-wrap:wrap;">
           <button class="btn btn-secondary btn-sm" onclick="mtgOpenEdit('${m.id}')">✏️ עריכה</button>
+          <button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="mtgOpenConfirmations('${m.id}')">👥 אישורים <span style="background:#818cf8;color:#fff;border-radius:10px;padding:0 6px;font-size:0.75rem;">${Object.keys(m.confirmations||{}).length}/${(m.decisions||[]).length||'?'}</span></button>
           <button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="mtgOpenSend('${m.id}')">📤 שלח סיכום</button>
           <button class="btn btn-danger-soft btn-sm" onclick="mtgDelete('${m.id}')">🗑️</button>
         </td>
@@ -5873,6 +5885,47 @@ async function mtgDoSend() {
   } catch(e) { toast('❌ '+e.message, 'error'); }
   finally { btn.disabled = false; btn.textContent = '📤 שלח'; }
 }
+// ── אישורי אסיפות ────────────────────────────────────────────────
+async function mtgOpenConfirmations(id) {
+  const m = mtgData.find(x => x.id === id);
+  document.getElementById('mtgConfTitle').textContent = `👥 אישורי קריאה — ${m ? m.date : ''}`;
+  document.getElementById('mtgConfList').innerHTML = '<div style="text-align:center;color:var(--text2);padding:20px;">טוען...</div>';
+  document.getElementById('mtgConfModal').classList.add('show');
+  try {
+    const r = await fetch(API + '/meetings/' + id + '/confirmations', {
+      headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('vp_token') || '') }
+    });
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('mtgConfList').innerHTML = '<div style="color:#f85149;">שגיאה בטעינה</div>'; return; }
+    const { confirmations, total, confirmedCount } = d;
+    const confirmedList = confirmations.filter(c => c.confirmation);
+    const pendingList   = confirmations.filter(c => !c.confirmation);
+    const typeLabel = t => t === 'attended' ? '🙋 היה נוכח/ת' : '📖 קרא ואישר';
+    document.getElementById('mtgConfList').innerHTML =
+      `<div style="margin-bottom:14px;font-size:0.88rem;color:var(--text2);">
+        <span style="color:var(--accent);font-weight:700;">${confirmedCount}</span> אישרו מתוך <strong>${total}</strong> דיירים
+      </div>` +
+      (confirmedList.length ? `
+        <div style="font-weight:700;font-size:0.85rem;margin-bottom:8px;color:var(--accent);">✅ אישרו</div>
+        ${confirmedList.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;">
+            <span style="font-weight:600;">${c.name}</span>
+            <span style="color:var(--text2);font-size:0.78rem;">${typeLabel(c.confirmation.type)} · ${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</span>
+          </div>`).join('')}` : '') +
+      (pendingList.length ? `
+        <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:#f0a500;">⏳ טרם אישרו</div>
+        ${pendingList.map(c => `
+          <div style="padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;color:var(--text2);">
+            ${c.name}
+          </div>`).join('')}` : '');
+  } catch(e) { document.getElementById('mtgConfList').innerHTML = '<div style="color:#f85149;">שגיאת תקשורת</div>'; }
+}
+
+function mtgCloseConfModal() {
+  document.getElementById('mtgConfModal').classList.remove('show');
+}
+// ── סוף אישורי אסיפות ────────────────────────────────────────────
+
 // ── סוף אסיפות דיירים ────────────────────────────────────────────
 
 
