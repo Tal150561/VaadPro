@@ -746,8 +746,17 @@ function portalRenderMeetings() {
      var conf = m.myConfirmation;
      var confBadge = conf
        ? (conf.type === 'agree'
-           ? '<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;color:var(--accent);font-weight:700;">✅ אישרת ומסכים/ה להחלטות — ' + new Date(conf.confirmedAt).toLocaleDateString('he-IL') + '</div>'
-           : '<div style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;color:#f85149;font-weight:700;">❌ לא הסכמת' + (conf.note ? '<div style="font-weight:400;font-size:0.8rem;margin-top:4px;color:var(--text2);">הערה: '+conf.note+'</div>' : '') + '</div>')
+           ? '<div style="background:rgba(37,211,102,.15);border:1px solid rgba(37,211,102,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;color:var(--accent);font-weight:700;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;">'+
+               '<span>✅ אישרת ומסכים/ה להחלטות — ' + new Date(conf.confirmedAt).toLocaleDateString('he-IL') + '</span>'+
+               '<button onclick="portalOpenDisagree(\''+m.id+'\')" style="background:none;border:none;color:var(--text2);font-size:0.78rem;cursor:pointer;text-decoration:underline;font-family:\'Heebo\',sans-serif;">שנה תגובה</button>'+
+             '</div>'
+           : '<div style="background:rgba(248,81,73,.08);border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:8px 14px;font-size:0.84rem;">'+
+               '<div style="color:#f85149;font-weight:700;display:flex;justify-content:space-between;align-items:center;">'+
+                 '<span>❌ לא הסכמת' + (conf.note ? '' : '') + '</span>'+
+                 '<button onclick="portalConfirmMeeting(\''+m.id+'\',\'agree\')" style="background:rgba(37,211,102,.15);color:var(--accent);border:1px solid rgba(37,211,102,.3);border-radius:6px;padding:4px 10px;font-size:0.78rem;font-weight:700;cursor:pointer;font-family:\'Heebo\',sans-serif;">✅ שנה לאישור</button>'+
+               '</div>'+
+               (conf.note ? '<div style="font-size:0.8rem;margin-top:4px;color:var(--text2);">הערה: '+conf.note+'</div>' : '') +
+             '</div>')
        : '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px 14px;">' +
            '<div style="font-size:0.83rem;color:var(--text2);margin-bottom:10px;">קראתי את הפרוטוקול וההחלטות</div>' +
            '<div style="display:flex;gap:8px;flex-wrap:wrap;">' +
