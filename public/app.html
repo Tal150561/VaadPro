@@ -1344,6 +1344,80 @@ function vpLogout() {
   </div>
 </div>
 
+  <!-- ══ Meeting Modal ══════════════════════════════════════════════ -->
+  <div class="help-modal-overlay" id="mtgModal" onclick="if(event.target===this)mtgCloseModal()">
+    <div class="help-modal" style="max-width:640px;max-height:92vh;overflow-y:auto;">
+      <h2 id="mtgModalTitle">➕ אסיפה חדשה</h2>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label>תאריך *</label>
+          <input type="date" id="mtgDate" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;" />
+        </div>
+        <div>
+          <label>סוג אסיפה</label>
+          <select id="mtgType" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;">
+            <option>אסיפה כללית</option>
+            <option>אסיפה שנתית</option>
+            <option>אסיפה דחופה</option>
+            <option>אסיפה מיוחדת</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label>משתתפים (מופרדים בפסיק)</label>
+        <input type="text" id="mtgAttendees" placeholder="למשל: דני לוי, רחל כהן, משה גולן"
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;" />
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <label>פרוטוקול</label>
+        <textarea id="mtgProtocol" rows="5" placeholder="תמצית הדיון, נושאים שעלו, הערות..."
+          style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.88rem;resize:vertical;line-height:1.6;"></textarea>
+      </div>
+
+      <div style="margin-bottom:18px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <label style="margin:0;font-weight:700;">✅ החלטות</label>
+          <button class="btn btn-green btn-sm" onclick="mtgAddDecision()">➕ הוסף החלטה</button>
+        </div>
+        <div id="mtgDecisionsList"></div>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="mtgCloseModal()">ביטול</button>
+        <button class="btn btn-green" id="mtgSaveBtn" onclick="mtgSave()">💾 שמור</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ Meeting Send Modal ══════════════════════════════════════════ -->
+  <div class="help-modal-overlay" id="mtgSendModal" onclick="if(event.target===this)mtgCloseSendModal()">
+    <div class="help-modal" style="max-width:420px;">
+      <h2 id="mtgSendTitle">📤 שלח סיכום אסיפה</h2>
+      <input type="hidden" id="mtgSendId" />
+
+      <div style="margin-bottom:18px;">
+        <label>ערוץ שליחה</label>
+        <select id="mtgSendChannel" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.9rem;">
+          <option value="both">וואטסאפ + מייל</option>
+          <option value="whatsapp">וואטסאפ בלבד</option>
+          <option value="email">מייל בלבד</option>
+        </select>
+      </div>
+
+      <div style="background:var(--surface2);border-radius:8px;padding:12px;margin-bottom:18px;font-size:0.84rem;color:var(--text2);line-height:1.6;">
+        הסיכום ישלח לכל הדיירים הפעילים עם הפרוטוקול וההחלטות שנרשמו.
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;">
+        <button class="btn btn-secondary" onclick="mtgCloseSendModal()">ביטול</button>
+        <button class="btn btn-green" id="mtgSendBtn" onclick="mtgDoSend()">📤 שלח</button>
+      </div>
+    </div>
+  </div>
+
   <!-- New Ticket Modal -->
   <div class="modal-bg" id="tktNewModal" style="display:none;" onclick="if(event.target===this)closeModal('tktNewModal')">
     <div class="modal" style="max-width:500px;">
@@ -5615,8 +5689,12 @@ document.addEventListener('change', function(e) {
 // ── טעינה כשנכנסים לטאב ──
 // (נוסף ל-switchTab)
 
-// ── אסיפות דיירים – stub (יורחב בגרסה הבאה) ──────────────────────
+// ════════════════════════════════════════════════════════════════════
+// אסיפות דיירים
+// ════════════════════════════════════════════════════════════════════
 let mtgData = [];
+let mtgEditId = null;
+let mtgDecisions = []; // החלטות בזמן עריכה
 
 async function mtgLoad() {
   try {
@@ -5633,28 +5711,169 @@ function mtgRender() {
   const el = document.getElementById('mtgList');
   if (!el) return;
   if (!mtgData.length) {
-    el.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><div>עדיין לא נוצרו אסיפות</div></div>';
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><div>עדיין לא נוצרו אסיפות — לחץ "אסיפה חדשה" להתחיל</div></div>';
     return;
   }
-  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>משתתפים</th><th>החלטות</th><th>פעולות</th></tr></thead><tbody>' +
-    mtgData.map(m => `<tr>
-      <td>${m.date || ''}</td>
-      <td>${m.type || 'אסיפה כללית'}</td>
-      <td>${(m.attendees || []).length}</td>
-      <td>${(m.decisions || []).length}</td>
-      <td><button class="btn btn-secondary btn-sm" onclick="mtgOpenEdit('${m.id}')">✏️ עריכה</button></td>
-    </tr>`).join('') +
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr>' +
+    '<th>תאריך</th><th>סוג</th><th>משתתפים</th><th>החלטות</th><th>ממתינות לביצוע</th><th>פעולות</th>' +
+    '</tr></thead><tbody>' +
+    mtgData.map(m => {
+      const pending = (m.decisions||[]).filter(d => d.status !== 'בוצע').length;
+      const pendingBadge = pending > 0 ? `<span style="background:var(--warn);color:#000;border-radius:20px;padding:1px 8px;font-size:0.78rem;font-weight:700;">${pending}</span>` : '<span style="color:var(--accent)">✅</span>';
+      return `<tr>
+        <td style="font-weight:600;">${m.date || ''}</td>
+        <td>${m.type || 'אסיפה כללית'}</td>
+        <td>${(m.attendees||[]).length}</td>
+        <td>${(m.decisions||[]).length}</td>
+        <td>${pendingBadge}</td>
+        <td style="display:flex;gap:6px;flex-wrap:wrap;">
+          <button class="btn btn-secondary btn-sm" onclick="mtgOpenEdit('${m.id}')">✏️ עריכה</button>
+          <button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="mtgOpenSend('${m.id}')">📤 שלח סיכום</button>
+          <button class="btn btn-danger-soft btn-sm" onclick="mtgDelete('${m.id}')">🗑️</button>
+        </td>
+      </tr>`;
+    }).join('') +
   '</tbody></table></div>';
 }
 
 function mtgOpenNew() {
-  toast('🚧 פיצ\'ר אסיפות בפיתוח – יגיע בקרוב!', 'info');
+  mtgEditId = null;
+  mtgDecisions = [];
+  document.getElementById('mtgModalTitle').textContent = '➕ אסיפה חדשה';
+  document.getElementById('mtgDate').value = new Date().toISOString().slice(0,10);
+  document.getElementById('mtgType').value = 'אסיפה כללית';
+  document.getElementById('mtgAttendees').value = '';
+  document.getElementById('mtgProtocol').value = '';
+  mtgRenderDecisions();
+  document.getElementById('mtgModal').classList.add('show');
 }
 
 function mtgOpenEdit(id) {
-  toast('🚧 פיצ\'ר אסיפות בפיתוח – יגיע בקרוב!', 'info');
+  const m = mtgData.find(x => x.id === id);
+  if (!m) return;
+  mtgEditId = id;
+  mtgDecisions = (m.decisions || []).map(d => ({...d}));
+  document.getElementById('mtgModalTitle').textContent = '✏️ עריכת אסיפה';
+  document.getElementById('mtgDate').value = m.date || '';
+  document.getElementById('mtgType').value = m.type || 'אסיפה כללית';
+  document.getElementById('mtgAttendees').value = (m.attendees||[]).join(', ');
+  document.getElementById('mtgProtocol').value = m.protocol || '';
+  mtgRenderDecisions();
+  document.getElementById('mtgModal').classList.add('show');
 }
-// ── סוף stub אסיפות ──────────────────────────────────────────────
+
+function mtgCloseModal() {
+  document.getElementById('mtgModal').classList.remove('show');
+}
+
+// ── החלטות ──
+function mtgAddDecision() {
+  mtgDecisions.push({ id: Date.now(), text: '', dueDate: '', assignee: '', status: 'פתוח' });
+  mtgRenderDecisions();
+}
+
+function mtgRemoveDecision(idx) {
+  mtgDecisions.splice(idx, 1);
+  mtgRenderDecisions();
+}
+
+function mtgRenderDecisions() {
+  const el = document.getElementById('mtgDecisionsList');
+  if (!el) return;
+  if (!mtgDecisions.length) {
+    el.innerHTML = '<div style="color:var(--text2);font-size:0.85rem;padding:8px 0;">אין החלטות עדיין</div>';
+    return;
+  }
+  el.innerHTML = mtgDecisions.map((d, i) => `
+    <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;margin-bottom:8px;background:var(--surface2);border-radius:8px;padding:10px 12px;">
+      <input type="text" value="${(d.text||'').replace(/"/g,'&quot;')}" placeholder="טקסט ההחלטה *"
+        oninput="mtgDecisions[${i}].text=this.value"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.85rem;width:100%;" />
+      <input type="date" value="${d.dueDate||''}"
+        oninput="mtgDecisions[${i}].dueDate=this.value"
+        title="תאריך יעד"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.82rem;" />
+      <input type="text" value="${(d.assignee||'').replace(/"/g,'&quot;')}" placeholder="אחראי"
+        oninput="mtgDecisions[${i}].assignee=this.value"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.82rem;width:110px;" />
+      <select onchange="mtgDecisions[${i}].status=this.value"
+        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 8px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.82rem;">
+        <option ${d.status==='פתוח'?'selected':''}>פתוח</option>
+        <option ${d.status==='בתהליך'?'selected':''}>בתהליך</option>
+        <option ${d.status==='בוצע'?'selected':''}>בוצע</option>
+      </select>
+      <button class="btn btn-danger-soft btn-sm" onclick="mtgRemoveDecision(${i})" style="padding:4px 9px;">✕</button>
+    </div>`).join('');
+}
+
+async function mtgSave() {
+  const date = document.getElementById('mtgDate').value.trim();
+  if (!date) { toast('⚠️ תאריך חובה', 'error'); return; }
+  const attendeesRaw = document.getElementById('mtgAttendees').value.trim();
+  const attendees = attendeesRaw ? attendeesRaw.split(',').map(s=>s.trim()).filter(Boolean) : [];
+  const payload = {
+    date,
+    type: document.getElementById('mtgType').value,
+    attendees,
+    protocol: document.getElementById('mtgProtocol').value.trim(),
+    decisions: mtgDecisions
+  };
+  const btn = document.getElementById('mtgSaveBtn');
+  btn.disabled = true; btn.textContent = 'שומר...';
+  try {
+    const url  = mtgEditId ? API+'/meetings/'+mtgEditId : API+'/meetings';
+    const method = mtgEditId ? 'PUT' : 'POST';
+    const r = await fetch(url, { method, headers: { 'Content-Type':'application/json', 'Authorization':'Bearer '+(localStorage.getItem('vp_token')||'') }, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (!d.ok) { toast('❌ '+( d.error||'שגיאה'), 'error'); return; }
+    mtgCloseModal();
+    await mtgLoad();
+    toast(mtgEditId ? '✅ אסיפה עודכנה' : '✅ אסיפה נשמרה', 'success');
+  } catch(e) { toast('❌ '+e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '💾 שמור'; }
+}
+
+async function mtgDelete(id) {
+  if (!confirm('למחוק אסיפה זו?')) return;
+  await fetch(API+'/meetings/'+id, { method:'DELETE', headers:{ 'Authorization':'Bearer '+(localStorage.getItem('vp_token')||'') } });
+  await mtgLoad();
+  toast('🗑️ אסיפה נמחקה', 'success');
+}
+
+function mtgOpenSend(id) {
+  const m = mtgData.find(x => x.id === id);
+  if (!m) return;
+  document.getElementById('mtgSendTitle').textContent = `שלח סיכום — ${m.date}`;
+  document.getElementById('mtgSendId').value = id;
+  document.getElementById('mtgSendChannel').value = 'both';
+  document.getElementById('mtgSendModal').classList.add('show');
+}
+
+function mtgCloseSendModal() {
+  document.getElementById('mtgSendModal').classList.remove('show');
+}
+
+async function mtgDoSend() {
+  const id = document.getElementById('mtgSendId').value;
+  const channel = document.getElementById('mtgSendChannel').value;
+  const btn = document.getElementById('mtgSendBtn');
+  btn.disabled = true; btn.textContent = 'שולח...';
+  try {
+    const r = await fetch(API+'/meetings/'+id+'/send-summary', {
+      method:'POST',
+      headers:{ 'Content-Type':'application/json', 'Authorization':'Bearer '+(localStorage.getItem('vp_token')||'') },
+      body: JSON.stringify({ channel })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      const { whatsapp, email, errors } = d.results;
+      toast(`✅ נשלח: ${whatsapp} וואטסאפ, ${email} מייל${errors.length?' ('+errors.length+' שגיאות)':''}`, 'success');
+      mtgCloseSendModal();
+    } else { toast('❌ '+(d.error||'שגיאה בשליחה'), 'error'); }
+  } catch(e) { toast('❌ '+e.message, 'error'); }
+  finally { btn.disabled = false; btn.textContent = '📤 שלח'; }
+}
+// ── סוף אסיפות דיירים ────────────────────────────────────────────
 
 
 
