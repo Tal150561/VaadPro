@@ -413,8 +413,8 @@ function vpLogout() {
     <button class="tab-btn" onclick="switchTab('trends')">📈 ניתוח מגמות</button>
     <button class="tab-btn" onclick="switchTab('bulletin')">📣 הודעות ועד הבית</button>
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
-    <button class="tab-btn" onclick="switchTab('maintenance')">🏗️ תחזוקה <span class="tbadge red" id="tbM" style="display:none">0</span></button>
-    <button class="tab-btn" onclick="switchTab('tickets')">🔨 תקלות <span class="tbadge red" id="tbTk" style="display:none">0</span></button>
+    <button class="tab-btn" onclick="switchTab('property')">🏢 ניהול נכס <span class="tbadge red" id="tbProperty" style="display:none">0</span></button>
+    <button class="tab-btn" onclick="switchTab('meetings')">📋 אסיפות</button>
     <button class="tab-btn" onclick="switchTab('troubleshoot')">🔧 פתרון בעיות</button>
   </div>
 </div>
@@ -1129,37 +1129,87 @@ function vpLogout() {
 
 
   <!-- TAB MAINTENANCE -->
-  <div class="tab-panel" id="tab-maintenance">
+  <!-- ───── ניהול נכס (תחזוקה + תקלות) ───── -->
+  <div class="tab-panel" id="tab-property">
 
-    <div class="card">
-      <div class="card-header" style="display:flex;align-items:center;gap:10px;">
-        🏗️ תחזוקת בניין
-        <button class="btn btn-green btn-sm" onclick="mntOpenAdd()" style="margin-right:auto;">➕ הוסף משימה</button>
-        <button class="btn btn-secondary btn-sm" onclick="mntLoadDefaults()">📋 טען רשימה מוצעת</button>
-      </div>
-      <div class="card-body">
-        <div id="mntSummary" style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;"></div>
-        <div class="table-wrap">
-          <table id="mntTable">
-            <thead>
-              <tr>
-                <th>סטטוס</th>
-                <th>משימה</th>
-                <th>תדירות</th>
-                <th>בוצע לאחרונה</th>
-                <th>תאריך הבא</th>
-                <th>ימי התראה</th>
-                <th>פעולות</th>
-              </tr>
-            </thead>
-            <tbody id="mntBody">
-              <tr><td colspan="7" style="text-align:center;color:var(--text2);padding:30px;">טוען...</td></tr>
-            </tbody>
-          </table>
+    <!-- sub-tab bar -->
+    <div style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:18px;">
+      <button id="subMnt" class="tab-btn active" style="font-size:0.84rem;padding:7px 16px;" onclick="switchSubTab('maintenance')">🏗️ תחזוקה <span class="tbadge red" id="tbM" style="display:none">0</span></button>
+      <button id="subTkt" class="tab-btn" style="font-size:0.84rem;padding:7px 16px;" onclick="switchSubTab('tickets')">🔨 תקלות <span class="tbadge red" id="tbTk" style="display:none">0</span></button>
+    </div>
+
+    <!-- maintenance sub-panel -->
+    <div id="subpanel-maintenance">
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px;">
+          🏗️ תחזוקת בניין
+          <button class="btn btn-green btn-sm" onclick="mntOpenAdd()" style="margin-right:auto;">➕ הוסף משימה</button>
+          <button class="btn btn-secondary btn-sm" onclick="mntLoadDefaults()">📋 טען רשימה מוצעת</button>
+        </div>
+        <div class="card-body">
+          <div id="mntSummary" style="display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap;"></div>
+          <div class="table-wrap">
+            <table id="mntTable">
+              <thead>
+                <tr>
+                  <th>סטטוס</th>
+                  <th>משימה</th>
+                  <th>תדירות</th>
+                  <th>בוצע לאחרונה</th>
+                  <th>תאריך הבא</th>
+                  <th>ימי התראה</th>
+                  <th>פעולות</th>
+                </tr>
+              </thead>
+              <tbody id="mntBody">
+                <tr><td colspan="7" style="text-align:center;color:var(--text2);padding:30px;">טוען...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
     </div>
 
+    <!-- tickets sub-panel -->
+    <div id="subpanel-tickets" style="display:none;">
+      <div class="card">
+        <div class="card-header" style="display:flex;align-items:center;gap:10px;">
+          🔨 תיעוד תקלות
+          <button class="btn btn-green btn-sm" onclick="tktOpenNew()" style="margin-right:auto;">+ תקלה חדשה</button>
+          <button class="btn btn-sm" onclick="tktLoad(this)" title="רענן תקלות" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);padding:5px 10px;">↻</button>
+        </div>
+        <div class="card-body">
+          <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+            <select id="tktFilterStatus" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+              <option value="">כל הסטטוסים</option>
+              <option>פתוח</option><option>בטיפול</option><option>ממתין לחומרים</option><option>נקבע תור</option><option>נסגר</option><option>לא רלוונטי</option>
+            </select>
+            <select id="tktFilterPriority" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+              <option value="">כל העדיפויות</option>
+              <option>דחוף</option><option>רגיל</option>
+            </select>
+            <select id="tktFilterCat" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
+              <option value="">כל הקטגוריות</option>
+            </select>
+          </div>
+          <div id="tktList"><div class="empty"><div class="empty-icon">🔨</div><div>אין תקלות</div></div></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ───── אסיפות דיירים ───── -->
+  <div class="tab-panel" id="tab-meetings">
+    <div class="card">
+      <div class="card-header" style="display:flex;align-items:center;gap:10px;">
+        📋 אסיפות דיירים
+        <button class="btn btn-green btn-sm" onclick="mtgOpenNew()" style="margin-right:auto;">➕ אסיפה חדשה</button>
+      </div>
+      <div class="card-body">
+        <div id="mtgList"><div class="empty"><div class="empty-icon">📋</div><div>עדיין לא נוצרו אסיפות</div></div></div>
+      </div>
+    </div>
   </div>
 
 </main>
@@ -1293,34 +1343,6 @@ function vpLogout() {
     <div class="chart-note">💡 לשלוח לדיירים: השתמש ב"העתק סיכום" ← הדבק בהודעה, או שמור כתמונה ושלח ידנית</div>
   </div>
 </div>
-
-  <!-- ── TICKETS TAB ───────────────────────────────────────────── -->
-  <div class="tab-panel" id="tab-tickets">
-    <div class="card">
-      <div class="card-header" style="display:flex;align-items:center;gap:10px;">
-        🔨 תיעוד תקלות
-        <button class="btn btn-green btn-sm" onclick="tktOpenNew()" style="margin-right:auto;">+ תקלה חדשה</button>
-        <button class="btn btn-sm" onclick="tktLoad(this)" title="רענן תקלות" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);padding:5px 10px;">↻</button>
-      </div>
-      <div class="card-body">
-        <!-- Filters -->
-        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
-          <select id="tktFilterStatus" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
-            <option value="">כל הסטטוסים</option>
-            <option>פתוח</option><option>בטיפול</option><option>ממתין לחומרים</option><option>נקבע תור</option><option>נסגר</option><option>לא רלוונטי</option>
-          </select>
-          <select id="tktFilterPriority" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
-            <option value="">כל העדיפויות</option>
-            <option>דחוף</option><option>רגיל</option>
-          </select>
-          <select id="tktFilterCat" onchange="tktRender()" style="font-size:0.82rem;padding:5px 8px;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);">
-            <option value="">כל הקטגוריות</option>
-          </select>
-        </div>
-        <div id="tktList"><div class="empty"><div class="empty-icon">🔨</div><div>אין תקלות</div></div></div>
-      </div>
-    </div>
-  </div>
 
   <!-- New Ticket Modal -->
   <div class="modal-bg" id="tktNewModal" style="display:none;" onclick="if(event.target===this)closeModal('tktNewModal')">
@@ -1495,33 +1517,67 @@ function showPlanUpgradeModal(requiredPlan) {
   setTimeout(() => modal.classList.add('show'), 10);
 }
 
-function switchTab(name) {
+function switchTab(name, subTab) {
+  // backward-compat: switchTab('maintenance') / switchTab('tickets') → property
+  if (name === 'maintenance') { switchTab('property', 'maintenance'); return; }
+  if (name === 'tickets')     { switchTab('property', 'tickets');     return; }
+
   // בדוק אם הטאב נעול לפי plan
-  const tabFeatureMap = { reports:'reports', trends:'trends', bulletin:'bulletin', maintenance:'maintenance' };
-  const requiredPlanMap = { reports:'Advanced', trends:'Advanced', bulletin:'Basic', maintenance:'Basic' };
+  const tabFeatureMap = { reports:'reports', trends:'trends', bulletin:'bulletin', property:'maintenance' };
+  const requiredPlanMap = { reports:'Advanced', trends:'Advanced', bulletin:'Basic', property:'Basic' };
   const feature = tabFeatureMap[name];
   if (feature && !planHasFeature(feature)) {
     showPlanUpgradeModal(requiredPlanMap[name] || 'Advanced');
     return;
   }
   if (name === 'troubleshoot') setTimeout(tsInit, 50);
-  if (name === 'maintenance') { mntLoad(); }
-  if (name === 'tickets') { tktLoad(); }
   if (name === 'settings') setTimeout(shareInitMsg, 50);
   document.querySelectorAll('.tab-panel').forEach(function(p){p.classList.remove('active');});
   document.querySelectorAll('.tab-btn').forEach(function(b){b.classList.remove('active');});
   document.getElementById('tab-'+name).classList.add('active');
-  document.querySelectorAll('.tab-btn').forEach(function(b){ if(b.getAttribute('onclick')&&b.getAttribute('onclick').includes(name)) b.classList.add('active'); });
+  document.querySelectorAll('.tab-btn').forEach(function(b){ if(b.getAttribute('onclick')&&b.getAttribute('onclick').includes("'"+name+"'")) b.classList.add('active'); });
   if (name === 'bulletin') { blRenderTenantGrid(); blRenderHistory(); }
   if (name === 'payments') {
     loadBankSyncStatus();
-    // Auto-refresh every 30 seconds while on this tab
     if (window._bankSyncPoller) clearInterval(window._bankSyncPoller);
     window._bankSyncPoller = setInterval(loadBankSyncStatus, 30000);
   } else {
     if (window._bankSyncPoller) { clearInterval(window._bankSyncPoller); window._bankSyncPoller = null; }
   }
   if (name === 'trends') { trendRenderSaved(); }
+  if (name === 'property') { switchSubTab(subTab || 'maintenance'); }
+  if (name === 'meetings')  { mtgLoad(); }
+}
+
+function switchSubTab(sub) {
+  // sub = 'maintenance' | 'tickets'
+  ['maintenance','tickets'].forEach(function(s) {
+    const panel = document.getElementById('subpanel-'+s);
+    const btn   = document.getElementById('sub'+s.charAt(0).toUpperCase()+s.slice(1,3));
+    if (!panel || !btn) return;
+    if (s === sub) {
+      panel.style.display = '';
+      btn.classList.add('active');
+    } else {
+      panel.style.display = 'none';
+      btn.classList.remove('active');
+    }
+  });
+  if (sub === 'maintenance') { mntLoad(); }
+  if (sub === 'tickets')     { tktLoad(); }
+}
+
+// update property badge = sum of mnt + tkt badges
+function updatePropertyBadge() {
+  const mntEl = document.getElementById('tbM');
+  const tktEl = document.getElementById('tbTk');
+  const propEl = document.getElementById('tbProperty');
+  if (!propEl) return;
+  const mntN = (mntEl && mntEl.style.display !== 'none') ? parseInt(mntEl.textContent)||0 : 0;
+  const tktN = (tktEl && tktEl.style.display !== 'none') ? parseInt(tktEl.textContent)||0 : 0;
+  const total = mntN + tktN;
+  propEl.textContent = total;
+  propEl.style.display = total > 0 ? '' : 'none';
 }
 
 
@@ -4497,6 +4553,7 @@ async function tktLoad(btnEl) {
     const open = tktData.filter(t => t.status !== 'נסגר' && t.status !== 'לא רלוונטי').length;
     const badge = document.getElementById('tbTk');
     if (badge) { badge.textContent = open; badge.style.display = open > 0 ? 'inline' : 'none'; }
+    updatePropertyBadge();
   } catch(e) { console.error('tktLoad:', e); }
 }
 
@@ -5335,6 +5392,7 @@ function mntUpdateBadge() {
   const urgent = mntTasks.filter(t => mntGetStatus(t) === 'overdue' || mntGetStatus(t) === 'soon').length;
   if (urgent > 0) { el.textContent = urgent; el.style.display = 'inline-flex'; }
   else { el.style.display = 'none'; }
+  updatePropertyBadge();
 }
 
 // ── Modal הוספה/עריכה ──
@@ -5555,6 +5613,47 @@ document.addEventListener('change', function(e) {
 
 // ── טעינה כשנכנסים לטאב ──
 // (נוסף ל-switchTab)
+
+// ── אסיפות דיירים – stub (יורחב בגרסה הבאה) ──────────────────────
+let mtgData = [];
+
+async function mtgLoad() {
+  try {
+    const res = await fetch(API + '/meetings', { headers: { 'Authorization': 'Bearer ' + (localStorage.getItem('vp_token') || '') } });
+    const d = await res.json();
+    mtgData = d.meetings || [];
+    mtgRender();
+  } catch(e) {
+    document.getElementById('mtgList').innerHTML = '<div class="empty"><div class="empty-icon">📋</div><div>שגיאה בטעינת אסיפות</div></div>';
+  }
+}
+
+function mtgRender() {
+  const el = document.getElementById('mtgList');
+  if (!el) return;
+  if (!mtgData.length) {
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📋</div><div>עדיין לא נוצרו אסיפות</div></div>';
+    return;
+  }
+  el.innerHTML = '<div class="table-wrap"><table><thead><tr><th>תאריך</th><th>סוג</th><th>משתתפים</th><th>החלטות</th><th>פעולות</th></tr></thead><tbody>' +
+    mtgData.map(m => `<tr>
+      <td>${m.date || ''}</td>
+      <td>${m.type || 'אסיפה כללית'}</td>
+      <td>${(m.attendees || []).length}</td>
+      <td>${(m.decisions || []).length}</td>
+      <td><button class="btn btn-secondary btn-sm" onclick="mtgOpenEdit('${m.id}')">✏️ עריכה</button></td>
+    </tr>`).join('') +
+  '</tbody></table></div>';
+}
+
+function mtgOpenNew() {
+  toast('🚧 פיצ\'ר אסיפות בפיתוח – יגיע בקרוב!', 'info');
+}
+
+function mtgOpenEdit(id) {
+  toast('🚧 פיצ\'ר אסיפות בפיתוח – יגיע בקרוב!', 'info');
+}
+// ── סוף stub אסיפות ──────────────────────────────────────────────
 
 
 
