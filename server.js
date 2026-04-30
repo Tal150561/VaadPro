@@ -2877,6 +2877,146 @@ app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
 });
 
 
+// ════════════════════════════════════════════════════════════════════
+// MEETINGS API — אסיפות דיירים
+// ════════════════════════════════════════════════════════════════════
+
+function meetingsFile(tenantId) {
+  return path.join(DATA_DIR, tenantId + '_meetings.json');
+}
+function loadMeetings(tenantId) {
+  const f = meetingsFile(tenantId);
+  if (!fs.existsSync(f)) return [];
+  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch(e) { return []; }
+}
+function saveMeetings(tenantId, meetings) {
+  fs.writeFileSync(meetingsFile(tenantId), JSON.stringify(meetings, null, 2));
+}
+function nextMeetingId(meetings) {
+  const nums = meetings.map(m => { const n = parseInt((m.id||'').replace('mtg_','')); return isNaN(n) ? 0 : n; });
+  return 'mtg_' + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, '0');
+}
+
+// GET /api/meetings
+app.get('/api/meetings', authMiddleware, (req, res) => {
+  const meetings = loadMeetings(req.user.tenantId);
+  res.json({ ok: true, meetings });
+});
+
+// POST /api/meetings — create
+app.post('/api/meetings', authMiddleware, (req, res) => {
+  const { date, type, attendees, protocol, decisions } = req.body;
+  if (!date) return res.status(400).json({ ok: false, error: 'תאריך חובה' });
+  const meetings = loadMeetings(req.user.tenantId);
+  const meeting = {
+    id: nextMeetingId(meetings),
+    date,
+    type: type || 'אסיפה כללית',
+    attendees: attendees || [],
+    protocol: protocol || '',
+    decisions: (decisions || []).map((d, i) => ({
+      id: i + 1,
+      text: d.text || '',
+      dueDate: d.dueDate || '',
+      assignee: d.assignee || '',
+      status: d.status || 'פתוח'
+    })),
+    createdAt: new Date().toISOString()
+  };
+  meetings.unshift(meeting);
+  saveMeetings(req.user.tenantId, meetings);
+  res.json({ ok: true, meeting });
+});
+
+// PUT /api/meetings/:id — update
+app.put('/api/meetings/:id', authMiddleware, (req, res) => {
+  const meetings = loadMeetings(req.user.tenantId);
+  const idx = meetings.findIndex(m => m.id === req.params.id);
+  if (idx === -1) return res.status(404).json({ ok: false, error: 'לא נמצא' });
+  const { date, type, attendees, protocol, decisions } = req.body;
+  meetings[idx] = {
+    ...meetings[idx],
+    date: date ?? meetings[idx].date,
+    type: type ?? meetings[idx].type,
+    attendees: attendees ?? meetings[idx].attendees,
+    protocol: protocol ?? meetings[idx].protocol,
+    decisions: decisions ? decisions.map((d, i) => ({
+      id: d.id || i + 1,
+      text: d.text || '',
+      dueDate: d.dueDate || '',
+      assignee: d.assignee || '',
+      status: d.status || 'פתוח'
+    })) : meetings[idx].decisions,
+    updatedAt: new Date().toISOString()
+  };
+  saveMeetings(req.user.tenantId, meetings);
+  res.json({ ok: true, meeting: meetings[idx] });
+});
+
+// PATCH /api/meetings/:id/decision/:decId — update single decision status
+app.patch('/api/meetings/:id/decision/:decId', authMiddleware, (req, res) => {
+  const meetings = loadMeetings(req.user.tenantId);
+  const mtg = meetings.find(m => m.id === req.params.id);
+  if (!mtg) return res.status(404).json({ ok: false, error: 'אסיפה לא נמצאה' });
+  const dec = (mtg.decisions || []).find(d => String(d.id) === req.params.decId);
+  if (!dec) return res.status(404).json({ ok: false, error: 'החלטה לא נמצאה' });
+  if (req.body.status) dec.status = req.body.status;
+  if (req.body.assignee !== undefined) dec.assignee = req.body.assignee;
+  if (req.body.dueDate !== undefined) dec.dueDate = req.body.dueDate;
+  saveMeetings(req.user.tenantId, meetings);
+  res.json({ ok: true, decision: dec });
+});
+
+// DELETE /api/meetings/:id
+app.delete('/api/meetings/:id', authMiddleware, (req, res) => {
+  let meetings = loadMeetings(req.user.tenantId);
+  meetings = meetings.filter(m => m.id !== req.params.id);
+  saveMeetings(req.user.tenantId, meetings);
+  res.json({ ok: true });
+});
+
+// POST /api/meetings/:id/send-summary — שליחה ידנית לדיירים
+app.post('/api/meetings/:id/send-summary', authMiddleware, async (req, res) => {
+  const { channel } = req.body; // 'whatsapp' | 'email' | 'both'
+  const meetings = loadMeetings(req.user.tenantId);
+  const mtg = meetings.find(m => m.id === req.params.id);
+  if (!mtg) return res.status(404).json({ ok: false, error: 'אסיפה לא נמצאה' });
+  const d = loadTenantData(req.user.tenantId);
+  const tenants = (d.tenants || []).filter(t => t.active !== false);
+
+  const decisionsText = (mtg.decisions || []).map((dec, i) =>
+    `${i+1}. ${dec.text}${dec.dueDate ? ' (יעד: '+dec.dueDate+')' : ''}${dec.assignee ? ' — '+dec.assignee : ''}`
+  ).join('\n');
+
+  const summary =
+    `📋 סיכום אסיפת דיירים\n` +
+    `תאריך: ${mtg.date}\n` +
+    `סוג: ${mtg.type}\n\n` +
+    (mtg.protocol ? `📝 פרוטוקול:\n${mtg.protocol}\n\n` : '') +
+    (decisionsText ? `✅ החלטות:\n${decisionsText}\n` : '') +
+    `\nבברכה, ועד הבית`;
+
+  const results = { whatsapp: 0, email: 0, errors: [] };
+
+  for (const tenant of tenants) {
+    try {
+      if ((channel === 'whatsapp' || channel === 'both') && tenant.phone) {
+        await sendWaMsg(req.user.tenantId, tenant.phone, summary);
+        results.whatsapp++;
+      }
+      if ((channel === 'email' || channel === 'both') && tenant.email) {
+        await sendEmailResend(tenant.email, `סיכום אסיפת דיירים — ${mtg.date}`, summary.replace(/\n/g, '<br>'));
+        results.email++;
+      }
+    } catch(e) { results.errors.push(e.message); }
+  }
+
+  res.json({ ok: true, results });
+});
+
+// ── סוף MEETINGS API ──────────────────────────────────────────────
+
+
 // ── Start ────────────────────────────────────────────────────────
 
 // ════════════════════════════════════════════════════════════════════
