@@ -2717,6 +2717,31 @@ app.get('/api/meetings/:id/confirmations', authMiddleware, (req, res) => {
 //    the wildcard GET /api/portal/:token, otherwise Express will match
 //    e.g. "tickets" as the :token param and return "לינק לא תקין".
 
+// ── one-time data fix: תקן wa_sent שגויים (paid:true → paid:false) ──
+app.get('/api/admin/fix-wasent', authMiddleware, (req, res) => {
+  const users = loadUsers();
+  let fixed = 0;
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.paymentHistory) continue;
+      let changed = false;
+      Object.keys(d.paymentHistory).forEach(tid => {
+        d.paymentHistory[tid].forEach(r => {
+          if (r.type === 'wa_sent' && r.paid === true) {
+            r.paid = false;
+            fixed++;
+            changed = true;
+          }
+        });
+      });
+      if (changed) saveTenantData(user.tenantId, { paymentHistory: d.paymentHistory });
+    } catch(e) {}
+  }
+  res.json({ ok: true, fixed, message: `תוקנו ${fixed} רשומות wa_sent` });
+});
+
 app.get('/api/portal/debug/:token', (req, res) => {
   const adminToken = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
   let isAdmin = false;
