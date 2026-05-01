@@ -2718,7 +2718,10 @@ app.get('/api/meetings/:id/confirmations', authMiddleware, (req, res) => {
 //    e.g. "tickets" as the :token param and return "לינק לא תקין".
 
 // ── one-time data fix: תקן wa_sent שגויים (paid:true → paid:false) ──
-app.get('/api/admin/fix-wasent', authMiddleware, (req, res) => {
+app.get('/api/admin/fix-wasent', (req, res) => {
+  const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'חסר token' });
+  try { jwt.verify(token, JWT_SECRET); } catch(e) { return res.status(401).json({ error: 'token לא תקין' }); }
   const users = loadUsers();
   let fixed = 0;
   for (const user of users) {
