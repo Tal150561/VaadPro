@@ -2963,7 +2963,10 @@ app.get('/api/portal/:token', (req, res) => {
       typeLabel:  typeLabel(r.type),
       name:       r.name,
       payerName:  r.payerName || ''
-    }))
+    })),
+    lastBankImport: d.lastBankSyncImport
+      ? { timestamp: d.lastBankSyncImport.timestamp, month: d.lastBankSyncImport.month }
+      : null
   });
 });
 
@@ -3472,7 +3475,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.7.1 – SaaS Server         ║');
+  console.log('║   VaadPro v2.9.1 – SaaS Server         ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

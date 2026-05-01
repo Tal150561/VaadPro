@@ -279,6 +279,7 @@
       <div id="currentAmount" class="current-amount"></div>
       <div id="openingDebtBanner" style="display:none;background:rgba(248,81,73,.12);border:1px solid rgba(248,81,73,.3);border-radius:8px;padding:8px 12px;margin-top:8px;font-size:0.85rem;color:#f85149;font-weight:700;"></div>
       <div id="currentMeta" class="current-meta"></div>
+      <div id="bankNotice" style="display:none;margin-top:10px;padding:9px 12px;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);border-radius:8px;font-size:0.8rem;color:#b8860b;line-height:1.5;"></div>
     </div>
 
     <!-- History -->
@@ -542,7 +543,28 @@ function render(d) {
   }
   document.getElementById('currentMeta').textContent = meta;
 
-  // History
+  // Bank import notice — מוצג כשהסטטוס "לא שולם" כדי למנוע בלבול
+  const bankNotice = document.getElementById('bankNotice');
+  if (c.status !== 'paid' && bankNotice) {
+    const bi = d.lastBankImport;
+    if (bi && bi.timestamp) {
+      const importDate = new Date(bi.timestamp);
+      const dateStr = importDate.toLocaleDateString('he-IL', { day: '2-digit', month: '2-digit', year: 'numeric' });
+      const timeStr = importDate.toLocaleTimeString('he-IL', { hour: '2-digit', minute: '2-digit' });
+      bankNotice.style.display = 'block';
+      bankNotice.innerHTML =
+        '💡 <strong>שימו לב:</strong> ייתכן ששילמת אך הנתונים טרם עודכנו.<br>' +
+        'קובץ הבנק האחרון נותח ב־<strong>' + dateStr + ' ' + timeStr + '</strong>.<br>' +
+        '<span style="opacity:.8;">אם ביצעת תשלום לאחר תאריך זה — הוא יעודכן בסריקה הבאה.</span>';
+    } else {
+      bankNotice.style.display = 'block';
+      bankNotice.innerHTML =
+        '💡 <strong>שימו לב:</strong> ייתכן ששילמת אך הנתונים טרם עודכנו.<br>' +
+        '<span style="opacity:.8;">אם ביצעת תשלום — הוא יעודכן לאחר ניתוח קובץ הבנק הבא.</span>';
+    }
+  } else if (bankNotice) {
+    bankNotice.style.display = 'none';
+  }
   const list = document.getElementById('historyList');
   if (!d.history || !d.history.length) {
     list.innerHTML = '<div class="empty-history">אין היסטוריית תשלומים עדיין</div>';
