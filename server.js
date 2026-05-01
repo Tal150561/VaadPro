@@ -2717,7 +2717,30 @@ app.get('/api/meetings/:id/confirmations', authMiddleware, (req, res) => {
 //    the wildcard GET /api/portal/:token, otherwise Express will match
 //    e.g. "tickets" as the :token param and return "לינק לא תקין".
 
-// ── one-time data fix: תקן wa_sent שגויים (paid:true → paid:false) ──
+// ── one-time fix: תקן תשלום אפריל לדייר ספציפי ──
+app.get('/api/admin/fix-payment', (req, res) => {
+  const { token, tenantId, month, paid } = req.query;
+  if (!token) return res.status(401).json({ error: 'חסר token' });
+  try { jwt.verify(token, JWT_SECRET); } catch(e) { return res.status(401).json({ error: 'token לא תקין' }); }
+  const users = loadUsers();
+  let fixed = false;
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.paymentHistory || !d.paymentHistory[tenantId]) continue;
+      const rec = d.paymentHistory[tenantId].find(r => r.month === month);
+      if (rec) {
+        rec.paid = paid !== 'false';
+        if (rec.paid && !rec.date) rec.date = '2026-04-29';
+        saveTenantData(user.tenantId, { paymentHistory: d.paymentHistory });
+        fixed = true;
+        break;
+      }
+    } catch(e) {}
+  }
+  res.json({ ok: fixed, message: fixed ? `עודכן` : `לא נמצאה רשומה` });
+});
 app.get('/api/admin/fix-wasent', (req, res) => {
   const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'חסר token' });
