@@ -2578,21 +2578,22 @@ function render() {
       const toggle=paid
         ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
         :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>';
-      // Debt: cumulative = unpaid history months + openingDebt + current month if unpaid
-      const tHistory = ph[String(t.id)] || [];
-      const amount = t.customAmount || (data.config && data.config.amount) || 300;
-      const openingDebt = Math.max(0, parseFloat(t.openingDebt) || 0);
-      const paidThisMonth = isM || isB; // only real payments count, not just reminder sent
-      // paymentHistory only has records when bank-import or manual mark occurred.
-      // Unpaid months in history = months where action was recorded but paid=false.
-      const unpaidHistory = tHistory.filter(function(r){ return !r.paid; });
-      const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (r.amount || amount); }, 0);
-      // Current month debt: only add if not paid AND not already tracked in history
-      const currentMonthInHistory = paidThisMonth || tHistory.some(function(r){ return !r.paid; });
-      const currentMonthDebt = paidThisMonth ? 0 : amount;
-      // Total: history unpaid + opening debt + current month (no double-count since history never has unpaid current month)
-      const totalDebt = historyDebt + openingDebt + currentMonthDebt;
-      let debtCell;
+       // Debt: cumulative = openingDebt + unpaid history months + current month if unpaid
+       const tHistory = ph[String(t.id)] || [];
+       const amount = t.customAmount || (data.config && data.config.amount) || 300;
+       const openingDebt = Math.max(0, parseFloat(t.openingDebt) || 0);
+       const paidThisMonth = isM || isB;
+       // unpaid months in history (all months, including current if recorded)
+       const unpaidHistory = tHistory.filter(function(r){ return !r.paid; });
+       const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || amount); }, 0);
+       // current month debt: add only if not paid AND current month not already in history
+       const currentMonthKey = data.config && data.config.manualMonth
+         ? (function(){ var mn=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']; var i=mn.indexOf(data.config.manualMonth); var y=new Date().getFullYear(); return i>=0?(y+'-'+String(i+1).padStart(2,'0')):null; })()
+         : (new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0'));
+       const currentInHistory = tHistory.some(function(r){ return r.month === currentMonthKey; });
+       const currentMonthDebt = (paidThisMonth || currentInHistory) ? 0 : amount;
+       const totalDebt = openingDebt + historyDebt + currentMonthDebt;
+       let debtCell;
       if (paidThisMonth && totalDebt === 0) {
         debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
       } else if (paidThisMonth && totalDebt > 0) {

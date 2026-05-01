@@ -347,18 +347,21 @@ function getMonthKey(config) {
 function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName, payerName) {
   if (!tenantData.paymentHistory) tenantData.paymentHistory = {};
   if (!tenantData.paymentHistory[tenantId]) tenantData.paymentHistory[tenantId] = [];
-  // Avoid duplicate for same month
-  const existing = tenantData.paymentHistory[tenantId].findIndex(r => r.month === monthKey);
+  // wa_sent = תזכורת בלבד, לא תשלום
+  const isPaid = (type === 'manual' || type === 'bank');
   const record = {
     month:     monthKey,
-    paid:      true,
+    paid:      isPaid,
     amount:    amount || 0,
     date:      new Date().toISOString().split('T')[0],
     type:      type, // 'wa_sent' | 'manual' | 'bank'
     name:      tenantName || '',
-    payerName: payerName || ''  // actual payer name from bank file
+    payerName: payerName || ''
   };
+  const existing = tenantData.paymentHistory[tenantId].findIndex(r => r.month === monthKey);
   if (existing >= 0) {
+    // אל תדרוס תשלום אמיתי עם תזכורת
+    if (!isPaid && tenantData.paymentHistory[tenantId][existing].paid) return;
     tenantData.paymentHistory[tenantId][existing] = record;
   } else {
     tenantData.paymentHistory[tenantId].push(record);
