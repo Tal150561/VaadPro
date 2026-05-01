@@ -513,15 +513,23 @@ function render(d) {
   document.getElementById('currentMonth').textContent = c.monthLabel;
   document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
 
-  // Opening debt banner
-  const debtBanner = document.getElementById('openingDebtBanner');
-  const openingDebt = Math.max(0, parseFloat(d.tenant.openingDebt) || 0);
-  if (openingDebt > 0) {
-    debtBanner.style.display = 'block';
-    debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + openingDebt + ' ₪</strong><br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: ' + (c.amount + openingDebt) + ' ₪</span>';
-  } else {
-    debtBanner.style.display = 'none';
-  }
+   // Opening debt banner — כולל חוב פתוח + חודשים שלא שולמו בהיסטוריה
+   const debtBanner = document.getElementById('openingDebtBanner');
+   const openingDebt = Math.max(0, parseFloat(d.tenant.openingDebt) || 0);
+   const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid; });
+   const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || c.amount); }, 0);
+   const totalPriorDebt = openingDebt + historyDebt;
+   if (totalPriorDebt > 0) {
+     debtBanner.style.display = 'block';
+     var breakdown = [];
+     if (historyDebt > 0) breakdown.push('חודשים קודמים: ' + historyDebt + '₪');
+     if (openingDebt > 0) breakdown.push('חוב פתוח: ' + openingDebt + '₪');
+     debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + totalPriorDebt + ' ₪</strong>' +
+       (breakdown.length ? '<br><span style="font-size:0.78rem;font-weight:400;color:rgba(255,255,255,0.7);">' + breakdown.join(' · ') + '</span>' : '') +
+       '<br><span style="font-size:0.78rem;font-weight:400;">סהדך לתשלום: ' + (c.amount + totalPriorDebt) + ' ₪</span>';
+   } else {
+     debtBanner.style.display = 'none';
+   }
 
   let meta = '';
   if (c.status === 'paid') {

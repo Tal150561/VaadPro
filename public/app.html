@@ -2590,7 +2590,7 @@ function render() {
        const currentMonthKey = data.config && data.config.manualMonth
          ? (function(){ var mn=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']; var i=mn.indexOf(data.config.manualMonth); var y=new Date().getFullYear(); return i>=0?(y+'-'+String(i+1).padStart(2,'0')):null; })()
          : (new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0'));
-       const currentInHistory = tHistory.some(function(r){ return r.month === currentMonthKey; });
+       const currentInHistory = tHistory.some(function(r){ return r.month === currentMonthKey && r.paid; });
        const currentMonthDebt = (paidThisMonth || currentInHistory) ? 0 : amount;
        const totalDebt = openingDebt + historyDebt + currentMonthDebt;
        let debtCell;
