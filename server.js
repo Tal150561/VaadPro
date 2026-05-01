@@ -2741,6 +2741,31 @@ app.get('/api/admin/fix-payment', (req, res) => {
   }
   res.json({ ok: fixed, message: fixed ? `עודכן` : `לא נמצאה רשומה` });
 });
+// ── one-time fix: מחק רשומות חודש שגויות שנוצרו ע"י BankSync ──
+app.get('/api/admin/fix-month', (req, res) => {
+  const { token, month } = req.query;
+  if (!token) return res.status(401).json({ error: 'חסר token' });
+  try { jwt.verify(token, JWT_SECRET); } catch(e) { return res.status(401).json({ error: 'token לא תקין' }); }
+  const targetMonth = month || '2026-05';
+  const users = loadUsers();
+  let fixed = 0;
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.paymentHistory) continue;
+      let changed = false;
+      Object.keys(d.paymentHistory).forEach(tid => {
+        const before = d.paymentHistory[tid].length;
+        d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== targetMonth);
+        if (d.paymentHistory[tid].length < before) { fixed += before - d.paymentHistory[tid].length; changed = true; }
+      });
+      if (changed) saveTenantData(user.tenantId, { paymentHistory: d.paymentHistory });
+    } catch(e) {}
+  }
+  res.json({ ok: true, fixed, message: `נמחקו ${fixed} רשומות ${targetMonth}` });
+});
+
 app.get('/api/admin/fix-wasent', (req, res) => {
   const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'חסר token' });
