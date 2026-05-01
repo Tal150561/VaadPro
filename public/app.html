@@ -5899,23 +5899,74 @@ async function mtgOpenConfirmations(id) {
     const { confirmations, total, confirmedCount } = d;
     const confirmedList = confirmations.filter(c => c.confirmation);
     const pendingList   = confirmations.filter(c => !c.confirmation);
+    const agreeList     = confirmedList.filter(c => c.confirmation.type === 'agree');
+    const disagreeList  = confirmedList.filter(c => c.confirmation.type === 'disagree');
+    const readList      = confirmedList.filter(c => c.confirmation.type !== 'agree' && c.confirmation.type !== 'disagree');
     const typeLabel = t => t === 'agree' ? '✅ מסכים/ה' : t === 'disagree' ? '❌ לא מסכים/ה' : '📖 קרא';
+    const pct = n => total > 0 ? Math.round(n / total * 100) : 0;
+    const agreePct    = pct(agreeList.length);
+    const disagreePct = pct(disagreeList.length);
+    const pendingPct  = pct(pendingList.length);
     document.getElementById('mtgConfList').innerHTML =
-      `<div style="margin-bottom:14px;font-size:0.88rem;color:var(--text2);">
-        <span style="color:var(--accent);font-weight:700;">${confirmedCount}</span> אישרו מתוך <strong>${total}</strong> דיירים
+      `<div style="margin-bottom:16px;">
+        <!-- כותרת סיכום -->
+        <div style="font-size:0.85rem;color:var(--text2);margin-bottom:12px;">
+          <strong>${total}</strong> דיירים סה"כ · <span style="color:var(--accent);font-weight:700;">${confirmedCount}</span> הגיבו
+        </div>
+        <!-- כרטיסי אחוזים -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:16px;">
+          <div style="background:rgba(37,211,102,.1);border:1px solid rgba(37,211,102,.25);border-radius:10px;padding:10px 12px;text-align:center;">
+            <div style="font-size:1.35rem;font-weight:800;color:var(--accent);">${agreePct}%</div>
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:2px;">✅ מסכימים</div>
+            <div style="font-size:0.8rem;font-weight:600;color:var(--accent);margin-top:1px;">${agreeList.length} דיירים</div>
+          </div>
+          <div style="background:rgba(248,81,73,.1);border:1px solid rgba(248,81,73,.25);border-radius:10px;padding:10px 12px;text-align:center;">
+            <div style="font-size:1.35rem;font-weight:800;color:#f85149;">${disagreePct}%</div>
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:2px;">❌ לא מסכימים</div>
+            <div style="font-size:0.8rem;font-weight:600;color:#f85149;margin-top:1px;">${disagreeList.length} דיירים</div>
+          </div>
+          <div style="background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.25);border-radius:10px;padding:10px 12px;text-align:center;">
+            <div style="font-size:1.35rem;font-weight:800;color:#f0a500;">${pendingPct}%</div>
+            <div style="font-size:0.75rem;color:var(--text2);margin-top:2px;">⏳ לא הגיבו</div>
+            <div style="font-size:0.8rem;font-weight:600;color:#f0a500;margin-top:1px;">${pendingList.length} דיירים</div>
+          </div>
+        </div>
+        <!-- פס התקדמות -->
+        <div style="height:8px;border-radius:99px;overflow:hidden;background:var(--surface2);display:flex;gap:2px;">
+          ${agreePct > 0 ? `<div style="width:${agreePct}%;background:var(--accent);border-radius:99px;transition:width .4s;"></div>` : ''}
+          ${disagreePct > 0 ? `<div style="width:${disagreePct}%;background:#f85149;border-radius:99px;transition:width .4s;"></div>` : ''}
+          ${pendingPct > 0 ? `<div style="width:${pendingPct}%;background:#f0a500;opacity:.5;border-radius:99px;transition:width .4s;"></div>` : ''}
+        </div>
       </div>` +
-      (confirmedList.length ? `
-        <div style="font-weight:700;font-size:0.85rem;margin-bottom:8px;color:var(--accent);">✅ אישרו</div>
-        ${confirmedList.map(c => `
+      (agreeList.length ? `
+        <div style="font-weight:700;font-size:0.85rem;margin-bottom:8px;color:var(--accent);">✅ מסכימים (${agreeList.length})</div>
+        ${agreeList.map(c => `
           <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;">
             <span style="font-weight:600;">${c.name}</span>
             <div style="text-align:left;">
-              <div style="color:${c.confirmation.type==='disagree'?'#f85149':'var(--text2)'};font-size:0.78rem;">${typeLabel(c.confirmation.type)} · ${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
+              <div style="color:var(--text2);font-size:0.78rem;">${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
               ${c.confirmation.note ? '<div style="color:#f0a500;font-size:0.76rem;margin-top:2px;">הערה: '+c.confirmation.note+'</div>' : ''}
             </div>
           </div>`).join('')}` : '') +
+      (disagreeList.length ? `
+        <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:#f85149;">❌ לא מסכימים (${disagreeList.length})</div>
+        ${disagreeList.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:rgba(248,81,73,.07);border:1px solid rgba(248,81,73,.15);border-radius:8px;margin-bottom:6px;font-size:0.84rem;">
+            <span style="font-weight:600;">${c.name}</span>
+            <div style="text-align:left;">
+              <div style="color:#f85149;font-size:0.78rem;">${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
+              ${c.confirmation.note ? '<div style="color:#f0a500;font-size:0.76rem;margin-top:2px;">הערה: '+c.confirmation.note+'</div>' : ''}
+            </div>
+          </div>`).join('')}` : '') +
+      (readList.length ? `
+        <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:var(--text2);">📖 קראו ולא הגיבו (${readList.length})</div>
+        ${readList.map(c => `
+          <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;">
+            <span style="font-weight:600;">${c.name}</span>
+            <div style="color:var(--text2);font-size:0.78rem;text-align:left;">${new Date(c.confirmation.confirmedAt).toLocaleString('he-IL',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}</div>
+          </div>`).join('')}` : '') +
       (pendingList.length ? `
-        <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:#f0a500;">⏳ טרם אישרו</div>
+        <div style="font-weight:700;font-size:0.85rem;margin:14px 0 8px;color:#f0a500;">⏳ טרם הגיבו (${pendingList.length})</div>
         ${pendingList.map(c => `
           <div style="padding:8px 12px;background:var(--surface2);border-radius:8px;margin-bottom:6px;font-size:0.84rem;color:var(--text2);">
             ${c.name}
