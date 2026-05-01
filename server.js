@@ -318,14 +318,14 @@ function getEffectiveMonth(config) {
 const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
 // Calculate total cumulative debt for a tenant:
-// unpaid paymentHistory months + openingDebt (excludes current month)
+// unpaid paymentHistory months + openingDebt (includes current month)
 function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
-  const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const openingDebt = Math.max(0, parseFloat(
     (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
   ));
+  const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const historyDebt = history
-    .filter(r => !r.paid && r.month !== currentMonthKey)
+    .filter(r => !r.paid)
     .reduce((s, r) => s + (r.amount || 0), 0);
   return historyDebt + openingDebt;
 }
@@ -1692,36 +1692,43 @@ function closeMonthUnpaid() {
         const tid = String(tenant.id);
         if (!d.paymentHistory[tid]) d.paymentHistory[tid] = [];
 
-        // אם כבר יש רשומה לחודש הקודם — לא נוגעים
-        const exists = d.paymentHistory[tid].some(r => r.month === prevKey);
-        if (exists) continue;
+        const amount = parseFloat(tenant.customAmount || (d.config && d.config.amount) || 300);
 
-        const amount = tenant.customAmount || (d.config && d.config.amount) || 300;
-        d.paymentHistory[tid].push({
-          month:     prevKey,
-          paid:      false,
-          amount:    amount,
-          date:      null,
-          type:      'unpaid',
-          name:      tenant.name || '',
-          payerName: ''
-        });
-        changed = true;
-        closed++;
+        // בדוק אם יש רשומה לחודש הקודם
+        const existing = d.paymentHistory[tid].find(r => r.month === prevKey);
+
+        if (existing) {
+          // רשומה קיימת — אם לא שולמה, צבור ל-openingDebt ומחק את הרשומה
+          if (!existing.paid) {
+            tenant.openingDebt = Math.round(
+              (Math.max(0, parseFloat(tenant.openingDebt) || 0) + amount) * 100
+            ) / 100;
+            d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== prevKey);
+            changed = true;
+            closed++;
+          }
+          // אם שולמה — לא נוגעים
+        } else {
+          // אין רשומה כלל — הדייר לא שילם ולא נרשם → צבור ל-openingDebt
+          tenant.openingDebt = Math.round(
+            (Math.max(0, parseFloat(tenant.openingDebt) || 0) + amount) * 100
+          ) / 100;
+          changed = true;
+          closed++;
+        }
       }
 
       if (changed) {
-        saveTenantData(user.tenantId, { paymentHistory: d.paymentHistory });
+        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory });
       }
     } catch(e) {
       console.error(`[closeMonthUnpaid:${user.tenantId}]`, e.message);
     }
   }
 
-  if (closed > 0) console.log(`[closeMonthUnpaid] נרשמו ${closed} דיירים כלא שילמו לחודש ${prevKey}`);
-  else console.log(`[closeMonthUnpaid] כל הדיירים מכוסים לחודש ${prevKey}`);
+  if (closed > 0) console.log(`[closeMonthUnpaid] נצברו ${closed} חובות לחודש ${prevKey} ל-openingDebt`);
+  else console.log(`[closeMonthUnpaid] כל הדיירים שילמו לחודש ${prevKey}`);
 }
-
 // ── Cron יומי — בדיקת תחזוקה ───────────────────────────────────
 async function runMaintenanceCron() {
   const users = loadUsers();
