@@ -2584,7 +2584,7 @@ function render() {
        const openingDebt = Math.max(0, parseFloat(t.openingDebt) || 0);
        const paidThisMonth = isM || isB;
        // unpaid months in history (all months, including current if recorded)
-       const unpaidHistory = tHistory.filter(function(r){ return !r.paid; });
+        const unpaidHistory = tHistory.filter(function(r){ return !r.paid && r.month !== currentMonthKey; });
        const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || amount); }, 0);
        // current month debt: add only if not paid AND current month not already in history
        const currentMonthKey = data.config && data.config.manualMonth

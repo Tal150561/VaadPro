@@ -526,7 +526,7 @@ function render(d) {
      if (openingDebt > 0) breakdown.push('חוב פתוח: ' + openingDebt + '₪');
      debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + totalPriorDebt + ' ₪</strong>' +
        (breakdown.length ? '<br><span style="font-size:0.78rem;font-weight:400;color:rgba(255,255,255,0.7);">' + breakdown.join(' · ') + '</span>' : '') +
-       '<br><span style="font-size:0.78rem;font-weight:400;">סהדך לתשלום: ' + (c.amount + totalPriorDebt) + ' ₪</span>';
+       '<br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: ' + (c.amount + totalPriorDebt) + ' ₪</span>';
    } else {
      debtBanner.style.display = 'none';
    }
