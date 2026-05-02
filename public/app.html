@@ -2394,8 +2394,16 @@ async function resetSent() {
 
 async function markPaid(id) {
   const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
-  data.sentLog[id+'_'+em]='manual_paid_'+new Date().toISOString();
+  const tenant = (data.tenants||[]).find(function(t){return String(t.id)===String(id);});
+  const defaultAmt = (tenant && (tenant.customAmount || (data.config&&data.config.amount))) || 300;
+  const input = prompt('סכום ששולם (₪):', defaultAmt);
+  if (input === null) return; // ביטול
+  const paidAmt = parseFloat(input);
+  if (isNaN(paidAmt) || paidAmt <= 0) { toast('❌ סכום לא תקין'); return; }
+  const ts = new Date().toISOString();
+  data.sentLog[id+'_'+em]='manual_paid_'+ts+'_amount_'+paidAmt;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});}catch(e){}
+  await loadData();
   render(); toast('💵 סומן כשילם','success');
 }
 
@@ -2538,11 +2546,14 @@ function render() {
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
       const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
-      const displayDebt = t.openingDebt && t.openingDebt !== 0
-        ? (t.openingDebt > 0
-            ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>'
-            : '<br><span style="color:var(--accent);font-size:0.72rem;font-weight:700;">יתרה: ₪'+Math.abs(t.openingDebt)+'</span>')
-        : '';
+      const creditBal = parseFloat(t.creditBalance) || 0;
+      const displayDebt = creditBal > 0
+        ? '<br><span style="color:#22c55e;font-size:0.72rem;font-weight:700;">✅ קרדיט: ₪'+creditBal+'</span>'
+        : (t.openingDebt && t.openingDebt !== 0
+            ? (t.openingDebt > 0
+                ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>'
+                : '<br><span style="color:var(--accent);font-size:0.72rem;font-weight:700;">יתרה: ₪'+Math.abs(t.openingDebt)+'</span>')
+            : '');
       h+='<td style="font-size:0.82rem;">'+displayAmount+displayDebt+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td style="white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="startEdit('+t.id+')" title="ערוך">✏️</button> <button class="btn btn-danger-soft" onclick="removeTenant('+t.id+')" title="מחק">🗑️</button></td>';
@@ -2586,6 +2597,7 @@ function render() {
        const tHistory = ph[String(t.id)] || [];
        const amount = t.customAmount || (data.config && data.config.amount) || 300;
        const openingDebt = parseFloat(t.openingDebt) || 0; // can be negative (credit)
+       const creditBalance = parseFloat(t.creditBalance) || 0;
        const paidThisMonth = isM || isB;
        // unpaid months in history (all months, including current if recorded)
         const currentMonthKey = (function(){ var mn=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']; var idx=mn.indexOf(em); var y=new Date().getFullYear(); return idx>=0?(y+'-'+String(idx+1).padStart(2,'0')):(new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0')); })();
@@ -2596,7 +2608,10 @@ function render() {
        const currentMonthDebt = (paidThisMonth || currentInHistory) ? 0 : amount;
        const totalDebt = Math.max(0, openingDebt + historyDebt + currentMonthDebt);
        let debtCell;
-      if (paidThisMonth && totalDebt === 0) {
+      if (creditBalance > 0 && totalDebt === 0) {
+        debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ קרדיט: ₪'+creditBalance+'</span>'
+          + '<span style="font-size:0.7rem;color:var(--text3);display:block;">יתרה תקוזז בחודש הבא</span>';
+      } else if (paidThisMonth && totalDebt === 0) {
         debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
       } else if (paidThisMonth && totalDebt > 0) {
         // Paid this month but has prior accumulated debt
@@ -2612,7 +2627,7 @@ function render() {
         if (currentMonthDebt > 0) breakdown.push('החודש: '+currentMonthDebt+'₪');
         if (historyDebt > 0) breakdown.push('חודשים קודמים: '+historyDebt+'₪');
         if (openingDebt > 0) breakdown.push('חוב פתוח: '+openingDebt+'₪');
-        if (openingDebt < 0) breakdown.push('יתרה: '+Math.abs(openingDebt)+'₪');
+        if (openingDebt < 0) breakdown.push('קרדיט: ₪'+creditBalance);
         debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+totalDebt+'₪</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }

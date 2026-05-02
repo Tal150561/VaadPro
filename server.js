@@ -328,8 +328,25 @@ function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
   const historyDebt = history
     .filter(r => !r.paid)
     .reduce((s, r) => s + (r.amount || 0), 0);
-  // Math.max(0,...) — total debt cannot be negative (credit never exceeds what's owed)
+  // openingDebt can be negative (credit from overpayment) — offsets historyDebt
+  // Math.max(0,...) — total debt shown cannot be negative; credit shown separately via getCreditBalance()
   return Math.max(0, historyDebt + openingDebt);
+}
+
+// Returns the credit balance (positive number = tenant has credit).
+// Credit exists when openingDebt is negative and no unpaid history debt.
+function getCreditBalance(tenantData, tenantId) {
+  const openingDebt = parseFloat(
+    (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
+  );
+  if (openingDebt >= 0) return 0;
+  const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
+  const historyDebt = history
+    .filter(r => !r.paid)
+    .reduce((s, r) => s + (r.amount || 0), 0);
+  // Net: positive means credit remaining after covering any unpaid history
+  const net = -(historyDebt + openingDebt); // openingDebt is negative
+  return Math.max(0, Math.round(net * 100) / 100);
 }
 
 function getMonthKey(config) {
@@ -346,19 +363,21 @@ function getMonthKey(config) {
 }
 
 // Write a payment record to paymentHistory (permanent archive, never reset)
-function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName, payerName) {
+// paidAmount: the actual amount the tenant paid (may differ from the monthly fee)
+function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName, payerName, paidAmount) {
   if (!tenantData.paymentHistory) tenantData.paymentHistory = {};
   if (!tenantData.paymentHistory[tenantId]) tenantData.paymentHistory[tenantId] = [];
   // wa_sent = תזכורת בלבד, לא תשלום
   const isPaid = (type === 'manual' || type === 'bank');
   const record = {
-    month:     monthKey,
-    paid:      isPaid,
-    amount:    amount || 0,
-    date:      new Date().toISOString().split('T')[0],
-    type:      type, // 'wa_sent' | 'manual' | 'bank'
-    name:      tenantName || '',
-    payerName: payerName || ''
+    month:      monthKey,
+    paid:       isPaid,
+    amount:     amount || 0,
+    paidAmount: (paidAmount != null && isPaid) ? parseFloat(paidAmount) : (amount || 0),
+    date:       new Date().toISOString().split('T')[0],
+    type:       type, // 'wa_sent' | 'manual' | 'bank'
+    name:       tenantName || '',
+    payerName:  payerName || ''
   };
   const existing = tenantData.paymentHistory[tenantId].findIndex(r => r.month === monthKey);
   if (existing >= 0) {
@@ -547,6 +566,13 @@ app.get('/api/data', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
   d.effectiveMonth    = getEffectiveMonth(d.config);
   d.currentAutoMonth  = getEffectiveMonth(d.config);
+  // Attach creditBalance per tenant so frontend can display credit info
+  if (d.tenants) {
+    d.tenants = d.tenants.map(t => ({
+      ...t,
+      creditBalance: getCreditBalance(d, String(t.id))
+    }));
+  }
   res.json(d);
 });
 
@@ -579,14 +605,22 @@ app.post('/api/data', authMiddleware, (req, res) => {
       const amount = tenant.customAmount || (config.amount || 300);
       let type = null;
       let payerName = '';
-      if (String(val).startsWith('manual_paid')) type = 'manual';
-      else if (String(val).startsWith('bank_import')) {
+      let paidAmount = null;
+      if (String(val).startsWith('manual_paid')) {
+        type = 'manual';
+        // Extract paidAmount stored as: manual_paid_TIMESTAMP_amount_XXX
+        const amtMatch = String(val).match(/_amount_([\d.]+)/);
+        if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
+      } else if (String(val).startsWith('bank_import')) {
         type = 'bank';
         // Extract payer name stored as: bank_import_..._amount_payer_NAME
         const payerMatch = String(val).match(/_payer_(.+)$/);
         if (payerMatch) payerName = payerMatch[1];
+        // Extract paid amount: bank_import_TIMESTAMP_AMOUNT_payer_...
+        const bankAmtMatch = String(val).match(/bank_import_[^_]+_([\d.]+)_/);
+        if (bankAmtMatch) paidAmount = parseFloat(bankAmtMatch[1]);
       }
-      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name, payerName);
+      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name, payerName, paidAmount);
     });
     req.body.paymentHistory = current.paymentHistory;
     delete req.body.bankMonthOverride; // don't save this field to tenant data
@@ -1711,8 +1745,20 @@ function closeMonthUnpaid() {
             d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== prevKey);
             changed = true;
             closed++;
+          } else {
+            // שולמה — בדוק אם יש עודף תשלום → יתרה שלילית ב-openingDebt
+            const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? amount);
+            const overpay = Math.round((paidAmt - amount) * 100) / 100;
+            if (overpay > 0) {
+              // הפחת עודף מ-openingDebt (יכול להפוך שלילי = קרדיט)
+              tenant.openingDebt = Math.round(
+                ((parseFloat(tenant.openingDebt) || 0) - overpay) * 100
+              ) / 100;
+              changed = true;
+              console.log(`[closeMonthUnpaid] עודף תשלום לדייר ${tenant.name}: ${overpay} ₪ → openingDebt=${tenant.openingDebt}`);
+            }
+            // אין צורך להסיר רשומה ששולמה — היא כבר paid:true
           }
-          // אם שולמה — לא נוגעים
         } else {
           // אין רשומה כלל — הדייר לא שילם ולא נרשם → צבור ל-openingDebt
           tenant.openingDebt = Math.round(
@@ -2944,7 +2990,7 @@ app.get('/api/portal/:token', (req, res) => {
 
   res.json({
     ok: true,
-    tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0 },
+    tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId) },
     building: { name: d.config?.buildingName || '' },
     current: {
       monthKey:   currentMonthKey,
