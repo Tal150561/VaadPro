@@ -319,15 +319,17 @@ const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי
 
 // Calculate total cumulative debt for a tenant:
 // unpaid paymentHistory months + openingDebt (includes current month)
+// openingDebt can be negative (tenant has credit) — it offsets historyDebt
 function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
-  const openingDebt = Math.max(0, parseFloat(
+  const openingDebt = parseFloat(
     (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
-  ));
+  );
   const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const historyDebt = history
     .filter(r => !r.paid)
     .reduce((s, r) => s + (r.amount || 0), 0);
-  return historyDebt + openingDebt;
+  // Math.max(0,...) — total debt cannot be negative (credit never exceeds what's owed)
+  return Math.max(0, historyDebt + openingDebt);
 }
 
 function getMonthKey(config) {
@@ -2942,7 +2944,7 @@ app.get('/api/portal/:token', (req, res) => {
 
   res.json({
     ok: true,
-    tenant: { name: tenant.name, openingDebt: Math.max(0, parseFloat(tenant.openingDebt) || 0) },
+    tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0 },
     building: { name: d.config?.buildingName || '' },
     current: {
       monthKey:   currentMonthKey,
