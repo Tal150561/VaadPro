@@ -515,40 +515,44 @@ function render(d) {
 
    // Opening debt banner — כולל חוב פתוח + חודשים שלא שולמו בהיסטוריה
    const debtBanner = document.getElementById('openingDebtBanner');
-   const openingDebt = parseFloat(d.tenant.openingDebt) || 0; // can be negative (credit)
-   // creditBalance = real-time credit (may differ from openingDebt before month-close cron)
+   const openingDebt = parseFloat(d.tenant.openingDebt) || 0; // can be negative (credit from cron)
+   // creditBalance = real-time credit from overpayment (positive = tenant has credit)
+   // only relevant when openingDebt is still 0 (before the 1st-of-month cron updates it)
    const creditBalance = parseFloat(d.tenant.creditBalance) || 0;
-   // Use the more negative of the two as the effective credit signal
-   const effectiveCredit = creditBalance > 0 ? -creditBalance : (openingDebt < 0 ? openingDebt : 0);
+   // effectiveOpeningDebt: if server already set openingDebt negative, use it;
+   // otherwise if creditBalance exists (pre-cron), use it as a negative offset
+   const effectiveOpeningDebt = (openingDebt < 0) ? openingDebt
+     : (creditBalance > 0 ? -creditBalance : openingDebt);
    const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid; });
    const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || c.amount); }, 0);
 
-   // amountDue: current month after applying credit
-   const amountDue = Math.max(0, c.amount + effectiveCredit + historyDebt);
+   // amountDue: total to pay (current month + prior debt), after applying any credit
+   const amountDue = Math.max(0, c.amount + effectiveOpeningDebt + historyDebt);
    // remaining credit after covering history (used for display only)
-   const creditAfterHistory = Math.min(0, effectiveCredit + historyDebt); // negative = still has credit
+   const creditAfterHistory = Math.min(0, effectiveOpeningDebt + historyDebt); // negative = still has credit
 
-   document.getElementById('currentAmount').innerHTML = amountDue + ' <span>₪</span>';
+   // currentAmount shows the monthly fee (same for everyone).
+   // Total debt is shown in the banner below.
+   document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
 
-   const totalPriorDebt = Math.max(0, openingDebt + historyDebt); // credit offsets debt, floor at 0
-   if (effectiveCredit < 0 && amountDue === 0) {
+   const totalPriorDebt = Math.max(0, effectiveOpeningDebt + historyDebt);
+   const creditShown = creditBalance > 0 ? creditBalance : Math.abs(openingDebt);
+   if (effectiveOpeningDebt < 0 && amountDue === 0) {
      // Full credit — covers this month and possibly more
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(52,209,122,.1)';
      debtBanner.style.borderColor = 'rgba(52,209,122,.3)';
      debtBanner.style.color = '#34d17a';
      const remaining = Math.abs(creditAfterHistory);
-     const creditShown = creditBalance > 0 ? creditBalance : Math.abs(openingDebt);
      debtBanner.innerHTML = '✅ יתרה לזכותך מכסה את החודש' +
        (remaining > 0 ? ' — נותרת יתרה של <strong>' + remaining + ' ₪</strong>' : ' במלואו') +
        '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">סה״כ לתשלום החודש: <strong>0 ₪</strong></span>';
-   } else if (effectiveCredit < 0 && amountDue > 0) {
+   } else if (effectiveOpeningDebt < 0 && amountDue > 0) {
      // Partial credit — reduces this month
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(245,166,35,.1)';
      debtBanner.style.borderColor = 'rgba(245,166,35,.3)';
      debtBanner.style.color = '#f5a623';
-     const creditShown = creditBalance > 0 ? creditBalance : Math.abs(openingDebt);
      debtBanner.innerHTML = '💳 יתרה לזכותך: <strong>' + creditShown + ' ₪</strong> קוזזה מהתשלום' +
        (historyDebt > 0 ? '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">חודשים קודמים: ' + historyDebt + '₪</span>' : '') +
        '<br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: <strong>' + amountDue + ' ₪</strong></span>';
