@@ -438,7 +438,7 @@ function vpLogout() {
           <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>מילות חיפוש לבנק <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inKeywords" placeholder="כהן י, העברה 052" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>סכום אישי ₪ <span style="opacity:.5;">(אופציונלי — ברירת מחדל מהגדרות)</span></label><input type="number" id="inCustomAmount" placeholder="ריק = ברירת מחדל" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
-          <div><label>חוב פתוח ₪ <span style="opacity:.5;">(אופציונלי — חוב שנצבר לפני הצטרפות למערכת)</span></label><input type="number" id="inOpeningDebt" placeholder="0" min="0" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div><label>חוב פתוח ₪ <span style="opacity:.5;">(אופציונלי — חוב קודם, או יתרה שלילית לזכות הדייר)</span></label><input type="number" id="inOpeningDebt" placeholder="0" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
         </div>
         <div class="hint" style="margin-top:8px;">מילות חיפוש: ביטויים מופרדים בפסיקים שמופיעים בקובץ הבנק עבור דייר זה</div>
@@ -1981,7 +1981,7 @@ function startEdit(id) {
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מילות חיפוש">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
-  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0" min="0"> <span style="font-size:0.75rem;color:var(--text3);">חוב פתוח</span>';
+  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">חוב פתוח / יתרה</span>';
   cells[5].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
   document.getElementById('en-'+id).focus();
 }
@@ -2538,7 +2538,11 @@ function render() {
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
       const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
-      const displayDebt = (t.openingDebt && t.openingDebt > 0) ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>' : '';
+      const displayDebt = t.openingDebt && t.openingDebt !== 0
+        ? (t.openingDebt > 0
+            ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>'
+            : '<br><span style="color:var(--accent);font-size:0.72rem;font-weight:700;">יתרה: ₪'+Math.abs(t.openingDebt)+'</span>')
+        : '';
       h+='<td style="font-size:0.82rem;">'+displayAmount+displayDebt+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td style="white-space:nowrap;"><button class="btn btn-secondary btn-sm" onclick="startEdit('+t.id+')" title="ערוך">✏️</button> <button class="btn btn-danger-soft" onclick="removeTenant('+t.id+')" title="מחק">🗑️</button></td>';
@@ -2581,7 +2585,7 @@ function render() {
        // Debt: cumulative = openingDebt + unpaid history months + current month if unpaid
        const tHistory = ph[String(t.id)] || [];
        const amount = t.customAmount || (data.config && data.config.amount) || 300;
-       const openingDebt = Math.max(0, parseFloat(t.openingDebt) || 0);
+       const openingDebt = parseFloat(t.openingDebt) || 0; // can be negative (credit)
        const paidThisMonth = isM || isB;
        // unpaid months in history (all months, including current if recorded)
         const currentMonthKey = (function(){ var mn=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']; var idx=mn.indexOf(em); var y=new Date().getFullYear(); return idx>=0?(y+'-'+String(idx+1).padStart(2,'0')):(new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0')); })();
@@ -2590,7 +2594,7 @@ function render() {
        // current month debt: add only if not paid AND current month not already in history
        const currentInHistory = tHistory.some(function(r){ return r.month === currentMonthKey && r.paid; });
        const currentMonthDebt = (paidThisMonth || currentInHistory) ? 0 : amount;
-       const totalDebt = openingDebt + historyDebt + currentMonthDebt;
+       const totalDebt = Math.max(0, openingDebt + historyDebt + currentMonthDebt);
        let debtCell;
       if (paidThisMonth && totalDebt === 0) {
         debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
@@ -2608,6 +2612,7 @@ function render() {
         if (currentMonthDebt > 0) breakdown.push('החודש: '+currentMonthDebt+'₪');
         if (historyDebt > 0) breakdown.push('חודשים קודמים: '+historyDebt+'₪');
         if (openingDebt > 0) breakdown.push('חוב פתוח: '+openingDebt+'₪');
+        if (openingDebt < 0) breakdown.push('יתרה: '+Math.abs(openingDebt)+'₪');
         debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+totalDebt+'₪</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }
