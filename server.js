@@ -3752,12 +3752,6 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
   return closed;
 }
 
-// Patch closeMonthUnpaid to also handle extra accounts
-// We store the original and call our extension at the end of each tenant loop
-const _origCloseMonthUnpaid = closeMonthUnpaid;
-// Monkey-patch: wrap after original definition completes (see call below at startup)
-// NOTE: we handle this by patching the cron call — see runMaintenanceCron override below
-
 // ── Extra accounts monthly close ─────────────────────────────
 // Runs on the 1st alongside the original scheduleDailyCron.
 // Only touches extraAccounts[].openingDebt — never touches tenant.openingDebt.
