@@ -712,13 +712,13 @@ function vpLogout() {
               <div class="wa-setup-num">1</div>
               <div style="font-size:0.84rem;color:var(--text2);">
                 <a href="/vaadpro-setup.bat" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת VaadPro-Setup</a>
-                <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Setup.bat</strong> — מתקין הכל אוטומטית</div>
+                <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Setup.zip</strong> — חלץ את ה-BAT ומתקין הכל אוטומטית</div>
               </div>
             </div>
             <div class="wa-setup-step">
               <div class="wa-setup-num">2</div>
               <div style="font-size:0.84rem;color:var(--text2);">
-                לחץ ימני על <strong>VaadPro-Setup.bat</strong> ← <strong>Properties</strong> ← סמן <strong>Unblock</strong> ← <strong>OK</strong>
+                חלץ את <strong>VaadPro-Setup.zip</strong> (קליק ימני ← חלץ הכל)
                 <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">🔓 נדרש פעם אחת בלבד — Windows חוסם קבצים שהורדו מהאינטרנט</div>
               </div>
             </div>
@@ -4825,7 +4825,7 @@ const TS_ITEMS = [
     cat: "WhatsApp / Bridge",
     q: "VaadPro-Setup.bat לא עושה כלום / נסגר מיד",
     a: [
-      "לחץ ימני על VaadPro-Setup.bat ← Properties ← סמן Unblock ← OK",
+      "ודא שחילצת את ה-ZIP לפני ההפעלה — אל תריץ ישירות מתוך ה-ZIP",
       "לחץ ימני ← 'הפעל כמנהל'",
       "ודא שיש חיבור אינטרנט — המתקין מוריד קבצים",
       "בדוק קובץ לוג על הדסקטופ: VaadPro-Setup-Log.txt — מכיל פרטי שגיאה מדויקים",
@@ -5267,8 +5267,8 @@ const HELP_CONTENT = {
       <h3>למה צריך את ה-Bridge?</h3>
       <p>ווטסאפ מחייב חיבור לטלפון שלך. ה-Bridge הוא תוכנה קטנה שרצה על המחשב ומחברת בין הטלפון לאפליקציה בענן.</p>
       <h3>Windows — צעדים</h3>
-      <div class="step"><div class="step-num">1</div><div>הגדרות ← הורד <strong>VaadPro-Setup.bat</strong></div></div>
-      <div class="step"><div class="step-num">2</div><div>לחץ ימני ← Properties ← Unblock ← OK</div></div>
+      <div class="step"><div class="step-num">1</div><div>הגדרות ← הורד <strong>VaadPro-Setup.zip</strong></div></div>
+      <div class="step"><div class="step-num">2</div><div>חלץ את ה-ZIP (קליק ימני ← חלץ הכל)</div></div>
       <div class="step"><div class="step-num">3</div><div>הגדרות ← לחץ <strong>"קבל קוד התקנה"</strong></div></div>
       <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>VaadPro-Setup.bat</strong> ← הכנס קוד ← Install</div></div>
       <div class="step"><div class="step-num">5</div><div>חזור לאפליקציה ← "חיבור ווטסאפ" ← סרוק QR</div></div>

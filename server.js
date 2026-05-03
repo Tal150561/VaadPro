@@ -445,7 +445,7 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
 כנס לאפליקציה ← הגדרות ← לחץ "קבל קוד התקנה"
 
 <strong>2. הורד את המתקין</strong>
-הגדרות ← הורד VaadPro-Setup.bat ← לחץ ימני ← Unblock ← OK
+הגדרות ← הורד VaadPro-Setup.zip ← חלץ את הקובץ
 
 <strong>3. הפעל והתקן</strong>
 לחץ פעמיים על VaadPro-Setup.bat ← הכנס קוד ← Install
@@ -2109,9 +2109,12 @@ app.get('/vaadpro-start.bat', (req, res) => {
 app.get('/vaadpro-setup.bat', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const bat = generateSetupBat(appUrl);
-  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.bat"');
-  res.setHeader('Content-Type', 'application/octet-stream');
-  res.send(bat);
+  // Wrap in ZIP — prevents Windows Defender from auto-deleting .bat files
+  // downloaded from the internet (MOTW / SmartScreen policy tightened ~2024)
+  const zip = buildZipBuffer('VaadPro-Setup.bat', bat);
+  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.zip"');
+  res.setHeader('Content-Type', 'application/zip');
+  res.send(zip);
 });
 
 function generateSetupPs1(appUrl) {
@@ -2286,6 +2289,54 @@ $btn.Add_Click({
 
 $form.ShowDialog() | Out-Null
 `;
+}
+
+// Build a minimal valid ZIP buffer containing a single stored (uncompressed) file.
+// Pure Node — no external dependencies. Used to wrap .bat files so Windows Defender
+// doesn't auto-delete them on download (MOTW policy tightened ~2024).
+function buildZipBuffer(filename, content) {
+  const fileContent = Buffer.from(content, 'utf8');
+  const fileNameBuf = Buffer.from(filename);
+  const crc = crc32(fileContent);
+
+  const local = Buffer.alloc(30 + fileNameBuf.length);
+  local.writeUInt32LE(0x04034b50, 0);
+  local.writeUInt16LE(20, 4); local.writeUInt16LE(0, 6); local.writeUInt16LE(0, 8);
+  local.writeUInt16LE(0, 10); local.writeUInt16LE(0, 12);
+  local.writeUInt32LE(crc, 14);
+  local.writeUInt32LE(fileContent.length, 18); local.writeUInt32LE(fileContent.length, 24);
+  local.writeUInt16LE(fileNameBuf.length, 26); local.writeUInt16LE(0, 28);
+  fileNameBuf.copy(local, 30);
+
+  const cdOffset = local.length + fileContent.length;
+  const cd = Buffer.alloc(46 + fileNameBuf.length);
+  cd.writeUInt32LE(0x02014b50, 0);
+  cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0, 8);
+  cd.writeUInt16LE(0, 10); cd.writeUInt16LE(0, 12); cd.writeUInt16LE(0, 14);
+  cd.writeUInt32LE(crc, 16);
+  cd.writeUInt32LE(fileContent.length, 20); cd.writeUInt32LE(fileContent.length, 24);
+  cd.writeUInt16LE(fileNameBuf.length, 28); cd.writeUInt16LE(0, 30); cd.writeUInt16LE(0, 32);
+  cd.writeUInt16LE(0, 34); cd.writeUInt16LE(0, 36); cd.writeUInt32LE(0, 38);
+  cd.writeUInt32LE(0, 42); fileNameBuf.copy(cd, 46);
+
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(0, 4); eocd.writeUInt16LE(0, 6);
+  eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(cdOffset, 16); eocd.writeUInt16LE(0, 20);
+
+  return Buffer.concat([local, fileContent, cd, eocd]);
+}
+
+function crc32(buf) {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 function generateSetupBat(appUrl) {
