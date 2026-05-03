@@ -1818,6 +1818,8 @@ async function loadData() {
     }
     // שמור גיבוי אוטומטי מקומי בכל טעינה מוצלחת
     try { sessionStorage.setItem('vaad_data_backup', JSON.stringify(data)); } catch(e){}
+    // טען נתוני חשבונות נוספים
+    loadAccountsIfNeeded().catch(function(){});
   } catch(e) {
     // השרת לא זמין – נסה לטעון מגיבוי מקומי
     try {
@@ -5609,9 +5611,7 @@ function promptAccountPaid(tenantId, accountId, defaultAmount) {
   markAccountPaid(tenantId, accountId, parseFloat(amt) || defaultAmount);
 }
 
-// ── Hook into loadData to also load accounts ───────────────────
-const _origLoadData = typeof loadData === 'function' ? loadData : null;
-// We patch after the script loads — using a flag approach
+// ── Hook into loadData — done directly in loadData() above ────
 let _accountsLoaded = false;
 async function loadAccountsIfNeeded() {
   if (_accountsLoaded) return;
@@ -5620,69 +5620,65 @@ async function loadAccountsIfNeeded() {
   await loadAccountsStatus();
 }
 
-// ── Patch render() to show accounts button in tenant list ─────
-// We inject the accounts button into the tenant row action area after render
-const _origRender = typeof render === 'function' ? render : null;
-function renderWithAccounts() {
-  if (_origRender) _origRender();
-  // Add accounts button to each tenant row
+// ── render() injection handled via renderWithAccounts ─────────
+// Called explicitly after render() in the payments tab render flow
+// See renderExtraAccountsCell() — injected via MutationObserver below
+var _accountsObserver = null;
+function startAccountsObserver() {
+  if (_accountsObserver) return;
+  var target = document.getElementById('tenantsWrap');
+  if (!target) return;
+  _accountsObserver = new MutationObserver(function() {
+    injectExtraAccountsCells();
+  });
+  _accountsObserver.observe(target, { childList: true, subtree: true });
+}
+
+function injectExtraAccountsCells() {
   document.querySelectorAll('[id^="send-btn-"]').forEach(function(sendBtn) {
-    const tid = sendBtn.id.replace('send-btn-', '');
-    const tenant = (data.tenants || []).find(t => String(t.id) === String(tid));
+    var tid = sendBtn.id.replace('send-btn-', '');
+    var tenant = (data.tenants || []).find(function(t){ return String(t.id) === String(tid); });
     if (!tenant) return;
-    const accs = accountsStatus[String(tid)];
-    // Insert accounts mini-cell after the debt cell if not already there
-    const row = sendBtn.closest('tr');
+    var row = sendBtn.closest('tr');
     if (!row) return;
-    const debtCell = row.cells[2];
+    var debtCell = row.cells[2];
     if (debtCell && !debtCell.querySelector('.extra-accs-wrap')) {
-      const wrap = document.createElement('div');
-      wrap.className = 'extra-accs-wrap';
-      wrap.innerHTML = renderExtraAccountsCell(tid);
-      debtCell.appendChild(wrap);
+      var extra = renderExtraAccountsCell(tid);
+      if (extra) {
+        var wrap = document.createElement('div');
+        wrap.className = 'extra-accs-wrap';
+        wrap.innerHTML = extra;
+        debtCell.appendChild(wrap);
+      }
     }
-    // Add manage button if not already there
-    const actionCell = row.cells[5];
+    var actionCell = row.cells[5];
     if (actionCell && !actionCell.querySelector('.acc-mgr-btn')) {
-      const btn = document.createElement('button');
+      var btn = document.createElement('button');
       btn.className = 'btn btn-sm acc-mgr-btn';
-      btn.style.cssText = 'background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);font-size:0.74rem;';
+      btn.style.cssText = 'background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);font-size:0.74rem;margin-right:4px;';
       btn.title = 'נהל חשבונות נוספים';
       btn.textContent = '💳';
-      btn.onclick = function() { openTenantAccounts(tid, tenant.name); };
-      actionCell.appendChild(btn);
+      btn.onclick = (function(id, name){ return function(){ openTenantAccounts(id, name); }; })(tid, tenant.name);
+      actionCell.insertBefore(btn, actionCell.firstChild);
     }
   });
 }
 
-// Override render with our extended version
-if (typeof render === 'function') {
-  window.render = renderWithAccounts;
-}
-
-// ── Init: load accounts data after main data loads ─────────────
-// Hooking into the existing loadData flow
-const _origLoadDataFn = window.loadData;
-if (typeof _origLoadDataFn === 'function') {
-  window.loadData = async function() {
-    await _origLoadDataFn();
-    await loadAccountsIfNeeded();
-  };
-}
-
-// Also load on page ready if data already exists
 document.addEventListener('DOMContentLoaded', function() {
-  setTimeout(loadAccountsIfNeeded, 1500); // after main data loads
+  setTimeout(startAccountsObserver, 2000);
 });
 
-// ── Settings tab: render templates when tab is opened ─────────
-const _origSwitchTab = window.switchTab;
-if (typeof _origSwitchTab === 'function') {
-  window.switchTab = function(tab) {
-    _origSwitchTab(tab);
-    if (tab === 'settings') loadAccountTemplates();
-  };
-}
+// ── Init: accounts loaded via loadData() above ─────────────────
+// (loadAccountsIfNeeded is called directly from loadData)
+
+// ── Settings tab: load templates when settings tab opened ──────
+// Patching switchTab — defined later in auth layer, so we use event delegation
+document.addEventListener('click', function(e) {
+  var btn = e.target.closest('[onclick]');
+  if (btn && btn.getAttribute('onclick') && btn.getAttribute('onclick').includes("switchTab('settings')")) {
+    setTimeout(loadAccountTemplates, 100);
+  }
+});
 // init() נקרא מה-auth layer לאחר הגדרת ה-token
 </script>
 
