@@ -286,6 +286,12 @@
     <div class="section-title">היסטוריית תשלומים — 12 חודשים אחרונים</div>
     <div class="history-list" id="historyList"></div>
 
+    <!-- Extra Accounts Section (shown only if tenant has extra accounts) -->
+    <div id="extraAccountsSection" style="display:none;margin-top:16px;">
+      <div class="section-title">חשבונות נוספים</div>
+      <div id="extraAccountsList"></div>
+    </div>
+
     </div><!-- /paymentsSection -->
 
     <!-- Tickets Section -->
@@ -905,6 +911,70 @@ async function portalSubmitDisagree() {
   await portalConfirmMeeting(_disagreeId, 'disagree', note);
 }
 // ── סוף אסיפות ───────────────────────────────────────────────────
+
+// ── חשבונות נוספים (multi-account) ────────────────────────────
+function renderExtraAccountsPortal(d) {
+  var section = document.getElementById('extraAccountsSection');
+  var list    = document.getElementById('extraAccountsList');
+  if (!section || !list) return;
+  var tenant = d.tenant || {};
+  var accounts = tenant.extraAccounts || [];
+  // Filter: only active accounts
+  var active = accounts.filter(function(a){ return a.active !== false; });
+  if (!active.length) { section.style.display = 'none'; return; }
+
+  section.style.display = 'block';
+  var mk = d.current && d.current.monthKey;  // YYYY-MM
+  var em = d.current && d.current.monthLabel; // ינואר etc.
+  var ph = d.extraPaymentHistory || {};       // { accId: [{month,paid,amount,...}] }
+  var freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+
+  list.innerHTML = active.map(function(acc) {
+    var history = ph[acc.id] || [];
+    var paidRec = history.find(function(r){ return r.month === mk && r.paid; });
+    var unpaidHistory = history.filter(function(r){ return !r.paid; });
+    var histDebt = unpaidHistory.reduce(function(s,r){ return s+(parseFloat(r.amount)||acc.amount||0); }, 0);
+    var openDebt = parseFloat(acc.openingDebt) || 0;
+    var totalDebt = Math.max(0, histDebt + openDebt);
+
+    var statusColor, statusText, bg, border;
+    if (paidRec) {
+      statusColor='var(--accent)'; statusText='✅ שולם';
+      bg='rgba(37,211,102,.06)'; border='rgba(37,211,102,.3)';
+    } else {
+      statusColor='var(--warn)'; statusText='⏳ ממתין לתשלום';
+      bg='rgba(248,81,73,.05)'; border='rgba(248,81,73,.25)';
+    }
+
+    var debtHtml = '';
+    if (!paidRec && totalDebt > 0) {
+      debtHtml = '<div style="margin-top:6px;font-size:0.8rem;color:#f85149;font-weight:700;">חוב מצטבר: ₪' + totalDebt + '</div>';
+    }
+
+    return '<div style="background:'+bg+';border:1px solid '+border+';border-radius:12px;padding:14px 16px;margin-bottom:10px;">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+        '<div>' +
+          '<div style="font-weight:700;font-size:0.95rem;">' + acc.label + '</div>' +
+          '<div style="font-size:0.78rem;color:var(--text2);margin-top:2px;">'+
+            '₪' + (acc.amount||0) + ' · ' + (freqLabel[acc.frequency]||acc.frequency) +
+          '</div>' +
+        '</div>' +
+        '<div style="font-weight:700;font-size:0.88rem;color:'+statusColor+';">' + statusText + '</div>' +
+      '</div>' +
+      debtHtml +
+    '</div>';
+  }).join('');
+}
+
+// Patch the main render call — inject extra accounts after main card renders
+var _origPortalRender = window.renderPortalData || null;
+// Hook: after allData is set, render extra accounts
+var _portalDataReady = false;
+var _portalAllData = null;
+document.addEventListener('portalDataReady', function(e) {
+  if (e.detail) { _portalAllData = e.detail; renderExtraAccountsPortal(e.detail); }
+});
+// ── סוף חשבונות נוספים ────────────────────────────────────────
 </script>
 <!-- Disagree Modal -->
 <div id="disagreeModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999;align-items:center;justify-content:center;padding:20px;">

@@ -445,7 +445,7 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
 כנס לאפליקציה ← הגדרות ← לחץ "קבל קוד התקנה"
 
 <strong>2. הורד את המתקין</strong>
-הגדרות ← הורד VaadPro-Setup.zip ← חלץ את הקובץ
+הגדרות ← הורד VaadPro-Setup.bat ← לחץ ימני ← Unblock ← OK
 
 <strong>3. הפעל והתקן</strong>
 לחץ פעמיים על VaadPro-Setup.bat ← הכנס קוד ← Install
@@ -2109,12 +2109,9 @@ app.get('/vaadpro-start.bat', (req, res) => {
 app.get('/vaadpro-setup.bat', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const bat = generateSetupBat(appUrl);
-  // Wrap in ZIP — prevents Windows Defender from auto-deleting .bat files
-  // downloaded from the internet (MOTW / SmartScreen policy tightened ~2024)
-  const zip = buildZipBuffer('VaadPro-Setup.bat', bat);
-  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.zip"');
-  res.setHeader('Content-Type', 'application/zip');
-  res.send(zip);
+  res.setHeader('Content-Disposition', 'attachment; filename="VaadPro-Setup.bat"');
+  res.setHeader('Content-Type', 'application/octet-stream');
+  res.send(bat);
 });
 
 function generateSetupPs1(appUrl) {
@@ -2289,54 +2286,6 @@ $btn.Add_Click({
 
 $form.ShowDialog() | Out-Null
 `;
-}
-
-// Build a minimal valid ZIP buffer containing a single stored (uncompressed) file.
-// Pure Node — no external dependencies. Used to wrap .bat files so Windows Defender
-// doesn't auto-delete them on download (MOTW policy tightened ~2024).
-function buildZipBuffer(filename, content) {
-  const fileContent = Buffer.from(content, 'utf8');
-  const fileNameBuf = Buffer.from(filename);
-  const crc = crc32(fileContent);
-
-  const local = Buffer.alloc(30 + fileNameBuf.length);
-  local.writeUInt32LE(0x04034b50, 0);
-  local.writeUInt16LE(20, 4); local.writeUInt16LE(0, 6); local.writeUInt16LE(0, 8);
-  local.writeUInt16LE(0, 10); local.writeUInt16LE(0, 12);
-  local.writeUInt32LE(crc, 14);
-  local.writeUInt32LE(fileContent.length, 18); local.writeUInt32LE(fileContent.length, 24);
-  local.writeUInt16LE(fileNameBuf.length, 26); local.writeUInt16LE(0, 28);
-  fileNameBuf.copy(local, 30);
-
-  const cdOffset = local.length + fileContent.length;
-  const cd = Buffer.alloc(46 + fileNameBuf.length);
-  cd.writeUInt32LE(0x02014b50, 0);
-  cd.writeUInt16LE(20, 4); cd.writeUInt16LE(20, 6); cd.writeUInt16LE(0, 8);
-  cd.writeUInt16LE(0, 10); cd.writeUInt16LE(0, 12); cd.writeUInt16LE(0, 14);
-  cd.writeUInt32LE(crc, 16);
-  cd.writeUInt32LE(fileContent.length, 20); cd.writeUInt32LE(fileContent.length, 24);
-  cd.writeUInt16LE(fileNameBuf.length, 28); cd.writeUInt16LE(0, 30); cd.writeUInt16LE(0, 32);
-  cd.writeUInt16LE(0, 34); cd.writeUInt16LE(0, 36); cd.writeUInt32LE(0, 38);
-  cd.writeUInt32LE(0, 42); fileNameBuf.copy(cd, 46);
-
-  const eocd = Buffer.alloc(22);
-  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(0, 4); eocd.writeUInt16LE(0, 6);
-  eocd.writeUInt16LE(1, 8); eocd.writeUInt16LE(1, 10);
-  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(cdOffset, 16); eocd.writeUInt16LE(0, 20);
-
-  return Buffer.concat([local, fileContent, cd, eocd]);
-}
-
-function crc32(buf) {
-  const t = new Uint32Array(256);
-  for (let i = 0; i < 256; i++) {
-    let c = i;
-    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
-    t[i] = c;
-  }
-  let crc = 0xFFFFFFFF;
-  for (let i = 0; i < buf.length; i++) crc = (crc >>> 8) ^ t[(crc ^ buf[i]) & 0xFF];
-  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 function generateSetupBat(appUrl) {
@@ -3041,7 +2990,11 @@ app.get('/api/portal/:token', (req, res) => {
 
   res.json({
     ok: true,
-    tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId) },
+    tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId),
+      extraAccounts: (tenant.extraAccounts || []).map(a => ({
+        id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false
+      }))
+    },
     building: { name: d.config?.buildingName || '' },
     current: {
       monthKey:   currentMonthKey,
@@ -3063,6 +3016,15 @@ app.get('/api/portal/:token', (req, res) => {
       name:       r.name,
       payerName:  r.payerName || ''
     })),
+    extraPaymentHistory: (() => {
+      const result = {};
+      for (const acc of (tenant.extraAccounts || [])) {
+        const phKey = String(entry.tenantId) + '__acc__' + acc.id;
+        result[acc.id] = ((d.paymentHistory || {})[phKey] || [])
+          .sort((a, b) => b.month.localeCompare(a.month)).slice(0, 12);
+      }
+      return result;
+    })(),
     lastBankImport: d.lastBankSyncImport
       ? { timestamp: d.lastBankSyncImport.timestamp, month: d.lastBankSyncImport.month }
       : null
@@ -3570,6 +3532,280 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     res.status(500).json({ ok: false, error: err.message });
   }
 });
+
+
+// ════════════════════════════════════════════════════════════════
+// MULTI-ACCOUNT FEATURE (v2.10)
+// ════════════════════════════════════════════════════════════════
+// Design principle: ADDITIVE ONLY.
+// Existing tenants without accounts[] continue to work exactly as before.
+// New accounts[] live alongside the existing openingDebt/customAmount fields.
+// paymentHistory for extra accounts uses key: tenantId + '__acc__' + accountId
+// sentLog for extra accounts uses key: tenantId + '__acc__' + accountId + '_' + month
+// ════════════════════════════════════════════════════════════════
+
+// ── Account Templates (config-level) ──────────────────────────
+// GET /api/account-templates — returns building-level account template list
+app.get('/api/account-templates', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json({ ok: true, templates: d.accountTemplates || [] });
+});
+
+// POST /api/account-templates — save building-level account templates
+app.post('/api/account-templates', authMiddleware, (req, res) => {
+  const { templates } = req.body;
+  if (!Array.isArray(templates)) return res.json({ ok: false, error: 'templates must be array' });
+  // Validate each template
+  for (const t of templates) {
+    if (!t.id || !t.label) return res.json({ ok: false, error: 'כל תבנית חייבת id ו-label' });
+    if (!['fixed', 'formula'].includes(t.type)) return res.json({ ok: false, error: 'סוג חשבון לא תקין: ' + t.type });
+    if (!['monthly', 'quarterly', 'yearly'].includes(t.frequency)) return res.json({ ok: false, error: 'תדירות לא תקינה: ' + t.frequency });
+  }
+  saveTenantData(req.user.tenantId, { accountTemplates: templates });
+  res.json({ ok: true });
+});
+
+// ── Per-Tenant Account Overrides ──────────────────────────────
+// GET /api/tenant-accounts/:tenantId — returns this tenant's account list
+app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const tid = req.params.tenantId;
+  const tenant = (d.tenants || []).find(t => String(t.id) === String(tid));
+  if (!tenant) return res.json({ ok: false, error: 'דייר לא נמצא' });
+  const accounts = tenant.extraAccounts || [];
+  // Enrich with current debt per account
+  const enriched = accounts.map(acc => {
+    const phKey = String(tid) + '__acc__' + acc.id;
+    const history = (d.paymentHistory || {})[phKey] || [];
+    const historyDebt = history.filter(r => !r.paid).reduce((s, r) => s + (r.amount || 0), 0);
+    const openingDebt = parseFloat(acc.openingDebt) || 0;
+    const totalDebt = Math.max(0, historyDebt + openingDebt);
+    return { ...acc, totalDebt, historyDebt };
+  });
+  res.json({ ok: true, accounts: enriched });
+});
+
+// POST /api/tenant-accounts/:tenantId — save tenant's extra accounts
+app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const tid = req.params.tenantId;
+  const tenantIdx = (d.tenants || []).findIndex(t => String(t.id) === String(tid));
+  if (tenantIdx < 0) return res.json({ ok: false, error: 'דייר לא נמצא' });
+  const { accounts } = req.body;
+  if (!Array.isArray(accounts)) return res.json({ ok: false, error: 'accounts must be array' });
+  // Preserve existing openingDebt values — only update amount/label fields
+  const existing = d.tenants[tenantIdx].extraAccounts || [];
+  const merged = accounts.map(acc => {
+    const prev = existing.find(e => e.id === acc.id);
+    return {
+      id:          acc.id,
+      label:       acc.label,
+      type:        acc.type || 'fixed',
+      frequency:   acc.frequency || 'monthly',
+      amount:      parseFloat(acc.amount) || 0,
+      openingDebt: prev ? (parseFloat(acc.openingDebt) ?? parseFloat(prev.openingDebt) ?? 0) : (parseFloat(acc.openingDebt) || 0),
+      matchKeywords: acc.matchKeywords || '',
+      formulaNote: acc.formulaNote || '',
+      active:      acc.active !== false, // default true
+    };
+  });
+  d.tenants[tenantIdx].extraAccounts = merged;
+  saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true });
+});
+
+// POST /api/mark-account-paid/:tenantId/:accountId — manual payment for extra account
+app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const tid = String(req.params.tenantId);
+  const accId = req.params.accountId;
+  const tenant = (d.tenants || []).find(t => String(t.id) === tid);
+  if (!tenant) return res.json({ ok: false, error: 'דייר לא נמצא' });
+  const acc = (tenant.extraAccounts || []).find(a => a.id === accId);
+  if (!acc) return res.json({ ok: false, error: 'חשבון לא נמצא' });
+
+  const mk = getMonthKey(d.config);
+  const { paidAmount } = req.body;
+  const paid = parseFloat(paidAmount) || acc.amount || 0;
+  const phKey = tid + '__acc__' + accId;
+  if (!d.paymentHistory) d.paymentHistory = {};
+  if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
+
+  // Deduplicate: don't overwrite if already paid this month
+  const existing = d.paymentHistory[phKey].findIndex(r => r.month === mk);
+  const record = {
+    month: mk, paid: true, amount: acc.amount || 0,
+    paidAmount: paid, date: new Date().toISOString().split('T')[0],
+    type: 'manual', name: tenant.name
+  };
+  // Also update sentLog for this account+month
+  const slKey = tid + '__acc__' + accId + '_' + getEffectiveMonth(d.config);
+  d.sentLog = d.sentLog || {};
+  d.sentLog[slKey] = 'manual_paid_' + new Date().toISOString() + '_amount_' + paid;
+
+  if (existing >= 0) {
+    if (d.paymentHistory[phKey][existing].paid) return res.json({ ok: true, alreadyPaid: true });
+    d.paymentHistory[phKey][existing] = record;
+  } else {
+    d.paymentHistory[phKey].push(record);
+  }
+  saveTenantData(req.user.tenantId, { paymentHistory: d.paymentHistory, sentLog: d.sentLog });
+  res.json({ ok: true });
+});
+
+// POST /api/mark-account-unpaid/:tenantId/:accountId — undo manual payment
+app.post('/api/mark-account-unpaid/:tenantId/:accountId', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const tid = String(req.params.tenantId);
+  const accId = req.params.accountId;
+  const mk = getMonthKey(d.config);
+  const em = getEffectiveMonth(d.config);
+  const phKey = tid + '__acc__' + accId;
+  if (d.paymentHistory && d.paymentHistory[phKey]) {
+    d.paymentHistory[phKey] = d.paymentHistory[phKey].filter(r => r.month !== mk);
+  }
+  const slKey = tid + '__acc__' + accId + '_' + em;
+  if (d.sentLog) delete d.sentLog[slKey];
+  saveTenantData(req.user.tenantId, { paymentHistory: d.paymentHistory, sentLog: d.sentLog });
+  res.json({ ok: true });
+});
+
+// GET /api/accounts-status — returns payment status of all extra accounts for current month
+// Used by app.html to display per-account paid/unpaid in the tenant list
+app.get('/api/accounts-status', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const mk = getMonthKey(d.config);
+  const em = getEffectiveMonth(d.config);
+  const result = {};
+  for (const tenant of (d.tenants || [])) {
+    const tid = String(tenant.id);
+    const accounts = tenant.extraAccounts || [];
+    if (!accounts.length) continue;
+    result[tid] = accounts.map(acc => {
+      const phKey = tid + '__acc__' + acc.id;
+      const slKey = tid + '__acc__' + acc.id + '_' + em;
+      const history = (d.paymentHistory || {})[phKey] || [];
+      const paidThisMonth = history.some(r => r.month === mk && r.paid)
+                         || String(d.sentLog[slKey] || '').startsWith('manual_paid')
+                         || String(d.sentLog[slKey] || '').startsWith('bank_import');
+      const historyDebt = history.filter(r => !r.paid).reduce((s, r) => s + (r.amount || 0), 0);
+      const openingDebt = parseFloat(acc.openingDebt) || 0;
+      const totalDebt   = Math.max(0, historyDebt + openingDebt);
+      return {
+        id: acc.id, label: acc.label, amount: acc.amount,
+        frequency: acc.frequency, active: acc.active !== false,
+        paidThisMonth, totalDebt, historyDebt, openingDebt
+      };
+    });
+  }
+  res.json({ ok: true, status: result });
+});
+
+// ── closeMonthUnpaid extension for extra accounts ─────────────
+// Called from within closeMonthUnpaid() — processes extraAccounts per tenant
+// Returns number of accounts closed
+function closeExtraAccountsUnpaid(d, tenant, prevKey) {
+  let closed = 0;
+  const tid = String(tenant.id);
+  const accounts = tenant.extraAccounts || [];
+  if (!accounts.length) return 0;
+
+  for (const acc of accounts) {
+    if (acc.active === false) continue;
+    // Check frequency: only charge if this month is a billing month
+    const [year, month] = prevKey.split('-').map(Number);
+    if (acc.frequency === 'quarterly' && (month % 3 !== 0)) continue; // bill on 3,6,9,12
+    if (acc.frequency === 'yearly'    && month !== 1) continue;       // bill on January
+
+    const phKey = tid + '__acc__' + acc.id;
+    if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
+    const amount = parseFloat(acc.amount) || 0;
+    if (amount <= 0) continue;
+
+    const existing = d.paymentHistory[phKey].find(r => r.month === prevKey);
+    if (existing) {
+      if (!existing.paid) {
+        // Unpaid — accumulate to account's openingDebt
+        acc.openingDebt = Math.round(
+          (Math.max(0, parseFloat(acc.openingDebt) || 0) + amount) * 100
+        ) / 100;
+        d.paymentHistory[phKey] = d.paymentHistory[phKey].filter(r => r.month !== prevKey);
+        closed++;
+      } else {
+        // Paid — check for overpayment credit
+        const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? amount);
+        const overpay = Math.round((paidAmt - amount) * 100) / 100;
+        if (overpay > 0) {
+          acc.openingDebt = Math.round(
+            ((parseFloat(acc.openingDebt) || 0) - overpay) * 100
+          ) / 100;
+        }
+      }
+    } else {
+      // No record — unpaid, accumulate
+      acc.openingDebt = Math.round(
+        (Math.max(0, parseFloat(acc.openingDebt) || 0) + amount) * 100
+      ) / 100;
+      closed++;
+    }
+  }
+  return closed;
+}
+
+// Patch closeMonthUnpaid to also handle extra accounts
+// We store the original and call our extension at the end of each tenant loop
+const _origCloseMonthUnpaid = closeMonthUnpaid;
+// Monkey-patch: wrap after original definition completes (see call below at startup)
+// NOTE: we handle this by patching the cron call — see runMaintenanceCron override below
+
+// ── Extra accounts monthly close ─────────────────────────────
+// Runs on the 1st alongside the original scheduleDailyCron.
+// Only touches extraAccounts[].openingDebt — never touches tenant.openingDebt.
+async function runMaintenanceCronWithAccounts() {
+  // Only close extra accounts on the 1st of the month
+  const now = new Date();
+  if (now.getDate() !== 1) return;
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey  = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+  const users = loadUsers();
+  let totalClosed = 0;
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.tenants || !d.tenants.length) continue;
+      if (!d.paymentHistory) d.paymentHistory = {};
+      let changed = false;
+      for (const tenant of d.tenants) {
+        const n = closeExtraAccountsUnpaid(d, tenant, prevKey);
+        if (n > 0) { changed = true; totalClosed += n; }
+      }
+      if (changed) saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory });
+    } catch(e) {
+      console.error(`[closeExtraAccounts:${user.tenantId}]`, e.message);
+    }
+  }
+  if (totalClosed > 0) console.log(`[closeExtraAccounts] נצברו ${totalClosed} חובות חשבונות נוספים לחודש ${prevKey}`);
+}
+
+// Run extra-accounts cron daily at 08:05 (5 min after original maintenance cron)
+// so it always runs after the main cron has finished.
+function scheduleDailyCronWithAccounts() {
+  const now  = new Date();
+  const next = new Date();
+  next.setHours(8, 5, 0, 0);
+  if (next <= now) next.setDate(next.getDate() + 1);
+  const delay = next - now;
+  setTimeout(() => {
+    runMaintenanceCronWithAccounts();
+    setInterval(runMaintenanceCronWithAccounts, 24 * 60 * 60 * 1000);
+  }, delay);
+  console.log(`[ExtraAccountsCron] יופעל ב-${next.toLocaleTimeString('he-IL')}`);
+}
+// Note: scheduleDailyCron() was already called above — the new one runs additionally
+// to handle the extra accounts layer. Both are safe to run together because
+// the original only touches tenant.openingDebt and the new one only touches acc.openingDebt.
+scheduleDailyCronWithAccounts();
 
 app.listen(PORT, () => {
   console.log('');
