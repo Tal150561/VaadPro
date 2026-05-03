@@ -1548,7 +1548,8 @@ function vpLogout() {
 
 <div id="toast"></div>
 
-<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js"></script><script>
+<script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js" onerror="void(0)"></script>
+<script>
 const API = '/api';
 let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
@@ -6428,6 +6429,7 @@ function showApiKeyModal(apiKey) {
     </div>
   `;
   document.body.appendChild(modal);
-
+}
+</script>
 </body>
 </html>
