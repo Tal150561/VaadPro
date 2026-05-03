@@ -484,6 +484,8 @@ function render(d) {
 
   // Build month selector if history exists
   allData = d;
+  // הצג חשבונות נוספים אם קיימים
+  renderExtraAccountsPortal(d);
   const sel = document.getElementById('monthSelector');
   const wrap = document.getElementById('monthSelectorWrap');
   if (d.history && d.history.length > 0) {
@@ -966,14 +968,6 @@ function renderExtraAccountsPortal(d) {
   }).join('');
 }
 
-// Patch the main render call — inject extra accounts after main card renders
-var _origPortalRender = window.renderPortalData || null;
-// Hook: after allData is set, render extra accounts
-var _portalDataReady = false;
-var _portalAllData = null;
-document.addEventListener('portalDataReady', function(e) {
-  if (e.detail) { _portalAllData = e.detail; renderExtraAccountsPortal(e.detail); }
-});
 // ── סוף חשבונות נוספים ────────────────────────────────────────
 </script>
 <!-- Disagree Modal -->
