@@ -5359,6 +5359,330 @@ async function downloadBridge() {
 }
 // ────────────────────────────────────────────────────────────────
 
+
+// ════════════════════════════════════════════════════════════════
+// MULTI-ACCOUNT FEATURE (v2.10)
+// ════════════════════════════════════════════════════════════════
+
+// ── State ──────────────────────────────────────────────────────
+let accountTemplates = []; // building-level templates
+let accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalDebt},...] }
+let taModalTenantId = null; // currently editing tenant
+let taModalAccounts = [];   // working copy
+
+// ── Load account templates from server ─────────────────────────
+async function loadAccountTemplates() {
+  try {
+    const r = await fetch(API + '/account-templates', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
+    const d = await r.json();
+    if (d.ok) { accountTemplates = d.templates || []; renderAccountTemplates(); }
+  } catch(e) {}
+}
+
+// ── Load accounts status for all tenants ───────────────────────
+async function loadAccountsStatus() {
+  try {
+    const r = await fetch(API + '/accounts-status', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
+    const d = await r.json();
+    if (d.ok) accountsStatus = d.status || {};
+  } catch(e) {}
+}
+
+// ── Render account templates list in settings ──────────────────
+function renderAccountTemplates() {
+  const el = document.getElementById('accountTemplatesList');
+  if (!el) return;
+  if (!accountTemplates.length) {
+    el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);padding:8px 0;">עדיין אין תבניות חשבונות. לחץ ״הוסף חשבון״ ליצירת הראשון.</div>';
+    return;
+  }
+  el.innerHTML = accountTemplates.map((t, i) => `
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+      <div><label style="font-size:0.75rem;">שם החשבון</label>
+        <input type="text" value="${t.label||''}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
+      <div><label style="font-size:0.75rem;">סכום ₪</label>
+        <input type="number" value="${t.amount||0}" min="0" onchange="accountTemplates[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
+      <div><label style="font-size:0.75rem;">תדירות</label>
+        <select onchange="accountTemplates[${i}].frequency=this.value" style="width:100%;">
+          <option value="monthly" ${t.frequency==='monthly'?'selected':''}>חודשי</option>
+          <option value="quarterly" ${t.frequency==='quarterly'?'selected':''}>רבעוני</option>
+          <option value="yearly" ${t.frequency==='yearly'?'selected':''}>שנתי</option>
+        </select></div>
+      <div><label style="font-size:0.75rem;">סוג</label>
+        <select onchange="accountTemplates[${i}].type=this.value" style="width:100%;">
+          <option value="fixed" ${t.type==='fixed'?'selected':''}>קבוע</option>
+          <option value="formula" ${t.type==='formula'?'selected':''}>מחושב</option>
+        </select></div>
+      <button class="btn btn-danger-soft btn-sm" onclick="accountTemplates.splice(${i},1);renderAccountTemplates();" style="height:36px;">🗑️</button>
+    </div>`).join('');
+}
+
+function addAccountTemplateRow() {
+  accountTemplates.push({ id: 'tpl_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0 });
+  renderAccountTemplates();
+}
+
+async function saveAccountTemplates() {
+  // Validate
+  for (const t of accountTemplates) {
+    if (!t.label.trim()) { toast('יש למלא שם לכל חשבון', 'error'); return; }
+  }
+  try {
+    const r = await fetch(API + '/account-templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      body: JSON.stringify({ templates: accountTemplates })
+    });
+    const d = await r.json();
+    if (d.ok) toast('✅ תבניות נשמרו', 'success');
+    else toast('שגיאה: ' + d.error, 'error');
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+// ── Open tenant accounts modal ─────────────────────────────────
+async function openTenantAccounts(tenantId, tenantName) {
+  taModalTenantId = tenantId;
+  document.getElementById('taModalName').textContent = tenantName;
+  document.getElementById('tenantAccountsModal').style.display = 'flex';
+  // Load current accounts for this tenant
+  try {
+    const r = await fetch(API + '/tenant-accounts/' + tenantId, {
+      headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+    });
+    const d = await r.json();
+    taModalAccounts = d.ok ? d.accounts : [];
+  } catch(e) { taModalAccounts = []; }
+  renderTenantAccountsModal();
+}
+
+function closeTenantAccountsModal() {
+  document.getElementById('tenantAccountsModal').style.display = 'none';
+  taModalTenantId = null; taModalAccounts = [];
+}
+
+function renderTenantAccountsModal() {
+  const el = document.getElementById('taModalList');
+  if (!el) return;
+  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+  if (!taModalAccounts.length) {
+    el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);">עדיין אין חשבונות נוספים לדייר זה.</div>';
+    return;
+  }
+  el.innerHTML = taModalAccounts.map((acc, i) => {
+    const debt = (acc.totalDebt || 0) > 0
+      ? `<span style="color:var(--danger);font-size:0.75rem;">חוב: ₪${acc.totalDebt}</span>`
+      : '';
+    return `
+    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;">
+        <div><label style="font-size:0.75rem;">שם החשבון</label>
+          <input type="text" value="${acc.label||''}" onchange="taModalAccounts[${i}].label=this.value" style="width:100%;"></div>
+        <div><label style="font-size:0.75rem;">סכום ₪</label>
+          <input type="number" value="${acc.amount||0}" min="0" onchange="taModalAccounts[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
+        <div><label style="font-size:0.75rem;">תדירות</label>
+          <select onchange="taModalAccounts[${i}].frequency=this.value" style="width:100%;">
+            <option value="monthly" ${acc.frequency==='monthly'?'selected':''}>חודשי</option>
+            <option value="quarterly" ${acc.frequency==='quarterly'?'selected':''}>רבעוני</option>
+            <option value="yearly" ${acc.frequency==='yearly'?'selected':''}>שנתי</option>
+          </select></div>
+        <button class="btn btn-danger-soft btn-sm" onclick="taModalAccounts.splice(${i},1);renderTenantAccountsModal();" style="height:36px;margin-top:18px;">🗑️</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+        <div><label style="font-size:0.75rem;">חוב פתוח ₪</label>
+          <input type="number" value="${acc.openingDebt||0}" onchange="taModalAccounts[${i}].openingDebt=parseFloat(this.value)||0" style="width:100%;"></div>
+        <div><label style="font-size:0.75rem;">מילות חיפוש בנק</label>
+          <input type="text" value="${acc.matchKeywords||''}" onchange="taModalAccounts[${i}].matchKeywords=this.value" placeholder="כהן ביטוח, חב׳ ביטוח" style="width:100%;"></div>
+      </div>
+      ${debt ? `<div style="margin-top:6px;">${debt}</div>` : ''}
+      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+        <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="checkbox" ${acc.active!==false?'checked':''} onchange="taModalAccounts[${i}].active=this.checked"> פעיל
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function addTenantAccountRow() {
+  // Offer to clone from templates if any exist
+  if (accountTemplates.length) {
+    const opts = accountTemplates.map((t, i) =>
+      `<option value="${i}">${t.label} — ₪${t.amount} (${{monthly:'חודשי',quarterly:'רבעוני',yearly:'שנתי'}[t.frequency]})</option>`
+    ).join('');
+    const html = `<select id="_tplSel" style="margin-left:8px;">${opts}</select>
+      <button class="btn btn-green btn-sm" onclick="
+        const idx=parseInt(document.getElementById('_tplSel').value);
+        const tpl=accountTemplates[idx];
+        taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',active:true});
+        document.getElementById('_tplAddBar').remove();
+        renderTenantAccountsModal();">הוסף מתבנית</button>
+      <button class="btn btn-secondary btn-sm" onclick="
+        taModalAccounts.push({id:'acc_'+Date.now(),label:'',type:'fixed',frequency:'monthly',amount:0,openingDebt:0,matchKeywords:'',active:true});
+        document.getElementById('_tplAddBar').remove();
+        renderTenantAccountsModal();">חשבון ריק</button>`;
+    const bar = document.createElement('div');
+    bar.id = '_tplAddBar';
+    bar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap;';
+    bar.innerHTML = '<span style="font-size:0.82rem;color:var(--text2);">בחר תבנית:</span>' + html;
+    document.getElementById('taModalList').after(bar);
+  } else {
+    taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', active: true });
+    renderTenantAccountsModal();
+  }
+}
+
+async function saveTenantAccounts() {
+  for (const acc of taModalAccounts) {
+    if (!acc.label.trim()) { toast('יש למלא שם לכל חשבון', 'error'); return; }
+  }
+  try {
+    const r = await fetch(API + '/tenant-accounts/' + taModalTenantId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      body: JSON.stringify({ accounts: taModalAccounts })
+    });
+    const d = await r.json();
+    if (d.ok) {
+      toast('✅ חשבונות נשמרו', 'success');
+      closeTenantAccountsModal();
+      await loadAccountsStatus();
+      render();
+    } else toast('שגיאה: ' + d.error, 'error');
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+// ── Mark extra account paid/unpaid ────────────────────────────
+async function markAccountPaid(tenantId, accountId, paidAmount) {
+  try {
+    const r = await fetch(API + '/mark-account-paid/' + tenantId + '/' + accountId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      body: JSON.stringify({ paidAmount })
+    });
+    const d = await r.json();
+    if (d.ok) { await loadAccountsStatus(); render(); toast('✅ תשלום נרשם', 'success'); }
+    else toast('שגיאה: ' + d.error, 'error');
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+async function markAccountUnpaid(tenantId, accountId) {
+  try {
+    const r = await fetch(API + '/mark-account-unpaid/' + tenantId + '/' + accountId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+    });
+    const d = await r.json();
+    if (d.ok) { await loadAccountsStatus(); render(); toast('בוטל', 'success'); }
+    else toast('שגיאה: ' + d.error, 'error');
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+// ── Render extra accounts summary cell (used in tenant list) ──
+function renderExtraAccountsCell(tenantId) {
+  const accs = accountsStatus[String(tenantId)];
+  if (!accs || !accs.length) return '';
+  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+  let html = '<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">';
+  for (const acc of accs) {
+    if (acc.active === false) continue;
+    const paid = acc.paidThisMonth;
+    const debt = acc.totalDebt > 0 ? ` · חוב: ₪${acc.totalDebt}` : '';
+    if (paid) {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--accent);">✓ ${acc.label}</span>
+        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(248,81,73,.1);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markAccountUnpaid('${tenantId}','${acc.id}')">בטל</button>
+      </div>`;
+    } else {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--warn);">⏳ ${acc.label} — ₪${acc.amount}${debt}</span>
+        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(37,211,102,.1);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="promptAccountPaid('${tenantId}','${acc.id}',${acc.amount})">✓ שילם</button>
+      </div>`;
+    }
+  }
+  html += '</div>';
+  return html;
+}
+
+function promptAccountPaid(tenantId, accountId, defaultAmount) {
+  const amt = prompt('סכום ששולם:', defaultAmount);
+  if (amt === null) return;
+  markAccountPaid(tenantId, accountId, parseFloat(amt) || defaultAmount);
+}
+
+// ── Hook into loadData to also load accounts ───────────────────
+const _origLoadData = typeof loadData === 'function' ? loadData : null;
+// We patch after the script loads — using a flag approach
+let _accountsLoaded = false;
+async function loadAccountsIfNeeded() {
+  if (_accountsLoaded) return;
+  _accountsLoaded = true;
+  await loadAccountTemplates();
+  await loadAccountsStatus();
+}
+
+// ── Patch render() to show accounts button in tenant list ─────
+// We inject the accounts button into the tenant row action area after render
+const _origRender = typeof render === 'function' ? render : null;
+function renderWithAccounts() {
+  if (_origRender) _origRender();
+  // Add accounts button to each tenant row
+  document.querySelectorAll('[id^="send-btn-"]').forEach(function(sendBtn) {
+    const tid = sendBtn.id.replace('send-btn-', '');
+    const tenant = (data.tenants || []).find(t => String(t.id) === String(tid));
+    if (!tenant) return;
+    const accs = accountsStatus[String(tid)];
+    // Insert accounts mini-cell after the debt cell if not already there
+    const row = sendBtn.closest('tr');
+    if (!row) return;
+    const debtCell = row.cells[2];
+    if (debtCell && !debtCell.querySelector('.extra-accs-wrap')) {
+      const wrap = document.createElement('div');
+      wrap.className = 'extra-accs-wrap';
+      wrap.innerHTML = renderExtraAccountsCell(tid);
+      debtCell.appendChild(wrap);
+    }
+    // Add manage button if not already there
+    const actionCell = row.cells[5];
+    if (actionCell && !actionCell.querySelector('.acc-mgr-btn')) {
+      const btn = document.createElement('button');
+      btn.className = 'btn btn-sm acc-mgr-btn';
+      btn.style.cssText = 'background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);font-size:0.74rem;';
+      btn.title = 'נהל חשבונות נוספים';
+      btn.textContent = '💳';
+      btn.onclick = function() { openTenantAccounts(tid, tenant.name); };
+      actionCell.appendChild(btn);
+    }
+  });
+}
+
+// Override render with our extended version
+if (typeof render === 'function') {
+  window.render = renderWithAccounts;
+}
+
+// ── Init: load accounts data after main data loads ─────────────
+// Hooking into the existing loadData flow
+const _origLoadDataFn = window.loadData;
+if (typeof _origLoadDataFn === 'function') {
+  window.loadData = async function() {
+    await _origLoadDataFn();
+    await loadAccountsIfNeeded();
+  };
+}
+
+// Also load on page ready if data already exists
+document.addEventListener('DOMContentLoaded', function() {
+  setTimeout(loadAccountsIfNeeded, 1500); // after main data loads
+});
+
+// ── Settings tab: render templates when tab is opened ─────────
+const _origSwitchTab = window.switchTab;
+if (typeof _origSwitchTab === 'function') {
+  window.switchTab = function(tab) {
+    _origSwitchTab(tab);
+    if (tab === 'settings') loadAccountTemplates();
+  };
+}
 // init() נקרא מה-auth layer לאחר הגדרת ה-token
 </script>
 
@@ -6109,329 +6433,5 @@ function showApiKeyModal(apiKey) {
   `;
   document.body.appendChild(modal);
 
-// ════════════════════════════════════════════════════════════════
-// MULTI-ACCOUNT FEATURE (v2.10)
-// ════════════════════════════════════════════════════════════════
-
-// ── State ──────────────────────────────────────────────────────
-let accountTemplates = []; // building-level templates
-let accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalDebt},...] }
-let taModalTenantId = null; // currently editing tenant
-let taModalAccounts = [];   // working copy
-
-// ── Load account templates from server ─────────────────────────
-async function loadAccountTemplates() {
-  try {
-    const r = await fetch(API + '/account-templates', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
-    const d = await r.json();
-    if (d.ok) { accountTemplates = d.templates || []; renderAccountTemplates(); }
-  } catch(e) {}
-}
-
-// ── Load accounts status for all tenants ───────────────────────
-async function loadAccountsStatus() {
-  try {
-    const r = await fetch(API + '/accounts-status', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
-    const d = await r.json();
-    if (d.ok) accountsStatus = d.status || {};
-  } catch(e) {}
-}
-
-// ── Render account templates list in settings ──────────────────
-function renderAccountTemplates() {
-  const el = document.getElementById('accountTemplatesList');
-  if (!el) return;
-  if (!accountTemplates.length) {
-    el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);padding:8px 0;">עדיין אין תבניות חשבונות. לחץ ״הוסף חשבון״ ליצירת הראשון.</div>';
-    return;
-  }
-  el.innerHTML = accountTemplates.map((t, i) => `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
-      <div><label style="font-size:0.75rem;">שם החשבון</label>
-        <input type="text" value="${t.label||''}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
-      <div><label style="font-size:0.75rem;">סכום ₪</label>
-        <input type="number" value="${t.amount||0}" min="0" onchange="accountTemplates[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
-      <div><label style="font-size:0.75rem;">תדירות</label>
-        <select onchange="accountTemplates[${i}].frequency=this.value" style="width:100%;">
-          <option value="monthly" ${t.frequency==='monthly'?'selected':''}>חודשי</option>
-          <option value="quarterly" ${t.frequency==='quarterly'?'selected':''}>רבעוני</option>
-          <option value="yearly" ${t.frequency==='yearly'?'selected':''}>שנתי</option>
-        </select></div>
-      <div><label style="font-size:0.75rem;">סוג</label>
-        <select onchange="accountTemplates[${i}].type=this.value" style="width:100%;">
-          <option value="fixed" ${t.type==='fixed'?'selected':''}>קבוע</option>
-          <option value="formula" ${t.type==='formula'?'selected':''}>מחושב</option>
-        </select></div>
-      <button class="btn btn-danger-soft btn-sm" onclick="accountTemplates.splice(${i},1);renderAccountTemplates();" style="height:36px;">🗑️</button>
-    </div>`).join('');
-}
-
-function addAccountTemplateRow() {
-  accountTemplates.push({ id: 'tpl_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0 });
-  renderAccountTemplates();
-}
-
-async function saveAccountTemplates() {
-  // Validate
-  for (const t of accountTemplates) {
-    if (!t.label.trim()) { toast('יש למלא שם לכל חשבון', 'error'); return; }
-  }
-  try {
-    const r = await fetch(API + '/account-templates', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
-      body: JSON.stringify({ templates: accountTemplates })
-    });
-    const d = await r.json();
-    if (d.ok) toast('✅ תבניות נשמרו', 'success');
-    else toast('שגיאה: ' + d.error, 'error');
-  } catch(e) { toast('שגיאת רשת', 'error'); }
-}
-
-// ── Open tenant accounts modal ─────────────────────────────────
-async function openTenantAccounts(tenantId, tenantName) {
-  taModalTenantId = tenantId;
-  document.getElementById('taModalName').textContent = tenantName;
-  document.getElementById('tenantAccountsModal').style.display = 'flex';
-  // Load current accounts for this tenant
-  try {
-    const r = await fetch(API + '/tenant-accounts/' + tenantId, {
-      headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
-    });
-    const d = await r.json();
-    taModalAccounts = d.ok ? d.accounts : [];
-  } catch(e) { taModalAccounts = []; }
-  renderTenantAccountsModal();
-}
-
-function closeTenantAccountsModal() {
-  document.getElementById('tenantAccountsModal').style.display = 'none';
-  taModalTenantId = null; taModalAccounts = [];
-}
-
-function renderTenantAccountsModal() {
-  const el = document.getElementById('taModalList');
-  if (!el) return;
-  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
-  if (!taModalAccounts.length) {
-    el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);">עדיין אין חשבונות נוספים לדייר זה.</div>';
-    return;
-  }
-  el.innerHTML = taModalAccounts.map((acc, i) => {
-    const debt = (acc.totalDebt || 0) > 0
-      ? `<span style="color:var(--danger);font-size:0.75rem;">חוב: ₪${acc.totalDebt}</span>`
-      : '';
-    return `
-    <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;">
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;">
-        <div><label style="font-size:0.75rem;">שם החשבון</label>
-          <input type="text" value="${acc.label||''}" onchange="taModalAccounts[${i}].label=this.value" style="width:100%;"></div>
-        <div><label style="font-size:0.75rem;">סכום ₪</label>
-          <input type="number" value="${acc.amount||0}" min="0" onchange="taModalAccounts[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
-        <div><label style="font-size:0.75rem;">תדירות</label>
-          <select onchange="taModalAccounts[${i}].frequency=this.value" style="width:100%;">
-            <option value="monthly" ${acc.frequency==='monthly'?'selected':''}>חודשי</option>
-            <option value="quarterly" ${acc.frequency==='quarterly'?'selected':''}>רבעוני</option>
-            <option value="yearly" ${acc.frequency==='yearly'?'selected':''}>שנתי</option>
-          </select></div>
-        <button class="btn btn-danger-soft btn-sm" onclick="taModalAccounts.splice(${i},1);renderTenantAccountsModal();" style="height:36px;margin-top:18px;">🗑️</button>
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
-        <div><label style="font-size:0.75rem;">חוב פתוח ₪</label>
-          <input type="number" value="${acc.openingDebt||0}" onchange="taModalAccounts[${i}].openingDebt=parseFloat(this.value)||0" style="width:100%;"></div>
-        <div><label style="font-size:0.75rem;">מילות חיפוש בנק</label>
-          <input type="text" value="${acc.matchKeywords||''}" onchange="taModalAccounts[${i}].matchKeywords=this.value" placeholder="כהן ביטוח, חב׳ ביטוח" style="width:100%;"></div>
-      </div>
-      ${debt ? `<div style="margin-top:6px;">${debt}</div>` : ''}
-      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
-        <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
-          <input type="checkbox" ${acc.active!==false?'checked':''} onchange="taModalAccounts[${i}].active=this.checked"> פעיל
-        </label>
-      </div>
-    </div>`;
-  }).join('');
-}
-
-function addTenantAccountRow() {
-  // Offer to clone from templates if any exist
-  if (accountTemplates.length) {
-    const opts = accountTemplates.map((t, i) =>
-      `<option value="${i}">${t.label} — ₪${t.amount} (${{monthly:'חודשי',quarterly:'רבעוני',yearly:'שנתי'}[t.frequency]})</option>`
-    ).join('');
-    const html = `<select id="_tplSel" style="margin-left:8px;">${opts}</select>
-      <button class="btn btn-green btn-sm" onclick="
-        const idx=parseInt(document.getElementById('_tplSel').value);
-        const tpl=accountTemplates[idx];
-        taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',active:true});
-        document.getElementById('_tplAddBar').remove();
-        renderTenantAccountsModal();">הוסף מתבנית</button>
-      <button class="btn btn-secondary btn-sm" onclick="
-        taModalAccounts.push({id:'acc_'+Date.now(),label:'',type:'fixed',frequency:'monthly',amount:0,openingDebt:0,matchKeywords:'',active:true});
-        document.getElementById('_tplAddBar').remove();
-        renderTenantAccountsModal();">חשבון ריק</button>`;
-    const bar = document.createElement('div');
-    bar.id = '_tplAddBar';
-    bar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap;';
-    bar.innerHTML = '<span style="font-size:0.82rem;color:var(--text2);">בחר תבנית:</span>' + html;
-    document.getElementById('taModalList').after(bar);
-  } else {
-    taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', active: true });
-    renderTenantAccountsModal();
-  }
-}
-
-async function saveTenantAccounts() {
-  for (const acc of taModalAccounts) {
-    if (!acc.label.trim()) { toast('יש למלא שם לכל חשבון', 'error'); return; }
-  }
-  try {
-    const r = await fetch(API + '/tenant-accounts/' + taModalTenantId, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
-      body: JSON.stringify({ accounts: taModalAccounts })
-    });
-    const d = await r.json();
-    if (d.ok) {
-      toast('✅ חשבונות נשמרו', 'success');
-      closeTenantAccountsModal();
-      await loadAccountsStatus();
-      render();
-    } else toast('שגיאה: ' + d.error, 'error');
-  } catch(e) { toast('שגיאת רשת', 'error'); }
-}
-
-// ── Mark extra account paid/unpaid ────────────────────────────
-async function markAccountPaid(tenantId, accountId, paidAmount) {
-  try {
-    const r = await fetch(API + '/mark-account-paid/' + tenantId + '/' + accountId, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
-      body: JSON.stringify({ paidAmount })
-    });
-    const d = await r.json();
-    if (d.ok) { await loadAccountsStatus(); render(); toast('✅ תשלום נרשם', 'success'); }
-    else toast('שגיאה: ' + d.error, 'error');
-  } catch(e) { toast('שגיאת רשת', 'error'); }
-}
-
-async function markAccountUnpaid(tenantId, accountId) {
-  try {
-    const r = await fetch(API + '/mark-account-unpaid/' + tenantId + '/' + accountId, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') }
-    });
-    const d = await r.json();
-    if (d.ok) { await loadAccountsStatus(); render(); toast('בוטל', 'success'); }
-    else toast('שגיאה: ' + d.error, 'error');
-  } catch(e) { toast('שגיאת רשת', 'error'); }
-}
-
-// ── Render extra accounts summary cell (used in tenant list) ──
-function renderExtraAccountsCell(tenantId) {
-  const accs = accountsStatus[String(tenantId)];
-  if (!accs || !accs.length) return '';
-  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
-  let html = '<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">';
-  for (const acc of accs) {
-    if (acc.active === false) continue;
-    const paid = acc.paidThisMonth;
-    const debt = acc.totalDebt > 0 ? ` · חוב: ₪${acc.totalDebt}` : '';
-    if (paid) {
-      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
-        <span style="color:var(--accent);">✓ ${acc.label}</span>
-        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(248,81,73,.1);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markAccountUnpaid('${tenantId}','${acc.id}')">בטל</button>
-      </div>`;
-    } else {
-      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
-        <span style="color:var(--warn);">⏳ ${acc.label} — ₪${acc.amount}${debt}</span>
-        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(37,211,102,.1);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="promptAccountPaid('${tenantId}','${acc.id}',${acc.amount})">✓ שילם</button>
-      </div>`;
-    }
-  }
-  html += '</div>';
-  return html;
-}
-
-function promptAccountPaid(tenantId, accountId, defaultAmount) {
-  const amt = prompt('סכום ששולם:', defaultAmount);
-  if (amt === null) return;
-  markAccountPaid(tenantId, accountId, parseFloat(amt) || defaultAmount);
-}
-
-// ── Hook into loadData to also load accounts ───────────────────
-const _origLoadData = typeof loadData === 'function' ? loadData : null;
-// We patch after the script loads — using a flag approach
-let _accountsLoaded = false;
-async function loadAccountsIfNeeded() {
-  if (_accountsLoaded) return;
-  _accountsLoaded = true;
-  await loadAccountTemplates();
-  await loadAccountsStatus();
-}
-
-// ── Patch render() to show accounts button in tenant list ─────
-// We inject the accounts button into the tenant row action area after render
-const _origRender = typeof render === 'function' ? render : null;
-function renderWithAccounts() {
-  if (_origRender) _origRender();
-  // Add accounts button to each tenant row
-  document.querySelectorAll('[id^="send-btn-"]').forEach(function(sendBtn) {
-    const tid = sendBtn.id.replace('send-btn-', '');
-    const tenant = (data.tenants || []).find(t => String(t.id) === String(tid));
-    if (!tenant) return;
-    const accs = accountsStatus[String(tid)];
-    // Insert accounts mini-cell after the debt cell if not already there
-    const row = sendBtn.closest('tr');
-    if (!row) return;
-    const debtCell = row.cells[2];
-    if (debtCell && !debtCell.querySelector('.extra-accs-wrap')) {
-      const wrap = document.createElement('div');
-      wrap.className = 'extra-accs-wrap';
-      wrap.innerHTML = renderExtraAccountsCell(tid);
-      debtCell.appendChild(wrap);
-    }
-    // Add manage button if not already there
-    const actionCell = row.cells[5];
-    if (actionCell && !actionCell.querySelector('.acc-mgr-btn')) {
-      const btn = document.createElement('button');
-      btn.className = 'btn btn-sm acc-mgr-btn';
-      btn.style.cssText = 'background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);font-size:0.74rem;';
-      btn.title = 'נהל חשבונות נוספים';
-      btn.textContent = '💳';
-      btn.onclick = function() { openTenantAccounts(tid, tenant.name); };
-      actionCell.appendChild(btn);
-    }
-  });
-}
-
-// Override render with our extended version
-if (typeof render === 'function') {
-  window.render = renderWithAccounts;
-}
-
-// ── Init: load accounts data after main data loads ─────────────
-// Hooking into the existing loadData flow
-const _origLoadDataFn = window.loadData;
-if (typeof _origLoadDataFn === 'function') {
-  window.loadData = async function() {
-    await _origLoadDataFn();
-    await loadAccountsIfNeeded();
-  };
-}
-
-// Also load on page ready if data already exists
-document.addEventListener('DOMContentLoaded', function() {
-  setTimeout(loadAccountsIfNeeded, 1500); // after main data loads
-});
-
-// ── Settings tab: render templates when tab is opened ─────────
-const _origSwitchTab = window.switchTab;
-if (typeof _origSwitchTab === 'function') {
-  window.switchTab = function(tab) {
-    _origSwitchTab(tab);
-    if (tab === 'settings') loadAccountTemplates();
-  };
-}
-</script>
 </body>
 </html>
