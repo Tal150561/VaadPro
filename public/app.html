@@ -5387,7 +5387,10 @@ async function loadAccountsStatus() {
   try {
     const r = await fetch(API + '/accounts-status', { headers: {} });
     const d = await r.json();
-    if (d.ok) accountsStatus = d.status || {};
+    if (d.ok) {
+      accountsStatus = d.status || {};
+      injectExtraAccountsCells(); // רענן תצוגה מיד אחרי עדכון סטטוס
+    }
   } catch(e) {}
 }
 
@@ -5645,7 +5648,10 @@ function injectExtraAccountsCells() {
     var row = sendBtn.closest('tr');
     if (!row) return;
     var debtCell = row.cells[2];
-    if (debtCell && !debtCell.querySelector('.extra-accs-wrap')) {
+    if (debtCell) {
+      // תמיד מחליף — לא בודק אם קיים
+      var existing = debtCell.querySelector('.extra-accs-wrap');
+      if (existing) existing.remove();
       var extra = renderExtraAccountsCell(tid);
       if (extra) {
         var wrap = document.createElement('div');
