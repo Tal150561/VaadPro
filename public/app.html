@@ -5603,7 +5603,7 @@ function renderExtraAccountsCell(tenantId) {
     } else {
       html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
         <span style="color:var(--warn);">⏳ ${acc.label} — ₪${acc.amount}${debt}</span>
-        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(37,211,102,.1);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="promptAccountPaid('${tenantId}','${acc.id}',${acc.amount})">✓ שילם</button>
+        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);" onclick="promptAccountPaid('${tenantId}','${acc.id}',${acc.amount})">סמן ששילם</button>
       </div>`;
     }
   }
