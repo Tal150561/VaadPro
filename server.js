@@ -693,7 +693,12 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     .replace(/{לינק_פורטל}/g, portalUrl1);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
-    const key = tenant.id+'_'+month; d.sentLog[key]='sent_'+new Date().toISOString();
+    const key = tenant.id+'_'+month;
+    // אל תדרוס תשלום קיים (bank_import / manual_paid) עם תזכורת WA
+    const existingVal = String(d.sentLog[key] || '');
+    if (!existingVal.startsWith('manual_paid') && !existingVal.startsWith('bank_import')) {
+      d.sentLog[key] = 'sent_'+new Date().toISOString();
+    }
     // Record to permanent history
     const mk = getMonthKey(d.config);
     recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
@@ -740,7 +745,11 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       .replace(/{לינק_פורטל}/g, portalUrlSA);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
-      d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString();
+      const saKey = tenant.id+'_'+month;
+      const saExisting = String(d.sentLog[saKey] || '');
+      if (!saExisting.startsWith('manual_paid') && !saExisting.startsWith('bank_import')) {
+        d.sentLog[saKey] = 'sent_'+new Date().toISOString();
+      }
       recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
       sent++;
       await new Promise(r=>setTimeout(r,1200));
