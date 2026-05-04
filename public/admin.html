@@ -878,12 +878,7 @@
       <div style="display:flex;gap:8px;align-items:center">
         <div id="crmStatusBadge"></div>
         <select id="crmStatus" onchange="saveCRMStatus()" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:12px;">
-          <option value="">סטטוס ליד</option>
-          <option value="חם">🔴 חם</option>
-          <option value="פושר">🟡 פושר</option>
-          <option value="קר">🔵 קר</option>
-          <option value="נסגר">✅ נסגר</option>
-          <option value="לא רלוונטי">❌ לא רלוונטי</option>
+          <!-- options set dynamically by openCRM() based on type -->
         </select>
         <button class="btn btn-ghost" onclick="closeModal('crmModal')">✕</button>
       </div>
@@ -894,6 +889,7 @@
       <div class="tab active" id="crmTab1" onclick="switchCRMTab('calls',this)">📞 שיחות</div>
       <div class="tab" id="crmTab2" onclick="switchCRMTab('tasks',this)">✅ משימות</div>
       <div class="tab" id="crmTab3" onclick="switchCRMTab('history',this)">📨 היסטוריה</div>
+      <div class="tab" id="crmTab4" onclick="switchCRMTab('building',this)" style="display:none">🏢 בניין</div>
     </div>
 
     <!-- Calls Tab -->
@@ -918,6 +914,13 @@
     <!-- History Tab -->
     <div id="crmTabHistory" style="display:none">
       <div id="crmHistoryList"></div>
+    </div>
+
+    <!-- Building Tab -->
+    <div id="crmTabBuilding" style="display:none">
+      <div id="crmBuildingContent">
+        <div style="text-align:center;color:var(--text3);padding:32px;font-size:13px">טוען נתוני בניין...</div>
+      </div>
     </div>
   </div>
 </div>
@@ -1884,6 +1887,24 @@ function formatDateTime(iso) {
 let crmCurrentId = '';
 let crmCurrentType = '';
 
+// אופציות סטטוס לפי סוג כרטיה
+const STATUS_OPTIONS_CUSTOMER = [
+  { value: '', label: 'ללא סטטוס' },
+  { value: 'פעיל', label: '✅ פעיל' },
+  { value: 'פגישה נקבעה', label: '📅 פגישה נקבעה' },
+  { value: 'בהטמעה', label: '🔧 בהטמעה' },
+  { value: 'מושהה', label: '⏸️ מושהה' },
+  { value: 'עזב', label: '🚪 עזב' },
+];
+const STATUS_OPTIONS_LEAD = [
+  { value: '', label: 'סטטוס ליד' },
+  { value: 'חם', label: '🔴 חם' },
+  { value: 'פושר', label: '🟡 פושר' },
+  { value: 'קר', label: '🔵 קר' },
+  { value: 'נסגר', label: '✅ נסגר' },
+  { value: 'לא רלוונטי', label: '❌ לא רלוונטי' },
+];
+
 async function openCRM(id, name, type) {
   crmCurrentId = id;
   crmCurrentType = type;
@@ -1892,6 +1913,15 @@ async function openCRM(id, name, type) {
   document.getElementById('newCallSummary').value = '';
   document.getElementById('newTaskText').value = '';
   document.getElementById('newTaskDate').value = '';
+
+  // הגדר אופציות סטטוס דינמיות
+  const opts = type === 'customer' ? STATUS_OPTIONS_CUSTOMER : STATUS_OPTIONS_LEAD;
+  document.getElementById('crmStatus').innerHTML = opts.map(o => `<option value="${o.value}">${o.label}</option>`).join('');
+
+  // הצג/הסתר tab בניין
+  const buildingTab = document.getElementById('crmTab4');
+  buildingTab.style.display = type === 'customer' ? 'inline-flex' : 'none';
+
   switchCRMTab('calls', document.getElementById('crmTab1'));
   openModal('crmModal');
   await loadCRMCard();
@@ -1910,6 +1940,10 @@ async function loadCRMCard() {
     renderCRMTasks(card.tasks || []);
     // History
     renderCRMHistory(data.msgHistory || []);
+    // Building snapshot (customers only)
+    if (crmCurrentType === 'customer' && data.buildingSnapshot) {
+      renderBuildingSnapshot(data.buildingSnapshot);
+    }
   } catch(e) { toast('שגיאה בטעינת כרטייה', 'err'); }
 }
 
@@ -1953,6 +1987,45 @@ function renderCRMHistory(history) {
       '</div>'
     ).join('') :
     '<div style="text-align:center;color:var(--text3);padding:24px;font-size:13px">אין היסטוריית הודעות</div>';
+}
+
+function renderBuildingSnapshot(s) {
+  const waLabel = s.waStatus === 'ready' || s.waStatus === 'connected'
+    ? '<span style="color:var(--green,#22c55e)">✅ מחובר</span>'
+    : s.waStatus
+      ? '<span style="color:var(--text3)">⚠️ ' + s.waStatus + '</span>'
+      : '<span style="color:var(--text3)">—</span>';
+
+  const bankLabel = s.bankAgentActive
+    ? '<span style="color:var(--green,#22c55e)">✅ פעיל</span>'
+    : '<span style="color:var(--text3)">לא פעיל</span>';
+
+  const clearingLabel = s.clearingHouse
+    ? '<span style="color:var(--accent)">' + s.clearingHouse + '</span>'
+    : '<span style="color:var(--text3)">לא מוגדר</span>';
+
+  const card = (icon, title, value) =>
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;">' +
+    '<div style="font-size:22px;line-height:1">' + icon + '</div>' +
+    '<div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">' + title + '</div>' +
+    '<div style="font-size:15px;font-weight:600;color:var(--text)">' + value + '</div></div>' +
+    '</div>';
+
+  document.getElementById('crmBuildingContent').innerHTML =
+    '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px">' +
+      card('👥', 'דיירים רשומים', s.numTenants) +
+      card('🧾', 'ממוצע חשבונות לדייר', s.avgAccountsPerTenant || '—') +
+      card('📱', 'גשר WhatsApp', waLabel) +
+      card('🏦', 'BankAgent', bankLabel) +
+    '</div>' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;justify-content:space-between;">' +
+      '<div style="display:flex;align-items:center;gap:12px">' +
+        '<div style="font-size:22px">💳</div>' +
+        '<div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">חיבור לסליקה</div>' +
+        '<div style="font-size:15px;font-weight:600">' + clearingLabel + '</div></div>' +
+      '</div>' +
+      '<span style="font-size:11px;color:var(--text3);background:var(--bg);padding:3px 8px;border-radius:20px;border:1px solid var(--border)">בקרוב</span>' +
+    '</div>';
 }
 
 async function saveCRMStatus() {
@@ -2010,6 +2083,7 @@ function switchCRMTab(tab, el) {
   document.getElementById('crmTabCalls').style.display = tab === 'calls' ? 'block' : 'none';
   document.getElementById('crmTabTasks').style.display = tab === 'tasks' ? 'block' : 'none';
   document.getElementById('crmTabHistory').style.display = tab === 'history' ? 'block' : 'none';
+  document.getElementById('crmTabBuilding').style.display = tab === 'building' ? 'block' : 'none';
 }
 
 // ════════════════════════════════════════════

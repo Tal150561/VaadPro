@@ -1269,7 +1269,38 @@ app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
   const card = getCRMCard(req.params.id);
   // הוסף היסטוריית הודעות מהלוג
   const log = loadMsgLog().filter(l => l.contactId === req.params.id);
-  res.json({ ok: true, card, msgHistory: log });
+
+  // בניין snapshot — רק ללקוחות (tenantId קיים ב-_users)
+  let buildingSnapshot = null;
+  const users = loadUsers();
+  const user = users.find(u => u.tenantId === req.params.id);
+  if (user) {
+    const td = loadTenantData(user.tenantId);
+    const tenants = td.tenants || [];
+    const numTenants = tenants.length;
+    // ספור חשבונות: כל דייר = 1 (חשבון ראשי) + extraAccounts שלו
+    const totalAccounts = tenants.reduce((sum, t) => sum + 1 + (t.extraAccounts ? t.extraAccounts.length : 0), 0);
+    const avgAccountsPerTenant = numTenants > 0 ? Math.round((totalAccounts / numTenants) * 10) / 10 : 0;
+    // BankAgent — בדוק אם יש ב-waClients עם סוג bank (או השתמש בדגל bankAgentActive)
+    const bankAgentActive = !!(user.bankAgentActive || (waClients[user.tenantId] && waClients[user.tenantId].bankAgentActive));
+    // WhatsApp bridge
+    const waStatus = waClients[user.tenantId] ? waClients[user.tenantId].status : null;
+    // Clearing house — placeholder לעתיד
+    const clearingHouse = user.clearingHouse || null;
+
+    buildingSnapshot = {
+      numTenants,
+      totalAccounts,
+      avgAccountsPerTenant,
+      bankAgentActive,
+      waStatus,
+      clearingHouse,
+      plan: user.plan,
+      createdAt: user.createdAt
+    };
+  }
+
+  res.json({ ok: true, card, msgHistory: log, buildingSnapshot });
 });
 
 // שמור כרטיית לקוח/ליד
