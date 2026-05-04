@@ -680,13 +680,17 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     }).filter(Boolean);
     if (lines.length) accountsBlock = '\n' + lines.join('\n');
   }
+  const portalUrl1 = tmpl.includes('{לינק_פורטל}')
+    ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
+    : '';
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
     .replace(/{סכום}/g, amount)
     .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
     .replace(/{סה"כ}/g, debt > 0 ? total : amount)
-    .replace(/{חשבונות}/g, accountsBlock);
+    .replace(/{חשבונות}/g, accountsBlock)
+    .replace(/{לינק_פורטל}/g, portalUrl1);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
     const key = tenant.id+'_'+month; d.sentLog[key]='sent_'+new Date().toISOString();
@@ -723,13 +727,17 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       }).filter(Boolean);
       if (lines.length) accountsBlock = '\n' + lines.join('\n');
     }
+    const portalUrlSA = tmpl.includes('{לינק_פורטל}')
+      ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
+      : '';
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
-      .replace(/{חשבונות}/g, accountsBlock);
+      .replace(/{חשבונות}/g, accountsBlock)
+      .replace(/{לינק_פורטל}/g, portalUrlSA);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
       d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString();
@@ -2677,6 +2685,31 @@ function savePortalTokens(tokens) {
     try { fs.copyFileSync(PORTAL_TOKENS_FILE, backup); } catch(e) { /* non-fatal */ }
   }
   fs.renameSync(tmp, PORTAL_TOKENS_FILE);
+}
+
+// Helper: קבל/צור portal URL לדייר (לשימוש בשליחת WA)
+function getOrCreatePortalUrl(tenantDataId, tenantId, tenantName) {
+  const tokens = loadPortalTokens();
+  const now = Date.now();
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  // נקה פגי תוקף
+  Object.keys(tokens).forEach(k => { if (tokens[k].expires < now) delete tokens[k]; });
+  // חפש token קיים
+  const existing = Object.entries(tokens).find(([, v]) =>
+    v.tenantDataId === tenantDataId && v.tenantId === String(tenantId) && v.expires > now
+  );
+  if (existing) return appUrl + '/tenant-portal.html?token=' + existing[0];
+  // צור חדש
+  const token = require('uuid').v4().replace(/-/g,'').substring(0,20);
+  tokens[token] = {
+    tenantDataId,
+    tenantId:   String(tenantId),
+    tenantName: tenantName || String(tenantId),
+    createdAt:  now,
+    expires:    now + 365 * 24 * 60 * 60 * 1000
+  };
+  savePortalTokens(tokens);
+  return appUrl + '/tenant-portal.html?token=' + token;
 }
 
 // Generate portal token for a specific tenant (called from app)
