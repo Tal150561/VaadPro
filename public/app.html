@@ -916,6 +916,7 @@ function vpLogout() {
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
+          <button class="btn btn-ghost" onclick="fixPaymentHistoryMonth()" style="font-size:0.75rem;color:var(--text3);margin-right:auto;" title="תיקון נתונים: מחק רשומות חודש שגויות">🔧 תקן נתונים</button>
         </div>
         <div style="margin-top:16px;"><div class="msg-preview" id="msgPreview"></div></div>
       </div>
@@ -1951,6 +1952,21 @@ function insertVar(v) {
   ta.value=ta.value.substring(0,s)+v+ta.value.substring(e);
   ta.focus();ta.setSelectionRange(s+v.length,s+v.length);
   updatePreview();
+}
+
+async function fixPaymentHistoryMonth() {
+  const month = prompt('חודש למחיקה מהיסטוריית תשלומים (YYYY-MM):', new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0'));
+  if (!month) return;
+  if (!confirm('למחוק את כל רשומות ' + month + ' מהיסטוריית התשלומים של הבניין?')) return;
+  try {
+    const r = await fetch(API + '/fix-payment-history', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ month })
+    });
+    const d = await r.json();
+    if (d.ok) { toast(d.message, 'success'); await loadData(); render(); }
+    else toast('שגיאה: ' + (d.error || ''), 'error');
+  } catch(e) { toast('שגיאה', 'error'); }
 }
 
 async function saveTemplate() {

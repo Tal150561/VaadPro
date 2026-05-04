@@ -1132,6 +1132,24 @@ app.post('/api/admin/extend-trial', adminAuthMiddleware, (req, res) => {
 });
 
 // ── Admin: ניקוי לוג שליחות ─────────────────────────────────────
+// ── תיקון נתונים: מחק רשומות paymentHistory שגויות לחודש ספציפי (של הלקוח המחובר בלבד) ──
+app.post('/api/fix-payment-history', authMiddleware, (req, res) => {
+  const { month } = req.body;
+  if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.json({ ok: false, error: 'חסר month תקין (YYYY-MM)' });
+  try {
+    const d = loadTenantData(req.user.tenantId);
+    if (!d.paymentHistory) return res.json({ ok: true, fixed: 0, message: 'אין paymentHistory' });
+    let fixed = 0;
+    Object.keys(d.paymentHistory).forEach(tid => {
+      const before = d.paymentHistory[tid].length;
+      d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== month);
+      fixed += before - d.paymentHistory[tid].length;
+    });
+    if (fixed > 0) saveTenantData(req.user.tenantId, { paymentHistory: d.paymentHistory });
+    res.json({ ok: true, fixed, message: `נמחקו ${fixed} רשומות ${month}` });
+  } catch(e) { res.json({ ok: false, error: e.message }); }
+});
+
 app.post('/api/admin/msglog/clean', adminAuthMiddleware, (req, res) => {
   const { days } = req.body;
   const d = parseInt(days) || 90;
