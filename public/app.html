@@ -963,7 +963,7 @@ function vpLogout() {
 
     <!-- ACCOUNT TEMPLATES CARD -->
     <div class="card" id="accountTemplatesCard">
-      <div class="card-header">💳 חשבונות בניין — תבניות
+      <div class="card-header">💳 הגדרת חשבונות נוספים
         <span style="font-size:0.75rem;color:var(--text3);margin-right:8px;">חשבונות שניתן לשייך לדיירים</span>
       </div>
       <div class="card-body">
@@ -5376,7 +5376,7 @@ let taModalAccounts = [];   // working copy
 // ── Load account templates from server ─────────────────────────
 async function loadAccountTemplates() {
   try {
-    const r = await fetch(API + '/account-templates', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
+    const r = await fetch(API + '/account-templates', { headers: {} });
     const d = await r.json();
     if (d.ok) { accountTemplates = d.templates || []; renderAccountTemplates(); }
   } catch(e) {}
@@ -5385,7 +5385,7 @@ async function loadAccountTemplates() {
 // ── Load accounts status for all tenants ───────────────────────
 async function loadAccountsStatus() {
   try {
-    const r = await fetch(API + '/accounts-status', { headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') } });
+    const r = await fetch(API + '/accounts-status', { headers: {} });
     const d = await r.json();
     if (d.ok) accountsStatus = d.status || {};
   } catch(e) {}
@@ -5433,7 +5433,7 @@ async function saveAccountTemplates() {
   try {
     const r = await fetch(API + '/account-templates', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ templates: accountTemplates })
     });
     const d = await r.json();
@@ -5450,7 +5450,7 @@ async function openTenantAccounts(tenantId, tenantName) {
   // Load current accounts for this tenant
   try {
     const r = await fetch(API + '/tenant-accounts/' + tenantId, {
-      headers: { 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+      headers: {}
     });
     const d = await r.json();
     taModalAccounts = d.ok ? d.accounts : [];
@@ -5541,7 +5541,7 @@ async function saveTenantAccounts() {
   try {
     const r = await fetch(API + '/tenant-accounts/' + taModalTenantId, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ accounts: taModalAccounts })
     });
     const d = await r.json();
@@ -5559,7 +5559,7 @@ async function markAccountPaid(tenantId, accountId, paidAmount) {
   try {
     const r = await fetch(API + '/mark-account-paid/' + tenantId + '/' + accountId, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ paidAmount })
     });
     const d = await r.json();
@@ -5572,7 +5572,7 @@ async function markAccountUnpaid(tenantId, accountId) {
   try {
     const r = await fetch(API + '/mark-account-unpaid/' + tenantId + '/' + accountId, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + localStorage.getItem('token') }
+      headers: { 'Content-Type': 'application/json' }
     });
     const d = await r.json();
     if (d.ok) { await loadAccountsStatus(); render(); toast('בוטל', 'success'); }
@@ -5613,11 +5613,15 @@ function promptAccountPaid(tenantId, accountId, defaultAmount) {
 }
 
 // ── Hook into loadData — done directly in loadData() above ────
+let _templatesLoaded = false;
 let _accountsLoaded = false;
 async function loadAccountsIfNeeded() {
-  if (_accountsLoaded) return;
+  const promises = [];
+  if (!_templatesLoaded) { _templatesLoaded = true; promises.push(loadAccountTemplates()); }
+  promises.push(loadAccountsStatus()); // תמיד מרענן סטטוס
+  await Promise.all(promises);
   _accountsLoaded = true;
-  await loadAccountTemplates();
+}
   await loadAccountsStatus();
 }
 
