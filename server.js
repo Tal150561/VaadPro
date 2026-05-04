@@ -3464,6 +3464,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
 
   const matched = [], unmatched = [];
   const newSentLog = Object.assign({}, sentLog);
+  const newPaymentHistory = {}; // extra accounts payment history additions
   // Deep-clone tenants so we can mutate openingDebt safely
   const updatedTenants = tenants.map(t => Object.assign({}, t));
 
@@ -3499,9 +3500,64 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
     }
-  });
 
-  return { matched, unmatched, newSentLog, updatedTenants, month: em };
+    // ── זיהוי חשבונות נוספים ──────────────────────────────────
+    // בודק שורות שלא שויכו לחשבון הראשי — לפי matchKeywords של כל חשבון נוסף
+    const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
+    if (extraAccounts.length) {
+      const usedRowIdxForMain = new Set(seenRowIdx); // שורות שכבר שויכו לחשבון הראשי
+      extraAccounts.forEach(acc => {
+        if (!acc.matchKeywords || !acc.matchKeywords.trim()) return;
+        const accKw = acc.matchKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
+        if (!accKw.length) return;
+        // בדוק אם כבר שולם החודש
+        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
+        if (newSentLog[slKey] && (
+          String(newSentLog[slKey]).startsWith('manual_paid') ||
+          String(newSentLog[slKey]).startsWith('bank_import')
+        )) return; // כבר שולם
+        // חפש שורה מתאימה
+        const accMatches = [];
+        mr.forEach(m => {
+          if (usedRowIdxForMain.has(m.rowIdx)) return; // שורה שכבר שויכה לחשבון ראשי
+          const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
+          if (kwMatches(accKw, rt)) {
+            accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx });
+          }
+        });
+        if (accMatches.length > 0) {
+          const totalPaid = accMatches.reduce((s, m) => s + m.amount, 0);
+          const payerName = accMatches[0].payerName || '';
+          newSentLog[slKey] = `bank_import_${new Date().toISOString()}_${totalPaid}_payer_${payerName}`;
+          // עדכן paymentHistory לחשבון הנוסף
+          const phKey = String(tenant.id) + '__acc__' + acc.id;
+          if (!newPaymentHistory[phKey]) newPaymentHistory[phKey] = [];
+          newPaymentHistory[phKey].push({
+            month: monthKey || getMonthKey(config),
+            paid: true,
+            amount: acc.amount || 0,
+            paidAmount: totalPaid,
+            date: new Date().toISOString().split('T')[0],
+            type: 'bank_import',
+            name: tenant.name,
+            payerName
+          });
+          // סמן שורות ששויכו כדי שלא ישויכו שוב
+          accMatches.forEach(m => usedRowIdxForMain.add(m.rowIdx));
+          matched.push({
+            tenantId: tenant.id,
+            name: `${tenant.name} (${acc.label})`,
+            amount: totalPaid,
+            matchType: 'extra_account',
+            accountId: acc.id,
+            accountLabel: acc.label
+          });
+        }
+      });
+    }
+  }); // end updatedTenants.forEach
+
+  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -3540,9 +3596,16 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     const monthKey = req.body.monthKey || null;
 
-    const { matched, unmatched, newSentLog, updatedTenants, month } = analyzeBankRowsServer(
+    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
     );
+
+    // מיזוג paymentHistory של חשבונות נוספים עם הקיים
+    const mergedPaymentHistory = Object.assign({}, d.paymentHistory || {});
+    for (const [key, records] of Object.entries(newPaymentHistory)) {
+      if (!mergedPaymentHistory[key]) mergedPaymentHistory[key] = [];
+      mergedPaymentHistory[key] = mergedPaymentHistory[key].concat(records);
+    }
 
     const importResult = {
       timestamp: new Date().toISOString(),
@@ -3552,8 +3615,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       matchedTenants: matched,
       unmatchedTenants: unmatched,
     };
-    // Save updatedTenants so openingDebt reductions are persisted
-    saveTenantData(req.user.tenantId, { sentLog: newSentLog, tenants: updatedTenants, lastBankSyncImport: importResult });
+    saveTenantData(req.user.tenantId, { sentLog: newSentLog, tenants: updatedTenants, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult });
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
   } catch (err) {
