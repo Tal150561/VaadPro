@@ -1996,16 +1996,23 @@ function renderBuildingSnapshot(s) {
       ? '<span style="color:var(--text3)">⚠️ ' + s.waStatus + '</span>'
       : '<span style="color:var(--text3)">—</span>';
 
-  const bankLabel = s.bankAgentActive
-    ? '<span style="color:var(--green,#22c55e)">✅ פעיל</span>'
-    : '<span style="color:var(--text3)">לא פעיל</span>';
+  let bankLabel;
+  if (s.lastBankSync && s.lastBankSync.timestamp) {
+    const d = new Date(s.lastBankSync.timestamp);
+    const dateStr = d.toLocaleDateString('he-IL', { day:'2-digit', month:'2-digit', year:'numeric' });
+    const timeStr = d.toLocaleTimeString('he-IL', { hour:'2-digit', minute:'2-digit' });
+    bankLabel = '<span style="color:var(--green,#22c55e)">✅ פעיל</span>' +
+      '<div style="font-size:10px;color:var(--text3);margin-top:2px">ריצה אחרונה: ' + dateStr + ' ' + timeStr + '</div>';
+  } else {
+    bankLabel = '<span style="color:var(--text3)">לא הופעל</span>';
+  }
 
   const clearingLabel = s.clearingHouse
     ? '<span style="color:var(--accent)">' + s.clearingHouse + '</span>'
     : '<span style="color:var(--text3)">לא מוגדר</span>';
 
   const card = (icon, title, value) =>
-    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:center;gap:12px;">' +
+    '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:14px 16px;display:flex;align-items:flex-start;gap:12px;">' +
     '<div style="font-size:22px;line-height:1">' + icon + '</div>' +
     '<div><div style="font-size:11px;color:var(--text3);margin-bottom:2px">' + title + '</div>' +
     '<div style="font-size:15px;font-weight:600;color:var(--text)">' + value + '</div></div>' +

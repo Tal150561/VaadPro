@@ -1281,8 +1281,8 @@ app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
     // ספור חשבונות: כל דייר = 1 (חשבון ראשי) + extraAccounts שלו
     const totalAccounts = tenants.reduce((sum, t) => sum + 1 + (t.extraAccounts ? t.extraAccounts.length : 0), 0);
     const avgAccountsPerTenant = numTenants > 0 ? Math.round((totalAccounts / numTenants) * 10) / 10 : 0;
-    // BankAgent — בדוק אם יש ב-waClients עם סוג bank (או השתמש בדגל bankAgentActive)
-    const bankAgentActive = !!(user.bankAgentActive || (waClients[user.tenantId] && waClients[user.tenantId].bankAgentActive));
+    // BankAgent — השתמש בנתוני הריצה האחרונה
+    const lastBankSync = td.lastBankSyncImport || null;
     // WhatsApp bridge
     const waStatus = waClients[user.tenantId] ? waClients[user.tenantId].status : null;
     // Clearing house — placeholder לעתיד
@@ -1292,7 +1292,7 @@ app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
       numTenants,
       totalAccounts,
       avgAccountsPerTenant,
-      bankAgentActive,
+      lastBankSync,
       waStatus,
       clearingHouse,
       plan: user.plan,
