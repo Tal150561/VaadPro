@@ -5622,8 +5622,6 @@ async function loadAccountsIfNeeded() {
   await Promise.all(promises);
   _accountsLoaded = true;
 }
-  await loadAccountsStatus();
-}
 
 // ── render() injection handled via renderWithAccounts ─────────
 // Called explicitly after render() in the payments tab render flow
