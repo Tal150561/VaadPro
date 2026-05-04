@@ -326,7 +326,7 @@ function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
   );
   const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const historyDebt = history
-    .filter(r => !r.paid)
+    .filter(r => !r.paid && r.type !== 'wa_sent')
     .reduce((s, r) => s + (r.amount || 0), 0);
   // openingDebt can be negative (credit from overpayment) — offsets historyDebt
   // Math.max(0,...) — total debt shown cannot be negative; credit shown separately via getCreditBalance()
@@ -342,7 +342,7 @@ function getCreditBalance(tenantData, tenantId) {
   if (openingDebt >= 0) return 0;
   const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const historyDebt = history
-    .filter(r => !r.paid)
+    .filter(r => !r.paid && r.type !== 'wa_sent')
     .reduce((s, r) => s + (r.amount || 0), 0);
   // Net: positive means credit remaining after covering any unpaid history
   const net = -(historyDebt + openingDebt); // openingDebt is negative
@@ -3074,7 +3074,9 @@ app.get('/api/portal/:token', (req, res) => {
   const currentMonthName = getEffectiveMonth(config);
 
   // Get payment history for this tenant (last 12 months)
+  // סנן wa_sent — תזכורות אינן תשלומים ואין להציגן כחוב בפורטל
   const history = ((d.paymentHistory || {})[entry.tenantId] || [])
+    .filter(r => r.type !== 'wa_sent')
     .sort((a, b) => b.month.localeCompare(a.month))
     .slice(0, 12);
 
