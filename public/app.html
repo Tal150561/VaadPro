@@ -5515,13 +5515,25 @@ function renderTenantAccountsModal() {
 function addTenantAccountRow() {
   // Offer to clone from templates if any exist
   if (accountTemplates.length) {
-    const opts = accountTemplates.map((t, i) =>
+    // סנן תבניות שכבר קיימות אצל הדייר
+    const existingLabels = taModalAccounts.map(a => a.label.trim().toLowerCase());
+    const availableTemplates = accountTemplates.filter(t => !existingLabels.includes(t.label.trim().toLowerCase()));
+
+    if (!availableTemplates.length) {
+      toast('כל החשבונות הזמינים כבר שויכו לדייר זה', 'error');
+      return;
+    }
+
+    const opts = availableTemplates.map((t, i) =>
       `<option value="${i}">${t.label} — ₪${t.amount} (${{monthly:'חודשי',quarterly:'רבעוני',yearly:'שנתי'}[t.frequency]})</option>`
     ).join('');
     const html = `<select id="_tplSel" style="margin-left:8px;">${opts}</select>
       <button class="btn btn-green btn-sm" onclick="
         const idx=parseInt(document.getElementById('_tplSel').value);
-        const tpl=accountTemplates[idx];
+        const opts=${JSON.stringify(availableTemplates)};
+        const tpl=opts[idx];
+        const already=taModalAccounts.some(a=>a.label.trim().toLowerCase()===tpl.label.trim().toLowerCase());
+        if(already){toast('חשבון זה כבר קיים לדייר','error');document.getElementById('_tplAddBar').remove();return;}
         taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',active:true});
         document.getElementById('_tplAddBar').remove();
         renderTenantAccountsModal();">הוסף מתבנית</button>
@@ -5544,6 +5556,10 @@ async function saveTenantAccounts() {
   for (const acc of taModalAccounts) {
     if (!acc.label.trim()) { toast('יש למלא שם לכל חשבון', 'error'); return; }
   }
+  // בדיקת כפילויות לפי label
+  const labels = taModalAccounts.map(a => a.label.trim().toLowerCase());
+  const dupLabel = labels.find((l, i) => labels.indexOf(l) !== i);
+  if (dupLabel) { toast('חשבון "' + taModalAccounts.find(a=>a.label.trim().toLowerCase()===dupLabel).label + '" מופיע יותר מפעם אחת', 'error'); return; }
   try {
     const r = await fetch(API + '/tenant-accounts/' + taModalTenantId, {
       method: 'POST',
