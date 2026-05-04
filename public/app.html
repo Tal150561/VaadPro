@@ -2276,9 +2276,7 @@ async function sendOne(id) {
   try{
     const r=await fetch(API+'/send/'+id,{method:'POST'}); const d=await r.json();
     if(d.ok){
-      const month=d.month||data.effectiveMonth||data.currentAutoMonth||'';
-      data.sentLog[id+'_'+month]=new Date().toISOString();
-      await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});
+      // השרת כבר שמר את sentLog ב-/api/send/:id — loadData יטען את המצב העדכני
       await loadData(); render(); toast('✅ הודעה נשלחה!','success');
     } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
   }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
