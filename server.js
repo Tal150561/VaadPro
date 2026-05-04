@@ -666,12 +666,27 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const mk     = getMonthKey(d.config);
   const debt   = calcTotalDebt(d, tenant.id, mk);
   const total  = amount + debt;
+  // בנה רשימת חשבונות נוספים פתוחים
+  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
+  let accountsBlock = '';
+  if (extraAccounts.length) {
+    const lines = extraAccounts.map(acc => {
+      const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
+      const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
+                || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
+      if (paid) return null;
+      return `• ${acc.label}: *${acc.amount} ₪*`;
+    }).filter(Boolean);
+    if (lines.length) accountsBlock = '\n' + lines.join('\n');
+  }
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
     .replace(/{סכום}/g, amount)
     .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
-    .replace(/{סה"כ}/g, debt > 0 ? total : amount);
+    .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+    .replace(/{חשבונות}/g, accountsBlock);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
     const key = tenant.id+'_'+month; d.sentLog[key]='sent_'+new Date().toISOString();
@@ -695,12 +710,26 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
     const amount = tenant.customAmount || globalAmount;
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
+    // בנה רשימת חשבונות נוספים פתוחים
+    const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
+    let accountsBlock = '';
+    if (extraAccounts.length) {
+      const lines = extraAccounts.map(acc => {
+        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
+        const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
+                  || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
+        if (paid) return null;
+        return `• ${acc.label}: *${acc.amount} ₪*`;
+      }).filter(Boolean);
+      if (lines.length) accountsBlock = '\n' + lines.join('\n');
+    }
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
-      .replace(/{סה"כ}/g, debt > 0 ? total : amount);
+      .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+      .replace(/{חשבונות}/g, accountsBlock);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
       d.sentLog[tenant.id+'_'+month]='sent_'+new Date().toISOString();

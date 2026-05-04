@@ -909,8 +909,9 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{סכום}')">{ סכום }</span>
           <span class="var-tag" onclick="insertVar('{חוב_קודם}')">{ חוב_קודם }</span>
           <span class="var-tag" onclick="insertVar('{סה&quot;כ}')">{ סה״כ }</span>
+          <span class="var-tag" onclick="insertVar('{חשבונות}')">{ חשבונות }</span>
         </div>
-        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח</div>
+        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים</div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
