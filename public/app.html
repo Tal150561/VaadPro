@@ -2682,6 +2682,8 @@ function render() {
       if (selectAll) selectAll.checked = allChecked;
     }
   }
+  // הזרק חשבונות נוספים אחרי כל render
+  if (typeof injectExtraAccountsCells === 'function') injectExtraAccountsCells();
 }
 
 function toast(msg,type){ const t=document.getElementById('toast'); t.textContent=msg; t.className=type?('show '+type):'show'; setTimeout(function(){t.className='';},2800); }
@@ -5626,19 +5628,7 @@ async function loadAccountsIfNeeded() {
   _accountsLoaded = true;
 }
 
-// ── render() injection handled via renderWithAccounts ─────────
-// Called explicitly after render() in the payments tab render flow
-// See renderExtraAccountsCell() — injected via MutationObserver below
-var _accountsObserver = null;
-function startAccountsObserver() {
-  if (_accountsObserver) return;
-  var target = document.getElementById('tenantsWrap');
-  if (!target) return;
-  _accountsObserver = new MutationObserver(function() {
-    injectExtraAccountsCells();
-  });
-  _accountsObserver.observe(target, { childList: true, subtree: true });
-}
+// ── render() injection — called directly at end of render() above ─────
 
 function injectExtraAccountsCells() {
   document.querySelectorAll('[id^="send-btn-"]').forEach(function(sendBtn) {
@@ -5674,7 +5664,7 @@ function injectExtraAccountsCells() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
-  setTimeout(startAccountsObserver, 2000);
+  setTimeout(function(){ if(typeof injectExtraAccountsCells==='function') injectExtraAccountsCells(); }, 2000);
 });
 
 // ── Init: accounts loaded via loadData() above ─────────────────
