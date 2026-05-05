@@ -576,6 +576,28 @@ app.get('/api/data', authMiddleware, (req, res) => {
   res.json(d);
 });
 
+// ── עדכון sentLog key בודד — ללא סנכרון paymentHistory ──────────────
+// להשתמש בזה במקום POST /api/data כשרוצים רק לעדכן/למחוק key ספציפי
+// (markPaid, markUnpaid, resetSent, sendOne — לא bank import)
+app.post('/api/sentlog-key', authMiddleware, (req, res) => {
+  const { key, value } = req.body; // value=null → מחיקה
+  if (!key) return res.json({ ok: false, error: 'חסר key' });
+  const d = loadTenantData(req.user.tenantId);
+  if (!d.sentLog) d.sentLog = {};
+  if (value === null || value === undefined) {
+    delete d.sentLog[key];
+  } else {
+    // אם כבר קיים manual_paid או bank_import — לא דורסים
+    const existing = String(d.sentLog[key] || '');
+    if (existing.startsWith('manual_paid') || existing.startsWith('bank_import')) {
+      return res.json({ ok: true, skipped: true });
+    }
+    d.sentLog[key] = value;
+  }
+  saveTenantData(req.user.tenantId, { sentLog: d.sentLog });
+  res.json({ ok: true });
+});
+
 app.post('/api/data', authMiddleware, (req, res) => {
   // בדוק מגבלת דיירים אם יש עדכון של רשימת דיירים
   if (req.body.tenants) {

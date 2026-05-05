@@ -2012,8 +2012,14 @@ async function addTenant() {
 async function removeTenant(id) {
   if(!confirm('למחוק דייר זה?')) return;
   data.tenants=data.tenants.filter(function(t){return t.id!=id;});
-  Object.keys(data.sentLog).forEach(function(k){if(k.startsWith(id+'_')) delete data.sentLog[k];});
-  try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants,sentLog:data.sentLog})});}catch(e){}
+  const keysToRemove = Object.keys(data.sentLog).filter(function(k){return k.startsWith(id+'_');});
+  keysToRemove.forEach(function(k){ delete data.sentLog[k]; });
+  try{
+    await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});
+    for(const k of keysToRemove){
+      await fetch(API+'/sentlog-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k,value:null})});
+    }
+  }catch(e){}
   render(); toast('🗑️ דייר הוסר');
 }
 
@@ -2418,11 +2424,10 @@ async function sendUnpaidOnly() {
   for(let i=0;i<unpaid.length;i++){
     try{
       const r=await fetch(API+'/send/'+unpaid[i].id,{method:'POST'}); const d=await r.json();
-      if(d.ok){const month=d.month||em; data.sentLog[unpaid[i].id+'_'+month]=new Date().toISOString();}
+      if(d.ok){ /* השרת כבר שמר sentLog ב-/api/send/:id */ }
       await new Promise(function(res){setTimeout(res,800);});
     }catch(e){}
   }
-  await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});
   await loadData(); render();
   document.getElementById('sendingStatus').textContent=''; btn.disabled=false;
   toast('✅ נשלחו '+unpaid.length+' הודעות!','success');
@@ -2432,8 +2437,11 @@ async function resetSent() {
   if(!confirm('לאפס את סטטוס התשלומים לחודש הנוכחי?')) return;
   const em = getEffectiveMonth();
   // Only delete keys for current month - keep other months intact
-  Object.keys(data.sentLog).forEach(function(k){ if(k.endsWith('_'+em)) delete data.sentLog[k]; });
-  await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});
+  const keysToDelete = Object.keys(data.sentLog).filter(function(k){ return k.endsWith('_'+em); });
+  for (const k of keysToDelete) {
+    delete data.sentLog[k];
+    try { await fetch(API+'/sentlog-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k,value:null})}); } catch(e){}
+  }
   render(); toast('🔄 סטטוס אופס');
 }
 
@@ -2446,16 +2454,19 @@ async function markPaid(id) {
   const paidAmt = parseFloat(input);
   if (isNaN(paidAmt) || paidAmt <= 0) { toast('❌ סכום לא תקין'); return; }
   const ts = new Date().toISOString();
-  data.sentLog[id+'_'+em]='manual_paid_'+ts+'_amount_'+paidAmt;
-  try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});}catch(e){}
+  const mpKey = id+'_'+em;
+  const mpVal = 'manual_paid_'+ts+'_amount_'+paidAmt;
+  data.sentLog[mpKey] = mpVal;
+  try{await fetch(API+'/sentlog-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:mpKey,value:mpVal})});}catch(e){}
   await loadData();
   render(); toast('💵 סומן כשילם','success');
 }
 
 async function markUnpaid(id) {
   const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
-  delete data.sentLog[id+'_'+em];
-  try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({sentLog:data.sentLog})});}catch(e){}
+  const muKey = id+'_'+em;
+  delete data.sentLog[muKey];
+  try{await fetch(API+'/sentlog-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:muKey,value:null})});}catch(e){}
   render(); toast('↩️ סומן כלא שילם');
 }
 
