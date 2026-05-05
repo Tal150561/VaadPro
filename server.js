@@ -4010,7 +4010,7 @@ scheduleDailyCronWithAccounts();
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.9.1 – SaaS Server         ║');
+  console.log('║   VaadPro v2.10.4 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
