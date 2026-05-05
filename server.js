@@ -1353,7 +1353,9 @@ app.get('/api/admin/crm/:id', adminAuthMiddleware, (req, res) => {
       waStatus,
       clearingHouse,
       plan: user.plan,
-      createdAt: user.createdAt
+      createdAt: user.createdAt,
+      billing: user.billing || null,
+      email: user.email
     };
   }
 
@@ -1573,7 +1575,7 @@ setTimeout(runTrialCheck, 30 * 1000);
 
 // ── Admin: עריכת לקוח ───────────────────────────────────────────
 app.post('/api/admin/edit-customer', superAdminMiddleware, async (req, res) => {
-  const { oldEmail, newEmail, fullName, phone, buildingName, address, password } = req.body;
+  const { oldEmail, newEmail, fullName, phone, buildingName, address, password, billing } = req.body;
   if (!oldEmail || !newEmail) return res.json({ ok: false, error: 'חסר אימייל' });
   const users = loadUsers();
   const idx = users.findIndex(u => u.email === oldEmail.toLowerCase());
@@ -1592,6 +1594,10 @@ app.post('/api/admin/edit-customer', superAdminMiddleware, async (req, res) => {
   if (address !== undefined) users[idx].address = address;
   if (password && password.length >= 6) {
     users[idx].passHash = await bcrypt.hash(password, 10);
+  }
+  // billing info (SaaS-level payment tracking)
+  if (billing !== undefined) {
+    users[idx].billing = billing;
   }
   saveUsers(users);
   res.json({ ok: true });

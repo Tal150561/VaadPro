@@ -890,6 +890,7 @@
       <div class="tab" id="crmTab2" onclick="switchCRMTab('tasks',this)">✅ משימות</div>
       <div class="tab" id="crmTab3" onclick="switchCRMTab('history',this)">📨 היסטוריה</div>
       <div class="tab" id="crmTab4" onclick="switchCRMTab('building',this)" style="display:none">🏢 בניין</div>
+      <div class="tab" id="crmTab5" onclick="switchCRMTab('payment',this)" style="display:none">💰 תשלום</div>
     </div>
 
     <!-- Calls Tab -->
@@ -920,6 +921,101 @@
     <div id="crmTabBuilding" style="display:none">
       <div id="crmBuildingContent">
         <div style="text-align:center;color:var(--text3);padding:32px;font-size:13px">טוען נתוני בניין...</div>
+      </div>
+    </div>
+
+    <!-- Payment Tab -->
+    <div id="crmTabPayment" style="display:none">
+      <div id="crmPaymentContent">
+
+        <!-- Row 1: isPaying + billingCycle + amount -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">לקוח משלם</label>
+            <select id="billingIsPaying" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
+              <option value="">לא מוגדר</option>
+              <option value="yes">כן</option>
+              <option value="no">לא</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">מחזור חיוב</label>
+            <select id="billingCycle" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
+              <option value="">—</option>
+              <option value="monthly">חודשי</option>
+              <option value="quarterly">רבעוני</option>
+              <option value="yearly">שנתי</option>
+            </select>
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">סכום (₪)</label>
+            <input type="number" id="billingAmount" min="0" placeholder="0" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+        </div>
+
+        <!-- Row 2: billingStart + billingEnd + paymentMethod -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">תחילת תשלום (YYYY-MM)</label>
+            <input type="month" id="billingStart" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">סיום / תוקף (YYYY-MM)</label>
+            <input type="month" id="billingEnd" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">שיטת תשלום</label>
+            <select id="billingMethod" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;">
+              <option value="">—</option>
+              <option value="bank">העברה בנקאית</option>
+              <option value="standing_order">הוראת קבע</option>
+              <option value="card">כרטיס אשראי</option>
+              <option value="other">אחר</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- Row 3: referral -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">הופנה על ידי (שם/אימייל)</label>
+            <input type="text" id="billingReferredBy" placeholder="—" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">חודשי חינם</label>
+            <input type="number" id="billingFreeMonths" min="0" placeholder="0" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">חינם עד (מחושב)</label>
+            <input type="text" id="billingFreeUntil" disabled placeholder="—" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text3);font-family:'Heebo',sans-serif;font-size:13px;opacity:0.7;" />
+          </div>
+        </div>
+
+        <!-- Row 4: discount + contractRef -->
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:12px">
+          <div>
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">הנחה (%)</label>
+            <input type="number" id="billingDiscount" min="0" max="100" placeholder="0" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+          <div style="grid-column:span 2">
+            <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">מספר חוזה / הפניה</label>
+            <input type="text" id="billingContractRef" placeholder="—" style="width:100%;box-sizing:border-box;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;" />
+          </div>
+        </div>
+
+        <!-- Clearing house (read-only from building tab, future) -->
+        <div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:12px;color:var(--text3)">💳 חיבור סליקה (CardCom) — <span id="billingClearingLabel">לא מוגדר</span></div>
+          <span style="font-size:11px;color:var(--text3);background:var(--bg);padding:3px 8px;border-radius:20px;border:1px solid var(--border)">בקרוב</span>
+        </div>
+
+        <!-- Notes -->
+        <div style="margin-bottom:14px">
+          <label style="font-size:11px;color:var(--text3);display:block;margin-bottom:4px">הערות חיוב</label>
+          <textarea id="billingNotes" placeholder="הערות פנימיות על החיוב..." style="width:100%;box-sizing:border-box;min-height:60px;background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;color:var(--text);font-family:'Heebo',sans-serif;font-size:13px;resize:vertical;direction:rtl;"></textarea>
+        </div>
+
+        <button class="btn btn-blue" onclick="saveBilling()" style="width:100%">💾 שמור פרטי תשלום</button>
       </div>
     </div>
   </div>
@@ -1921,6 +2017,8 @@ async function openCRM(id, name, type) {
   // הצג/הסתר tab בניין
   const buildingTab = document.getElementById('crmTab4');
   buildingTab.style.display = type === 'customer' ? 'inline-flex' : 'none';
+  const paymentTab = document.getElementById('crmTab5');
+  paymentTab.style.display = type === 'customer' ? 'inline-flex' : 'none';
 
   switchCRMTab('calls', document.getElementById('crmTab1'));
   openModal('crmModal');
@@ -1943,6 +2041,7 @@ async function loadCRMCard() {
     // Building snapshot (customers only)
     if (crmCurrentType === 'customer' && data.buildingSnapshot) {
       renderBuildingSnapshot(data.buildingSnapshot);
+      renderBillingTab(data.buildingSnapshot);
     }
   } catch(e) { toast('שגיאה בטעינת כרטייה', 'err'); }
 }
@@ -2035,6 +2134,70 @@ function renderBuildingSnapshot(s) {
     '</div>';
 }
 
+function calcFreeUntil(billingStart, freeMonths) {
+  if (!billingStart || !freeMonths || freeMonths <= 0) return '';
+  const [y, m] = billingStart.split('-').map(Number);
+  const total = m + parseInt(freeMonths) - 1;
+  const yr = y + Math.floor(total / 12);
+  const mo = (total % 12) + 1;
+  return yr + '-' + String(mo).padStart(2, '0');
+}
+
+function renderBillingTab(snapshot) {
+  const b = snapshot.billing || {};
+  document.getElementById('billingIsPaying').value = b.isPaying || '';
+  document.getElementById('billingCycle').value = b.billingCycle || '';
+  document.getElementById('billingAmount').value = b.amount != null ? b.amount : '';
+  document.getElementById('billingStart').value = b.billingStart || '';
+  document.getElementById('billingEnd').value = b.billingEnd || '';
+  document.getElementById('billingMethod').value = b.paymentMethod || '';
+  document.getElementById('billingReferredBy').value = b.referredBy || '';
+  document.getElementById('billingFreeMonths').value = b.freeMonths != null ? b.freeMonths : '';
+  document.getElementById('billingDiscount').value = b.discount != null ? b.discount : '';
+  document.getElementById('billingContractRef').value = b.contractRef || '';
+  document.getElementById('billingNotes').value = b.notes || '';
+  const freeUntil = calcFreeUntil(b.billingStart, b.freeMonths);
+  document.getElementById('billingFreeUntil').value = freeUntil;
+  const clearing = snapshot.clearingHouse;
+  document.getElementById('billingClearingLabel').innerHTML = clearing
+    ? '<span style="color:var(--accent)">' + clearing + '</span>'
+    : '<span style="color:var(--text3)">לא מוגדר</span>';
+  const update = () => {
+    document.getElementById('billingFreeUntil').value =
+      calcFreeUntil(document.getElementById('billingStart').value,
+                    document.getElementById('billingFreeMonths').value);
+  };
+  document.getElementById('billingStart').oninput = update;
+  document.getElementById('billingFreeMonths').oninput = update;
+}
+
+async function saveBilling() {
+  const billing = {
+    isPaying: document.getElementById('billingIsPaying').value,
+    billingCycle: document.getElementById('billingCycle').value,
+    amount: document.getElementById('billingAmount').value !== '' ? parseFloat(document.getElementById('billingAmount').value) : null,
+    billingStart: document.getElementById('billingStart').value || null,
+    billingEnd: document.getElementById('billingEnd').value || null,
+    paymentMethod: document.getElementById('billingMethod').value,
+    referredBy: document.getElementById('billingReferredBy').value.trim() || null,
+    freeMonths: document.getElementById('billingFreeMonths').value !== '' ? parseInt(document.getElementById('billingFreeMonths').value) : 0,
+    discount: document.getElementById('billingDiscount').value !== '' ? parseFloat(document.getElementById('billingDiscount').value) : null,
+    contractRef: document.getElementById('billingContractRef').value.trim() || null,
+    notes: document.getElementById('billingNotes').value.trim() || null,
+    updatedAt: new Date().toISOString()
+  };
+  const customer = allCustomers.find(c => c.tenantId === crmCurrentId);
+  if (!customer) { toast('לא נמצא לקוח', 'err'); return; }
+  const res = await fetch('/api/admin/edit-customer', {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ oldEmail: customer.email, newEmail: customer.email, billing })
+  });
+  const data = await res.json();
+  if (data.ok) { toast('פרטי תשלום נשמרו ✓', 'ok'); }
+  else { toast('שגיאה: ' + (data.error || ''), 'err'); }
+}
+
+
 async function saveCRMStatus() {
   const status = document.getElementById('crmStatus').value;
   await fetch('/api/admin/crm/' + crmCurrentId, {
@@ -2091,6 +2254,7 @@ function switchCRMTab(tab, el) {
   document.getElementById('crmTabTasks').style.display = tab === 'tasks' ? 'block' : 'none';
   document.getElementById('crmTabHistory').style.display = tab === 'history' ? 'block' : 'none';
   document.getElementById('crmTabBuilding').style.display = tab === 'building' ? 'block' : 'none';
+  document.getElementById('crmTabPayment').style.display = tab === 'payment' ? 'block' : 'none';
 }
 
 // ════════════════════════════════════════════
