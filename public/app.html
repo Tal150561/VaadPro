@@ -3299,8 +3299,10 @@ function rptAnalyze() {
     }
 
     // Fix 1: Filter by date range — dateFrom is INCLUSIVE (>= start of day)
-    if (dateObj && dateFrom) { const f=new Date(dateFrom); f.setHours(0,0,0,0); if(dateObj < f) continue; }
-    if (dateObj && dateTo) { const t=new Date(dateTo); t.setHours(23,59,59); if(dateObj > t) continue; }
+    // Use manual parse of YYYY-MM-DD to avoid UTC midnight interpretation (timezone bug)
+    function parseDateInput(s){ const p=s.split('-'); return new Date(parseInt(p[0]),parseInt(p[1])-1,parseInt(p[2])); }
+    if (dateObj && dateFrom) { const f=parseDateInput(dateFrom); f.setHours(0,0,0,0); if(dateObj < f) continue; }
+    if (dateObj && dateTo) { const t=parseDateInput(dateTo); t.setHours(23,59,59,999); if(dateObj > t) continue; }
 
     const desc = colDesc >= 0 ? String(row[colDesc]||'').trim() : '';
     const balRaw = colBal >= 0 ? String(row[colBal]||'').replace(/[,\s₪]/g,'') : '';
