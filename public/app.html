@@ -3261,10 +3261,18 @@ function rptAnalyze() {
   const colDesc = parseInt(document.getElementById('rptColDesc').value);
   const colDebit = parseInt(document.getElementById('rptColDebit').value);
   const colBal = parseInt(document.getElementById('rptColBalance').value);
-  const dateFrom = document.getElementById('rptDateFrom').value;
-  const dateTo = document.getElementById('rptDateTo').value;
+  let dateFrom = document.getElementById('rptDateFrom').value;
+  let dateTo = document.getElementById('rptDateTo').value;
 
   if (colDebit < 0) { toast('⚠️ חובה לבחור עמודת חיוב', 'error'); return; }
+
+  // Validate date range — swap if reversed
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    document.getElementById('rptDateFrom').value = dateTo;
+    document.getElementById('rptDateTo').value   = dateFrom;
+    const tmp = dateFrom; dateFrom = dateTo; dateTo = tmp;
+    toast('⚠️ טווח תאריכים היה הפוך — תוקן אוטומטית', 'warning');
+  }
 
   const expenses = [];
   let lastBalance = null;
@@ -3312,19 +3320,7 @@ function rptAnalyze() {
     expenses.push({ date: fmtDate, desc: desc, amount: debit, balance: bal, checked: true });
   }
 
-  if (!expenses.length) {
-    // DEBUG: show diagnostic info
-    let debugRows = [], debugCount = 0;
-    for (let di = 1; di < Math.min(rptRows.length, 10); di++) {
-      const dr = rptRows[di];
-      const dDebit = colDebit >= 0 ? String(dr[colDebit]||'') : '?';
-      const dDate  = colDate  >= 0 ? String(dr[colDate]||'')  : '?';
-      debugRows.push('r'+(di)+': debit=['+dDebit+'] date=['+dDate+']');
-    }
-    console.warn('rptAnalyze debug — colDate:'+colDate+' colDebit:'+colDebit+' dateFrom:'+dateFrom+' dateTo:'+dateTo+' totalRows:'+rptRows.length);
-    console.warn(debugRows.join('\n'));
-    toast('⚠️ לא נמצאו הוצאות. פתח את ה-Console (F12) לפרטים נוספים.', 'error'); return;
-  }
+  if (!expenses.length) { toast('⚠️ לא נמצאו הוצאות בטווח התאריכים שנבחר', 'error'); return; }
 
   rptExpenses = expenses;
   // Auto-fill last balance from last row of entire file
