@@ -2332,12 +2332,16 @@ $btn.Add_Click({
       # Add shortcut to Windows Startup with correct WorkingDirectory
       $startupDir = [System.Environment]::GetFolderPath('Startup')
       $startupShortcut = [System.IO.Path]::Combine($startupDir, 'VaadPro Bridge.lnk')
-      $ws2 = New-Object -ComObject WScript.Shell
-      $s2 = $ws2.CreateShortcut($startupShortcut)
-      $s2.TargetPath = $batPath
-      $s2.WorkingDirectory = $installDir
-      $s2.Description = 'VaadPro Bridge'
-      $s2.Save()
+      try {
+        $ws2 = New-Object -ComObject WScript.Shell
+        $s2 = $ws2.CreateShortcut($startupShortcut)
+        $s2.TargetPath = $batPath
+        $s2.WorkingDirectory = $installDir
+        $s2.Description = 'VaadPro Bridge'
+        $s2.Save()
+      } catch {
+        Log ('Startup shortcut skipped (non-ASCII path): ' + $_.Exception.Message)
+      }
       Log 'Step 4: Node.js installed - restart required'
       $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 100, 200)
       $status.Text = 'Node.js installed successfully!' + [char]13 + [char]10 + [char]13 + [char]10 + 'IMPORTANT: Please restart your computer.' + [char]13 + [char]10 + 'VaadPro Bridge will start automatically after restart.'
@@ -2376,14 +2380,26 @@ $btn.Add_Click({
     Log 'Step 5: npm install done'
 
     $batPath = [System.IO.Path]::Combine($installDir, 'VaadPro-Start.bat')
-    $shortcutPath = [System.IO.Path]::Combine([System.Environment]::GetFolderPath('Desktop'), 'VaadPro Bridge.lnk')
-    $ws = New-Object -ComObject WScript.Shell
-    $s = $ws.CreateShortcut($shortcutPath)
-    $s.TargetPath = $batPath
-    $s.WorkingDirectory = $installDir
-    $s.Description = 'VaadPro Bridge'
-    $s.Save()
-    Log 'Shortcut created'
+    $desktopPath = [System.Environment]::GetFolderPath('Desktop')
+    $shortcutPath = [System.IO.Path]::Combine($desktopPath, 'VaadPro Bridge.lnk')
+    try {
+      $ws = New-Object -ComObject WScript.Shell
+      $s = $ws.CreateShortcut($shortcutPath)
+      $s.TargetPath = $batPath
+      $s.WorkingDirectory = $installDir
+      $s.Description = 'VaadPro Bridge'
+      $s.Save()
+      Log 'Shortcut created'
+    } catch {
+      Log ('Desktop shortcut skipped (non-ASCII path): ' + $_.Exception.Message)
+      try {
+        $fallbackPath = [System.IO.Path]::Combine($desktopPath, 'VaadPro Bridge.bat')
+        Set-Content -Path $fallbackPath -Value ('@echo off' + [char]13 + [char]10 + 'cd /d "' + $installDir + '"' + [char]13 + [char]10 + 'start "" "' + $batPath + '"') -Encoding ASCII
+        Log 'Fallback .bat shortcut created on Desktop'
+      } catch {
+        Log ('Fallback shortcut also failed: ' + $_.Exception.Message)
+      }
+    }
 
     $status.ForeColor = [System.Drawing.Color]::FromArgb(0, 150, 50)
     $status.Text = 'Installation complete! Starting VaadPro Bridge...'
