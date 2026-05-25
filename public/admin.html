@@ -658,6 +658,11 @@
           <div class="field">
             <label>תוכן ההודעה</label>
             <textarea id="msgBody" placeholder="כתוב את ההודעה כאן...&#10;&#10;ניתן להשתמש ב:&#10;{שם} — שם הנמען&#10;{בניין} — שם הבניין"></textarea>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+              <input type="text" id="adminAiInstruction" placeholder='לדוגמא: "יותר רשמי", "קצר ב-50%"' style="flex:1;min-width:160px;height:34px;font-size:13px;padding:0 10px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text);font-family:'Heebo',sans-serif;">
+              <button class="btn btn-green btn-sm" id="adminAiBtn" onclick="adminAiImprove()" style="height:34px;padding:0 14px;font-size:13px;white-space:nowrap;">✨ שפר עם AI</button>
+              <span id="adminAiStatus" style="font-size:12px;color:var(--text2);"></span>
+            </div>
           </div>
 
           <div id="manualPhoneRow" class="field">
@@ -2310,6 +2315,43 @@ function formatDate(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('he-IL');
 }
+
+// ── AI Improve (Gemini via VaadPro server) ───────────────────────
+async function adminAiImprove() {
+  const ta = document.getElementById('msgBody');
+  const instrEl = document.getElementById('adminAiInstruction');
+  const statusEl = document.getElementById('adminAiStatus');
+  const btn = document.getElementById('adminAiBtn');
+  if (!ta || !ta.value.trim()) { toast('⚠️ אין טקסט לשיפור', 'err'); return; }
+  const instruction = instrEl ? instrEl.value.trim() : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ חושב...'; }
+  if (statusEl) statusEl.textContent = '';
+
+  const systemPrompt = 'אתה עוזר לנציגי VaadPro לשפר הודעות WhatsApp ומייל בעברית. כתוב בעברית טבעית ומקצועית. שמור על כל הפלייסהולדרים בפורמט {משתנה}. הפלייסהולדרים: {שם} {בניין}. החזר רק את ההודעה המשופרת, ללא הסברים וללא מרכאות.';
+  const userMsg = instruction
+    ? ('שפר לפי: "' + instruction + '"\n\nהודעה:\n' + ta.value)
+    : ('שפר את ההודעה — תעשה יותר מקצועית וברורה:\n\n' + ta.value);
+
+    try {
+    const r = await fetch('/api/ai-improve', {
+      method: 'POST',
+      headers: Object.assign({ 'Content-Type': 'application/json' }, adminHeaders()),
+      body: JSON.stringify({ system: systemPrompt, user: userMsg })
+    });
+    const d = await r.json();
+    if (d.ok && d.result) {
+      ta.value = d.result;
+      toast('✨ ההודעה שופרה', 'ok');
+      if (statusEl) { statusEl.textContent = '✅ בוצע'; setTimeout(function(){ statusEl.textContent=''; }, 3000); }
+    } else {
+      toast('❌ שגיאת AI: ' + (d.error || 'נסה שנית'), 'err');
+    }
+  } catch(e) {
+    toast('❌ שגיאת חיבור', 'err');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '✨ שפר עם AI'; }
+}
+
 </script>
 
 <!-- Reset Password Modal -->

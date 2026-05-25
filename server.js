@@ -4029,6 +4029,37 @@ function scheduleDailyCronWithAccounts() {
 // the original only touches tenant.openingDebt and the new one only touches acc.openingDebt.
 scheduleDailyCronWithAccounts();
 
+// ── POST /api/ai-improve ─────────────────────────────────────────
+// Gemini Flash proxy — GEMINI_API_KEY stays server-side only
+app.post('/api/ai-improve', authMiddleware, async (req, res) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) return res.json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
+  const { system, user } = req.body;
+  if (!user) return res.json({ ok: false, error: 'missing user message' });
+  try {
+    const prompt = system ? system + '\n\n' + user : user;
+    const r = await fetch(
+      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=' + apiKey,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
+        })
+      }
+    );
+    const data = await r.json();
+    const result = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    if (result) return res.json({ ok: true, result });
+    console.error('[ai-improve] Gemini empty response:', JSON.stringify(data));
+    return res.json({ ok: false, error: 'empty response from Gemini' });
+  } catch (e) {
+    console.error('[ai-improve] error:', e.message);
+    return res.json({ ok: false, error: e.message });
+  }
+});
+
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');

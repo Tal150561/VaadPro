@@ -913,10 +913,15 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{לינק_פורטל}')">{ לינק_פורטל }</span>
         </div>
         <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
-        <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
           <button class="btn btn-ghost" onclick="fixPaymentHistoryMonth()" style="font-size:0.75rem;color:var(--text3);margin-right:auto;" title="תיקון נתונים: מחק רשומות חודש שגויות">🔧 תקן נתונים</button>
+        </div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <input type="text" id="cfgAiInstruction" placeholder='לדוגמה: "יותר נחמד", "קצר ב-50%"' style="flex:1;min-width:180px;height:34px;font-size:0.82rem;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+          <button class="btn btn-secondary" id="cfgAiBtn" onclick="aiImprove('cfgTemplate','cfgAiInstruction','cfgAiStatus','settings')" style="height:34px;padding:0 14px;font-size:0.82rem;white-space:nowrap;">✨ שפר עם AI</button>
+          <span id="cfgAiStatus" style="font-size:0.78rem;color:var(--text3);"></span>
         </div>
         <div style="margin-top:16px;"><div class="msg-preview" id="msgPreview"></div></div>
       </div>
@@ -1104,6 +1109,11 @@ function vpLogout() {
               <label style="font-size:0.82rem;">צרף קובץ <span style="opacity:.5;">(אופציונלי)</span></label>
               <input type="file" id="blEmailAttachment" style="margin-top:4px;font-size:0.82rem;" accept=".pdf,.xlsx,.xls,.doc,.docx,.png,.jpg,.jpeg">
             </div>
+          </div>
+          <div style="margin-bottom:8px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <input type="text" id="blAiInstruction" placeholder='לדוגמה: "יותר רשמי", "קצר יותר"' style="flex:1;min-width:160px;height:32px;font-size:0.82rem;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+            <button class="btn btn-secondary btn-sm" id="blAiBtn" onclick="aiImprove('blBody','blAiInstruction','blAiStatus','bulletin')" style="height:32px;padding:0 12px;font-size:0.82rem;white-space:nowrap;">✨ AI</button>
+            <span id="blAiStatus" style="font-size:0.78rem;color:var(--text3);"></span>
           </div>
           <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
             <button class="btn btn-green" onclick="blSend()" id="blSendBtn">📤 שלח הודעה</button>
@@ -5732,6 +5742,50 @@ document.addEventListener('click', function(e) {
   }
 });
 // init() נקרא מה-auth layer לאחר הגדרת ה-token
+
+// ── AI Improve (Gemini Flash) ─────────────────────────────────────
+async function aiImprove(textareaId, instructionId, statusId, context) {
+  const ta = document.getElementById(textareaId);
+  const instrEl = document.getElementById(instructionId);
+  const statusEl = document.getElementById(statusId);
+  const btnId = textareaId === 'cfgTemplate' ? 'cfgAiBtn' : 'blAiBtn';
+  const btn = document.getElementById(btnId);
+  if (!ta || !ta.value.trim()) { toast('⚠️ אין טקסט לשיפור', 'error'); return; }
+  const instruction = instrEl ? instrEl.value.trim() : '';
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ חושב...'; }
+  if (statusEl) statusEl.textContent = '';
+
+  const placeholderNote = context === 'settings'
+    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {חוב_קודם} {סה"כ} {חשבונות} {לינק_פורטל}'
+    : 'שמור על כל הפלייסהולדרים בפורמט {משתנה}. הפלייסהולדרים: {שם} {תאריך}';
+
+  const systemPrompt = 'אתה עוזר למנהלי ועד בית לשפר הודעות WhatsApp בעברית. כללים: כתוב בעברית טבעית ומכובדת. ' + placeholderNote + '. החזר רק את ההודעה המשופרת בלבד, ללא הסברים וללא מרכאות.';
+  const userMsg = instruction
+    ? ('שפר לפי: "' + instruction + '"\n\nהודעה:\n' + ta.value)
+    : ('שפר את ההודעה — תעשה יותר ידידותית ומזמינה לתשלום:\n\n' + ta.value);
+
+    try {
+    const r = await fetch(API + '/ai-improve', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ system: systemPrompt, user: userMsg })
+    });
+    const d = await r.json();
+    if (d.ok && d.result) {
+      ta.value = d.result;
+      if (context === 'settings') updatePreview();
+      if (context === 'bulletin') blUpdatePreview();
+      toast('✨ ההודעה שופרה', 'success');
+      if (statusEl) { statusEl.textContent = '✅ בוצע'; setTimeout(function(){ statusEl.textContent=''; }, 3000); }
+    } else {
+      toast('❌ שגיאת AI: ' + (d.error || 'נסה שנית'), 'error');
+    }
+  } catch(e) {
+    toast('❌ שגיאת חיבור', 'error');
+  }
+  if (btn) { btn.disabled = false; btn.textContent = '✨ שפר עם AI'; }
+}
+
 </script>
 
 <script>
