@@ -2034,13 +2034,31 @@ async function doAutoSend(user) {
     const amount = tenant.customAmount || globalAmount;
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
+    const portalUrlAuto = tmpl.includes('{לינק_פורטל}')
+      ? getOrCreatePortalUrl(user.tenantId, tenant.id, tenant.name)
+      : '';
+    // extra accounts block
+    const extraAccountsAuto = (tenant.extraAccounts || []).filter(a => a.active !== false);
+    let accountsBlockAuto = '';
+    if (extraAccountsAuto.length) {
+      const lines = extraAccountsAuto.map(acc => {
+        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
+        const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
+                  || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
+        if (paid) return null;
+        return `• ${acc.label}: *${acc.amount} ₪*`;
+      }).filter(Boolean);
+      if (lines.length) accountsBlockAuto = '\n' + lines.join('\n');
+    }
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
-      .replace(/{סה"כ}/g, debt > 0 ? total : amount);
-    try {
+      .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+      .replace(/{חשבונות}/g, accountsBlockAuto)
+      .replace(/{לינק_פורטל}/g, portalUrlAuto);
+        try {
       await sendWaMsg(user.tenantId, tenant.phone, msg);
       d.sentLog[key] = 'sent_' + new Date().toISOString();
       recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
