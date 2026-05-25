@@ -4139,6 +4139,46 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
 });
 
+// ── DEBUG ENDPOINT — REMOVE AFTER USE ────────────────────────────
+const DEBUG_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
+app.get('/api/debug-may', (req, res) => {
+  if (req.query.token !== DEBUG_TOKEN) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const dataDir = DATA_DIR;
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+    const result = {};
+    files.forEach(f => {
+      try {
+        const d = JSON.parse(fs.readFileSync(path.join(dataDir, f), 'utf8'));
+        const tenantName = d.config && d.config.buildingName ? d.config.buildingName : f;
+        // sentLog entries for May
+        const sl = d.sentLog || {};
+        const mayLog = Object.entries(sl).filter(([k]) => k.includes('\u05de\u05d0\u05d9'));
+        // paymentHistory entries for 2026-05
+        const ph = d.paymentHistory || {};
+        const mayPH = {};
+        Object.entries(ph).forEach(([tid, records]) => {
+          const r = (records || []).filter(r => r.month === '2026-05');
+          if (r.length) mayPH[tid] = r;
+        });
+        // tenant names map
+        const tenantMap = {};
+        (d.tenants || []).forEach(t => { tenantMap[String(t.id)] = t.name; });
+        if (mayLog.length || Object.keys(mayPH).length) {
+          result[tenantName] = {
+            sentLogMay: mayLog.map(([k,v]) => ({ key: k, val: v, tenantName: tenantMap[k.split('_')[0]] || '?' })),
+            paymentHistoryMay: Object.entries(mayPH).map(([tid, recs]) => ({ tenantId: tid, name: tenantMap[tid] || '?', records: recs }))
+          };
+        }
+      } catch(e) { result[f] = { error: e.message }; }
+    });
+    res.json({ ok: true, data: result });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ── END DEBUG ─────────────────────────────────────────────────────
+
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
