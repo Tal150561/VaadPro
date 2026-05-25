@@ -4030,7 +4030,7 @@ function scheduleDailyCronWithAccounts() {
 scheduleDailyCronWithAccounts();
 
 // ── POST /api/ai-improve ─────────────────────────────────────────
-// Gemini Flash proxy — GEMINI_API_KEY stays server-side only
+// Anthropic Claude proxy — ANTHROPIC_API_KEY stays server-side only
 app.post('/api/ai-improve', (req, res, next) => {
   // Accept regular user token (Authorization: Bearer ...) OR admin token (x-admin-token)
   const userToken = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
@@ -4046,30 +4046,31 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
   return res.status(401).json({ ok: false, error: 'unauthorized' });
 }, async (req, res) => {
-  const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) return res.json({ ok: false, error: 'ANTHROPIC_API_KEY not configured on server' });
   const { system, user } = req.body;
   if (!user) return res.json({ ok: false, error: 'missing user message' });
   try {
-    const prompt = system ? system + '\n\n' + user : user;
-    const r = await fetch(
-      'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-lite:generateContent?key=' + apiKey,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { temperature: 0.7, maxOutputTokens: 1024 }
-        })
-      }
-    );
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5-20251001',
+        max_tokens: 1024,
+        system: system || '',
+        messages: [{ role: 'user', content: user }]
+      })
+    });
     const data = await r.json();
-    const result = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+    const result = data?.content?.[0]?.text?.trim();
     if (result) return res.json({ ok: true, result });
-    // Log full response for debugging
-    const errDetail = data?.error?.message || data?.promptFeedback?.blockReason || JSON.stringify(data).slice(0, 200);
-    console.error('[ai-improve] Gemini bad response:', errDetail);
-    return res.json({ ok: false, error: 'Gemini: ' + errDetail });
+    const errDetail = data?.error?.message || JSON.stringify(data).slice(0, 200);
+    console.error('[ai-improve] Anthropic bad response:', errDetail);
+    return res.json({ ok: false, error: 'Claude: ' + errDetail });
   } catch (e) {
     console.error('[ai-improve] error:', e.message);
     return res.json({ ok: false, error: e.message });
