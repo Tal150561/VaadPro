@@ -3186,8 +3186,7 @@ app.get('/api/portal/:token', (req, res) => {
     .sort((a, b) => b.month.localeCompare(a.month))
     .slice(0, 12);
 
-  // Current month status: check sentLog first, then let paymentHistory override
-  // paymentHistory is the source of truth — sentLog can be stale (e.g. sent_ written after bank_import)
+  // Current month status from sentLog
   const sentKey = entry.tenantId + '_' + currentMonthName;
   const sentVal = (d.sentLog || {})[sentKey] || null;
   let currentStatus = 'unpaid';
@@ -3196,14 +3195,6 @@ app.get('/api/portal/:token', (req, res) => {
     if (String(sentVal).startsWith('manual_paid')) { currentStatus = 'paid'; currentType = 'manual'; }
     else if (String(sentVal).startsWith('bank_import')) { currentStatus = 'paid'; currentType = 'bank'; }
     else if (String(sentVal).startsWith('sent_')) { currentStatus = 'reminded'; currentType = 'wa_sent'; }
-  }
-  // Override: if paymentHistory has a real payment for current month, always show as paid
-  // This handles: bank imported payment, then AutoSend sent reminder (overwrote sentLog to sent_)
-  const phCurrentRecord = ((d.paymentHistory || {})[entry.tenantId] || [])
-    .find(r => r.month === currentMonthKey && r.paid === true && r.type !== 'wa_sent');
-  if (phCurrentRecord) {
-    currentStatus = 'paid';
-    currentType = phCurrentRecord.type === 'bank_import' ? 'bank' : phCurrentRecord.type;
   }
 
   // Build Hebrew month label for display
@@ -3701,10 +3692,9 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       const payerName   = tenantMatches[0].payerName || '';
       // Apply payment to opening debt first, then credit current month if remainder
       const { creditForMonth } = applyPaymentToDebt(tenant, totalAmount);
-      // Fix: always write sentLog when tenant matched, even if creditForMonth===0
-      // (i.e. payment covered only old debt). Without this, AutoSend sends a reminder
-      // to a tenant who already paid via bank.
-      newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
+      if (creditForMonth > 0) {
+        newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
+      }
       matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: (parseFloat(tenant.openingDebt)||0) === 0 });
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
@@ -4148,6 +4138,46 @@ app.post('/api/ai-improve', (req, res, next) => {
     return res.json({ ok: false, error: e.message });
   }
 });
+
+// ── DEBUG ENDPOINT — REMOVE AFTER USE ────────────────────────────
+const DEBUG_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
+app.get('/api/debug-may', (req, res) => {
+  if (req.query.token !== DEBUG_TOKEN) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const dataDir = DATA_DIR;
+    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+    const result = {};
+    files.forEach(f => {
+      try {
+        const d = JSON.parse(fs.readFileSync(path.join(dataDir, f), 'utf8'));
+        const tenantName = d.config && d.config.buildingName ? d.config.buildingName : f;
+        // sentLog entries for May
+        const sl = d.sentLog || {};
+        const mayLog = Object.entries(sl).filter(([k]) => k.includes('\u05de\u05d0\u05d9'));
+        // paymentHistory entries for 2026-05
+        const ph = d.paymentHistory || {};
+        const mayPH = {};
+        Object.entries(ph).forEach(([tid, records]) => {
+          const r = (records || []).filter(r => r.month === '2026-05');
+          if (r.length) mayPH[tid] = r;
+        });
+        // tenant names map
+        const tenantMap = {};
+        (d.tenants || []).forEach(t => { tenantMap[String(t.id)] = t.name; });
+        if (mayLog.length || Object.keys(mayPH).length) {
+          result[tenantName] = {
+            sentLogMay: mayLog.map(([k,v]) => ({ key: k, val: v, tenantName: tenantMap[k.split('_')[0]] || '?' })),
+            paymentHistoryMay: Object.entries(mayPH).map(([tid, recs]) => ({ tenantId: tid, name: tenantMap[tid] || '?', records: recs }))
+          };
+        }
+      } catch(e) { result[f] = { error: e.message }; }
+    });
+    res.json({ ok: true, data: result });
+  } catch(e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+// ── END DEBUG ─────────────────────────────────────────────────────
 
 app.listen(PORT, () => {
   console.log('');
