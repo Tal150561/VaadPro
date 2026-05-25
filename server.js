@@ -4066,8 +4066,10 @@ app.post('/api/ai-improve', (req, res, next) => {
     const data = await r.json();
     const result = data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
     if (result) return res.json({ ok: true, result });
-    console.error('[ai-improve] Gemini empty response:', JSON.stringify(data));
-    return res.json({ ok: false, error: 'empty response from Gemini' });
+    // Log full response for debugging
+    const errDetail = data?.error?.message || data?.promptFeedback?.blockReason || JSON.stringify(data).slice(0, 200);
+    console.error('[ai-improve] Gemini bad response:', errDetail);
+    return res.json({ ok: false, error: 'Gemini: ' + errDetail });
   } catch (e) {
     console.error('[ai-improve] error:', e.message);
     return res.json({ ok: false, error: e.message });
