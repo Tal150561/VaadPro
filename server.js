@@ -4032,15 +4032,18 @@ scheduleDailyCronWithAccounts();
 // ── POST /api/ai-improve ─────────────────────────────────────────
 // Gemini Flash proxy — GEMINI_API_KEY stays server-side only
 app.post('/api/ai-improve', (req, res, next) => {
-  // Accept both regular user token and admin token
-  const auth = req.headers.authorization || '';
-  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token) return res.status(401).json({ ok: false, error: 'unauthorized' });
-  const jwt = require('jsonwebtoken');
-  const JWT_SECRET_LOCAL = process.env.JWT_SECRET || 'vaadpro-secret';
-  const ADMIN_JWT_SECRET_LOCAL = process.env.ADMIN_JWT_SECRET || (JWT_SECRET_LOCAL + '-admin');
-  try { jwt.verify(token, JWT_SECRET_LOCAL); return next(); } catch(e) {}
-  try { jwt.verify(token, ADMIN_JWT_SECRET_LOCAL); return next(); } catch(e) {}
+  // Accept regular user token (Authorization: Bearer ...) OR admin token (x-admin-token)
+  const userToken = (req.headers['authorization'] || '').replace('Bearer ', '').trim();
+  const adminToken = (req.headers['x-admin-token'] || '').replace('Bearer ', '').trim();
+  if (userToken) {
+    try { jwt.verify(userToken, JWT_SECRET); return next(); } catch(e) {}
+  }
+  if (adminToken) {
+    try {
+      const decoded = jwt.verify(adminToken, ADMIN_JWT_SECRET);
+      if (decoded.isAdmin) return next();
+    } catch(e) {}
+  }
   return res.status(401).json({ ok: false, error: 'unauthorized' });
 }, async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
