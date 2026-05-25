@@ -4139,17 +4139,16 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
 });
 
-// ── TEMP: fix corrupt paymentHistory for May 2026 (unpaid tenants marked as bank-paid) ──
+// ── TEMP: fix corrupt paymentHistory for May 2026 ──
 const FIX_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
-app.post('/api/fix-may-history', (req, res) => {
+app.get('/api/fix-may-history', (req, res) => {
   if (req.query.token !== FIX_TOKEN) return res.status(403).json({ error: 'forbidden' });
-  // The 5 tenant IDs that were incorrectly marked as paid in paymentHistory for 2026-05
   const CORRUPT_TENANT_IDS = [
-    '1774516750738', // תומר
-    '1774516750740', // רנדי
-    '1774516750741', // לימור
-    '1774516750742', // עידו
-    '1774516750744'  // תמי
+    '1774516750738',
+    '1774516750740',
+    '1774516750741',
+    '1774516750742',
+    '1774516750744'
   ];
   const CORRUPT_FILE = 'e17cab8f-bc04-4540-ba60-d44a348ec3f7.json';
   try {
@@ -4160,7 +4159,6 @@ app.post('/api/fix-may-history', (req, res) => {
     CORRUPT_TENANT_IDS.forEach(tid => {
       if (!d.paymentHistory[tid]) return;
       const before = d.paymentHistory[tid].length;
-      // Remove only the incorrect bank record for 2026-05 (paid: true, type: bank, date: 2026-05-24)
       d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => {
         const isCorrupt = r.month === '2026-05' && r.paid === true && r.type === 'bank' && r.date === '2026-05-24';
         return !isCorrupt;
@@ -4168,7 +4166,7 @@ app.post('/api/fix-may-history', (req, res) => {
       fixed += before - d.paymentHistory[tid].length;
     });
     fs.writeFileSync(filePath, JSON.stringify(d, null, 2), 'utf8');
-    res.json({ ok: true, recordsRemoved: fixed, message: fixed + ' corrupt bank records removed for May 2026' });
+    res.json({ ok: true, recordsRemoved: fixed, message: fixed + ' corrupt records removed' });
   } catch(e) {
     res.status(500).json({ ok: false, error: e.message });
   }
