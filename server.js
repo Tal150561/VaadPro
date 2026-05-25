@@ -4139,69 +4139,6 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
 });
 
-// ── TEMP: fix corrupt paymentHistory for May 2026 ──
-const FIX_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
-app.get('/api/fix-may-history', (req, res) => {
-  if (req.query.token !== FIX_TOKEN) return res.status(403).json({ error: 'forbidden' });
-  const CORRUPT_TENANT_IDS = [
-    '1774516750738',
-    '1774516750740',
-    '1774516750741',
-    '1774516750742',
-    '1774516750744'
-  ];
-  const CORRUPT_FILE = 'e17cab8f-bc04-4540-ba60-d44a348ec3f7.json';
-  try {
-    const filePath = path.join(DATA_DIR, CORRUPT_FILE);
-    const d = JSON.parse(fs.readFileSync(filePath, 'utf8'));
-    if (!d.paymentHistory) return res.json({ ok: true, message: 'no paymentHistory found' });
-    let fixed = 0;
-    CORRUPT_TENANT_IDS.forEach(tid => {
-      if (!d.paymentHistory[tid]) return;
-      const before = d.paymentHistory[tid].length;
-      d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => {
-        const isCorrupt = r.month === '2026-05' && r.paid === true && r.type === 'bank' && (r.date === '2026-05-24' || r.date === '2026-05-25');
-        return !isCorrupt;
-      });
-      fixed += before - d.paymentHistory[tid].length;
-    });
-    fs.writeFileSync(filePath, JSON.stringify(d, null, 2), 'utf8');
-    res.json({ ok: true, recordsRemoved: fixed, message: fixed + ' corrupt records removed' });
-  } catch(e) {
-    res.status(500).json({ ok: false, error: e.message });
-  }
-});
-app.get('/api/debug-may', (req, res) => {
-  if (req.query.token !== FIX_TOKEN) return res.status(403).json({ error: 'forbidden' });
-  try {
-    const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json') && !f.startsWith('_'));
-    const result = {};
-    files.forEach(f => {
-      try {
-        const d = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
-        const sl = d.sentLog || {};
-        const mayLog = Object.entries(sl).filter(([k]) => k.includes('מאי'));
-        const ph = d.paymentHistory || {};
-        const mayPH = {};
-        Object.entries(ph).forEach(([tid, records]) => {
-          const r = (records || []).filter(r => r.month === '2026-05');
-          if (r.length) mayPH[tid] = r;
-        });
-        const tenantMap = {};
-        (d.tenants || []).forEach(t => { tenantMap[String(t.id)] = t.name; });
-        if (mayLog.length || Object.keys(mayPH).length) {
-          result[f] = {
-            sentLogMay: mayLog.map(([k,v]) => ({ key: k, val: v, name: tenantMap[k.split('_')[0]] || '?' })),
-            paymentHistoryMay: Object.entries(mayPH).map(([tid, recs]) => ({ tid, name: tenantMap[tid] || '?', records: recs }))
-          };
-        }
-      } catch(e) {}
-    });
-    res.json({ ok: true, data: result });
-  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
-});
-// ── END TEMP FIX ──
-
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
