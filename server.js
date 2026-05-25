@@ -4031,7 +4031,18 @@ scheduleDailyCronWithAccounts();
 
 // ── POST /api/ai-improve ─────────────────────────────────────────
 // Gemini Flash proxy — GEMINI_API_KEY stays server-side only
-app.post('/api/ai-improve', authMiddleware, async (req, res) => {
+app.post('/api/ai-improve', (req, res, next) => {
+  // Accept both regular user token and admin token
+  const auth = req.headers.authorization || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token) return res.status(401).json({ ok: false, error: 'unauthorized' });
+  const jwt = require('jsonwebtoken');
+  const JWT_SECRET_LOCAL = process.env.JWT_SECRET || 'vaadpro-secret';
+  const ADMIN_JWT_SECRET_LOCAL = process.env.ADMIN_JWT_SECRET || (JWT_SECRET_LOCAL + '-admin');
+  try { jwt.verify(token, JWT_SECRET_LOCAL); return next(); } catch(e) {}
+  try { jwt.verify(token, ADMIN_JWT_SECRET_LOCAL); return next(); } catch(e) {}
+  return res.status(401).json({ ok: false, error: 'unauthorized' });
+}, async (req, res) => {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) return res.json({ ok: false, error: 'GEMINI_API_KEY not configured on server' });
   const { system, user } = req.body;
