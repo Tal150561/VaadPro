@@ -4171,6 +4171,35 @@ app.get('/api/fix-may-history', (req, res) => {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
+app.get('/api/debug-may', (req, res) => {
+  if (req.query.token !== FIX_TOKEN) return res.status(403).json({ error: 'forbidden' });
+  try {
+    const files = fs.readdirSync(DATA_DIR).filter(f => f.endsWith('.json') && !f.startsWith('_'));
+    const result = {};
+    files.forEach(f => {
+      try {
+        const d = JSON.parse(fs.readFileSync(path.join(DATA_DIR, f), 'utf8'));
+        const sl = d.sentLog || {};
+        const mayLog = Object.entries(sl).filter(([k]) => k.includes('מאי'));
+        const ph = d.paymentHistory || {};
+        const mayPH = {};
+        Object.entries(ph).forEach(([tid, records]) => {
+          const r = (records || []).filter(r => r.month === '2026-05');
+          if (r.length) mayPH[tid] = r;
+        });
+        const tenantMap = {};
+        (d.tenants || []).forEach(t => { tenantMap[String(t.id)] = t.name; });
+        if (mayLog.length || Object.keys(mayPH).length) {
+          result[f] = {
+            sentLogMay: mayLog.map(([k,v]) => ({ key: k, val: v, name: tenantMap[k.split('_')[0]] || '?' })),
+            paymentHistoryMay: Object.entries(mayPH).map(([tid, recs]) => ({ tid, name: tenantMap[tid] || '?', records: recs }))
+          };
+        }
+      } catch(e) {}
+    });
+    res.json({ ok: true, data: result });
+  } catch(e) { res.status(500).json({ ok: false, error: e.message }); }
+});
 // ── END TEMP FIX ──
 
 app.listen(PORT, () => {
