@@ -895,6 +895,11 @@ function vpLogout() {
           <div class="hint" id="monthHint" style="margin-top:5px;">ריק = חודש נוכחי אוטומטית</div>
         </div>
         <div class="schedule-box" style="margin-top:16px;">📅 <span id="scheduleText">הגדר תזמון</span></div>
+        <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span id="lastAutoSendStatus" style="font-size:0.82rem;"></span>
+          <button class="btn btn-secondary" id="btnResendAuto" onclick="resendAuto()" style="height:32px;padding:0 14px;font-size:0.82rem;">🔁 שלח עכשיו</button>
+          <span id="resendAutoStatus" style="font-size:0.78rem;color:var(--text3);"></span>
+        </div>
       </div>
     </div>
 
@@ -1942,6 +1947,46 @@ function updateSchedule() {
   const ml=c.manualMonth?c.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
   const el=document.getElementById('scheduleText');
   if(el) el.innerHTML='הודעות ישלחו ב-<strong>'+(c.sendDay||1)+'</strong> לחודש בשעה <strong>'+h+':'+m+'</strong> — חודש: <strong>'+ml+'</strong>';
+  // Update lastAutoSend status line
+  const sl=document.getElementById('lastAutoSendStatus');
+  if(sl){
+    const las=c.lastAutoSend;
+    if(las&&las.date){
+      const d=new Date(las.date);
+      const ds=d.toLocaleDateString('he-IL')+' '+d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+      sl.innerHTML='<span style="color:var(--green)">✅ נשלח ב-'+ds+' — '+las.sent+' דיירים — חודש: '+las.month+'</span>';
+    } else {
+      sl.innerHTML='<span style="color:var(--text3)">⏳ לא נשלח עדיין החודש</span>';
+    }
+  }
+}
+
+async function resendAuto() {
+  const btn=document.getElementById('btnResendAuto');
+  const st=document.getElementById('resendAutoStatus');
+  if(btn) btn.disabled=true;
+  if(st) st.textContent='שולח...';
+  try {
+    const r=await fetch(API+'/resend-auto',{method:'POST',headers:{'Content-Type':'application/json'}});
+    const d=await r.json();
+    if(d.ok){
+      if(d.sent>0){
+        toast('\u2705 \u05e0\u05e9\u05dc\u05d7\u05d5 '+d.sent+' \u05d4\u05d5\u05d3\u05e2\u05d5\u05ea \u05dc\u05d7\u05d5\u05d3\u05e9 '+d.month,'success');
+        if(st) st.textContent='';
+        // Refresh data to update lastAutoSend display
+        const rd=await fetch(API+'/data'); const jd=await rd.json();
+        data.config=Object.assign(data.config,jd.config||{});
+        if(jd.effectiveMonth) data.effectiveMonth=jd.effectiveMonth;
+        updateSchedule();
+        render();
+      } else {
+        if(st) st.textContent='\u05db\u05dc \u05d4\u05d3\u05d9\u05d9\u05e8\u05d9\u05dd \u05db\u05d1\u05e8 \u05e7\u05d9\u05d1\u05dc\u05d5 \u05d0\u05d5 \u05e9\u05d9\u05dc\u05de\u05d5';
+      }
+    } else {
+      if(st) st.textContent='\u05e9\u05d2\u05d9\u05d0\u05d4: '+(d.error||'');
+    }
+  } catch(e){ if(st) st.textContent='\u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05dc\u05d9\u05d7\u05d4'; }
+  finally { if(btn) btn.disabled=false; }
 }
 
 function updatePreview() {

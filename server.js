@@ -782,6 +782,20 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   res.json({ ok: true, sent });
 });
 
+// Manual resend-auto: same logic as cron, triggered from settings UI
+app.post('/api/resend-auto', authMiddleware, async (req, res) => {
+  try {
+    const users = loadUsers();
+    const user = users.find(u => u.tenantId === req.user.tenantId);
+    if (!user) return res.json({ ok: false, error: 'user not found' });
+    const result = await doAutoSend(user);
+    res.json({ ok: true, sent: result.sent, month: result.month });
+  } catch(e) {
+    console.error('[resend-auto]', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // Generic send message
 app.post('/api/send-message', authMiddleware, async (req, res) => {
   const { phone, message } = req.body;
@@ -2004,6 +2018,51 @@ async function runMeetingReminderCron() {
 }
 
 // ── Auto-send cron — runs every minute, checks each tenant's schedule ──
+// Helper: execute the actual send logic for a tenant (used by cron + manual resend)
+async function doAutoSend(user) {
+  const d = loadTenantData(user.tenantId);
+  const config = d.config || {};
+  const month  = getEffectiveMonth(config);
+  const mk     = getMonthKey(config);
+  const globalAmount = config.amount || 300;
+  const tmpl = config.template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
+  let sent = 0;
+
+  for (const tenant of (d.tenants || [])) {
+    const key = tenant.id + '_' + month;
+    if (d.sentLog[key]) continue; // already paid or reminded — skip
+    const amount = tenant.customAmount || globalAmount;
+    const debt   = calcTotalDebt(d, tenant.id, mk);
+    const total  = amount + debt;
+    const msg = tmpl
+      .replace(/{שם}/g, tenant.name)
+      .replace(/{חודש}/g, month)
+      .replace(/{סכום}/g, amount)
+      .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+      .replace(/{סה"כ}/g, debt > 0 ? total : amount);
+    try {
+      await sendWaMsg(user.tenantId, tenant.phone, msg);
+      d.sentLog[key] = 'sent_' + new Date().toISOString();
+      recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
+      sent++;
+      await new Promise(r => setTimeout(r, 1200));
+    } catch(e) {
+      console.error(`[AutoSend] ${user.email} → ${tenant.name}: ${e.message}`);
+    }
+  }
+
+  if (sent > 0) {
+    // Save lastAutoSend info for UI display
+    const nowIso = new Date().toISOString();
+    d.config.lastAutoSend = { date: nowIso, sent, month };
+    saveTenantData(user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory, config: d.config });
+    console.log(`[AutoSend] ✅ ${user.email} — sent to ${sent} unpaid tenants for ${month}`);
+  } else {
+    console.log(`[AutoSend] ${user.email} — no unsent unpaid tenants for ${month}`);
+  }
+  return { sent, month };
+}
+
 async function runAutoSendCron() {
   const now = new Date();
   const currentDay  = now.getDate();
@@ -2022,54 +2081,36 @@ async function runAutoSendCron() {
       const sendHour   = parseInt(config.sendHour)   || 9;
       const sendMinute = parseInt(config.sendMinute) || 0;
 
-      // Check if now matches the configured day + hour + minute (within same minute)
-      if (currentDay !== sendDay)   continue;
-      if (currentHour !== sendHour) continue;
-      if (currentMin  !== sendMinute) continue;
+      // Build a Date for the configured send time today
+      const scheduledToday = new Date(now);
+      scheduledToday.setHours(sendHour, sendMinute, 0, 0);
+      const diffMin = (now - scheduledToday) / 60000; // positive = we are past scheduled time
 
-      // Check if there are any unpaid tenants who haven't been reminded yet this month
-      const month  = getEffectiveMonth(config);
-      const mk     = getMonthKey(config);
-      const hasUnsentUnpaid = (d.tenants || []).some(t => !d.sentLog[t.id + '_' + month]);
-      if (!hasUnsentUnpaid) {
+      // Day must match; time window: 0..15 minutes after scheduled time
+      if (currentDay !== sendDay)        continue;
+      if (diffMin < 0 || diffMin >= 15)  continue;
+
+      // Guard: already auto-sent today? (prevent double-send within the 15-min window)
+      const lastAS = config.lastAutoSend || {};
+      if (lastAS.date) {
+        const lastDate = new Date(lastAS.date);
+        if (lastDate.getFullYear() === now.getFullYear() &&
+            lastDate.getMonth()    === now.getMonth()    &&
+            lastDate.getDate()     === now.getDate()) {
+          console.log(`[AutoSend] ${user.email} — already sent today, skipping`);
+          continue;
+        }
+      }
+
+      // Check if there are any unsent tenants
+      const month = getEffectiveMonth(config);
+      const hasUnsent = (d.tenants || []).some(t => !d.sentLog[t.id + '_' + month]);
+      if (!hasUnsent) {
         console.log(`[AutoSend] ${user.email} — all tenants already paid or reminded for ${month}, skipping`);
         continue;
       }
 
-      // Send only to unpaid tenants
-      const globalAmount = config.amount || 300;
-      const tmpl = config.template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
-      let sent = 0;
-
-      for (const tenant of (d.tenants || [])) {
-        const key = tenant.id + '_' + month;
-        if (d.sentLog[key]) continue; // already paid or reminded — skip
-        const amount = tenant.customAmount || globalAmount;
-        const debt   = calcTotalDebt(d, tenant.id, mk);
-        const total  = amount + debt;
-        const msg = tmpl
-          .replace(/{שם}/g, tenant.name)
-          .replace(/{חודש}/g, month)
-          .replace(/{סכום}/g, amount)
-          .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
-          .replace(/{סה"כ}/g, debt > 0 ? total : amount);
-        try {
-          await sendWaMsg(user.tenantId, tenant.phone, msg);
-          d.sentLog[key] = 'sent_' + new Date().toISOString();
-          recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
-          sent++;
-          await new Promise(r => setTimeout(r, 1200));
-        } catch(e) {
-          console.error(`[AutoSend] ${user.email} → ${tenant.name}: ${e.message}`);
-        }
-      }
-
-      if (sent > 0) {
-        saveTenantData(user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
-        console.log(`[AutoSend] ✅ ${user.email} — sent to ${sent} unpaid tenants for ${month}`);
-      } else {
-        console.log(`[AutoSend] ${user.email} — no unpaid tenants for ${month}`);
-      }
+      await doAutoSend(user);
     } catch(e) {
       console.error(`[AutoSend] error for ${user.email}:`, e.message);
     }
