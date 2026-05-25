@@ -2064,7 +2064,10 @@ async function doAutoSend(user) {
 }
 
 async function runAutoSendCron() {
-  const now = new Date();
+  // Use Israel time (UTC+2 winter / UTC+3 summer) for all schedule comparisons
+  const nowUtc = new Date();
+  const ilStr = nowUtc.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' });
+  const now = new Date(ilStr);
   const currentDay  = now.getDate();
   const currentHour = now.getHours();
   const currentMin  = now.getMinutes();
