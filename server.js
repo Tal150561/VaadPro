@@ -4160,7 +4160,7 @@ app.get('/api/fix-may-history', (req, res) => {
       if (!d.paymentHistory[tid]) return;
       const before = d.paymentHistory[tid].length;
       d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => {
-        const isCorrupt = r.month === '2026-05' && r.paid === true && r.type === 'bank' && r.date === '2026-05-24';
+        const isCorrupt = r.month === '2026-05' && r.paid === true && r.type === 'bank' && (r.date === '2026-05-24' || r.date === '2026-05-25');
         return !isCorrupt;
       });
       fixed += before - d.paymentHistory[tid].length;
