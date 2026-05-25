@@ -4139,45 +4139,41 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
 });
 
-// ── DEBUG ENDPOINT — REMOVE AFTER USE ────────────────────────────
-const DEBUG_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
-app.get('/api/debug-may', (req, res) => {
-  if (req.query.token !== DEBUG_TOKEN) return res.status(403).json({ error: 'forbidden' });
+// ── TEMP: fix corrupt paymentHistory for May 2026 (unpaid tenants marked as bank-paid) ──
+const FIX_TOKEN = process.env.DEBUG_TOKEN || 'vaadpro-debug-2026';
+app.post('/api/fix-may-history', (req, res) => {
+  if (req.query.token !== FIX_TOKEN) return res.status(403).json({ error: 'forbidden' });
+  // The 5 tenant IDs that were incorrectly marked as paid in paymentHistory for 2026-05
+  const CORRUPT_TENANT_IDS = [
+    '1774516750738', // תומר
+    '1774516750740', // רנדי
+    '1774516750741', // לימור
+    '1774516750742', // עידו
+    '1774516750744'  // תמי
+  ];
+  const CORRUPT_FILE = 'e17cab8f-bc04-4540-ba60-d44a348ec3f7.json';
   try {
-    const dataDir = DATA_DIR;
-    const files = fs.readdirSync(dataDir).filter(f => f.endsWith('.json') && !f.startsWith('_'));
-    const result = {};
-    files.forEach(f => {
-      try {
-        const d = JSON.parse(fs.readFileSync(path.join(dataDir, f), 'utf8'));
-        const tenantName = d.config && d.config.buildingName ? d.config.buildingName : f;
-        // sentLog entries for May
-        const sl = d.sentLog || {};
-        const mayLog = Object.entries(sl).filter(([k]) => k.includes('\u05de\u05d0\u05d9'));
-        // paymentHistory entries for 2026-05
-        const ph = d.paymentHistory || {};
-        const mayPH = {};
-        Object.entries(ph).forEach(([tid, records]) => {
-          const r = (records || []).filter(r => r.month === '2026-05');
-          if (r.length) mayPH[tid] = r;
-        });
-        // tenant names map
-        const tenantMap = {};
-        (d.tenants || []).forEach(t => { tenantMap[String(t.id)] = t.name; });
-        if (mayLog.length || Object.keys(mayPH).length) {
-          result[tenantName] = {
-            sentLogMay: mayLog.map(([k,v]) => ({ key: k, val: v, tenantName: tenantMap[k.split('_')[0]] || '?' })),
-            paymentHistoryMay: Object.entries(mayPH).map(([tid, recs]) => ({ tenantId: tid, name: tenantMap[tid] || '?', records: recs }))
-          };
-        }
-      } catch(e) { result[f] = { error: e.message }; }
+    const filePath = path.join(DATA_DIR, CORRUPT_FILE);
+    const d = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    if (!d.paymentHistory) return res.json({ ok: true, message: 'no paymentHistory found' });
+    let fixed = 0;
+    CORRUPT_TENANT_IDS.forEach(tid => {
+      if (!d.paymentHistory[tid]) return;
+      const before = d.paymentHistory[tid].length;
+      // Remove only the incorrect bank record for 2026-05 (paid: true, type: bank, date: 2026-05-24)
+      d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => {
+        const isCorrupt = r.month === '2026-05' && r.paid === true && r.type === 'bank' && r.date === '2026-05-24';
+        return !isCorrupt;
+      });
+      fixed += before - d.paymentHistory[tid].length;
     });
-    res.json({ ok: true, data: result });
+    fs.writeFileSync(filePath, JSON.stringify(d, null, 2), 'utf8');
+    res.json({ ok: true, recordsRemoved: fixed, message: fixed + ' corrupt bank records removed for May 2026' });
   } catch(e) {
     res.status(500).json({ ok: false, error: e.message });
   }
 });
-// ── END DEBUG ─────────────────────────────────────────────────────
+// ── END TEMP FIX ──
 
 app.listen(PORT, () => {
   console.log('');
