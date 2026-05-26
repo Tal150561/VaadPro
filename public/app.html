@@ -267,7 +267,15 @@
     opts.headers = opts.headers || {};
     if (typeof opts.headers === 'object') opts.headers['Authorization'] = 'Bearer ' + token;
     return _origFetch(url, opts).then(function(res) {
-      if (res.status === 401) { vpLogout(); return; }
+      if (res.status === 401) {
+        // הצג הודעה ברורה לפני ניתוק — פג תוקף session
+        const banner = document.createElement('div');
+        banner.style.cssText = 'position:fixed;top:0;left:0;right:0;background:#e53935;color:#fff;text-align:center;padding:18px 20px;font-size:1.05rem;font-family:Heebo,sans-serif;z-index:99999;direction:rtl;';
+        banner.innerHTML = '⏱️ פג תוקף החיבור — מעביר אותך לדף הכניסה... <button onclick="vpLogout()" style="margin-right:12px;background:#fff;color:#e53935;border:none;border-radius:4px;padding:4px 12px;cursor:pointer;font-family:Heebo,sans-serif;">כניסה מחדש</button>';
+        document.body.appendChild(banner);
+        setTimeout(vpLogout, 3000);
+        return;
+      }
       if (res.status === 402) { window.location.href = '/pricing.html?reason=expired'; return; }
       if (res.status === 403) { window.location.href = '/pricing.html?reason=suspended'; return; }
       return res;
@@ -4993,6 +5001,24 @@ const TS_ITEMS = [
       "פתח מחדש את ה-Bridge — לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ",
       "חזור לאפליקציה ← לחץ 'חיבור ווטסאפ' ← סרוק QR עם המספר החדש",
       "כל נתוני הבניין, הדיירים והתשלומים נשמרים — רק ה-WhatsApp מתחלף"
+    ]
+  },
+  {
+    cat: "חיבור ושגיאות כלליות",
+    q: "הדף מתרענן לפתע ומחזיר לדף הכניסה",
+    a: [
+      "זהו מצב תקין — פג תוקף ה-session (מתרחש לאחר מספר שעות ללא פעילות)",
+      "פשוט הכנס מחדש עם המייל והסיסמה שלך — כל הנתונים שמורים",
+      "אם זה קורה לעיתים קרובות מדי — ודא שהדפדפן לא חוסם cookies"
+    ]
+  },
+  {
+    cat: "חיבור ושגיאות כלליות",
+    q: "שגיאות חיבור בקונסול (502 / Failed to fetch)",
+    a: [
+      "502 על /api/status או /api/last-bank-import נובע לרוב מפג תוקף session — התנתק והתחבר מחדש",
+      "אם הבעיה נמשכת אחרי כניסה מחדש — בדוק חיבור אינטרנט",
+      "אם כל המשתמשים מדווחים על הבעיה בו-זמנית — ייתכן תחזוקה זמנית בשרת, נסה שוב בעוד מספר דקות"
     ]
   },
   {
