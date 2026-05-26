@@ -3690,11 +3690,11 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     if (tenantMatches.length > 0) {
       const totalAmount = tenantMatches.reduce((s, m) => s + m.amount, 0);
       const payerName   = tenantMatches[0].payerName || '';
-      // Apply payment to opening debt first, then credit current month if remainder
-      const { creditForMonth } = applyPaymentToDebt(tenant, totalAmount);
-      if (creditForMonth > 0) {
-        newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
-      }
+      // Apply payment to opening debt first (mutates tenant.openingDebt in-place)
+      applyPaymentToDebt(tenant, totalAmount);
+      // Always mark sentLog on bank match — even if payment only covered old debt (creditForMonth was 0).
+      // Bug #7 fix: old guard `if (creditForMonth > 0)` caused AutoSend to fire on tenants who already paid.
+      newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
       matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: (parseFloat(tenant.openingDebt)||0) === 0 });
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
@@ -3799,8 +3799,25 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
     );
 
+    // רשום paymentHistory לדיירים רגילים שזוהו
+    const tenantDataForHistory = { paymentHistory: Object.assign({}, d.paymentHistory || {}) };
+    const importMonthKey = monthKey || (() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0'); })();
+    matched.forEach(m => {
+      if (String(m.tenantId).includes('__acc__')) return; // extraAccounts מטופלים בנפרד
+      const slKey = String(m.tenantId) + '_' + month; // month = שם חודש בעברית
+      const slVal = String(newSentLog[slKey] || '');
+      let payerName = '', paidAmount = null;
+      const payerMatch = slVal.match(/_payer_(.+)$/);
+      if (payerMatch) payerName = payerMatch[1];
+      const amtMatch = slVal.match(/bank_import_[^_]+_([\d.]+)_/);
+      if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
+      const tenant = (d.tenants || []).find(t => String(t.id) === String(m.tenantId));
+      const amount = (tenant && tenant.customAmount) || (d.config && d.config.amount) || 300;
+      recordPayment(tenantDataForHistory, String(m.tenantId), importMonthKey, 'bank', amount, m.name, payerName, paidAmount);
+    });
+
     // מיזוג paymentHistory של חשבונות נוספים עם הקיים
-    const mergedPaymentHistory = Object.assign({}, d.paymentHistory || {});
+    const mergedPaymentHistory = tenantDataForHistory.paymentHistory;
     for (const [key, records] of Object.entries(newPaymentHistory)) {
       if (!mergedPaymentHistory[key]) mergedPaymentHistory[key] = [];
       mergedPaymentHistory[key] = mergedPaymentHistory[key].concat(records);
@@ -4142,7 +4159,7 @@ app.post('/api/ai-improve', (req, res, next) => {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.4 – SaaS Server        ║');
+  console.log('║   VaadPro v2.10.10 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
