@@ -12,7 +12,8 @@ const jwt       = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const XLSX   = require('xlsx');
-const { Client, LocalAuth } = require('whatsapp-web.js');
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
+const { Boom } = require('@hapi/boom');
 const qrcode    = require('qrcode');
 
 const app  = express();
@@ -33,8 +34,8 @@ const JWT_SECRET = process.env.JWT_SECRET || 'vaadpro-secret-change-in-productio
 // ── Directories ──────────────────────────────────────────────────
 const DATA_DIR  = process.env.DATA_DIR || path.join(__dirname, 'data');
 const USERS_FILE = path.join(DATA_DIR, '_users.json');
-const WA_AUTH_DIR = path.join(__dirname, '.wwebjs_auth');
-[DATA_DIR, WA_AUTH_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
+const WA_SESSIONS_DIR = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'wa_sessions') : path.join(__dirname, 'wa_sessions');
+[DATA_DIR, WA_SESSIONS_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
 // ── Plans ────────────────────────────────────────────────────────
 const PLANS = {
@@ -117,7 +118,7 @@ function authMiddleware(req, res, next) {
   }
 }
 
-const WA_MODE = process.env.WA_MODE || 'local'; // 'local' | 'cloud'
+const WA_MODE = process.env.WA_MODE || 'server'; // 'server' (Baileys on Railway) | 'cloud' (external Bridge) | 'local' (legacy)
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET || 'vaadpro-bridge-secret';
 
 // ── WhatsApp state (used in both modes) ─────────────────────────
@@ -130,13 +131,9 @@ function getWa(tenantId) {
   return waClients[tenantId];
 }
 
-const DETACH_ERRORS = ['detached frame','target closed','session closed','protocol error','execution context','page crashed','browser has disconnected'];
-function isDetachError(msg) { const l=(msg||'').toLowerCase(); return DETACH_ERRORS.some(e=>l.includes(e)); }
-
-async function destroyWaClient(tenantId) {
-  const wa = getWa(tenantId);
-  if (wa.client) { try { await wa.client.destroy(); } catch(e) {} wa.client = null; }
-}
+// ── Baileys WA Engine (server mode) ─────────────────────────────
+// Silent pino logger — suppresses Baileys internal noise in Railway logs
+const pinoLogger = require('pino')({ level: 'silent' });
 
 async function restartWa(tenantId, reason) {
   const wa = getWa(tenantId);
@@ -145,96 +142,121 @@ async function restartWa(tenantId, reason) {
   wa.status = 'disconnected';
   wa.phone  = null;
   console.log(`[WA:${tenantId}] restart: ${reason}`);
-  await destroyWaClient(tenantId);
-  if (wa.healthTimer) { clearInterval(wa.healthTimer); wa.healthTimer = null; }
+  // Close existing sock if any
+  if (wa.client) {
+    try { wa.client.end(undefined); } catch(e) {}
+    wa.client = null;
+  }
   await new Promise(r => setTimeout(r, 3000));
   wa.restarting = false;
   initWa(tenantId);
 }
 
-function startHealthCheck(tenantId) {
+async function initWa(tenantId) {
+  if (WA_MODE !== 'server') return; // Only run in server mode
   const wa = getWa(tenantId);
-  if (wa.healthTimer) clearInterval(wa.healthTimer);
-  wa.healthTimer = setInterval(async () => {
-    if (wa.status !== 'ready' || wa.restarting) return;
-    try { await wa.client.pupPage.evaluate(() => document.title); }
-    catch(e) { if (isDetachError(e.message)) restartWa(tenantId, 'health: '+e.message); }
-  }, 30000);
-}
+  const sessionDir = path.join(WA_SESSIONS_DIR, tenantId);
+  if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
-function initWa(tenantId) {
-  const wa = getWa(tenantId);
-  wa.client = new Client({
-    authStrategy: new LocalAuth({ clientId: tenantId, dataPath: WA_AUTH_DIR }),
-    puppeteer: {
-      headless: true,
-      args: ['--no-sandbox','--disable-setuid-sandbox','--disable-dev-shm-usage',
-             '--disable-background-timer-throttling','--disable-renderer-backgrounding']
-    }
-  });
+  try {
+    const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
+    const { version } = await fetchLatestBaileysVersion();
 
-  wa.client.on('qr', async (qr) => {
-    wa.status = 'qr';
-    wa.qrData = await qrcode.toDataURL(qr);
-    console.log(`[WA:${tenantId}] QR ready`);
-  });
+    const sock = makeWASocket({
+      version,
+      auth: state,
+      printQRInTerminal: false,
+      logger: pinoLogger,
+      browser: ['VaadPro', 'Chrome', '1.0'],
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 30000,
+      retryRequestDelayMs: 2000,
+    });
 
-  wa.client.on('ready', () => {
-    wa.status = 'ready';
-    wa.qrData = null;
-    wa.phone  = wa.client.info ? wa.client.info.wid.user : null;
-    console.log(`[WA:${tenantId}] connected`, wa.phone || '');
-    startHealthCheck(tenantId);
-  });
+    wa.client = sock;
 
-  wa.client.on('disconnected', (reason) => {
-    wa.status = 'disconnected';
-    wa.phone  = null;
-    if (wa.healthTimer) { clearInterval(wa.healthTimer); wa.healthTimer = null; }
-    console.log(`[WA:${tenantId}] disconnected: ${reason}`);
-    setTimeout(() => restartWa(tenantId, 'disconnected: '+reason), 5000);
-  });
+    sock.ev.on('connection.update', async (update) => {
+      const { connection, lastDisconnect, qr } = update;
 
-  wa.client.on('auth_failure', () => { wa.status = 'disconnected'; });
+      if (qr) {
+        wa.status = 'qr';
+        wa.qrData = await qrcode.toDataURL(qr);
+        console.log(`[WA:${tenantId}] QR ready — waiting for scan`);
+      }
 
-  wa.client.initialize().catch(e => {
+      if (connection === 'open') {
+        wa.status = 'ready';
+        wa.qrData = null;
+        wa.phone  = sock.user?.id?.split(':')[0] || null;
+        console.log(`[WA:${tenantId}] connected — ${wa.phone}`);
+      }
+
+      if (connection === 'close') {
+        wa.status = 'disconnected';
+        wa.phone  = null;
+        wa.client = null;
+        const statusCode = (lastDisconnect?.error instanceof Boom)
+          ? lastDisconnect.error.output?.statusCode : 0;
+        console.log(`[WA:${tenantId}] closed — code=${statusCode}`);
+
+        if (statusCode === DisconnectReason.loggedOut) {
+          // Logged out from phone — clear session, wait for new QR scan
+          console.log(`[WA:${tenantId}] logged out — clearing session`);
+          try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch(e) {}
+          wa.status = 'disconnected';
+          // Do NOT auto-restart — user must click "Connect WhatsApp" again
+        } else {
+          // Network/timeout disconnect — auto reconnect
+          console.log(`[WA:${tenantId}] reconnecting in 5s...`);
+          setTimeout(() => initWa(tenantId), 5000);
+        }
+      }
+    });
+
+    sock.ev.on('creds.update', saveCreds);
+
+  } catch(e) {
     console.error(`[WA:${tenantId}] init error:`, e.message);
-    setTimeout(() => restartWa(tenantId, 'init: '+e.message), 5000);
-  });
+    wa.status = 'disconnected';
+    wa.client = null;
+    setTimeout(() => restartWa(tenantId, 'init: '+e.message), 8000);
+  }
 }
 
 async function sendWaMsg(tenantId, phone, message) {
-  // אם לא סופק tenantId — מצא Bridge פעיל אוטומטית
   let resolvedTenantId = tenantId;
   if (!resolvedTenantId || !waClients[resolvedTenantId] || waClients[resolvedTenantId].status !== 'ready') {
     resolvedTenantId = Object.keys(waClients).find(id => waClients[id] && waClients[id].status === 'ready');
   }
-  if (!resolvedTenantId) throw new Error('אין Bridge מחובר. הפעל את תוכנת ה-Bridge תחילה.');
+  if (!resolvedTenantId) throw new Error('WhatsApp לא מחובר. לחץ על "חיבור WhatsApp" וסרוק את הברקוד.');
   const wa = getWa(resolvedTenantId);
   if (wa.status !== 'ready') throw new Error('WhatsApp לא מחובר');
   let normalized = phone.replace(/\D/g, '');
   if (normalized.startsWith('0')) normalized = '972' + normalized.slice(1);
 
+  if (WA_MODE === 'server') {
+    // Baileys running on Railway — send directly
+    if (!wa.client) throw new Error('WhatsApp לא מחובר — סרוק ברקוד חדש');
+    const jid = normalized + '@s.whatsapp.net';
+    await wa.client.sendMessage(jid, { text: message });
+    return;
+  }
+
   if (WA_MODE === 'cloud') {
-    // במצב ענן — הבקשה נשמרת בתור, ה-bridge שולח אותה
+    // External Bridge polling mode (legacy)
     const queue = sendQueue[tenantId] = sendQueue[tenantId] || [];
     return new Promise((resolve, reject) => {
       const msgId = Date.now() + '_' + Math.random().toString(36).slice(2);
       queue.push({ msgId, phone: normalized, message, resolve, reject, ts: Date.now() });
-      // timeout אחרי 30 שניות אם ה-bridge לא מגיב
       setTimeout(() => reject(new Error('Bridge timeout – וודא שה-WA Bridge מחובר')), 30000);
     });
   }
 
-  // מצב local — שלח ישירות
+  // WA_MODE === 'local' (legacy — whatsapp-web.js, kept for backward compat)
   try {
     await wa.client.sendMessage(normalized + '@c.us', message);
   } catch(e) {
-    if (isDetachError(e.message)) {
-      restartWa(tenantId, 'send: '+e.message);
-      throw new Error('WhatsApp התנתק – מתחבר מחדש, נסה שוב בעוד 15 שניות');
-    }
-    throw e;
+    throw new Error('WhatsApp התנתק – מתחבר מחדש, נסה שוב בעוד 15 שניות');
   }
 }
 
@@ -651,18 +673,25 @@ app.post('/api/data', authMiddleware, (req, res) => {
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
 });
 
-// Init WhatsApp — במצב ענן מחזיר סטטוס מה-Bridge, במצב local מפעיל WA
+// Init WhatsApp — server mode: start Baileys, return QR / status
 app.post('/api/wa/init', authMiddleware, (req, res) => {
   const { tenantId } = req.user;
   const wa = getWa(tenantId);
   console.log(`[wa/init] mode=${WA_MODE} tenantId=${tenantId} status=${wa.status}`);
 
+  if (WA_MODE === 'server') {
+    if (!wa.client && !wa.restarting && wa.status !== 'qr') {
+      console.log(`[wa/init] starting Baileys for ${tenantId}`);
+      initWa(tenantId);
+    }
+    return res.json({ ok: true, status: wa.restarting ? 'reconnecting' : wa.status, qrDataUrl: wa.qrData });
+  }
+
   if (WA_MODE === 'cloud') {
-    // במצב ענן — ה-Bridge הוא שמנהל את WA, רק מחזיר סטטוס נוכחי
     return res.json({ ok: true, status: wa.status, qrDataUrl: wa.qrData });
   }
 
-  // מצב local — הפעל WA ישירות
+  // WA_MODE === 'local' (legacy)
   if (!wa.client) {
     console.log(`[wa/init] starting local WA for ${tenantId}`);
     initWa(tenantId);
@@ -4163,14 +4192,17 @@ app.listen(PORT, () => {
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
-  console.log('Mode:      ', WA_MODE === 'cloud' ? '☁️  Cloud (WA Bridge)' : '💻 Local (direct WA)');
+  const modeLabel = WA_MODE === 'server' ? '🚀 Server (Baileys on Railway)' : WA_MODE === 'cloud' ? '☁️  Cloud (WA Bridge)' : '💻 Local (legacy)';
+  console.log('Mode:      ', modeLabel);
   console.log('Admin URL:  /admin');
   console.log('');
-  if (WA_MODE === 'local') {
-    console.log('WhatsApp: local mode – WA will init on first login');
-  } else {
+  if (WA_MODE === 'server') {
+    console.log('WhatsApp: Baileys runs on Railway — customers scan QR in browser');
+  } else if (WA_MODE === 'cloud') {
     console.log('WhatsApp: cloud mode – waiting for WA Bridge connections');
     console.log('Bridge secret:', BRIDGE_SECRET);
+  } else {
+    console.log('WhatsApp: local mode (legacy)');
   }
   console.log('');
 });
