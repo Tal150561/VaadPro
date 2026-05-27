@@ -358,8 +358,8 @@ function vpLogout() {
         <div class="wz-arrow" id="wzArrow3">▶</div>
       </div>
       <div class="wz-body" id="wzBody3" style="display:none;">
-        <div class="wz-desc">אם עדיין לא הורדת Bridge — הגדרות ← "קבל קוד התקנה" ← הורד VaadPro-Setup ← הכנס קוד<br>לאחר שה-Bridge פועל: לחץ "חיבור ווטסאפ" ← סרוק QR עם הטלפון</div>
-        <div class="wz-tip">💡 ה-Bridge צריך להישאר פתוח בזמן שליחת הודעות</div>
+        <div class="wz-desc">לחץ על כפתור <strong>"חיבור ווטסאפ"</strong> למעלה ← יופיע ברקוד ← סרוק עם הטלפון ← מחובר ✅</div>
+        <div class="wz-tip">💡 ללא התקנה — הכל עובד ישירות מהדפדפן</div>
         <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;">
           <button class="btn btn-green btn-sm" onclick="wzGo('settings');closeWizard()">📱 עבור להגדרות</button>
           <button class="btn btn-secondary btn-sm" onclick="wzDone(3)">✅ סיימתי</button>
@@ -697,162 +697,31 @@ function vpLogout() {
 
 
     <div class="card">
-      <div class="card-header">📱 חיבור ווטסאפ — הגדרה ראשונית
+      <div class="card-header">📱 חיבור ווטסאפ
         <button class="help-btn" onclick="showHelp('wa')">?</button>
       </div>
       <div class="card-body">
 
-        <!-- OS Selector -->
-        <div style="display:flex;gap:8px;margin-bottom:16px;">
-          <button id="osWin" onclick="selectOS('win')" class="btn btn-green btn-sm" style="padding:8px 20px;">🪟 Windows</button>
-          <button id="osMac" onclick="selectOS('mac')" class="btn btn-secondary btn-sm" style="padding:8px 20px;">🍎 Mac</button>
-        </div>
-
-        <!-- WINDOWS -->
-        <div id="setupWin">
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step1')">
-              <span>📥 שלב 1 — הורד את מתקין VaadPro</span>
-              <span id="step1Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="step1Body">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">1</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                <a href="/vaadpro-setup.bat" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת VaadPro-Setup</a>
-                <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Setup.bat</strong> — מתקין הכל אוטומטית</div>
-              </div>
+        <div style="background:rgba(37,211,102,.06);border:1px solid rgba(37,211,102,.2);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
+          <div style="font-size:0.95rem;font-weight:700;color:var(--accent);margin-bottom:14px;">✅ ללא התקנה — הכל עובד מהדפדפן</div>
+          <div style="display:flex;flex-direction:column;gap:10px;">
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-size:0.75rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;">1</div>
+              <div style="font-size:0.88rem;color:var(--text2);">לחץ על <strong style="color:var(--accent);">"חיבור ווטסאפ"</strong> (הכפתור הירוק למעלה בכל מסך)</div>
             </div>
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">2</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                לחץ ימני על <strong>VaadPro-Setup.bat</strong> ← <strong>Properties</strong> ← סמן <strong>Unblock</strong> ← <strong>OK</strong>
-                <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">🔓 נדרש פעם אחת בלבד — Windows חוסם קבצים שהורדו מהאינטרנט</div>
-              </div>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-size:0.75rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;">2</div>
+              <div style="font-size:0.88rem;color:var(--text2);">יופיע <strong>ברקוד QR</strong> — פתח ווטסאפ בטלפון ← תפריט ← מכשירים מקושרים ← קשר מכשיר ← סרוק</div>
             </div>
+            <div style="display:flex;gap:12px;align-items:flex-start;">
+              <div style="width:24px;height:24px;border-radius:50%;background:var(--accent);color:#000;font-size:0.75rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;">3</div>
+              <div style="font-size:0.88rem;color:var(--text2);">הכפתור יהפוך ל-🟢 <strong>מחובר</strong> — הכל מוכן לשליחת תזכורות</div>
             </div>
-          </div>
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step2')">
-              <span>🔑 שלב 2 — קבל קוד התקנה</span>
-              <span id="step2Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="step2Body">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">3</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                <button onclick="getInstallCode()" class="btn btn-green btn-sm" style="font-size:0.9rem;padding:8px 16px;">🔑 קבל קוד התקנה</button>
-                <div id="installCodeDisplay" style="margin-top:10px;display:none;">
-                  <div style="font-size:0.75rem;color:var(--text2);margin-bottom:4px;">הקוד שלך (תקף 30 דקות):</div>
-                  <div id="installCodeValue" style="font-size:2rem;font-weight:900;color:var(--accent);letter-spacing:8px;"></div>
-                </div>
-                <div style="font-size:0.76rem;margin-top:6px;opacity:.7;">הקוד מזהה את החשבון שלך — הכנס אותו במתקין</div>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('step3')">
-              <span>▶️ שלב 3 — הפעל את המתקין</span>
-              <span id="step3Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="step3Body">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">4</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                לחץ פעמיים על <strong>VaadPro-Setup.bat</strong>
-                <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">✅ מוריד, מתקין ומפעיל הכל אוטומטית — כולל Node.js אם חסר</div>
-              </div>
-            </div>
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">5</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                בחלון שנפתח — הכנס את <strong>קוד ההתקנה</strong> ← לחץ <strong>Install</strong>
-                <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ממתין כ-2 דקות — פעם אחת בלבד</div>
-              </div>
-            </div>
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">6</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק QR עם הטלפון
-              </div>
-            </div>
-            </div>
-          </div>
-          <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(59,130,246,.08);padding:10px;border-radius:8px;border:1px solid rgba(59,130,246,.2);">
-            💡 <strong>כל יום:</strong> לחץ על קיצור הדרך <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">VaadPro Bridge</code> על הדסקטופ ← השאר פתוח
-          </div>
-          <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(245,158,11,.08);padding:10px;border-radius:8px;border:1px solid rgba(245,158,11,.2);">
-            ⚡ <strong>הפעלה אוטומטית עם Windows:</strong> לחץ <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">Win+R</code> ← הקלד <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">shell:startup</code> ← גרור את <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">VaadPro-Start.bat</code>
           </div>
         </div>
 
-        <!-- MAC -->
-        <div id="setupMac" style="display:none;">
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('mstep1')">
-              <span>📥 שלב 1 — הורד את מתקין VaadPro</span>
-              <span id="mstep1Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="mstep1Body">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">1</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                <a href="/vaadpro-setup.sh" style="color:var(--accent);font-weight:700;font-size:0.95rem;">⬇️ לחץ כאן להורדת VaadPro-Setup (Mac)</a>
-                <div style="font-size:0.76rem;margin-top:6px;opacity:.85;">📦 יורד קובץ <strong>VaadPro-Setup.sh</strong></div>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('mstep2')">
-              <span>🔑 שלב 2 — קבל קוד התקנה</span>
-              <span id="mstep2Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="mstep2Body" style="display:none;">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">2</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                <button onclick="getInstallCode()" class="btn btn-green btn-sm" style="font-size:0.9rem;padding:8px 16px;">🔑 קבל קוד התקנה</button>
-                <div id="installCodeDisplayMac" style="margin-top:10px;display:none;">
-                  <div style="font-size:0.75rem;color:var(--text2);margin-bottom:4px;">הקוד שלך (תקף 30 דקות):</div>
-                  <div id="installCodeValueMac" style="font-size:2rem;font-weight:900;color:var(--accent);letter-spacing:8px;"></div>
-                </div>
-              </div>
-            </div>
-            </div>
-          </div>
-          <div class="wa-setup-card">
-            <h3 style="cursor:pointer;display:flex;justify-content:space-between;align-items:center;" onclick="toggleStep('mstep3')">
-              <span>▶️ שלב 3 — הפעל את המתקין</span>
-              <span id="mstep3Icon" style="font-size:0.75rem;color:var(--text3);">▼</span>
-            </h3>
-            <div id="mstep3Body" style="display:none;">
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">3</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                פתח Terminal ← גרור את <strong>VaadPro-Setup.sh</strong> לתוכו ← לחץ Enter
-                <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">או: <code style="background:var(--surface2);padding:1px 6px;border-radius:4px;">chmod +x VaadPro-Setup.sh && ./VaadPro-Setup.sh</code></div>
-              </div>
-            </div>
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">4</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                הכנס את <strong>קוד ההתקנה</strong> כשמתבקש ← המתן להתקנה
-                <div style="font-size:0.76rem;margin-top:4px;opacity:.7;">⏳ ממתין כ-2 דקות — פעם אחת בלבד</div>
-              </div>
-            </div>
-            <div class="wa-setup-step">
-              <div class="wa-setup-num">5</div>
-              <div style="font-size:0.84rem;color:var(--text2);">
-                חזור לאפליקציה ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק QR עם הטלפון
-              </div>
-            </div>
-            </div>
-          </div>
-          <div style="font-size:0.78rem;color:var(--text2);margin-top:8px;background:rgba(59,130,246,.08);padding:10px;border-radius:8px;border:1px solid rgba(59,130,246,.2);">
-            💡 <strong>כל יום:</strong> לחץ על <code style="background:var(--surface2);padding:1px 4px;border-radius:3px;">VaadPro Bridge</code> על הדסקטופ ← השאר פתוח
-          </div>
+        <div style="font-size:0.8rem;color:var(--text3);background:rgba(59,130,246,.06);padding:10px 14px;border-radius:8px;border:1px solid rgba(59,130,246,.15);">
+          💡 <strong>ווטסאפ מחובר ישירות מהשרת</strong> — אין צורך בהורדות, אין צורך שהמחשב יהיה פתוח. ההודעות יישלחו אוטומטית גם כשהמחשב כבוי.
         </div>
 
       </div>
@@ -866,13 +735,11 @@ function vpLogout() {
       <div id="resetWaBody" style="display:none;">
       <div class="card-body">
         <p style="font-size:0.84rem;color:var(--text2);margin-bottom:14px;">
-          רוצה לעבור למספר אחר? חבר ועד חדש רוצה להתחבר? פעל לפי השלבים:
+          רוצה לעבור למספר אחר? פעל לפי השלבים:
         </p>
         <div style="font-size:0.84rem;line-height:2;margin-bottom:16px;">
-          <div>1️⃣ לחץ כאן על "נתק WhatsApp"</div>
-          <div>2️⃣ סגור את חלון ה-Bridge במחשב</div>
-          <div>3️⃣ פתח מחדש את ה-Bridge (לחץ פעמיים על הקיצור בדסקטופ)</div>
-          <div>4️⃣ חזור לכאן ← לחץ "חיבור ווטסאפ" ← סרוק QR עם המספר החדש</div>
+          <div>1️⃣ לחץ כאן על <strong>"נתק WhatsApp"</strong></div>
+          <div>2️⃣ חזור לכאן ← לחץ <strong>"חיבור ווטסאפ"</strong> ← סרוק QR עם המספר החדש</div>
         </div>
         <p style="font-size:0.8rem;color:var(--text3);margin-bottom:14px;">✅ כל נתוני הבניין, הדיירים והתשלומים נשמרים — רק ה-WhatsApp מתחלף.</p>
         <button class="btn btn-secondary" onclick="resetWaAuth()" id="btnResetAuth">
@@ -2447,7 +2314,7 @@ async function resetWaAuth() {
     const d = await r.json();
     if (!d.ok) throw new Error(d.error || 'שגיאה');
     msg.style.color = 'var(--accent)';
-    msg.innerHTML = '✅ WhatsApp נותק.<br><br>המשך לשלב 2: סגור את חלון ה-Bridge ← פתח מחדש ← חזור ולחץ "חיבור ווטסאפ"';
+    msg.innerHTML = '✅ WhatsApp נותק.<br><br>לחץ כעת על <strong>"חיבור ווטסאפ"</strong> וסרוק ברקוד עם המספר החדש.';
     msg.style.display = 'block';
     btn.textContent = '✅ נותק';
     // Re-enable after 30 seconds to allow reconnection
@@ -4924,72 +4791,39 @@ async function tktDelete() {
 // ── פתרון בעיות ─────────────────────────────────────────────
 const TS_ITEMS = [
   {
-    cat: "WhatsApp / Bridge",
-    q: "הסטטוס מציג 'לא מחובר' למרות שה-Bridge רץ",
+    cat: "ווטסאפ",
+    q: "הסטטוס מציג 'לא מחובר'",
     a: [
-      "ודא שחלון ה-Bridge (החלון השחור) פתוח ולא מוזער",
-      "לחץ רענן בדף — לפעמים הסטטוס מתעדכן באיחור של 30 שניות",
-      "סגור את VaadPro-Start.bat ופתח שוב",
-      "אם עדיין לא עובד — מחק את תיקיית wa-auth בתוך VaadPro-Bridge וסרוק QR מחדש"
+      "לחץ על כפתור 'חיבור ווטסאפ' ← יופיע ברקוד חדש ← סרוק עם הטלפון",
+      "רענן את הדף ולחץ שוב — לפעמים הסטטוס מתעדכן באיחור של 30 שניות",
+      "בדוק שהטלפון מחובר לאינטרנט"
     ]
   },
   {
-    cat: "WhatsApp / Bridge",
+    cat: "ווטסאפ",
     q: "ה-QR לא מופיע / נעלם מהר מדי",
     a: [
-      "רענן את הדף ב-VaadPro ולחץ שוב על 'חיבור ווטסאפ'",
+      "רענן את הדף ולחץ שוב על 'חיבור ווטסאפ'",
       "ה-QR תקף ל-60 שניות — סרוק מהר",
-      "ודא שה-Bridge פועל (חלון שחור פתוח) לפני שאתה לוחץ על חיבור ווטסאפ"
+      "אם הברקוד פג — לחץ שוב על 'חיבור ווטסאפ' לקבלת ברקוד חדש"
     ]
   },
   {
-    cat: "WhatsApp / Bridge",
+    cat: "ווטסאפ",
     q: "הודעות WA לא נשלחות — מקבל שגיאה",
     a: [
-      "ודא שה-Bridge מחובר (סטטוס ירוק)",
-      "ווטסאפ חייב להיות פתוח בטלפון (לא חייב להיות בחזית, אבל לא סגור לחלוטין)",
+      "ודא שהסטטוס ירוק 'מחובר' — אם לא, לחץ 'חיבור ווטסאפ' וסרוק QR",
       "בדוק שהטלפון מחובר לאינטרנט",
       "נסה לשלוח לדייר בודד — אם עובד, הבעיה בדייר ספציפי (מספר שגוי?)"
     ]
   },
   {
-    cat: "WhatsApp / Bridge",
-    q: "VaadPro-Setup.bat לא עושה כלום / נסגר מיד",
-    a: [
-      "לחץ ימני על VaadPro-Setup.bat ← Properties ← סמן Unblock ← OK",
-      "לחץ ימני ← 'הפעל כמנהל'",
-      "ודא שיש חיבור אינטרנט — המתקין מוריד קבצים",
-      "בדוק קובץ לוג על הדסקטופ: VaadPro-Setup-Log.txt — מכיל פרטי שגיאה מדויקים",
-      "Mac: פתח Terminal ← הרץ: chmod +x VaadPro-Setup.sh && ./VaadPro-Setup.sh"
-    ]
-  },
-  {
-    cat: "WhatsApp / Bridge",
-    q: "Bridge לא עולה אחרי ההתקנה — חלון נסגר מיד",
-    a: [
-      "אם Node.js הותקן זה עתה — חובה לעשות Restart למחשב לפני הפעלת Bridge",
-      "אחרי Restart לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ",
-      "אם עדיין לא עובד — בדוק קובץ לוג: VaadPro-Setup-Log.txt על הדסקטופ",
-      "ניתן להריץ Setup מחדש עם קוד חדש מהגדרות — יזהה Node.js קיים וידלג על ההתקנה"
-    ]
-  },
-  {
-    cat: "WhatsApp / Bridge",
-    q: "שגיאה: ERR_REQUIRE_ESM בחלון ה-Bridge",
-    a: [
-      "זוהי שגיאת גרסת חבילה — node_modules מכיל גרסה לא תואמת",
-      "פתרון: מחק את תיקיית VaadPro-Bridge לחלוטין ← הרץ VaadPro-Setup מחדש עם קוד חדש",
-      "Mac: מחק את תיקיית ~/Documents/VaadPro-Bridge ← הרץ VaadPro-Setup.sh מחדש",
-      "אם הבעיה חוזרת — פנה לתמיכה"
-    ]
-  },
-  {
-    cat: "WhatsApp / Bridge",
+    cat: "ווטסאפ",
     q: "ווטסאפ התנתק לאחר ימים / שבועות",
     a: [
-      "ווטסאפ מתנתק אוטומטית אם הטלפון לא מחובר לאינטרנט יותר מ-14 יום",
-      "לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ — אם מתבקש QR, סרוק שוב",
-      "אין צורך להריץ את המתקין שוב — רק לחץ על קיצור הדרך 'VaadPro Bridge' על הדסקטופ"
+      "זה קורה אם ניתקת את 'המכשיר המקושר' מהגדרות הטלפון",
+      "לחץ על 'חיבור ווטסאפ' ← סרוק QR מחדש — הכל חוזר לעבוד",
+      "אין צורך בשום הורדה או התקנה"
     ]
   },
   {
@@ -4997,8 +4831,6 @@ const TS_ITEMS = [
     q: "רוצה להחליף מספר WhatsApp / חבר ועד חדש רוצה להתחבר",
     a: [
       "עבור להגדרות ← 'החלפת מספר WhatsApp' ← לחץ 'נתק WhatsApp'",
-      "סגור את חלון ה-Bridge במחשב",
-      "פתח מחדש את ה-Bridge — לחץ פעמיים על קיצור הדרך 'VaadPro Bridge' על הדסקטופ",
       "חזור לאפליקציה ← לחץ 'חיבור ווטסאפ' ← סרוק QR עם המספר החדש",
       "כל נתוני הבניין, הדיירים והתשלומים נשמרים — רק ה-WhatsApp מתחלף"
     ]
@@ -5406,23 +5238,21 @@ const HELP_CONTENT = {
       <p><strong>ידני</strong> — בחר חודש ספציפי.</p>
       <h3>תבנית הודעה</h3>
       <p>משתנים זמינים: <code>{שם}</code> <code>{חודש}</code> <code>{סכום}</code></p>
-      <h3>הורדת Bridge</h3>
-      <p>לחץ "הורד חבילת Bridge המלאה" לקבלת ZIP עם כל מה שצריך לחיבור ווטסאפ.</p>
+
     `
   },
   wa: {
-    title: '📱 חיבור ווטסאפ — מדריך מלא',
+    title: '📱 חיבור ווטסאפ — מדריך',
     body: `
-      <h3>למה צריך את ה-Bridge?</h3>
-      <p>ווטסאפ מחייב חיבור לטלפון שלך. ה-Bridge הוא תוכנה קטנה שרצה על המחשב ומחברת בין הטלפון לאפליקציה בענן.</p>
-      <h3>Windows — צעדים</h3>
-      <div class="step"><div class="step-num">1</div><div>הגדרות ← הורד <strong>VaadPro-Setup.bat</strong></div></div>
-      <div class="step"><div class="step-num">2</div><div>לחץ ימני ← Properties ← Unblock ← OK</div></div>
-      <div class="step"><div class="step-num">3</div><div>הגדרות ← לחץ <strong>"קבל קוד התקנה"</strong></div></div>
-      <div class="step"><div class="step-num">4</div><div>לחץ פעמיים על <strong>VaadPro-Setup.bat</strong> ← הכנס קוד ← Install</div></div>
-      <div class="step"><div class="step-num">5</div><div>חזור לאפליקציה ← "חיבור ווטסאפ" ← סרוק QR</div></div>
-      <h3>כל יום</h3>
-      <p>לחץ פעמיים על קיצור הדרך <strong>VaadPro Bridge</strong> על הדסקטופ.</p>
+      <h3>חיבור ראשוני</h3>
+      <div class="step"><div class="step-num">1</div><div>לחץ על <strong>"חיבור ווטסאפ"</strong> (הכפתור הירוק למעלה)</div></div>
+      <div class="step"><div class="step-num">2</div><div>יופיע ברקוד QR — פתח ווטסאפ בטלפון</div></div>
+      <div class="step"><div class="step-num">3</div><div>תפריט ← <strong>מכשירים מקושרים</strong> ← קשר מכשיר ← סרוק</div></div>
+      <div class="step"><div class="step-num">4</div><div>הכפתור יהפוך ל-🟢 <strong>מחובר</strong></div></div>
+      <h3>ווטסאפ מנותק?</h3>
+      <p>לחץ שוב על "חיבור ווטסאפ" וסרוק ברקוד חדש — לא נדרשת שום התקנה.</p>
+      <h3>החלפת מספר</h3>
+      <p>הגדרות ← "נתק WhatsApp" ← לחץ "חיבור ווטסאפ" ← סרוק עם המספר החדש.</p>
     `
   }
 };
