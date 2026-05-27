@@ -189,6 +189,17 @@ async function initWa(tenantId) {
         wa.qrData = null;
         wa.phone  = sock.user?.id?.split(':')[0] || null;
         console.log(`[WA:${tenantId}] connected — ${wa.phone}`);
+        // עדכן firstConnectedAt / lastConnectedAt — מוציא מ"ממתינים להתקנה" באדמין
+        try {
+          const users = loadUsers();
+          const user = users.find(u => u.tenantId === tenantId);
+          if (user) {
+            if (!user.firstConnectedAt) user.firstConnectedAt = new Date().toISOString();
+            user.lastConnectedAt = new Date().toISOString();
+            saveUsers(users);
+            console.log(`[WA:${tenantId}] lastConnectedAt saved`);
+          }
+        } catch(e) { console.error(`[WA:${tenantId}] failed to save lastConnectedAt:`, e.message); }
       }
 
       if (connection === 'close') {

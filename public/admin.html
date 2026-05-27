@@ -513,7 +513,7 @@
       <div id="waitingInstallPanel" style="display:none;margin-bottom:20px">
         <div style="background:rgba(99,102,241,.08);border:1px solid rgba(99,102,241,.25);border-radius:12px;padding:16px 20px;">
           <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-            <h3 style="font-size:14px;font-weight:700;color:#818cf8">⏳ ממתינים להתקנה</h3>
+            <h3 style="font-size:14px;font-weight:700;color:#818cf8">⏳ ממתינים לחיבור WhatsApp</h3>
             <span id="waitingInstallCount" style="font-size:12px;color:var(--text3);margin-right:auto"></span>
             <span style="font-size:12px;color:var(--text3)">הצג מי נרשם לפני יותר מ:</span>
             <select id="waitingDays" onchange="loadWaitingInstall()" style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:4px 8px;color:var(--text);font-size:12px;">
@@ -1664,7 +1664,7 @@ async function loadWaitingInstall() {
     if (!list.length) { panel.style.display = 'none'; return; }
     panel.style.display = 'block';
     document.getElementById('waitingInstallCount').textContent = list.length + ' לקוחות';
-    const statusMap = { pending:'⏳ ממתין', needs_help:'🆘 דורש עזרה', in_progress:'⏳ בתהליך', installed:'✅ הותקן', not_interested:'❌ לא מעוניין' };
+    const statusMap = { pending:'⏳ ממתין', needs_help:'🆘 דורש עזרה', in_progress:'⏳ בתהליך', installed:'✅ חובר', not_interested:'❌ לא מעוניין' };
     const statusColor = { pending:'#818cf8', needs_help:'#ef4444', in_progress:'#f59e0b', installed:'#22c55e', not_interested:'#6b7280' };
     document.getElementById('waitingInstallList').innerHTML = list.map(u => {
       const name = u.fullName || u.buildingName || u.email;
