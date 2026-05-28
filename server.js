@@ -838,10 +838,18 @@ app.post('/api/resend-auto', authMiddleware, async (req, res) => {
 
 // Generic send message
 app.post('/api/send-message', authMiddleware, async (req, res) => {
-  const { phone, message } = req.body;
+  const { phone, message, tenantName } = req.body;
   if (!phone || !message) return res.json({ ok: false, error: 'חסר מידע' });
-  try { await sendWaMsg(req.user.tenantId, phone, message); res.json({ ok: true }); }
-  catch(e) { res.json({ ok: false, error: e.message }); }
+  try {
+    await sendWaMsg(req.user.tenantId, phone, message);
+    res.json({ ok: true });
+  } catch(e) {
+    const isDisconnected = e.message && (e.message.includes('מנותק') || e.message.includes('not connected') || e.message.includes('socket'));
+    const displayError = isDisconnected
+      ? (tenantName ? `ההודעה לא נשלחה ל${tenantName} — WhatsApp מנותק. לחץ "חיבור WhatsApp" וסרוק ברקוד.` : 'WhatsApp מנותק — לחץ "חיבור WhatsApp" וסרוק ברקוד.')
+      : e.message;
+    res.json({ ok: false, error: displayError, disconnected: isDisconnected });
+  }
 });
 
 // הורדת config.json מותאם אישית ללקוח

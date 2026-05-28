@@ -302,6 +302,15 @@ function vpLogout() {
   </div>
 </header>
 
+<!-- WA Disconnect Banner -->
+<div id="waBanner" style="display:none;background:rgba(239,68,68,.12);border-bottom:1px solid rgba(239,68,68,.25);padding:8px 16px;text-align:center;font-size:13px;color:var(--text2);direction:rtl;">
+  <span id="waBannerMsg">⚠️ WhatsApp מנותק</span>
+  &nbsp;
+  <button onclick="handleConnClick()" style="background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.4);border-radius:6px;padding:3px 10px;font-size:12px;color:inherit;cursor:pointer;">חיבור מחדש</button>
+  &nbsp;
+  <button onclick="document.getElementById('waBanner').style.display='none'" style="background:none;border:none;font-size:15px;cursor:pointer;color:var(--text3);">✕</button>
+</div>
+
 <!-- Onboarding Wizard Modal -->
 <div class="modal-overlay" id="wizardModal" style="z-index:200;">
   <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto;">
@@ -1737,16 +1746,61 @@ function fillForm() {
   updateSchedule(); updatePreview();
 }
 
+let _waDisconnectedSince = null, _checkTimeoutId = null, _lastQrTime = null;
+
 function pollStatus() { checkStatus(); statusInterval=setInterval(checkStatus,2500); }
 
 async function checkStatus() {
+  // Timeout 60s: אם אין תגובה 60 שניות — הצג "בודק חיבור..."
+  if (_checkTimeoutId) clearTimeout(_checkTimeoutId);
+  _checkTimeoutId = setTimeout(function() {
+    updateConnBadge({ status: 'checking' });
+  }, 60000);
+
   try {
-    const r=await fetch(API+'/status'); const s=await r.json();
+    const r = await fetch(API+'/status');
+    if (_checkTimeoutId) { clearTimeout(_checkTimeoutId); _checkTimeoutId = null; }
+    const s = await r.json();
     if(s.effectiveMonth){data.effectiveMonth=s.effectiveMonth;data.currentAutoMonth=s.effectiveMonth;}
     updateConnBadge(s);
-    if(s.status==='qr'&&s.qrDataUrl) showQR(s.qrDataUrl);
-    if(s.status==='ready'){ closeQR(); if(!data._loaded){data._loaded=true;await loadData();fillForm();render();} }
-  } catch(e){ updateConnBadge({status:'disconnected'}); }
+    if(s.status==='qr'&&s.qrDataUrl) { _lastQrTime = Date.now(); showQR(s.qrDataUrl); }
+    // QR timeout: אחרי 60 שניות QR פג — הצג הודעה
+    if(s.status==='qr' && _lastQrTime && (Date.now()-_lastQrTime) > 60000) {
+      const c = document.getElementById('qrContainer');
+      if(c) c.innerHTML='<div class="qr-loading" style="font-size:13px;text-align:center;color:var(--text2);">⏱ הברקוד פג תוקף<br><button onclick="handleConnClick()" style="margin-top:8px;background:var(--accent);color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;">ברקוד חדש</button></div>';
+      _lastQrTime = null;
+    }
+    if(s.status==='ready'){
+      closeQR();
+      _waDisconnectedSince = null;
+      showWaBanner(false);
+      if(!data._loaded){data._loaded=true;await loadData();fillForm();render();}
+    }
+    // ניהול banner ניתוק
+    if(s.status==='disconnected' || s.status==='logged_out') {
+      if (!_waDisconnectedSince) _waDisconnectedSince = Date.now();
+      const minsSince = (Date.now() - _waDisconnectedSince) / 60000;
+      if (minsSince >= 5) {
+        const msg = s.status==='logged_out'
+          ? '⚠️ WhatsApp נותק מהמכשיר — יש לסרוק ברקוד חדש'
+          : '⚠️ WhatsApp מנותק זמנית — לחץ לחיבור מחדש';
+        showWaBanner(true, msg);
+      }
+    } else if (s.status !== 'disconnected' && s.status !== 'logged_out') {
+      _waDisconnectedSince = null;
+    }
+  } catch(e){
+    if (_checkTimeoutId) { clearTimeout(_checkTimeoutId); _checkTimeoutId = null; }
+    updateConnBadge({status:'disconnected'});
+  }
+}
+
+function showWaBanner(show, msg) {
+  const banner = document.getElementById('waBanner');
+  const bannerMsg = document.getElementById('waBannerMsg');
+  if (!banner) return;
+  if (show) { bannerMsg.textContent = msg || '⚠️ WhatsApp מנותק'; banner.style.display='block'; }
+  else { banner.style.display='none'; }
 }
 
 function updateConnBadge(s) {
@@ -1755,6 +1809,8 @@ function updateConnBadge(s) {
   if(s.status==='ready'){ badge.classList.add('connected'); text.textContent=s.phoneConnected?'מחובר: '+s.phoneConnected:'מחובר'; }
   else if(s.status==='qr'){ badge.classList.add('qr-mode'); text.textContent='לחץ לסריקת QR'; }
   else if(s.status==='reconnecting'){ badge.classList.add('qr-mode'); text.textContent='🔄 מתחבר מחדש...'; }
+  else if(s.status==='checking'){ badge.classList.add('qr-mode'); text.textContent='🔍 בודק חיבור...'; }
+  else if(s.status==='logged_out'){ text.textContent='🔴 נותק — סרוק מחדש'; }
   else { text.textContent='לחץ לחיבור'; }
 }
 
@@ -2339,9 +2395,16 @@ async function sendAll() {
     if(d.ok){
       document.getElementById('sendingStatus').textContent='שולח '+d.total+' הודעות...';
       toast('📤 שולח '+d.total+' הודעות...','success');
-      let i=0; const poll=setInterval(async function(){await loadData();render();i++;if(i>12){clearInterval(poll);document.getElementById('sendingStatus').textContent='';btn.disabled=false;btn.innerHTML='📤 שלח לכולם';}},3000);
+      let i=0; const poll=setInterval(async function(){await loadData();render();i++;if(i>12){clearInterval(poll);document.getElementById('sendingStatus').textContent='';btn.disabled=false;btn.innerHTML='💬 WA לכולם';}},3000);
+    } else if(d.error && d.error.includes('מנותק')) {
+      toast('❌ WhatsApp מנותק — לחץ על כפתור החיבור למעלה וסרוק ברקוד','error');
+      btn.disabled=false; btn.innerHTML='💬 WA לכולם';
+      showWaBanner(true, '⚠️ WhatsApp מנותק — יש לחבר לפני שליחה');
+    } else {
+      toast('❌ שגיאה: '+(d.error||'לא ידוע'),'error');
+      btn.disabled=false; btn.innerHTML='💬 WA לכולם';
     }
-  }catch(e){toast('❌ שגיאה','error');btn.disabled=false;btn.innerHTML='📤 שלח לכולם';}
+  }catch(e){toast('❌ שגיאת רשת — נסה שוב','error');btn.disabled=false;btn.innerHTML='💬 WA לכולם';}
 }
 
 async function sendUnpaidOnly() {
