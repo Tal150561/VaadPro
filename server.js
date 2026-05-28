@@ -1664,9 +1664,23 @@ app.post('/api/admin/delete-customer', superAdminMiddleware, (req, res) => {
   let users = loadUsers();
   const user = users.find(u => u.email === email.toLowerCase());
   if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+  // סגור Baileys session ושחרר RAM לפני מחיקת הנתונים
+  const { tenantId } = user;
+  const wa = waClients[tenantId];
+  if (wa) {
+    if (wa.client) { try { wa.client.end(undefined); } catch(e) {} }
+    delete waClients[tenantId];
+    console.log(`[delete-customer] WA session closed and freed for ${tenantId}`);
+  }
   // מחק קובץ נתוני הבניין
-  const tf = tenantFile(user.tenantId);
+  const tf = tenantFile(tenantId);
   if (fs.existsSync(tf)) fs.unlinkSync(tf);
+  // מחק תיקיית WA session מהדיסק
+  const sessionDir = path.join(WA_SESSIONS_DIR, tenantId);
+  if (fs.existsSync(sessionDir)) {
+    try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch(e) {}
+    console.log(`[delete-customer] WA session dir deleted for ${tenantId}`);
+  }
   // הסר מרשימת המשתמשים
   users = users.filter(u => u.email !== email.toLowerCase());
   saveUsers(users);
