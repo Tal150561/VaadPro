@@ -657,7 +657,7 @@ function vpLogout() {
             </div>
             <div class="table-wrap">
               <table class="expense-table">
-                <thead><tr><th class="cb-col">✓</th><th>תאריך</th><th>תיאור</th><th>סכום</th></tr></thead>
+                <thead><tr><th class="cb-col">✓</th><th>תאריך</th><th>תיאור</th><th>סכום</th><th>הערה / על מה ההוצאה</th></tr></thead>
                 <tbody id="rptExpensesBody"></tbody>
               </table>
             </div>
@@ -3310,7 +3310,8 @@ function rptAnalyze() {
     const bal = parseFloat(balRaw);
 
     const fmtDate = dateObj ? dateObj.toLocaleDateString('he-IL', {day:'2-digit',month:'2-digit',year:'numeric'}) : dateStr;
-    expenses.push({ date: fmtDate, desc: desc, amount: debit, balance: bal, checked: true });
+    const isCheck = rptIsCheck(desc);
+    expenses.push({ date: fmtDate, desc: desc, amount: debit, balance: bal, checked: true, note: '', isCheck: isCheck });
   }
 
   if (!expenses.length) { toast('⚠️ לא נמצאו הוצאות בטווח התאריכים שנבחר', 'error'); return; }
@@ -3326,15 +3327,29 @@ function rptAnalyze() {
   toast('✅ נמצאו ' + expenses.length + ' הוצאות', 'success');
 }
 
+function rptIsCheck(desc) {
+  const d = String(desc || '').trim();
+  if (!d) return false;
+  // contains check-related Hebrew/English keyword
+  if (/שיק|המחאה|צ'ק|cheque|check/i.test(d)) return true;
+  // description is essentially just a number (check serial only, no real text)
+  if (/^[\d\s.\-#]+$/.test(d)) return true;
+  return false;
+}
+
 function rptRenderExpenses() {
   const tbody = document.getElementById('rptExpensesBody');
   let html = '';
   rptExpenses.forEach(function(ex, i) {
-    html += '<tr>';
+    const needsNote = ex.isCheck && !ex.note;
+    const rowStyle = needsNote ? ' style="background:rgba(210,153,34,.06);"' : '';
+    html += '<tr' + rowStyle + '>';
     html += '<td class="cb-col"><input type="checkbox" ' + (ex.checked?'checked':'') + ' onchange="rptToggle('+i+',this.checked)" style="width:16px;height:16px;cursor:pointer;"></td>';
     html += '<td style="white-space:nowrap;">'+ex.date+'</td>';
-    html += '<td>'+ex.desc+'</td>';
+    html += '<td>' + (ex.isCheck ? '<span title="שיק — מומלץ להוסיף הערה" style="color:var(--warn);margin-left:4px;">✏️</span>' : '') + rptEsc(ex.desc) + '</td>';
     html += '<td style="font-family:monospace;color:var(--danger);white-space:nowrap;">'+ex.amount.toLocaleString()+'₪</td>';
+    const ph = ex.isCheck ? 'על מה השיק? (למשל: תיקון אינסטלציה)' : 'הערה (אופציונלי)';
+    html += '<td><input type="text" value="' + rptEsc(ex.note||'') + '" placeholder="' + ph + '" onInput="rptSetNote('+i+',this.value)" style="width:100%;min-width:150px;font-size:0.82rem;padding:5px 8px;border:1px solid var(--border);border-radius:6px;background:var(--surface2);color:var(--text);font-family:inherit;"></td>';
     html += '</tr>';
   });
   tbody.innerHTML = html;
@@ -3342,6 +3357,14 @@ function rptRenderExpenses() {
   rptUpdatePreview();
 }
 
+function rptEsc(s) {
+  return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function rptSetNote(i, val) {
+  if (rptExpenses[i]) rptExpenses[i].note = val;
+  rptUpdatePreview();
+}
 function rptToggle(i, checked) {
   rptExpenses[i].checked = checked;
   rptUpdateCounts();
@@ -3362,7 +3385,11 @@ function rptUpdateCounts() {
 
 function rptBuildExpensesList() {
   const sel = rptExpenses.filter(function(ex){ return ex.checked; });
-  return sel.map(function(ex){ return '• ' + ex.date + ' | ' + ex.desc + ' | ' + ex.amount.toLocaleString() + '₪'; }).join('\n');
+  return sel.map(function(ex){
+    var label = ex.desc;
+    if (ex.note) { label = ex.desc ? (ex.desc + ' — ' + ex.note) : ex.note; }
+    return '• ' + ex.date + ' | ' + label + ' | ' + ex.amount.toLocaleString() + '₪';
+  }).join('\n');
 }
 
 function rptUpdatePreview() {
@@ -4187,6 +4214,18 @@ function rptSaveReport() {
   });
   const total = sel.reduce(function(s,ex){ return s+ex.amount; }, 0);
 
+  // שורות בודדות — נשמרות לתיעוד עתידי (כולל הערות לשיקים)
+  const lineItems = sel.map(function(ex){
+    return {
+      date: ex.date,
+      desc: ex.desc,
+      note: ex.note || '',
+      amount: ex.amount,
+      category: rptCategorize(ex.desc),
+      isCheck: !!ex.isCheck
+    };
+  });
+
   const label = trendMakeLabel(dateFrom, dateTo);
   const report = {
     id: Date.now(),
@@ -4195,6 +4234,7 @@ function rptSaveReport() {
     dateTo: dateTo,
     categories: cats,
     total: total,
+    lineItems: lineItems,
     savedAt: new Date().toISOString()
   };
 
