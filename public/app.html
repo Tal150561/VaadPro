@@ -4351,13 +4351,25 @@ function trendGroupReports() {
 function trendMergeGroup(group) {
   // ממזג כמה דוחות לקטגוריות מאוחדות
   const cats = {}, total = { v: 0 };
+  const itemsByCat = {}; // cat -> [ {date,desc,note,amount,isCheck} ]
   group.reports.forEach(function(r) {
     Object.entries(r.categories).forEach(function([cat,amt]) {
       cats[cat] = (cats[cat]||0) + amt;
     });
     total.v += r.total;
+    // אסוף שורות בודדות לפי קטגוריה (דוחות ישנים בלי lineItems — מדולגים בעדינות)
+    if (Array.isArray(r.lineItems)) {
+      r.lineItems.forEach(function(li) {
+        const cat = li.category || rptCategorize(li.desc);
+        if (!itemsByCat[cat]) itemsByCat[cat] = [];
+        itemsByCat[cat].push({
+          date: li.date || '', desc: li.desc || '', note: li.note || '',
+          amount: li.amount || 0, isCheck: !!li.isCheck
+        });
+      });
+    }
   });
-  return { categories: cats, total: total.v, label: group.label };
+  return { categories: cats, total: total.v, label: group.label, itemsByCat: itemsByCat };
 }
 
 function trendSetRes(res, btn) {
@@ -4407,15 +4419,26 @@ function trendUpdate() {
       alerts.push({ cat, pct, diff, arrow });
     }
 
-    html += '<tr>' +
-      '<td><strong>' + cat + '</strong></td>' +
+    const safeCat = cat.replace(/[^a-zA-Z0-9]/g, function(ch){ return ch.charCodeAt(0); });
+    const hasItems = (base.itemsByCat && base.itemsByCat[cat] && base.itemsByCat[cat].length) ||
+                     (cmp.itemsByCat  && cmp.itemsByCat[cat]  && cmp.itemsByCat[cat].length);
+    const caret = hasItems ? '<span id="car_'+safeCat+'" style="display:inline-block;width:14px;color:var(--text2);">▸</span> ' : '<span style="display:inline-block;width:14px;"></span> ';
+    const rowClick = hasItems ? ' onclick="trendToggleCat(\''+safeCat+'\',\''+cat.replace(/'/g,"\\'")+'\')" style="cursor:pointer;" title="לחץ לפירוט השורות"' : '';
+    html += '<tr'+rowClick+'>' +
+      '<td>' + caret + '<strong>' + cat + '</strong></td>' +
       '<td>' + (bv ? bv.toLocaleString()+'₪' : '—') + '</td>' +
       '<td>' + (cv ? cv.toLocaleString()+'₪' : '—') + '</td>' +
       '<td class="' + cls + '">' + (diff !== 0 ? (diff>0?'+':'')+diff.toLocaleString()+'₪' : '—') + '</td>' +
       '<td class="' + cls + '">' + pctStr + '</td>' +
       '<td style="font-size:1.1rem;" class="' + cls + '">' + arrow + '</td>' +
     '</tr>';
+    if (hasItems) {
+      html += '<tr id="det_'+safeCat+'" style="display:none;"><td colspan="6" style="padding:0;background:rgba(255,255,255,.015);">' +
+        trendCatDetailHtml(cat, base, cmp) + '</td></tr>';
+    }
   });
+  // שמור למצב גלובלי עבור drill-down ידני (לא חובה, אבל נוח)
+  trendLastBase = base; trendLastCmp = cmp;
 
   // שורת סיכום
   const totalDiff = cmp.total - base.total;
@@ -4446,6 +4469,42 @@ function trendUpdate() {
 
   // גרף עמודות השוואה
   trendRenderCompareChart(allCats, base, cmp);
+}
+
+let trendLastBase = null, trendLastCmp = null;
+
+// בונה טבלת פירוט שורות לקטגוריה — שתי התקופות זו לצד זו (השוואת תפוחים-לתפוחים)
+function trendCatDetailHtml(cat, base, cmp) {
+  const bItems = (base.itemsByCat && base.itemsByCat[cat]) ? base.itemsByCat[cat] : [];
+  const cItems = (cmp.itemsByCat  && cmp.itemsByCat[cat])  ? cmp.itemsByCat[cat]  : [];
+
+  function rows(items) {
+    if (!items.length) return '<div style="color:var(--text2);font-size:0.8rem;padding:8px 4px;">— אין שורות מתועדות —</div>';
+    return items.map(function(it){
+      let label = it.desc || '';
+      if (it.note) label = it.desc ? (it.desc + ' — ' + it.note) : it.note;
+      if (!label) label = '(ללא תיאור)';
+      const mark = it.isCheck ? '<span title="שיק" style="color:var(--warn);">✏️</span> ' : '';
+      return '<div style="display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid rgba(48,54,61,.3);font-size:0.8rem;">' +
+        '<span>' + mark + rptEsc(label) + ' <span style="color:var(--text2);">· ' + rptEsc(it.date) + '</span></span>' +
+        '<span style="font-family:monospace;color:var(--danger);white-space:nowrap;">' + it.amount.toLocaleString() + '₪</span>' +
+      '</div>';
+    }).join('');
+  }
+
+  return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;padding:10px 14px;">' +
+    '<div><div style="font-size:0.78rem;font-weight:700;color:var(--info);margin-bottom:6px;">' + rptEsc(base.label) + '</div>' + rows(bItems) + '</div>' +
+    '<div><div style="font-size:0.78rem;font-weight:700;color:var(--accent);margin-bottom:6px;">' + rptEsc(cmp.label) + '</div>' + rows(cItems) + '</div>' +
+  '</div>';
+}
+
+function trendToggleCat(safeCat, cat) {
+  const det = document.getElementById('det_' + safeCat);
+  const car = document.getElementById('car_' + safeCat);
+  if (!det) return;
+  const open = det.style.display !== 'none';
+  det.style.display = open ? 'none' : 'table-row';
+  if (car) car.textContent = open ? '▸' : '▾';
 }
 
 function trendRenderCompareChart(cats, base, cmp) {
@@ -4606,6 +4665,26 @@ async function trendExportExcel() {
         }
       });
     } catch(e) { console.log('timeline capture failed:', e); }
+  }
+
+  // גיליון פירוט שורות — כולל הערות לשיקים (השוואת תפוחים-לתפוחים)
+  const detRows = [['תקופה','קטגוריה','תאריך','תיאור / הערה','שיק?','סכום ₪']];
+  function pushItems(periodLabel, m) {
+    allCats.forEach(function(cat) {
+      const items = (m.itemsByCat && m.itemsByCat[cat]) ? m.itemsByCat[cat] : [];
+      items.forEach(function(it) {
+        let label = it.desc || '';
+        if (it.note) label = it.desc ? (it.desc + ' — ' + it.note) : it.note;
+        detRows.push([periodLabel, cat, it.date||'', label||'(ללא תיאור)', it.isCheck?'כן':'', it.amount||0]);
+      });
+    });
+  }
+  pushItems(base.label, base);
+  pushItems(cmp.label, cmp);
+  if (detRows.length > 1) {
+    const wsDet = XLSX.utils.aoa_to_sheet(detRows);
+    wsDet['!cols'] = [{wch:14},{wch:14},{wch:12},{wch:40},{wch:7},{wch:12}];
+    XLSX.utils.book_append_sheet(wb, wsDet, 'פירוט שורות');
   }
 
   XLSX.writeFile(wb, 'השוואת-הוצאות-'+base.label+'-vs-'+cmp.label+'.xlsx');
