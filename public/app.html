@@ -907,6 +907,9 @@ function vpLogout() {
           <div style="display:flex;align-items:flex-end;gap:8px;">
             <button class="btn btn-secondary btn-sm" onclick="trendExportExcel()">📥 ייצא לאקסל</button>
             <button class="btn btn-secondary btn-sm" onclick="trendExportHTML()">📊 ייצא דוח מלא</button>
+            <label style="display:flex;align-items:center;gap:5px;font-size:0.78rem;color:var(--text2);cursor:pointer;white-space:nowrap;" title="הוסף פירוט שורות מתקפל לדוח שנשלח למקבל">
+              <input type="checkbox" id="trendExportDetail" checked style="width:14px;height:14px;accent-color:var(--accent);"> פירוט שורות בדוח
+            </label>
           </div>
         </div>
 
@@ -4722,7 +4725,33 @@ async function trendExportHTML() {
   const td_total = cmp.total - base.total;
   const pct_total = base.total > 0 ? ((td_total/base.total)*100).toFixed(1) : '—';
 
+  const includeDetail = (function(){ const el=document.getElementById('trendExportDetail'); return el ? el.checked : true; })();
+
+  function escHtml(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+  // בונה שתי עמודות פירוט (base/cmp) לקטגוריה — לדוח העצמאי
+  function detailColsHtml(cat) {
+    const bItems = (base.itemsByCat && base.itemsByCat[cat]) ? base.itemsByCat[cat] : [];
+    const cItems = (cmp.itemsByCat  && cmp.itemsByCat[cat])  ? cmp.itemsByCat[cat]  : [];
+    function rows(items) {
+      if (!items.length) return '<div class="di-empty">— אין שורות מתועדות —</div>';
+      return items.map(function(it){
+        let label = it.desc || '';
+        if (it.note) label = it.desc ? (it.desc + ' — ' + it.note) : it.note;
+        if (!label) label = '(ללא תיאור)';
+        const mark = it.isCheck ? '✏️ ' : '';
+        return '<div class="di-row"><span>' + mark + escHtml(label) + ' <span class="di-date">· ' + escHtml(it.date) + '</span></span>' +
+               '<span class="di-amt">' + it.amount.toLocaleString() + ' ₪</span></div>';
+      }).join('');
+    }
+    return '<div class="di-grid">' +
+      '<div><div class="di-h di-h-base">' + escHtml(base.label) + '</div>' + rows(bItems) + '</div>' +
+      '<div><div class="di-h di-h-cmp">' + escHtml(cmp.label) + '</div>' + rows(cItems) + '</div>' +
+    '</div>';
+  }
+
   let tableRows = '';
+  let catIdx = 0;
   allCats.forEach(function(cat) {
     const bv = base.categories[cat]||0;
     const cv = cmp.categories[cat]||0;
@@ -4730,14 +4759,23 @@ async function trendExportHTML() {
     const pct = bv > 0 ? ((diff/bv)*100).toFixed(1) : '—';
     const color = diff > 0 ? '#c0392b' : diff < 0 ? '#27ae60' : '#555';
     const arrow = diff > 0 ? '▲' : diff < 0 ? '▼' : '—';
-    tableRows += '<tr>' +
-      '<td>' + cat + '</td>' +
+    const hasItems = (base.itemsByCat && base.itemsByCat[cat] && base.itemsByCat[cat].length) ||
+                     (cmp.itemsByCat  && cmp.itemsByCat[cat]  && cmp.itemsByCat[cat].length);
+    const showDet = includeDetail && hasItems;
+    const did = 'd' + (catIdx++);
+    const caret = showDet ? '<span class="di-caret" id="car_'+did+'">▸</span> ' : '';
+    const rowAttr = showDet ? ' class="di-clickable" onclick="toggleDet(\''+did+'\')"' : '';
+    tableRows += '<tr'+rowAttr+'>' +
+      '<td>' + caret + cat + '</td>' +
       '<td style="text-align:left">' + bv.toLocaleString() + ' ₪</td>' +
       '<td style="text-align:left">' + cv.toLocaleString() + ' ₪</td>' +
       '<td style="text-align:left;color:' + color + ';font-weight:bold">' + (diff>0?'+':'') + diff.toLocaleString() + ' ₪</td>' +
       '<td style="text-align:center;color:' + color + '">' + (pct !== '—' ? (diff>0?'+':'') + pct + '%' : '—') + '</td>' +
       '<td style="text-align:center;color:' + color + '">' + arrow + '</td>' +
       '</tr>';
+    if (showDet) {
+      tableRows += '<tr class="di-detrow" id="det_'+did+'" style="display:none"><td colspan="6" class="di-detcell">' + detailColsHtml(cat) + '</td></tr>';
+    }
   });
 
   const diffColor = td_total > 0 ? '#c0392b' : td_total < 0 ? '#27ae60' : '#555';
@@ -4763,6 +4801,17 @@ async function trendExportHTML() {
     'img{width:100%;border-radius:8px;border:1px solid #e0e0e0;margin-top:8px;}' +
     '.footer{text-align:center;color:#aaa;font-size:12px;margin-top:24px;}' +
     '@media print{body{background:#fff;padding:0}.report{box-shadow:none;border-radius:0;}}' +
+    '.di-clickable{cursor:pointer;}' +
+    '.di-clickable:hover td{background:#eef4ff;}' +
+    '.di-caret{display:inline-block;width:14px;color:#888;}' +
+    '.di-detcell{padding:0!important;background:#fafbfc;}' +
+    '.di-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;padding:12px 16px;}' +
+    '.di-h{font-size:12px;font-weight:bold;margin-bottom:6px;padding-bottom:4px;border-bottom:1px solid #ddd;}' +
+    '.di-h-base{color:#2563eb;} .di-h-cmp{color:#16a34a;}' +
+    '.di-row{display:flex;justify-content:space-between;gap:10px;padding:4px 0;border-bottom:1px solid #eee;font-size:12.5px;}' +
+    '.di-date{color:#999;} .di-amt{font-family:monospace;color:#c0392b;white-space:nowrap;}' +
+    '.di-empty{color:#aaa;font-size:12px;padding:6px 0;}' +
+    '@media print{.di-detrow{display:table-row!important;}.di-caret{display:none;}}' +
     '</style></head><body>' +
     '<div class="report">' +
     '<h1>דוח השוואת הוצאות</h1>' +
@@ -4783,7 +4832,9 @@ async function trendExportHTML() {
     (chart1Img ? '<div class="section"><h2>גרף השוואה</h2><img src="' + chart1Img + '" alt="גרף השוואה"></div>' : '') +
     (chart2Img ? '<div class="section"><h2>גרף ציר זמן</h2><img src="' + chart2Img + '" alt="גרף ציר זמן"></div>' : '') +
     '<div class="footer">VaadPro — מערכת ניהול ועד בית | הדפס: Ctrl+P</div>' +
-    '</div></body></html>';
+    '</div>' +
+    (includeDetail ? '<script>function toggleDet(id){var d=document.getElementById("det_"+id),c=document.getElementById("car_"+id);if(!d)return;var o=d.style.display!=="none";d.style.display=o?"none":"table-row";if(c)c.textContent=o?"\\u25B8":"\\u25BE";}<\/script>' : '') +
+    '</body></html>';
 
   const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
   const url = URL.createObjectURL(blob);
