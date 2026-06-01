@@ -235,13 +235,16 @@ async function initWa(tenantId) {
 }
 
 async function sendWaMsg(tenantId, phone, message) {
+  // חובה לשלוח דרך ה-session של הלקוח עצמו — לעולם לא דרך מספר של לקוח אחר.
+  // (fallback חוצה-לקוחות נמחק: הוא גרם להודעות להישלח ממספר זר ומנע שמירת lastConnectedAt)
   let resolvedTenantId = tenantId;
-  if (!resolvedTenantId || !waClients[resolvedTenantId] || waClients[resolvedTenantId].status !== 'ready') {
+  if (!resolvedTenantId) {
+    // רק כשאין tenantId בכלל (קריאה כללית) — קח כל session מחובר
     resolvedTenantId = Object.keys(waClients).find(id => waClients[id] && waClients[id].status === 'ready');
   }
   if (!resolvedTenantId) throw new Error('WhatsApp לא מחובר. לחץ על "חיבור WhatsApp" וסרוק את הברקוד.');
   const wa = getWa(resolvedTenantId);
-  if (wa.status !== 'ready') throw new Error('WhatsApp לא מחובר');
+  if (wa.status !== 'ready') throw new Error('WhatsApp מנותק — לחץ "חיבור WhatsApp" וסרוק ברקוד.');
   let normalized = phone.replace(/\D/g, '');
   if (normalized.startsWith('0')) normalized = '972' + normalized.slice(1);
 
@@ -4218,10 +4221,35 @@ app.post('/api/ai-improve', (req, res, next) => {
   }
 });
 
+// ── Auto-reconnect existing WA sessions on server startup (Railway restart) ──
+// בלי זה: אחרי כל deploy כל ה-sessions נשארים disconnected בזיכרון,
+// connection='open' לא נורה, ו-lastConnectedAt לא מתעדכן → לקוחות תקועים ב"ממתינים".
+function reconnectExistingSessions() {
+  if (WA_MODE !== 'server') return;
+  let dirs = [];
+  try { dirs = fs.readdirSync(WA_SESSIONS_DIR); } catch(e) { return; }
+  const valid = dirs.filter(d => {
+    try {
+      const sd = path.join(WA_SESSIONS_DIR, d);
+      if (!fs.statSync(sd).isDirectory()) return false;
+      // session תקין = יש קובץ creds.json
+      return fs.existsSync(path.join(sd, 'creds.json'));
+    } catch(e) { return false; }
+  });
+  console.log(`[WA] startup reconnect — found ${valid.length} saved session(s)`);
+  valid.forEach((tenantId, i) => {
+    // השהיה מדורגת כדי לא להעמיס את הזיכרון/רשת בבת אחת
+    setTimeout(() => {
+      console.log(`[WA] reconnecting saved session: ${tenantId}`);
+      try { initWa(tenantId); } catch(e) { console.error(`[WA] reconnect ${tenantId} failed:`, e.message); }
+    }, i * 4000);
+  });
+}
+
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.10 – SaaS Server       ║');
+  console.log('║   VaadPro v2.10.13 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
@@ -4238,4 +4266,6 @@ app.listen(PORT, () => {
     console.log('WhatsApp: local mode (legacy)');
   }
   console.log('');
+  // הפעל reconnect ל-sessions קיימים אחרי שהשרת עלה
+  setTimeout(reconnectExistingSessions, 2000);
 });
