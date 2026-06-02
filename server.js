@@ -126,7 +126,7 @@ const waClients = {}; // tenantId → { client?, status, qrData, phone, restarti
 
 function getWa(tenantId) {
   if (!waClients[tenantId]) {
-    waClients[tenantId] = { client: null, status: 'disconnected', qrData: null, phone: null, restarting: false, healthTimer: null };
+    waClients[tenantId] = { client: null, status: 'disconnected', qrData: null, phone: null, restarting: false, healthTimer: null, qrCount: 0, qrTimer: null };
   }
   return waClients[tenantId];
 }
@@ -134,6 +134,30 @@ function getWa(tenantId) {
 // ── Baileys WA Engine (server mode) ─────────────────────────────
 // Silent pino logger — suppresses Baileys internal noise in Railway logs
 const pinoLogger = require('pino')({ level: 'silent' });
+
+// ── QR burn-protection ──────────────────────────────────────────
+// אם המשתמש לא סורק את הברקוד, Baileys ממשיך לייצר QR חדש כל ~20ש'.
+// כל QR נספר אצל WhatsApp כניסיון linking, ואחרי כמה כאלה WhatsApp חוסם
+// זמנית ("Can't link new devices right now"). כדי למנוע זאת — סוגרים את
+// ה-socket אחרי מספר מוגבל של QR-ים בלי סריקה.
+const QR_MAX_REFRESHES = 4;        // עד 4 QR-ים (~1.5 דק') ואז סוגרים
+const QR_IDLE_TIMEOUT_MS = 90000;  // או 90ש' ללא סריקה — מה שמגיע קודם
+
+function stopQrWatch(wa) {
+  if (wa && wa.qrTimer) { clearTimeout(wa.qrTimer); wa.qrTimer = null; }
+}
+
+function closeIdleQr(tenantId, reason) {
+  const wa = getWa(tenantId);
+  stopQrWatch(wa);
+  if (wa.status !== 'qr') return; // נסרק/נסגר בינתיים — אין מה לעשות
+  console.log(`[WA:${tenantId}] QR idle — closing socket (${reason})`);
+  if (wa.client) { try { wa.client.end(undefined); } catch(e) {} }
+  wa.client = null;
+  wa.status = 'qr_expired';
+  wa.qrData = null;
+  wa.qrCount = 0;
+}
 
 async function restartWa(tenantId, reason) {
   const wa = getWa(tenantId);
@@ -158,6 +182,10 @@ async function initWa(tenantId) {
   const sessionDir = path.join(WA_SESSIONS_DIR, tenantId);
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
 
+  // אתחול מונה QR לכל ניסיון חיבור חדש
+  stopQrWatch(wa);
+  wa.qrCount = 0;
+
   try {
     const { state, saveCreds } = await useMultiFileAuthState(sessionDir);
     const { version } = await fetchLatestBaileysVersion();
@@ -181,12 +209,23 @@ async function initWa(tenantId) {
       if (qr) {
         wa.status = 'qr';
         wa.qrData = await qrcode.toDataURL(qr);
-        console.log(`[WA:${tenantId}] QR ready — waiting for scan`);
+        wa.qrCount = (wa.qrCount || 0) + 1;
+        console.log(`[WA:${tenantId}] QR ready (#${wa.qrCount}) — waiting for scan`);
+        // אם נשרפו יותר מדי QR-ים בלי סריקה — סגור כדי לא לעורר חסימת WhatsApp
+        if (wa.qrCount >= QR_MAX_REFRESHES) {
+          closeIdleQr(tenantId, `${QR_MAX_REFRESHES} QRs unscanned`);
+          return;
+        }
+        // אפס טיימר idle — סגירה אם המשתמש נוטש את המסך
+        stopQrWatch(wa);
+        wa.qrTimer = setTimeout(() => closeIdleQr(tenantId, 'idle timeout'), QR_IDLE_TIMEOUT_MS);
       }
 
       if (connection === 'open') {
         wa.status = 'ready';
         wa.qrData = null;
+        stopQrWatch(wa);
+        wa.qrCount = 0;
         wa.phone  = sock.user?.id?.split(':')[0] || null;
         console.log(`[WA:${tenantId}] connected — ${wa.phone}`);
         // עדכן firstConnectedAt / lastConnectedAt — מוציא מ"ממתינים להתקנה" באדמין
@@ -203,6 +242,14 @@ async function initWa(tenantId) {
       }
 
       if (connection === 'close') {
+        stopQrWatch(wa);
+        // אם סגרנו בכוונה QR נטוש — אל תפעיל reconnect (זה היה שורף עוד QR-ים)
+        if (wa.status === 'qr_expired') {
+          wa.phone = null;
+          wa.client = null;
+          console.log(`[WA:${tenantId}] closed after idle QR — not reconnecting (user must click again)`);
+          return;
+        }
         wa.status = 'disconnected';
         wa.phone  = null;
         wa.client = null;
@@ -588,9 +635,12 @@ app.get('/api/status', authMiddleware, (req, res) => {
   const wa = getWa(tenantId);
   const d  = loadTenantData(tenantId);
   console.log(`[status] tenantId=${tenantId} waStatus=${wa.status} phone=${wa.phone}`);
+  // qr_expired (סגרנו QR נטוש) → מציגים למשתמש "מנותק" כדי שילחץ חיבור מחדש
+  const outStatus = wa.restarting ? 'reconnecting'
+                  : (wa.status === 'qr_expired' ? 'disconnected' : wa.status);
   res.json({
-    status:          wa.restarting ? 'reconnecting' : wa.status,
-    qrDataUrl:       wa.qrData,
+    status:          outStatus,
+    qrDataUrl:       wa.status === 'qr_expired' ? null : wa.qrData,
     phoneConnected:  wa.phone,
     effectiveMonth:  getEffectiveMonth(d.config),
     currentAutoMonth: getEffectiveMonth(d.config)
@@ -698,7 +748,9 @@ app.post('/api/wa/init', authMiddleware, (req, res) => {
       console.log(`[wa/init] starting Baileys for ${tenantId}`);
       initWa(tenantId);
     }
-    return res.json({ ok: true, status: wa.restarting ? 'reconnecting' : wa.status, qrDataUrl: wa.qrData });
+    const outStatus = wa.restarting ? 'reconnecting'
+                    : (wa.status === 'qr_expired' ? 'reconnecting' : wa.status);
+    return res.json({ ok: true, status: outStatus, qrDataUrl: wa.qrData });
   }
 
   if (WA_MODE === 'cloud') {
@@ -4249,7 +4301,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.13 – SaaS Server       ║');
+  console.log('║   VaadPro v2.10.14 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
