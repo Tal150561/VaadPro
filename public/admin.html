@@ -557,6 +557,10 @@
         <h1>לקוחות</h1>
         <p>ניהול חשבונות, תשלומים והפעלה/ניתוק</p>
       </div>
+      <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="checkOrphanSessions()">🧹 בדוק sessions יתומים</button>
+        <span id="orphanStatus" style="font-size:13px;color:var(--text3)"></span>
+      </div>
       <div class="table-wrap">
         <div class="table-header">
           <h3 id="customersCount">לקוחות</h3>
@@ -1973,6 +1977,42 @@ async function cleanMsgLog() {
     loadMsgLog();
   } else {
     toast('שגיאה', 'err');
+  }
+}
+
+// ── ניקוי sessions יתומים (WA session ללא לקוח רשום) ──
+async function checkOrphanSessions() {
+  const statusEl = document.getElementById('orphanStatus');
+  statusEl.textContent = 'בודק...';
+  try {
+    const res = await fetch('/api/admin/orphan-sessions', { headers: adminHeaders() });
+    const data = await res.json();
+    if (!data.ok) { statusEl.textContent = ''; toast(data.error || 'שגיאה', 'err'); return; }
+    if (data.count === 0) {
+      statusEl.textContent = '✓ אין sessions יתומים';
+      return;
+    }
+    const lines = data.orphans.map(o =>
+      `• ${o.tenantId}  (${o.onDisk ? 'דיסק' : ''}${o.onDisk && o.inMemory ? '+' : ''}${o.inMemory ? 'זיכרון' : ''})` +
+      `${o.phone ? ' — ' + o.phone : ''}${o.status ? ' [' + o.status + ']' : ''}`
+    ).join('\n');
+    statusEl.textContent = `נמצאו ${data.count} sessions יתומים`;
+    if (!confirm(`נמצאו ${data.count} sessions יתומים (חיבור WhatsApp ללא לקוח רשום):\n\n${lines}\n\nלנתק ולמחוק את כולם?`)) return;
+    const res2 = await fetch('/api/admin/orphan-sessions/clean', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({})
+    });
+    const data2 = await res2.json();
+    if (data2.ok) {
+      statusEl.textContent = `✓ נוקו ${data2.count} sessions`;
+      toast(`נוקו ${data2.count} sessions יתומים ✓`, 'ok');
+      loadCustomers();
+    } else {
+      statusEl.textContent = '';
+      toast(data2.error || 'שגיאה בניקוי', 'err');
+    }
+  } catch(e) {
+    statusEl.textContent = '';
+    toast('שגיאה: ' + e.message, 'err');
   }
 }
 

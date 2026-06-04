@@ -123,6 +123,7 @@ const BRIDGE_SECRET = process.env.BRIDGE_SECRET || 'vaadpro-bridge-secret';
 
 // ── WhatsApp state (used in both modes) ─────────────────────────
 const waClients = {}; // tenantId → { client?, status, qrData, phone, restarting, healthTimer }
+const deletedTenants = new Set(); // tenantId-ים שנמחקו — חוסם reconnect/init של session יתום
 
 function getWa(tenantId) {
   if (!waClients[tenantId]) {
@@ -178,6 +179,10 @@ async function restartWa(tenantId, reason) {
 
 async function initWa(tenantId) {
   if (WA_MODE !== 'server') return; // Only run in server mode
+  if (deletedTenants.has(tenantId)) {
+    console.log(`[WA:${tenantId}] init skipped — tenant deleted`);
+    return;
+  }
   const wa = getWa(tenantId);
   const sessionDir = path.join(WA_SESSIONS_DIR, tenantId);
   if (!fs.existsSync(sessionDir)) fs.mkdirSync(sessionDir, { recursive: true });
@@ -1729,11 +1734,19 @@ app.post('/api/admin/delete-customer', superAdminMiddleware, (req, res) => {
   if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
   // סגור Baileys session ושחרר RAM לפני מחיקת הנתונים
   const { tenantId } = user;
+  // סמן כמחוק — חוסם reconnect מושהה (setTimeout) ו-reconnect בעליית שרת
+  deletedTenants.add(tenantId);
   const wa = waClients[tenantId];
   if (wa) {
-    if (wa.client) { try { wa.client.end(undefined); } catch(e) {} }
+    stopQrWatch(wa);
+    // logout אמיתי מנתק את ה-device אצל WhatsApp (end() לבד משאיר חיבור חי שמתחבר מחדש)
+    if (wa.client) {
+      try { wa.client.logout(); } catch(e) {
+        try { wa.client.end(undefined); } catch(e2) {}
+      }
+    }
     delete waClients[tenantId];
-    console.log(`[delete-customer] WA session closed and freed for ${tenantId}`);
+    console.log(`[delete-customer] WA session logged out and freed for ${tenantId}`);
   }
   // מחק קובץ נתוני הבניין
   const tf = tenantFile(tenantId);
@@ -1744,13 +1757,77 @@ app.post('/api/admin/delete-customer', superAdminMiddleware, (req, res) => {
     try { fs.rmSync(sessionDir, { recursive: true, force: true }); } catch(e) {}
     console.log(`[delete-customer] WA session dir deleted for ${tenantId}`);
   }
+  // ניקוי חוזר מושהה — logout הוא אסינכרוני ועלול לכתוב מחדש creds.json אחרי המחיקה
+  setTimeout(() => {
+    try {
+      if (fs.existsSync(sessionDir)) {
+        fs.rmSync(sessionDir, { recursive: true, force: true });
+        console.log(`[delete-customer] WA session dir re-cleaned for ${tenantId}`);
+      }
+    } catch(e) {}
+  }, 8000);
   // הסר מרשימת המשתמשים
   users = users.filter(u => u.email !== email.toLowerCase());
   saveUsers(users);
   res.json({ ok: true });
 });
 
-// ── Admin: ממתינים להתקנה ───────────────────────────────────────
+// ── Admin: זיהוי וניקוי sessions יתומים (WA session בלי user) ──────
+// GET = רשימה בלבד (preview). POST = מנתק, מוחק תיקייה ומסיר מהזיכרון.
+app.get('/api/admin/orphan-sessions', superAdminMiddleware, (req, res) => {
+  const users = loadUsers();
+  const validIds = new Set(users.map(u => u.tenantId));
+  const orphans = [];
+  // sessions על הדיסק
+  let dirs = [];
+  try { dirs = fs.readdirSync(WA_SESSIONS_DIR); } catch(e) {}
+  dirs.forEach(d => {
+    try {
+      const sd = path.join(WA_SESSIONS_DIR, d);
+      if (!fs.statSync(sd).isDirectory()) return;
+      if (!validIds.has(d)) {
+        const wa = waClients[d];
+        orphans.push({ tenantId: d, onDisk: true, inMemory: !!wa, status: wa ? wa.status : null, phone: wa ? wa.phone : null });
+      }
+    } catch(e) {}
+  });
+  // sessions בזיכרון בלבד (בלי תיקייה)
+  Object.keys(waClients).forEach(tid => {
+    if (!validIds.has(tid) && !orphans.find(o => o.tenantId === tid)) {
+      orphans.push({ tenantId: tid, onDisk: false, inMemory: true, status: waClients[tid].status, phone: waClients[tid].phone });
+    }
+  });
+  res.json({ ok: true, count: orphans.length, orphans });
+});
+
+app.post('/api/admin/orphan-sessions/clean', superAdminMiddleware, (req, res) => {
+  const users = loadUsers();
+  const validIds = new Set(users.map(u => u.tenantId));
+  const { tenantId } = req.body; // אופציונלי — ניקוי ספציפי; בלעדיו מנקה את כל היתומים
+  const cleaned = [];
+  const targets = new Set();
+  let dirs = [];
+  try { dirs = fs.readdirSync(WA_SESSIONS_DIR); } catch(e) {}
+  dirs.forEach(d => { if (!validIds.has(d)) targets.add(d); });
+  Object.keys(waClients).forEach(tid => { if (!validIds.has(tid)) targets.add(tid); });
+  targets.forEach(tid => {
+    if (tenantId && tid !== tenantId) return;
+    deletedTenants.add(tid);
+    const wa = waClients[tid];
+    if (wa) {
+      stopQrWatch(wa);
+      if (wa.client) { try { wa.client.logout(); } catch(e) { try { wa.client.end(undefined); } catch(e2) {} } }
+      delete waClients[tid];
+    }
+    const sd = path.join(WA_SESSIONS_DIR, tid);
+    try { if (fs.existsSync(sd)) fs.rmSync(sd, { recursive: true, force: true }); } catch(e) {}
+    setTimeout(() => { try { if (fs.existsSync(sd)) fs.rmSync(sd, { recursive: true, force: true }); } catch(e) {} }, 8000);
+    cleaned.push(tid);
+    console.log(`[orphan-clean] removed orphan session ${tid}`);
+  });
+  res.json({ ok: true, cleaned, count: cleaned.length });
+});
+
 // ── Admin: עדכון סטטוס התקנה ידני ─────────────────────────────
 app.post('/api/admin/install-status', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { email, status } = req.body;
@@ -4301,7 +4378,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.14 – SaaS Server       ║');
+  console.log('║   VaadPro v2.10.15 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
