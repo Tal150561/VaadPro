@@ -32,6 +32,9 @@
   .forgot a:hover { color:var(--accent); }
   .trial-note { background:rgba(37,211,102,.06); border:1px solid rgba(37,211,102,.2); border-radius:8px; padding:12px 14px; font-size:0.82rem; color:var(--text2); margin-bottom:16px; line-height:1.5; }
   .trial-note strong { color:var(--accent); }
+  /* Google Places Autocomplete widget — match dark theme */
+  #regAddrHost { margin-bottom:14px; }
+  #regAddrHost gmp-place-autocomplete { width:100%; display:block; }
 </style>
 </head>
 <body>
@@ -67,8 +70,12 @@
     <div class="msg" id="msgRegister"></div>
     <label>שם מלא</label>
     <input type="text" id="regName" placeholder="ישראל ישראלי">
-    <label>שם הבניין</label>
-    <input type="text" id="regBuilding" placeholder='למשל: "רחוב הרצל 5, תל אביב"'>
+    <label>שם הבניין <span style="color:var(--text2);font-weight:400">(אופציונלי)</span></label>
+    <input type="text" id="regBuilding" placeholder='למשל: "בניין הדס" — אפשר להשאיר ריק'>
+    <label>כתובת הבניין</label>
+    <div id="regAddrHost"></div>
+    <input type="text" id="regAddress" placeholder="התחל להקליד כתובת ובחר מהרשימה">
+    <div id="regAddrHint" style="font-size:0.75rem;color:var(--text2);margin-top:-8px;margin-bottom:14px;display:none;">בחר כתובת מהרשימה לתוצאות חיפוש מדויקות בעתיד</div>
     <label>מייל</label>
     <input type="email" id="regEmail" placeholder="your@email.com" dir="ltr">
     <label>טלפון</label>
@@ -80,6 +87,61 @@
 </div>
 
 <script>
+// ===== Google Places Autocomplete (כתובת בניין) =====
+// state: נתפס בעת בחירת כתובת מהרשימה. נופל לטקסט חופשי אם Google לא זמין.
+let regAddrData = { address: '', placeId: '' };
+
+(async function loadMapsForRegister() {
+  try {
+    const r = await fetch('/api/maps-key');
+    const d = await r.json();
+    if (!d.key) { showAddrFallbackHint(); return; }   // אין מפתח → טקסט חופשי
+    const s = document.createElement('script');
+    s.src = 'https://maps.googleapis.com/maps/api/js?key=' + encodeURIComponent(d.key) +
+            '&loading=async&language=he&region=IL&callback=initRegAutocomplete';
+    s.async = true;
+    s.onerror = showAddrFallbackHint;                  // טעינה נכשלה → טקסט חופשי
+    document.head.appendChild(s);
+  } catch (e) { showAddrFallbackHint(); }              // אין רשת/שרת → טקסט חופשי
+})();
+
+function showAddrFallbackHint() {
+  // נשארים עם ה-input הרגיל #regAddress (נפילה חיננית). אין צורך בפעולה נוספת.
+}
+
+window.initRegAutocomplete = async function () {
+  try {
+    const { PlaceAutocompleteElement } = await google.maps.importLibrary('places');
+    const acEl = new PlaceAutocompleteElement({
+      includedRegionCodes: ['il'],
+      requestedLanguage: 'he',
+      requestedRegion: 'IL'
+    });
+    const host = document.getElementById('regAddrHost');
+    const plainInput = document.getElementById('regAddress');
+    host.appendChild(acEl);
+    plainInput.style.display = 'none';                 // מסתירים את ה-input הרגיל, ה-widget מחליף אותו
+    document.getElementById('regAddrHint').style.display = 'block';
+
+    acEl.addEventListener('gmp-select', async (event) => {
+      try {
+        const place = event.placePrediction.toPlace();
+        await place.fetchFields({ fields: ['id', 'formattedAddress'] });
+        regAddrData.address = place.formattedAddress || '';
+        regAddrData.placeId = place.id || '';
+      } catch (err) { console.error('fetchFields failed', err); }
+    });
+    // אם Google דוחה בקשה — חוזרים ל-input הרגיל כדי לא לחסום הרשמה
+    acEl.addEventListener('gmp-requesterror', () => {
+      host.innerHTML = '';
+      plainInput.style.display = 'block';
+      document.getElementById('regAddrHint').style.display = 'none';
+    });
+  } catch (e) {
+    showAddrFallbackHint();   // הספרייה לא נטענה → input רגיל נשאר
+  }
+};
+
 function showTab(tab) {
   document.getElementById('panelLogin').style.display    = tab === 'login'    ? 'block' : 'none';
   document.getElementById('panelRegister').style.display = tab === 'register' ? 'block' : 'none';
@@ -127,11 +189,14 @@ async function doLogin() {
 
 async function doRegister() {
   const name     = document.getElementById('regName').value.trim();
-  const building = document.getElementById('regBuilding').value.trim();
+  const building = document.getElementById('regBuilding').value.trim();   // אופציונלי
+  // כתובת: מה-widget אם נבחרה, אחרת מה-input הרגיל (נפילה חיננית)
+  const address  = (regAddrData.address || document.getElementById('regAddress').value).trim();
+  const placeId  = regAddrData.placeId || '';
   const email    = document.getElementById('regEmail').value.trim();
   const phone    = document.getElementById('regPhone').value.trim();
   const pass     = document.getElementById('regPass').value;
-  if (!name || !building || !email || !pass) { showMsg('msgRegister', 'יש למלא את כל השדות', 'err'); return; }
+  if (!name || !address || !email || !pass) { showMsg('msgRegister', 'יש למלא שם, כתובת, מייל וסיסמה', 'err'); return; }
   if (pass.length < 6) { showMsg('msgRegister', 'סיסמה חייבת להכיל לפחות 6 תווים', 'err'); return; }
   const btn = document.getElementById('btnRegister');
   btn.disabled = true; btn.textContent = 'נרשם...';
@@ -139,7 +204,7 @@ async function doRegister() {
     const r = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fullName: name, buildingName: building, email, phone, password: pass })
+      body: JSON.stringify({ fullName: name, buildingName: building, address, placeId, email, phone, password: pass })
     });
     const d = await r.json();
     if (d.ok) {

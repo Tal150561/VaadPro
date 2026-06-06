@@ -558,30 +558,39 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
   }
 }
 
+// מפתח Google Maps (ציבורי — מוגבל ב-referrer בצד Google). מאפשר החלפת מפתח דרך env var בלי deploy.
+app.get('/api/maps-key', (req, res) => {
+  res.json({ key: process.env.GOOGLE_MAPS_KEY || '' });
+});
+
 // הרשמה
 app.post('/api/auth/register', async (req, res) => {
-  const { email, password, buildingName, address, phone, fullName } = req.body;
-  if (!email || !password || !buildingName) return res.json({ ok: false, error: 'יש למלא את כל השדות' });
+  const { email, password, buildingName, address, placeId, phone, fullName } = req.body;
+  // הכתובת היא החובה החדשה; שם הבניין אופציונלי (נופל חזרה לכתובת לתצוגה)
+  if (!email || !password || !address) return res.json({ ok: false, error: 'יש למלא את כל השדות' });
   if (password.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
 
   const users = loadUsers();
   if (users.find(u => u.email === email.toLowerCase())) return res.json({ ok: false, error: 'אימייל זה כבר רשום' });
 
+  // אם שם הבניין ריק — השתמש בכתובת כשם תצוגה (fallback)
+  const displayName = (buildingName && buildingName.trim()) ? buildingName.trim() : address;
+
   const tenantId  = uuidv4();
   const passHash  = await bcrypt.hash(password, 10);
   const trialEnd  = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 יום
 
-  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName, address: address||'', phone: phone||'', fullName: fullName||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
+  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName: displayName, address: address||'', buildingPlaceId: placeId||'', phone: phone||'', fullName: fullName||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
   users.push(user);
   saveUsers(users);
 
   // צור קובץ נתונים ראשוני לבניין
   saveTenantData(tenantId, { tenants: [], sentLog: {}, config: { amount: 300, sendDay: 1, sendHour: 9, sendMinute: 0, monthMode: 'auto', manualMonth: '', template: 'שלום {שם}! 👋\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה! 🙏' }, reports: [], rptLayouts: {} });
 
-  const token = jwt.sign({ userId: user.id, tenantId, email: user.email, buildingName, fullName: fullName||'' }, JWT_SECRET, { expiresIn: '30d' });
+  const token = jwt.sign({ userId: user.id, tenantId, email: user.email, buildingName: displayName, fullName: fullName||'' }, JWT_SECRET, { expiresIn: '30d' });
   // שלח אימייל ברוכה (לא חוסם את התשובה)
-  sendWelcomeEmail(user.email, buildingName, tenantId).catch(() => {});
-  res.json({ ok: true, token, buildingName, plan: 'trial', trialEnd });
+  sendWelcomeEmail(user.email, displayName, tenantId).catch(() => {});
+  res.json({ ok: true, token, buildingName: displayName, plan: 'trial', trialEnd });
 });
 
 // התחברות
@@ -4378,7 +4387,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.15 – SaaS Server       ║');
+  console.log('║   VaadPro v2.10.17 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
