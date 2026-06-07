@@ -1868,19 +1868,34 @@ app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
       const recentlyConnected = activeInMemory || daysSinceConn < 30;
       return !recentlyConnected;
     })
-    .map(u => ({
-      email: u.email,
-      fullName: u.fullName||'',
-      buildingName: u.buildingName||'',
-      phone: u.phone||'',
-      createdAt: u.createdAt,
-      daysSince: Math.floor((now - new Date(u.createdAt)) / (1000*60*60*24)),
-      plan: u.plan,
-      trialEnd: u.trialEnd||null,
-      maxTenantsOverride: u.maxTenantsOverride||null,
-      lastConnectedAt: u.lastConnectedAt||null,
-      installStatus: (statuses[u.email] && statuses[u.email].status) || 'pending'
-    }))
+    .map(u => {
+      // סטטוס חיבור WhatsApp חי (אם יש session בזיכרון)
+      const wa = waClients[u.tenantId];
+      let waStatus = 'none';            // לא ניסה להתחבר כלל
+      if (wa) {
+        if (wa.status === 'ready' || wa.status === 'connected') waStatus = 'ready';
+        else if (wa.status === 'qr') waStatus = 'qr';            // QR מוצג, ממתין לסריקה
+        else if (wa.status === 'qr_expired') waStatus = 'qr_expired';
+        else if (wa.status === 'reconnecting') waStatus = 'reconnecting';
+        else waStatus = wa.status || 'connecting';
+      }
+      return {
+        email: u.email,
+        fullName: u.fullName||'',
+        buildingName: u.buildingName||'',
+        address: u.address||'',
+        buildingPlaceId: u.buildingPlaceId||'',
+        phone: u.phone||'',
+        createdAt: u.createdAt,
+        daysSince: Math.floor((now - new Date(u.createdAt)) / (1000*60*60*24)),
+        plan: u.plan,
+        trialEnd: u.trialEnd||null,
+        maxTenantsOverride: u.maxTenantsOverride||null,
+        lastConnectedAt: u.lastConnectedAt||null,
+        waStatus,
+        installStatus: (statuses[u.email] && statuses[u.email].status) || 'pending'
+      };
+    })
     .sort((a,b) => b.daysSince - a.daysSince);
   res.json({ waiting });
 });
@@ -4387,7 +4402,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.17 – SaaS Server       ║');
+  console.log('║   VaadPro v2.10.18 – SaaS Server       ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

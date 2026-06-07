@@ -1670,16 +1670,41 @@ async function loadWaitingInstall() {
     document.getElementById('waitingInstallCount').textContent = list.length + ' לקוחות';
     const statusMap = { pending:'⏳ ממתין', needs_help:'🆘 דורש עזרה', in_progress:'⏳ בתהליך', installed:'✅ חובר', not_interested:'❌ לא מעוניין' };
     const statusColor = { pending:'#818cf8', needs_help:'#ef4444', in_progress:'#f59e0b', installed:'#22c55e', not_interested:'#6b7280' };
+    // סטטוס חיבור WhatsApp חי (מהשרת)
+    const waMap = {
+      none:        { t:'⚪ טרם התחיל', c:'#6b7280' },
+      qr:          { t:'📷 QR מוצג — ממתין לסריקה', c:'#f59e0b' },
+      qr_expired:  { t:'⏱ QR פג תוקף', c:'#ef4444' },
+      reconnecting:{ t:'🔄 מתחבר מחדש...', c:'#818cf8' },
+      connecting:  { t:'🔄 מתחבר...', c:'#818cf8' },
+      ready:       { t:'🟢 מחובר', c:'#22c55e' }
+    };
+    const esc = function(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); };
     document.getElementById('waitingInstallList').innerHTML = list.map(u => {
       const name = u.fullName || u.buildingName || u.email;
       const days = u.daysSince === 1 ? 'יום' : u.daysSince + ' ימים';
       const st = u.installStatus || 'pending';
       const opts = Object.entries(statusMap).map(function(e){ return '<option value="'+e[0]+'"'+(st===e[0]?' selected':'')+'>'+e[1]+'</option>'; }).join('');
-      return '<div style="display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid rgba(255,255,255,.05);flex-wrap:wrap">' +
-        '<span style="font-size:11px;color:#818cf8;font-weight:700;min-width:80px">לפני ' + days + '</span>' +
-        '<span style="font-size:13px;flex:1;min-width:120px">' + name + '</span>' +
-        '<select onchange="setInstallStatus(\'' + u.email + '\',this.value)" style="font-size:11px;padding:3px 6px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);color:' + (statusColor[st]||'#818cf8') + '">' + opts + '</select>' +
-        '<button class="btn btn-sm" style="background:rgba(99,102,241,.15);color:#818cf8;font-size:11px" onclick="showPage(\'messaging\')">📨 פנה</button>' +
+      const wa = waMap[u.waStatus] || { t: u.waStatus||'', c:'#6b7280' };
+      // שורת פרטי הרשמה (כל מה שהלקוח מילא בטופס)
+      const det = [];
+      if (u.buildingName) det.push('<span title="שם בניין">🏢 ' + esc(u.buildingName) + '</span>');
+      if (u.address)      det.push('<span title="כתובת">📍 ' + esc(u.address) + '</span>');
+      if (u.phone)        det.push('<span title="טלפון">📞 <a href="tel:' + esc(u.phone) + '" style="color:#818cf8;text-decoration:none">' + esc(u.phone) + '</a></span>');
+      if (u.email)        det.push('<span title="אימייל">✉️ <a href="mailto:' + esc(u.email) + '" style="color:#818cf8;text-decoration:none">' + esc(u.email) + '</a></span>');
+      const detRow = det.length
+        ? '<div style="display:flex;gap:14px;flex-wrap:wrap;font-size:12px;color:var(--text2);margin-top:4px;width:100%">' + det.join('') + '</div>'
+        : '<div style="font-size:11px;color:var(--text3);margin-top:4px;width:100%">לא נמסרו פרטים בהרשמה</div>';
+      const waBadge = '<span title="סטטוס חיבור WhatsApp בזמן אמת" style="font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;background:' + wa.c + '22;color:' + wa.c + ';white-space:nowrap">' + wa.t + '</span>';
+      return '<div style="padding:10px 0;border-bottom:1px solid rgba(255,255,255,.05)">' +
+        '<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">' +
+          '<span style="font-size:11px;color:#818cf8;font-weight:700;min-width:80px">לפני ' + days + '</span>' +
+          '<span style="font-size:13px;font-weight:600;flex:1;min-width:120px">' + esc(name) + '</span>' +
+          waBadge +
+          '<select onchange="setInstallStatus(\'' + u.email + '\',this.value)" style="font-size:11px;padding:3px 6px;border-radius:6px;background:var(--bg2);border:1px solid var(--border);color:' + (statusColor[st]||'#818cf8') + '">' + opts + '</select>' +
+          '<button class="btn btn-sm" style="background:rgba(99,102,241,.15);color:#818cf8;font-size:11px" onclick="showPage(\'messaging\')">📨 פנה</button>' +
+        '</div>' +
+        detRow +
         '</div>';
     }).join('');
   } catch(e) {}
