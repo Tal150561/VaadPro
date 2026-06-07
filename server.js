@@ -526,20 +526,19 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
 יש לך <strong>30 יום ניסיון חינם</strong> עם כל הפיצ'רים פתוחים.
 
 <hr style="margin:16px 0;border:none;border-top:1px solid #eee;">
-<strong>כדי להתחבר לוואטסאפ:</strong>
+<strong>לחיבור WhatsApp — רק לסרוק ברקוד:</strong>
 <hr style="margin:8px 0;border:none;border-top:1px solid #eee;">
 
-<strong>1. קבל קוד התקנה</strong>
-כנס לאפליקציה ← הגדרות ← לחץ "קבל קוד התקנה"
+<strong>1. כנס לאפליקציה</strong>
+היכנס עם האימייל והסיסמה שבחרת בהרשמה.
 
-<strong>2. הורד את המתקין</strong>
-הגדרות ← הורד VaadPro-Setup.bat ← לחץ ימני ← Unblock ← OK
+<strong>2. לחץ "חיבור WhatsApp"</strong>
+בהגדרות ← לחץ על כפתור "חיבור WhatsApp". יוצג ברקוד QR.
 
-<strong>3. הפעל והתקן</strong>
-לחץ פעמיים על VaadPro-Setup.bat ← הכנס קוד ← Install
+<strong>3. סרוק עם הטלפון</strong>
+פתח WhatsApp בטלפון ← הגדרות ← מכשירים מקושרים ← קישור מכשיר ← סרוק את הברקוד שעל המסך ← מחובר ✅
 
-<strong>4. חבר ווטסאפ</strong>
-סרוק QR עם הטלפון ← מחובר ✅
+<em style="color:#666;font-size:13px;">אין צורך בהורדה או התקנה כלשהי — הכל פועל מהדפדפן.</em>
 
 <a href="${appUrl}" style="display:inline-block;background:#25D366;color:#000;padding:12px 28px;border-radius:8px;text-decoration:none;font-weight:bold;margin-top:16px;">כנס לאפליקציה ←</a>
 
@@ -555,6 +554,38 @@ async function sendWelcomeEmail(email, buildingName, tenantId) {
     console.log('[Email] welcome sent to ' + email);
   } catch(e) {
     console.error('[Email] welcome failed:', e.message);
+  }
+}
+
+// ── התראת Super Admin על הרשמת לקוח חדש (אימייל) ──────────
+// נשלח לכתובת ADMIN_EMAIL — fire-and-forget, לעולם לא מפיל את ההרשמה.
+async function notifyAdminNewSignup(user) {
+  const adminEmail = process.env.ADMIN_EMAIL || '';
+  if (!adminEmail) { console.log('[Admin notify] ADMIN_EMAIL not set - skipping new-signup alert'); return; }
+  if (!RESEND_API_KEY && (!SMTP_HOST || !SMTP_USER)) { console.log('[Admin notify] email not configured - skipping'); return; }
+  const appUrl = process.env.APP_URL || 'https://vaadpro.org';
+  const when = new Date().toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+  const subject = '\u{1F195} לקוח חדש נרשם ל-VaadPro: ' + (user.buildingName || user.address || user.email);
+  const esc = (s) => String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const row = (label, val) => val ? ('<tr><td style="padding:4px 12px 4px 0;color:#888;white-space:nowrap">' + label + '</td><td style="padding:4px 0;font-weight:bold">' + esc(val) + '</td></tr>') : '';
+  const body = '<div dir="rtl" style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#222;max-width:560px;">'
+    + '<h2 style="margin:0 0 12px;font-size:18px;">\u{1F195} לקוח חדש נרשם למערכת</h2>'
+    + '<table style="border-collapse:collapse;margin:8px 0 16px;">'
+    + row('שם בניין / תצוגה:', user.buildingName)
+    + row('כתובת:', user.address)
+    + row('איש קשר:', user.fullName)
+    + row('טלפון:', user.phone)
+    + row('אימייל:', user.email)
+    + row('נרשם ב:', when)
+    + '</table>'
+    + '<a href="' + appUrl + '/admin" style="display:inline-block;background:#6366f1;color:#fff;padding:10px 24px;border-radius:8px;text-decoration:none;font-weight:bold;">פתח פאנל אדמין &#8592;</a>'
+    + '<p style="font-size:12px;color:#999;margin-top:20px;">הלקוח טרם חיבר WhatsApp - יופיע ב"ממתינים לחיבור WhatsApp".</p>'
+    + '</div>';
+  try {
+    await sendEmailResend(adminEmail, subject, body);
+    console.log('[Admin notify] new-signup alert sent to ' + adminEmail + ' for ' + user.email);
+  } catch(e) {
+    console.error('[Admin notify] failed:', e.message);
   }
 }
 
@@ -590,6 +621,8 @@ app.post('/api/auth/register', async (req, res) => {
   const token = jwt.sign({ userId: user.id, tenantId, email: user.email, buildingName: displayName, fullName: fullName||'' }, JWT_SECRET, { expiresIn: '30d' });
   // שלח אימייל ברוכה (לא חוסם את התשובה)
   sendWelcomeEmail(user.email, displayName, tenantId).catch(() => {});
+  // התראה ל-Super Admin על לקוח חדש (לא חוסם, לא מפיל את ההרשמה)
+  notifyAdminNewSignup(user).catch(() => {});
   res.json({ ok: true, token, buildingName: displayName, plan: 'trial', trialEnd });
 });
 
@@ -1869,12 +1902,11 @@ app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
       return !recentlyConnected;
     })
     .map(u => {
-      // סטטוס חיבור WhatsApp חי (אם יש session בזיכרון)
       const wa = waClients[u.tenantId];
-      let waStatus = 'none';            // לא ניסה להתחבר כלל
+      let waStatus = 'none';
       if (wa) {
         if (wa.status === 'ready' || wa.status === 'connected') waStatus = 'ready';
-        else if (wa.status === 'qr') waStatus = 'qr';            // QR מוצג, ממתין לסריקה
+        else if (wa.status === 'qr') waStatus = 'qr';
         else if (wa.status === 'qr_expired') waStatus = 'qr_expired';
         else if (wa.status === 'reconnecting') waStatus = 'reconnecting';
         else waStatus = wa.status || 'connecting';
