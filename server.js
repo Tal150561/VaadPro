@@ -146,8 +146,35 @@ function saveTenantData(tenantId, patch) {
 // (transient — .bak is itself a Layer-1 artifact, no point nesting it).
 
 const BACKUPS_DIR     = path.join(DATA_DIR, '_backups');
-const BACKUP_KEEP_DAYS = parseInt(process.env.BACKUP_KEEP_DAYS || '14', 10) || 14;
+const BACKUP_CONFIG_FILE = path.join(DATA_DIR, '_backup_config.json');
 if (!fs.existsSync(BACKUPS_DIR)) { try { fs.mkdirSync(BACKUPS_DIR, { recursive: true }); } catch(e) {} }
+
+// Retention is runtime-configurable from the admin panel (super only) and
+// persisted to _backup_config.json. Precedence on boot:
+//   1) saved value in _backup_config.json (set via admin)
+//   2) env BACKUP_KEEP_DAYS
+//   3) default 14
+// Clamped to a sane 1..365 range.
+function _clampKeepDays(n) { n = parseInt(n, 10); if (!Number.isFinite(n)) return 14; return Math.max(1, Math.min(365, n)); }
+function loadBackupConfig() {
+  try {
+    if (fs.existsSync(BACKUP_CONFIG_FILE)) {
+      const c = JSON.parse(fs.readFileSync(BACKUP_CONFIG_FILE, 'utf8'));
+      if (c && c.keepDays != null) return { keepDays: _clampKeepDays(c.keepDays) };
+    }
+  } catch(e) { console.error('[Backup] config read failed:', e.message); }
+  if (process.env.BACKUP_KEEP_DAYS) return { keepDays: _clampKeepDays(process.env.BACKUP_KEEP_DAYS) };
+  return { keepDays: 14 };
+}
+function saveBackupConfig(keepDays) {
+  const cfg = { keepDays: _clampKeepDays(keepDays) };
+  // Atomic write (same discipline as Layer 1)
+  const tmp = BACKUP_CONFIG_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+  fs.renameSync(tmp, BACKUP_CONFIG_FILE);
+  return cfg;
+}
+function getBackupKeepDays() { return loadBackupConfig().keepDays; }
 
 // CRC-32 table (built once)
 const _crc32Table = (() => {
@@ -243,7 +270,8 @@ function createBackup(reason) {
 // Delete snapshots older than BACKUP_KEEP_DAYS (by mtime). Best-effort.
 function pruneOldBackups() {
   try {
-    const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    const keepDays = getBackupKeepDays();
+    const cutoff = Date.now() - keepDays * 24 * 60 * 60 * 1000;
     let removed = 0;
     for (const f of fs.readdirSync(BACKUPS_DIR)) {
       if (!f.startsWith('backup-') || !f.endsWith('.zip')) continue;
@@ -252,7 +280,7 @@ function pruneOldBackups() {
         if (fs.statSync(fp).mtimeMs < cutoff) { fs.unlinkSync(fp); removed++; }
       } catch(e) { /* skip */ }
     }
-    if (removed > 0) console.log(`[Backup] pruned ${removed} backup(s) older than ${BACKUP_KEEP_DAYS} days`);
+    if (removed > 0) console.log(`[Backup] pruned ${removed} backup(s) older than ${keepDays} days`);
   } catch(e) { console.error('[Backup] prune failed:', e.message); }
 }
 
@@ -2041,6 +2069,42 @@ app.post('/api/admin/orphan-sessions/clean', superAdminMiddleware, (req, res) =>
   res.json({ ok: true, cleaned, count: cleaned.length });
 });
 
+// ── Admin: הגדרות גיבוי (שכבה 2) — Super Admin בלבד ───────────────
+// GET: מחזיר את מספר ימי השמירה הנוכחי + רשימת הגיבויים הקיימים
+app.get('/api/admin/backup-settings', superAdminMiddleware, (req, res) => {
+  let backups = [];
+  try {
+    backups = fs.readdirSync(BACKUPS_DIR)
+      .filter(f => f.startsWith('backup-') && f.endsWith('.zip'))
+      .map(f => {
+        const fp = path.join(BACKUPS_DIR, f);
+        let size = 0, mtime = null;
+        try { const st = fs.statSync(fp); size = st.size; mtime = st.mtime.toISOString(); } catch(e) {}
+        return { name: f, sizeKb: Math.round(size / 1024), mtime };
+      })
+      .sort((a, b) => (b.mtime || '').localeCompare(a.mtime || ''));
+  } catch(e) {}
+  res.json({ ok: true, keepDays: getBackupKeepDays(), count: backups.length, backups: backups.slice(0, 30) });
+});
+
+// POST { keepDays } — עדכון מספר ימי השמירה (נשמר ל-_backup_config.json, נכנס לתוקף מיד)
+app.post('/api/admin/backup-settings', superAdminMiddleware, (req, res) => {
+  const { keepDays } = req.body || {};
+  if (keepDays == null || isNaN(parseInt(keepDays, 10))) {
+    return res.json({ ok: false, error: 'מספר ימים לא תקין' });
+  }
+  const cfg = saveBackupConfig(keepDays);
+  console.log(`[Backup] keepDays updated to ${cfg.keepDays} by admin ${req.adminUser && req.adminUser.email}`);
+  pruneOldBackups(); // החל מיד — מחק גיבויים שחורגים מהסף החדש
+  res.json({ ok: true, keepDays: cfg.keepDays });
+});
+
+// POST — צור גיבוי ידני עכשיו (Super Admin)
+app.post('/api/admin/backup-now', superAdminMiddleware, (req, res) => {
+  const p = createBackup('manual');
+  res.json({ ok: !!p, file: p ? path.basename(p) : null });
+});
+
 // ── Admin: עדכון סטטוס התקנה ידני ─────────────────────────────
 app.post('/api/admin/install-status', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { email, status } = req.body;
@@ -2586,7 +2650,7 @@ console.log('[AutoSend] scheduler active — checking every minute');
 // Backup Layer 2 — take a snapshot ~30s after boot (catches missed daily runs
 // after a deploy / restart), then the daily cron handles the rest.
 setTimeout(() => createBackup('startup'), 30 * 1000);
-console.log(`[Backup] Layer 2 active — daily snapshots, keeping ${BACKUP_KEEP_DAYS} days`);
+console.log(`[Backup] Layer 2 active — daily snapshots, keeping ${getBackupKeepDays()} days`);
 
 
 // ── שכחתי סיסמה ─────────────────────────────────────────────────
