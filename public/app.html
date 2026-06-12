@@ -831,6 +831,7 @@ function vpLogout() {
           </div>
         </div>
         <div class="hint" style="margin-top:10px;">⚠️ שחזור יחליף את כל הנתונים הקיימים – גבה קודם!</div>
+        <div class="hint" style="margin-top:8px;color:var(--text2);">🛡️ בנוסף, המערכת מבצעת גיבוי אוטומטי יומי בשרת (כולל לפני כל שחזור) — רשת ביטחון נוספת מעבר לגיבוי הידני.</div>
       </div>
     </div>
 
@@ -3978,6 +3979,14 @@ function restoreData(event) {
       if (!restored.tenants || !Array.isArray(restored.tenants)) {
         toast('❌ קובץ לא תקין – חסר מידע דיירים', 'error'); return;
       }
+      // שכבה 2: צור snapshot של המצב הנוכחי לפני הדריסה (ניתן לחזרה אם השחזור שגוי)
+      try {
+        await fetch(API + '/backup-now', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reason: 'pre-restore' })
+        });
+      } catch(e) { /* גיבוי-טרום-שחזור הוא best-effort — לא לחסום את השחזור */ }
       // Save to server
       try {
         await fetch(API + '/data', {

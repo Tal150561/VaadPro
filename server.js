@@ -121,6 +121,141 @@ function saveTenantData(tenantId, patch) {
   return merged;
 }
 
+// ════════════════════════════════════════════════════════════════
+// Backup Layer 2 — rolling daily snapshots of ALL data files
+// ════════════════════════════════════════════════════════════════
+// Staged backup plan (Neve Yam v3.4 §7) — שכבה 2.
+// Layer 1 = atomic write per file (saveTenantData). Layer 2 = a daily
+// point-in-time ZIP of the ENTIRE data dir, kept BACKUP_KEEP_DAYS back,
+// plus an extra snapshot taken right before any manual restore.
+//
+// Design decisions (confirmed with operator):
+//  - ONE system-wide snapshot per run (not per-tenant) — disaster recovery
+//    is all-or-nothing, and shared files (_portal_tokens etc.) span tenants.
+//  - Retention via env var BACKUP_KEEP_DAYS (default 14) — SaaS-level knob,
+//    not a per-vaad setting (a tenant must not be able to disable backups).
+//  - Captures the WHOLE data dir minus regenerable/transient/huge things,
+//    so a file added in a FUTURE version is included automatically (e.g.
+//    meterReadings — plan §9.6). No per-file enumeration to forget.
+//  - Pure-Node ZIP writer — zero new npm deps, no shelling out (Hebrew
+//    filenames + child_process quoting is a footgun). Deflate, UTF-8 flag.
+//
+// EXCLUDES (never backed up): the _backups dir itself (no recursion),
+// wa_sessions (binary Baileys creds — regenerable by re-scanning QR, and
+// large), bridge-node-modules.zip (huge, regenerable), and *.tmp / *.bak
+// (transient — .bak is itself a Layer-1 artifact, no point nesting it).
+
+const BACKUPS_DIR     = path.join(DATA_DIR, '_backups');
+const BACKUP_KEEP_DAYS = parseInt(process.env.BACKUP_KEEP_DAYS || '14', 10) || 14;
+if (!fs.existsSync(BACKUPS_DIR)) { try { fs.mkdirSync(BACKUPS_DIR, { recursive: true }); } catch(e) {} }
+
+// CRC-32 table (built once)
+const _crc32Table = (() => {
+  let c, t = [];
+  for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
+  return t;
+})();
+function _crc32(buf) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < buf.length; i++) c = _crc32Table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+
+// Minimal pure-Node ZIP writer. files: [{ name, data:Buffer }]. Deflate + UTF-8.
+function _writeZip(files, outPath) {
+  const zlib = require('zlib');
+  const chunks = [], central = [];
+  let offset = 0;
+  const dosTime = 0, dosDate = 0x21; // fixed 1980-01-01 — avoids tz noise
+  for (const f of files) {
+    const nameBuf = Buffer.from(f.name, 'utf8');
+    const crc  = _crc32(f.data);
+    const comp = zlib.deflateRawSync(f.data);
+    const store = comp.length >= f.data.length;
+    const method = store ? 0 : 8;
+    const body = store ? f.data : comp;
+    const lh = Buffer.alloc(30);
+    lh.writeUInt32LE(0x04034b50, 0); lh.writeUInt16LE(20, 4); lh.writeUInt16LE(0x0800, 6);
+    lh.writeUInt16LE(method, 8); lh.writeUInt16LE(dosTime, 10); lh.writeUInt16LE(dosDate, 12);
+    lh.writeUInt32LE(crc, 14); lh.writeUInt32LE(body.length, 18); lh.writeUInt32LE(f.data.length, 22);
+    lh.writeUInt16LE(nameBuf.length, 26); lh.writeUInt16LE(0, 28);
+    chunks.push(lh, nameBuf, body);
+    const ch = Buffer.alloc(46);
+    ch.writeUInt32LE(0x02014b50, 0); ch.writeUInt16LE(20, 4); ch.writeUInt16LE(20, 6); ch.writeUInt16LE(0x0800, 8);
+    ch.writeUInt16LE(method, 10); ch.writeUInt16LE(dosTime, 12); ch.writeUInt16LE(dosDate, 14);
+    ch.writeUInt32LE(crc, 16); ch.writeUInt32LE(body.length, 20); ch.writeUInt32LE(f.data.length, 24);
+    ch.writeUInt16LE(nameBuf.length, 28); ch.writeUInt32LE(offset, 42);
+    central.push(Buffer.concat([ch, nameBuf]));
+    offset += lh.length + nameBuf.length + body.length;
+  }
+  const cd = Buffer.concat(central);
+  const eocd = Buffer.alloc(22);
+  eocd.writeUInt32LE(0x06054b50, 0); eocd.writeUInt16LE(files.length, 8); eocd.writeUInt16LE(files.length, 10);
+  eocd.writeUInt32LE(cd.length, 12); eocd.writeUInt32LE(offset, 16);
+  // Atomic: write .tmp then rename (same discipline as Layer 1)
+  const tmp = outPath + '.tmp';
+  fs.writeFileSync(tmp, Buffer.concat([...chunks, cd, eocd]));
+  fs.renameSync(tmp, outPath);
+}
+
+// Collect every data file worth backing up (top-level of DATA_DIR only).
+// SHARED helper — Layer 3 (off-site) and a future "full manual backup"
+// button must both call THIS, so there is one definition of "all data".
+function collectAllDataFiles() {
+  const out = [];
+  let entries = [];
+  try { entries = fs.readdirSync(DATA_DIR, { withFileTypes: true }); } catch(e) { return out; }
+  for (const ent of entries) {
+    if (!ent.isFile()) continue;                 // skip dirs (_backups, wa_sessions)
+    const name = ent.name;
+    if (name.endsWith('.tmp') || name.endsWith('.bak')) continue;  // transient
+    if (name === 'bridge-node-modules.zip') continue;              // huge, regenerable
+    try {
+      const data = fs.readFileSync(path.join(DATA_DIR, name));
+      out.push({ name, data });
+    } catch(e) { console.error('[Backup] skip unreadable file', name, e.message); }
+  }
+  return out;
+}
+
+// Create one snapshot. reason ∈ {'daily','pre-restore','manual'}. Returns path or null.
+function createBackup(reason) {
+  try {
+    const files = collectAllDataFiles();
+    if (!files.length) { console.warn('[Backup] no data files to back up — skipping'); return null; }
+    // Israel-local timestamp so filenames line up with the operator's day
+    const ilNow = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+    const pad = n => String(n).padStart(2, '0');
+    const ts = `${ilNow.getFullYear()}-${pad(ilNow.getMonth()+1)}-${pad(ilNow.getDate())}_${pad(ilNow.getHours())}${pad(ilNow.getMinutes())}${pad(ilNow.getSeconds())}`;
+    const safeReason = (reason || 'manual').replace(/[^a-z0-9-]/gi, '');
+    const outPath = path.join(BACKUPS_DIR, `backup-${safeReason}-${ts}.zip`);
+    _writeZip(files, outPath);
+    const sizeKb = Math.round(fs.statSync(outPath).size / 1024);
+    console.log(`[Backup] created ${path.basename(outPath)} — ${files.length} files, ${sizeKb}KB`);
+    pruneOldBackups();
+    return outPath;
+  } catch(e) {
+    console.error('[Backup] createBackup failed:', e.message);
+    return null;  // never throw — a backup failure must not break the caller
+  }
+}
+
+// Delete snapshots older than BACKUP_KEEP_DAYS (by mtime). Best-effort.
+function pruneOldBackups() {
+  try {
+    const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const f of fs.readdirSync(BACKUPS_DIR)) {
+      if (!f.startsWith('backup-') || !f.endsWith('.zip')) continue;
+      const fp = path.join(BACKUPS_DIR, f);
+      try {
+        if (fs.statSync(fp).mtimeMs < cutoff) { fs.unlinkSync(fp); removed++; }
+      } catch(e) { /* skip */ }
+    }
+    if (removed > 0) console.log(`[Backup] pruned ${removed} backup(s) older than ${BACKUP_KEEP_DAYS} days`);
+  } catch(e) { console.error('[Backup] prune failed:', e.message); }
+}
+
 // ── JWT Auth middleware ──────────────────────────────────────────
 function authMiddleware(req, res, next) {
   const header = req.headers['authorization'];
@@ -808,6 +943,16 @@ app.post('/api/data', authMiddleware, (req, res) => {
   }
   const merged = saveTenantData(req.user.tenantId, req.body);
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
+});
+
+// Backup Layer 2 — manual / pre-restore snapshot trigger.
+// Called by the frontend (restoreData) BEFORE a manual restore overwrites data,
+// so an accidental restore from a wrong/old file is itself recoverable.
+// System-wide snapshot (not per-tenant) — same artifact as the daily cron.
+app.post('/api/backup-now', authMiddleware, (req, res) => {
+  const reason = (req.body && req.body.reason === 'pre-restore') ? 'pre-restore' : 'manual';
+  const p = createBackup(reason);
+  res.json({ ok: !!p, file: p ? path.basename(p) : null });
 });
 
 // Init WhatsApp — server mode: start Baileys, return QR / status
@@ -2206,6 +2351,9 @@ async function runMaintenanceCron() {
     closeMonthUnpaid();
   }
 
+  // Backup Layer 2 — daily rolling snapshot of all data files (then prune old)
+  createBackup('daily');
+
   for (const user of users) {
     if (!user.tenantId) continue;
     try {
@@ -2434,6 +2582,11 @@ setInterval(runAutoSendCron, 60 * 1000);
 // Also run once at startup (after 10s) to catch any missed sends
 setTimeout(runAutoSendCron, 10 * 1000);
 console.log('[AutoSend] scheduler active — checking every minute');
+
+// Backup Layer 2 — take a snapshot ~30s after boot (catches missed daily runs
+// after a deploy / restart), then the daily cron handles the rest.
+setTimeout(() => createBackup('startup'), 30 * 1000);
+console.log(`[Backup] Layer 2 active — daily snapshots, keeping ${BACKUP_KEEP_DAYS} days`);
 
 
 // ── שכחתי סיסמה ─────────────────────────────────────────────────
