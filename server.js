@@ -155,24 +155,43 @@ if (!fs.existsSync(BACKUPS_DIR)) { try { fs.mkdirSync(BACKUPS_DIR, { recursive: 
 //   2) env BACKUP_KEEP_DAYS
 //   3) default 14
 // Clamped to a sane 1..365 range.
+//
+// Layer 3 (off-site email) settings also live here:
+//   emailFreq ∈ {'off','daily','weekly','monthly'} (default 'weekly')
+//   lastEmailSent: ISO string of the last successful off-site email (for cadence)
+const _VALID_EMAIL_FREQ = ['off', 'daily', 'weekly', 'monthly'];
 function _clampKeepDays(n) { n = parseInt(n, 10); if (!Number.isFinite(n)) return 14; return Math.max(1, Math.min(365, n)); }
 function loadBackupConfig() {
+  let keepDays = null, emailFreq = null, lastEmailSent = null;
   try {
     if (fs.existsSync(BACKUP_CONFIG_FILE)) {
       const c = JSON.parse(fs.readFileSync(BACKUP_CONFIG_FILE, 'utf8'));
-      if (c && c.keepDays != null) return { keepDays: _clampKeepDays(c.keepDays) };
+      if (c) {
+        if (c.keepDays != null) keepDays = _clampKeepDays(c.keepDays);
+        if (typeof c.emailFreq === 'string' && _VALID_EMAIL_FREQ.includes(c.emailFreq)) emailFreq = c.emailFreq;
+        if (c.lastEmailSent) lastEmailSent = c.lastEmailSent;
+      }
     }
   } catch(e) { console.error('[Backup] config read failed:', e.message); }
-  if (process.env.BACKUP_KEEP_DAYS) return { keepDays: _clampKeepDays(process.env.BACKUP_KEEP_DAYS) };
-  return { keepDays: 14 };
+  if (keepDays == null) keepDays = process.env.BACKUP_KEEP_DAYS ? _clampKeepDays(process.env.BACKUP_KEEP_DAYS) : 14;
+  if (emailFreq == null) emailFreq = 'weekly';
+  return { keepDays, emailFreq, lastEmailSent };
 }
-function saveBackupConfig(keepDays) {
-  const cfg = { keepDays: _clampKeepDays(keepDays) };
+function saveBackupConfig(patch) {
+  const cur = loadBackupConfig();
+  const next = {
+    keepDays: cur.keepDays,
+    emailFreq: cur.emailFreq,
+    lastEmailSent: cur.lastEmailSent || null
+  };
+  if (patch && patch.keepDays != null) next.keepDays = _clampKeepDays(patch.keepDays);
+  if (patch && typeof patch.emailFreq === 'string' && _VALID_EMAIL_FREQ.includes(patch.emailFreq)) next.emailFreq = patch.emailFreq;
+  if (patch && 'lastEmailSent' in patch) next.lastEmailSent = patch.lastEmailSent;
   // Atomic write (same discipline as Layer 1)
   const tmp = BACKUP_CONFIG_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2), 'utf8');
+  fs.writeFileSync(tmp, JSON.stringify(next, null, 2), 'utf8');
   fs.renameSync(tmp, BACKUP_CONFIG_FILE);
-  return cfg;
+  return next;
 }
 function getBackupKeepDays() { return loadBackupConfig().keepDays; }
 
@@ -282,6 +301,90 @@ function pruneOldBackups() {
     }
     if (removed > 0) console.log(`[Backup] pruned ${removed} backup(s) older than ${keepDays} days`);
   } catch(e) { console.error('[Backup] prune failed:', e.message); }
+}
+
+// ── Backup Layer 3 — off-site copy via email (Resend) ───────────────
+// Attaches the latest ZIP to an email to ADMIN_EMAIL. The ONLY copy that
+// survives total loss of the Railway volume. Frequency is admin-controlled
+// (off/daily/weekly/monthly, default weekly). Uses the existing Resend key
+// but a DEDICATED sender (sendEmailResend has no attachment support).
+const RESEND_MAX_ATTACH_MB = 25; // Resend hard limit ~25MB
+
+async function sendBackupEmail(zipPath, reason) {
+  const adminEmail = process.env.ADMIN_EMAIL || '';
+  if (!adminEmail) { console.log('[Backup] ADMIN_EMAIL not set — skipping off-site email'); return false; }
+  if (!RESEND_API_KEY) { console.log('[Backup] RESEND_API_KEY not set — skipping off-site email'); return false; }
+  let buf;
+  try { buf = fs.readFileSync(zipPath); } catch(e) { console.error('[Backup] cannot read zip for email:', e.message); return false; }
+  const sizeMb = buf.length / (1024 * 1024);
+  if (sizeMb > RESEND_MAX_ATTACH_MB) {
+    console.error(`[Backup] zip ${sizeMb.toFixed(1)}MB exceeds Resend ${RESEND_MAX_ATTACH_MB}MB limit — off-site email NOT sent. Consider R2/S3 for off-site at this scale.`);
+    // Still notify the admin (without attachment) so the failure is visible
+    try {
+      await sendEmailResend(adminEmail, '⚠️ גיבוי VaadPro גדול מדי לאימייל',
+        `<div dir="rtl">הגיבוי היומי (${Math.round(sizeMb)}MB) חורג ממגבלת ${RESEND_MAX_ATTACH_MB}MB של האימייל ולא נשלח כקובץ מצורף.<br>הגיבוי קיים בשרת (שכבות 1+2). כדאי לשקול מעבר לאחסון off-site (R2/S3).</div>`);
+    } catch(e) {}
+    return false;
+  }
+  const fname = path.basename(zipPath);
+  const ilNow = new Date().toLocaleDateString('he-IL', { timeZone: 'Asia/Jerusalem' });
+  let tenantCount = 0;
+  try { tenantCount = (loadUsers() || []).length; } catch(e) {}
+  const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
+  const subject = `גיבוי VaadPro — ${ilNow}`;
+  const html = `<div dir="rtl" style="font-family:Arial,sans-serif;font-size:15px;line-height:1.7;color:#222;max-width:560px;">
+<h2 style="margin:0 0 12px">🛡️ גיבוי VaadPro</h2>
+גיבוי אוטומטי של כל נתוני המערכת מצורף להודעה זו.<br><br>
+<strong>תאריך:</strong> ${ilNow}<br>
+<strong>לקוחות במערכת:</strong> ${tenantCount}<br>
+<strong>גודל הגיבוי:</strong> ${Math.round(buf.length/1024)}KB<br>
+<strong>קובץ:</strong> ${fname}<br><br>
+<em style="color:#666;font-size:13px;">שמור הודעה זו — זהו עותק off-site של כל נתוני המערכת, מחוץ לשרת. לשחזור: פתח את ה-ZIP והעלה את הקובץ הרצוי דרך "שחזור מגיבוי".</em>
+<hr style="margin:20px 0;border:none;border-top:1px solid #eee;">
+<p style="font-size:12px;color:#999;">VaadPro — גיבוי אוטומטי (שכבה 3)</p>
+</div>`;
+  const payload = {
+    from: fromAddr, to: adminEmail, subject, html,
+    attachments: [{ filename: fname, content: buf.toString('base64') }]
+  };
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload)
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || JSON.stringify(data));
+    console.log(`[Backup] off-site email sent to ${adminEmail} (${fname}, ${Math.round(buf.length/1024)}KB)`);
+    return true;
+  } catch(e) {
+    console.error('[Backup] off-site email failed:', e.message);
+    return false;
+  }
+}
+
+// Decide if an off-site email is due now, based on emailFreq + lastEmailSent.
+function offsiteEmailDue() {
+  const cfg = loadBackupConfig();
+  if (cfg.emailFreq === 'off') return false;
+  if (!cfg.lastEmailSent) return true; // never sent → send now
+  const last = new Date(cfg.lastEmailSent).getTime();
+  if (isNaN(last)) return true;
+  const days = (Date.now() - last) / (24 * 60 * 60 * 1000);
+  if (cfg.emailFreq === 'daily')   return days >= 1;
+  if (cfg.emailFreq === 'weekly')  return days >= 7;
+  if (cfg.emailFreq === 'monthly') return days >= 30;
+  return false;
+}
+
+// Create a fresh snapshot and email it off-site (if due / forced). Updates lastEmailSent.
+async function runOffsiteBackup(force) {
+  if (!force && !offsiteEmailDue()) return false;
+  const zip = createBackup('daily');
+  if (!zip) return false;
+  const ok = await sendBackupEmail(zip, 'offsite');
+  if (ok) saveBackupConfig({ lastEmailSent: new Date().toISOString() });
+  return ok;
 }
 
 // ── JWT Auth middleware ──────────────────────────────────────────
@@ -2084,19 +2187,47 @@ app.get('/api/admin/backup-settings', superAdminMiddleware, (req, res) => {
       })
       .sort((a, b) => (b.mtime || '').localeCompare(a.mtime || ''));
   } catch(e) {}
-  res.json({ ok: true, keepDays: getBackupKeepDays(), count: backups.length, backups: backups.slice(0, 30) });
+  const cfg = loadBackupConfig();
+  res.json({
+    ok: true,
+    keepDays: cfg.keepDays,
+    emailFreq: cfg.emailFreq,
+    lastEmailSent: cfg.lastEmailSent || null,
+    adminEmailSet: !!(process.env.ADMIN_EMAIL),
+    count: backups.length,
+    backups: backups.slice(0, 30)
+  });
 });
 
-// POST { keepDays } — עדכון מספר ימי השמירה (נשמר ל-_backup_config.json, נכנס לתוקף מיד)
+// POST { keepDays?, emailFreq? } — עדכון הגדרות גיבוי (נשמר ל-_backup_config.json, נכנס לתוקף מיד)
 app.post('/api/admin/backup-settings', superAdminMiddleware, (req, res) => {
-  const { keepDays } = req.body || {};
-  if (keepDays == null || isNaN(parseInt(keepDays, 10))) {
-    return res.json({ ok: false, error: 'מספר ימים לא תקין' });
+  const { keepDays, emailFreq } = req.body || {};
+  const patch = {};
+  if (keepDays != null) {
+    if (isNaN(parseInt(keepDays, 10))) return res.json({ ok: false, error: 'מספר ימים לא תקין' });
+    patch.keepDays = keepDays;
   }
-  const cfg = saveBackupConfig(keepDays);
-  console.log(`[Backup] keepDays updated to ${cfg.keepDays} by admin ${req.adminUser && req.adminUser.email}`);
-  pruneOldBackups(); // החל מיד — מחק גיבויים שחורגים מהסף החדש
-  res.json({ ok: true, keepDays: cfg.keepDays });
+  if (emailFreq != null) {
+    if (!['off','daily','weekly','monthly'].includes(emailFreq)) return res.json({ ok: false, error: 'תדירות לא תקינה' });
+    patch.emailFreq = emailFreq;
+  }
+  if (!Object.keys(patch).length) return res.json({ ok: false, error: 'אין מה לעדכן' });
+  const cfg = saveBackupConfig(patch);
+  console.log(`[Backup] settings updated (keepDays=${cfg.keepDays}, emailFreq=${cfg.emailFreq}) by admin ${req.adminUser && req.adminUser.email}`);
+  if (patch.keepDays != null) pruneOldBackups(); // החל מיד — מחק גיבויים שחורגים מהסף החדש
+  res.json({ ok: true, keepDays: cfg.keepDays, emailFreq: cfg.emailFreq });
+});
+
+// POST — שלח גיבוי off-site עכשיו (בדיקה / כפוי), ללא תלות בתדירות (Super Admin)
+app.post('/api/admin/backup-email-now', superAdminMiddleware, async (req, res) => {
+  if (!process.env.ADMIN_EMAIL) return res.json({ ok: false, error: 'ADMIN_EMAIL לא מוגדר ב-Railway' });
+  if (!RESEND_API_KEY) return res.json({ ok: false, error: 'RESEND_API_KEY לא מוגדר' });
+  try {
+    const ok = await runOffsiteBackup(true);
+    res.json({ ok, error: ok ? null : 'השליחה נכשלה — בדוק לוגים' });
+  } catch(e) {
+    res.json({ ok: false, error: e.message });
+  }
 });
 
 // POST — צור גיבוי ידני עכשיו (Super Admin)
@@ -2463,6 +2594,9 @@ async function runMaintenanceCron() {
 
   // Backup Layer 2 — daily rolling snapshot of all data files (then prune old)
   createBackup('daily');
+
+  // Backup Layer 3 — off-site email (only if due per admin frequency: off/daily/weekly/monthly)
+  runOffsiteBackup(false).catch(e => console.error('[Backup] offsite cron error:', e.message));
 
   for (const user of users) {
     if (!user.tenantId) continue;

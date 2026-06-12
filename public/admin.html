@@ -573,6 +573,17 @@
           <button class="btn btn-ghost" onclick="cleanStartupBackups()">🧹 נקה גיבויי startup ישנים</button>
           <span id="backupStatus" style="font-size:13px;color:var(--text3)"></span>
         </div>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-top:14px;padding-top:14px;border-top:1px solid var(--border,#333)">
+          <span style="font-size:14px">📧 גיבוי off-site לאימייל (שכבה 3):</span>
+          <select id="backupEmailFreq" onchange="saveBackupEmailFreq()" style="padding:6px 8px;border-radius:8px;border:1px solid var(--border,#444);background:var(--surface2,#222);color:inherit">
+            <option value="off">כבוי</option>
+            <option value="daily">יומי</option>
+            <option value="weekly">שבועי</option>
+            <option value="monthly">חודשי</option>
+          </select>
+          <button class="btn btn-ghost" onclick="backupEmailNow()">✉️ שלח גיבוי עכשיו</button>
+          <span id="backupEmailStatus" style="font-size:13px;color:var(--text3)"></span>
+        </div>
         <div id="backupList" style="margin-top:12px;font-size:13px;color:var(--text3)"></div>
       </div>
       <div class="table-wrap">
@@ -2063,6 +2074,19 @@ async function loadBackupSettings() {
     if (!data.ok) return;
     const inp = document.getElementById('backupKeepDays');
     if (inp && document.activeElement !== inp) inp.value = data.keepDays;
+    const freqSel = document.getElementById('backupEmailFreq');
+    if (freqSel && document.activeElement !== freqSel) freqSel.value = data.emailFreq || 'weekly';
+    const eStatus = document.getElementById('backupEmailStatus');
+    if (eStatus) {
+      if (!data.adminEmailSet) {
+        eStatus.textContent = '⚠️ ADMIN_EMAIL לא מוגדר ב-Railway — לא יישלחו מיילים';
+      } else if (data.lastEmailSent) {
+        const when = new Date(data.lastEmailSent).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' });
+        eStatus.textContent = 'נשלח לאחרונה: ' + when;
+      } else {
+        eStatus.textContent = 'טרם נשלח גיבוי off-site';
+      }
+    }
     const list = document.getElementById('backupList');
     if (list) {
       if (!data.count) {
@@ -2138,6 +2162,40 @@ async function deleteBackup(file) {
       toast(data.error || 'שגיאה במחיקה', 'err');
     }
   } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+
+async function saveBackupEmailFreq() {
+  const sel = document.getElementById('backupEmailFreq');
+  const eStatus = document.getElementById('backupEmailStatus');
+  eStatus.textContent = 'שומר...';
+  try {
+    const res = await fetch('/api/admin/backup-settings', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ emailFreq: sel.value })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      const labels = { off:'כבוי', daily:'יומי', weekly:'שבועי', monthly:'חודשי' };
+      toast(`תדירות הגיבוי באימייל: ${labels[data.emailFreq] || data.emailFreq} ✓`, 'ok');
+      loadBackupSettings();
+    } else { eStatus.textContent = ''; toast(data.error || 'שגיאה', 'err'); }
+  } catch(e) { eStatus.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+
+async function backupEmailNow() {
+  const eStatus = document.getElementById('backupEmailStatus');
+  eStatus.textContent = 'שולח גיבוי לאימייל...';
+  try {
+    const res = await fetch('/api/admin/backup-email-now', { method: 'POST', headers: adminHeaders(), body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.ok) {
+      eStatus.textContent = '✓ נשלח לאימייל';
+      toast('גיבוי נשלח לאימייל ✓', 'ok');
+      loadBackupSettings();
+    } else {
+      eStatus.textContent = '';
+      toast(data.error || 'שגיאה בשליחה', 'err');
+    }
+  } catch(e) { eStatus.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
 }
 
 async function cleanStartupBackups() {
