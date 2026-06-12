@@ -84,14 +84,40 @@ function tenantFile(tenantId) {
 
 function loadTenantData(tenantId) {
   const f = tenantFile(tenantId);
-  if (!fs.existsSync(f)) return { tenants: [], sentLog: {}, config: {}, reports: [], rptLayouts: {} };
-  try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch(e) { return { tenants: [], sentLog: {}, config: {}, reports: [], rptLayouts: {} }; }
+  const empty = () => ({ tenants: [], sentLog: {}, config: {}, reports: [], rptLayouts: {} });
+  if (!fs.existsSync(f)) return empty();
+  try {
+    return JSON.parse(fs.readFileSync(f, 'utf8'));
+  } catch(e) {
+    // Layer 1 (backup): primary file is corrupt — try the .bak before giving up.
+    console.error('[Data] Failed to parse ' + tenantId + '.json:', e.message);
+    const backup = f + '.bak';
+    if (fs.existsSync(backup)) {
+      try {
+        const recovered = JSON.parse(fs.readFileSync(backup, 'utf8'));
+        console.log('[Data] Recovered ' + tenantId + ' from backup file (.bak)');
+        return recovered;
+      } catch(e2) { console.error('[Data] .bak for ' + tenantId + ' also unreadable:', e2.message); }
+    }
+    return empty();
+  }
 }
 
 function saveTenantData(tenantId, patch) {
   const current = loadTenantData(tenantId);
   const merged  = Object.assign(current, patch);
-  fs.writeFileSync(tenantFile(tenantId), JSON.stringify(merged, null, 2), 'utf8');
+  const f       = tenantFile(tenantId);
+  const tmp     = f + '.tmp';
+  const backup  = f + '.bak';
+  const data    = JSON.stringify(merged, null, 2);
+  // Layer 1 (backup): atomic write — write .tmp → back up current to .bak → atomic rename.
+  // Same pattern already proven on _portal_tokens.json. Prevents a 0-byte / half-written
+  // money file if Railway crashes mid-write.
+  fs.writeFileSync(tmp, data, 'utf8');
+  if (fs.existsSync(f)) {
+    try { fs.copyFileSync(f, backup); } catch(e) { /* non-fatal — backup is best-effort */ }
+  }
+  fs.renameSync(tmp, f);
   return merged;
 }
 
