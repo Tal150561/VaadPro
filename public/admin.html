@@ -561,6 +561,19 @@
         <button class="btn btn-ghost" onclick="checkOrphanSessions()">🧹 בדוק sessions יתומים</button>
         <span id="orphanStatus" style="font-size:13px;color:var(--text3)"></span>
       </div>
+      <div class="table-wrap" style="margin-bottom:16px;padding:16px;">
+        <h3 style="margin:0 0 4px">🛡️ הגדרות גיבוי (שכבה 2)</h3>
+        <p style="font-size:13px;color:var(--text3);margin:0 0 12px">גיבוי יומי אוטומטי של כל נתוני המערכת. מספר הימים לשמירה — גיבויים ישנים יותר נמחקים אוטומטית.</p>
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+          <label style="font-size:14px">ימי שמירה:
+            <input type="number" id="backupKeepDays" min="1" max="365" style="width:80px;padding:6px 8px;margin-right:6px;border-radius:8px;border:1px solid var(--border,#444);background:var(--surface2,#222);color:inherit" />
+          </label>
+          <button class="btn btn-primary" onclick="saveBackupSettings()">💾 שמור</button>
+          <button class="btn btn-ghost" onclick="adminBackupNow()">📦 צור גיבוי עכשיו</button>
+          <span id="backupStatus" style="font-size:13px;color:var(--text3)"></span>
+        </div>
+        <div id="backupList" style="margin-top:12px;font-size:13px;color:var(--text3)"></div>
+      </div>
       <div class="table-wrap">
         <div class="table-header">
           <h3 id="customersCount">לקוחות</h3>
@@ -1246,6 +1259,7 @@ async function loadCustomers() {
   const data = await res.json();
   allCustomers = data.users || [];
   renderCustomers(allCustomers);
+  loadBackupSettings();
 }
 
 function renderCustomers(users) {
@@ -2039,6 +2053,67 @@ async function checkOrphanSessions() {
     statusEl.textContent = '';
     toast('שגיאה: ' + e.message, 'err');
   }
+}
+
+async function loadBackupSettings() {
+  try {
+    const res = await fetch('/api/admin/backup-settings', { headers: adminHeaders() });
+    const data = await res.json();
+    if (!data.ok) return;
+    const inp = document.getElementById('backupKeepDays');
+    if (inp && document.activeElement !== inp) inp.value = data.keepDays;
+    const list = document.getElementById('backupList');
+    if (list) {
+      if (!data.count) {
+        list.textContent = 'אין עדיין גיבויים (ייווצרו אוטומטית).';
+      } else {
+        const rows = (data.backups || []).slice(0, 8).map(b => {
+          const when = b.mtime ? new Date(b.mtime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
+          return `• ${b.name} — ${b.sizeKb}KB${when ? ' · ' + when : ''}`;
+        }).join('<br>');
+        list.innerHTML = `סה"כ ${data.count} גיבויים. אחרונים:<br>${rows}`;
+      }
+    }
+  } catch(e) { /* שקט */ }
+}
+
+async function saveBackupSettings() {
+  const statusEl = document.getElementById('backupStatus');
+  const inp = document.getElementById('backupKeepDays');
+  const keepDays = parseInt(inp.value, 10);
+  if (!keepDays || keepDays < 1 || keepDays > 365) { toast('מספר ימים חייב להיות בין 1 ל-365', 'err'); return; }
+  statusEl.textContent = 'שומר...';
+  try {
+    const res = await fetch('/api/admin/backup-settings', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ keepDays })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      statusEl.textContent = `✓ נשמר — שומר ${data.keepDays} ימים`;
+      toast(`הגדרת הגיבוי נשמרה: ${data.keepDays} ימים ✓`, 'ok');
+      loadBackupSettings();
+    } else {
+      statusEl.textContent = '';
+      toast(data.error || 'שגיאה', 'err');
+    }
+  } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+
+async function adminBackupNow() {
+  const statusEl = document.getElementById('backupStatus');
+  statusEl.textContent = 'יוצר גיבוי...';
+  try {
+    const res = await fetch('/api/admin/backup-now', { method: 'POST', headers: adminHeaders(), body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.ok) {
+      statusEl.textContent = `✓ נוצר: ${data.file}`;
+      toast('גיבוי נוצר ✓', 'ok');
+      loadBackupSettings();
+    } else {
+      statusEl.textContent = '';
+      toast('שגיאה ביצירת גיבוי', 'err');
+    }
+  } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
 }
 
 function formatDateTime(iso) {
