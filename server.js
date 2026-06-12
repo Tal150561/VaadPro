@@ -2105,6 +2105,52 @@ app.post('/api/admin/backup-now', superAdminMiddleware, (req, res) => {
   res.json({ ok: !!p, file: p ? path.basename(p) : null });
 });
 
+// POST { file } — מחק גיבוי בודד לפי שם (Super Admin)
+app.post('/api/admin/backup-delete', superAdminMiddleware, (req, res) => {
+  const { file } = req.body || {};
+  // ולידציה קפדנית — רק שם קובץ backup-*.zip, ללא נתיבים (מניעת path traversal)
+  if (!file || typeof file !== 'string' ||
+      file !== path.basename(file) ||           // אסור תווי נתיב
+      !/^backup-[a-z-]+-\d[\d_-]*\.zip$/i.test(file)) {
+    return res.json({ ok: false, error: 'שם קובץ לא תקין' });
+  }
+  const fp = path.join(BACKUPS_DIR, file);
+  // ודא שהקובץ אכן בתוך BACKUPS_DIR אחרי resolve
+  if (path.dirname(fp) !== BACKUPS_DIR || !fs.existsSync(fp)) {
+    return res.json({ ok: false, error: 'הגיבוי לא נמצא' });
+  }
+  try {
+    fs.unlinkSync(fp);
+    console.log(`[Backup] deleted ${file} by admin ${req.adminUser && req.adminUser.email}`);
+    res.json({ ok: true });
+  } catch(e) {
+    res.json({ ok: false, error: 'מחיקה נכשלה: ' + e.message });
+  }
+});
+
+// POST — נקה גיבויי startup ישנים (משאיר את האחרון; daily/pre-restore/manual לא נגעים)
+app.post('/api/admin/backup-clean-startup', superAdminMiddleware, (req, res) => {
+  let removed = 0;
+  try {
+    const startups = fs.readdirSync(BACKUPS_DIR)
+      .filter(f => /^backup-startup-[\d_-]+\.zip$/i.test(f))
+      .map(f => {
+        const fp = path.join(BACKUPS_DIR, f);
+        let mtime = 0; try { mtime = fs.statSync(fp).mtimeMs; } catch(e) {}
+        return { f, fp, mtime };
+      })
+      .sort((a, b) => b.mtime - a.mtime); // החדש ראשון
+    // השאר את גיבוי ה-startup האחרון; מחק את כל השאר
+    for (let i = 1; i < startups.length; i++) {
+      try { fs.unlinkSync(startups[i].fp); removed++; } catch(e) {}
+    }
+    if (removed > 0) console.log(`[Backup] cleaned ${removed} old startup backup(s) by admin ${req.adminUser && req.adminUser.email}`);
+  } catch(e) {
+    return res.json({ ok: false, error: e.message });
+  }
+  res.json({ ok: true, removed });
+});
+
 // ── Admin: עדכון סטטוס התקנה ידני ─────────────────────────────
 app.post('/api/admin/install-status', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { email, status } = req.body;

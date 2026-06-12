@@ -570,6 +570,7 @@
           </label>
           <button class="btn btn-primary" onclick="saveBackupSettings()">💾 שמור</button>
           <button class="btn btn-ghost" onclick="adminBackupNow()">📦 צור גיבוי עכשיו</button>
+          <button class="btn btn-ghost" onclick="cleanStartupBackups()">🧹 נקה גיבויי startup ישנים</button>
           <span id="backupStatus" style="font-size:13px;color:var(--text3)"></span>
         </div>
         <div id="backupList" style="margin-top:12px;font-size:13px;color:var(--text3)"></div>
@@ -2067,11 +2068,14 @@ async function loadBackupSettings() {
       if (!data.count) {
         list.textContent = 'אין עדיין גיבויים (ייווצרו אוטומטית).';
       } else {
-        const rows = (data.backups || []).slice(0, 8).map(b => {
+        const rows = (data.backups || []).slice(0, 12).map(b => {
           const when = b.mtime ? new Date(b.mtime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
-          return `• ${b.name} — ${b.sizeKb}KB${when ? ' · ' + when : ''}`;
-        }).join('<br>');
-        list.innerHTML = `סה"כ ${data.count} גיבויים. אחרונים:<br>${rows}`;
+          const safe = b.name.replace(/'/g, "\\'");
+          return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">` +
+                 `<button class="btn btn-ghost" style="padding:2px 8px;font-size:12px" title="מחק גיבוי זה" onclick="deleteBackup('${safe}')">🗑️</button>` +
+                 `<span>${b.name} — ${b.sizeKb}KB${when ? ' · ' + when : ''}</span></div>`;
+        }).join('');
+        list.innerHTML = `סה"כ ${data.count} גיבויים. אחרונים:${rows}`;
       }
     }
   } catch(e) { /* שקט */ }
@@ -2112,6 +2116,44 @@ async function adminBackupNow() {
     } else {
       statusEl.textContent = '';
       toast('שגיאה ביצירת גיבוי', 'err');
+    }
+  } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+
+async function deleteBackup(file) {
+  if (!confirm(`למחוק את הגיבוי?\n\n${file}\n\nפעולה זו אינה הפיכה.`)) return;
+  const statusEl = document.getElementById('backupStatus');
+  statusEl.textContent = 'מוחק...';
+  try {
+    const res = await fetch('/api/admin/backup-delete', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ file })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      statusEl.textContent = '✓ נמחק';
+      toast('הגיבוי נמחק ✓', 'ok');
+      loadBackupSettings();
+    } else {
+      statusEl.textContent = '';
+      toast(data.error || 'שגיאה במחיקה', 'err');
+    }
+  } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+
+async function cleanStartupBackups() {
+  if (!confirm('לנקות את כל גיבויי ה-startup הישנים?\n\nיישמרו: הגיבוי האחרון, וכל הגיבויים היומיים / טרום-שחזור / ידניים.')) return;
+  const statusEl = document.getElementById('backupStatus');
+  statusEl.textContent = 'מנקה...';
+  try {
+    const res = await fetch('/api/admin/backup-clean-startup', { method: 'POST', headers: adminHeaders(), body: JSON.stringify({}) });
+    const data = await res.json();
+    if (data.ok) {
+      statusEl.textContent = `✓ נוקו ${data.removed} גיבויי startup`;
+      toast(data.removed ? `נוקו ${data.removed} גיבויי startup ✓` : 'אין מה לנקות', 'ok');
+      loadBackupSettings();
+    } else {
+      statusEl.textContent = '';
+      toast(data.error || 'שגיאה בניקוי', 'err');
     }
   } catch(e) { statusEl.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
 }
