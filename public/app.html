@@ -1931,9 +1931,12 @@ function updatePreview() {
   const amount=document.getElementById('cfgAmount').value||300;
   const sampleDebt=200, sampleTotal=parseInt(amount)+sampleDebt;
   const el=document.getElementById('msgPreview');
+  // שלב 1: דוגמת בלוק חשבונות עם שורת חוב נצבר (תצוגה בלבד — הלוגיקה האמיתית בשרת)
+  const sampleAccounts = '\n• ביטוח מבנה: *240 ₪* + חוב קודם 180 ₪ = *420 ₪*\n• שיפוץ לובי: *300 ₪*';
   if(el) el.textContent=t
     .replace(/{שם}/g,name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount)
-    .replace(/{חוב_קודם}/g,sampleDebt).replace(/{סה"כ}/g,sampleTotal);
+    .replace(/{חוב_קודם}/g,sampleDebt).replace(/{סה"כ}/g,sampleTotal)
+    .replace(/{חשבונות}/g,sampleAccounts);
 }
 
 function insertVar(v) {
@@ -5564,6 +5567,8 @@ let accountTemplates = []; // building-level templates
 let accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalDebt},...] }
 let taModalTenantId = null; // currently editing tenant
 let taModalAccounts = [];   // working copy
+let taModalOwner  = { name:'', phone:'', email:'' }; // שלב 1: סלוט בעלים
+let taModalTenant = { name:'', phone:'', email:'' }; // שלב 1: סלוט שוכר
 
 // ── Load account templates from server ─────────────────────────
 async function loadAccountTemplates() {
@@ -5649,7 +5654,9 @@ async function openTenantAccounts(tenantId, tenantName) {
     });
     const d = await r.json();
     taModalAccounts = d.ok ? d.accounts : [];
-  } catch(e) { taModalAccounts = []; }
+    taModalOwner  = (d.ok && d.owner)  ? d.owner  : { name:'', phone:'', email:'' };
+    taModalTenant = (d.ok && d.tenant) ? d.tenant : { name:'', phone:'', email:'' };
+  } catch(e) { taModalAccounts = []; taModalOwner = { name:'', phone:'', email:'' }; taModalTenant = { name:'', phone:'', email:'' }; }
   renderTenantAccountsModal();
 }
 
@@ -5662,11 +5669,34 @@ function renderTenantAccountsModal() {
   const el = document.getElementById('taModalList');
   if (!el) return;
   const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+
+  // ── שלב 1: סלוטי בעלים / שוכר ─────────────────────────────────
+  const esc = (v) => String(v||'').replace(/"/g,'&quot;');
+  const slotsHtml = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px;">
+      <div style="font-size:0.8rem;font-weight:700;color:var(--text2);margin-bottom:8px;">👥 משלמים בנכס (אופציונלי)</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        <div>
+          <div style="font-size:0.75rem;color:var(--text3);margin-bottom:4px;">בעלים (owner)</div>
+          <input type="text"  value="${esc(taModalOwner.name)}"  onchange="taModalOwner.name=this.value"  placeholder="שם"    style="width:100%;margin-bottom:4px;">
+          <input type="text"  value="${esc(taModalOwner.phone)}" onchange="taModalOwner.phone=this.value" placeholder="טלפון" style="width:100%;margin-bottom:4px;direction:ltr;">
+          <input type="email" value="${esc(taModalOwner.email)}" onchange="taModalOwner.email=this.value" placeholder="מייל"  style="width:100%;direction:ltr;">
+        </div>
+        <div>
+          <div style="font-size:0.75rem;color:var(--text3);margin-bottom:4px;">שוכר (tenant)</div>
+          <input type="text"  value="${esc(taModalTenant.name)}"  onchange="taModalTenant.name=this.value"  placeholder="שם"    style="width:100%;margin-bottom:4px;">
+          <input type="text"  value="${esc(taModalTenant.phone)}" onchange="taModalTenant.phone=this.value" placeholder="טלפון" style="width:100%;margin-bottom:4px;direction:ltr;">
+          <input type="email" value="${esc(taModalTenant.email)}" onchange="taModalTenant.email=this.value" placeholder="מייל"  style="width:100%;direction:ltr;">
+        </div>
+      </div>
+      <div style="font-size:0.7rem;color:var(--text3);margin-top:6px;">💡 כל חשבון מכוון ל"משלם" — אם הסלוט ריק, נופלים חזרה לטלפון הראשי של הנכס.</div>
+    </div>`;
+
   if (!taModalAccounts.length) {
-    el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);">עדיין אין חשבונות נוספים לדייר זה.</div>';
+    el.innerHTML = slotsHtml + '<div style="font-size:0.83rem;color:var(--text3);">עדיין אין חשבונות נוספים לדייר זה.</div>';
     return;
   }
-  el.innerHTML = taModalAccounts.map((acc, i) => {
+  el.innerHTML = slotsHtml + taModalAccounts.map((acc, i) => {
     const debt = (acc.totalDebt || 0) > 0
       ? `<span style="color:var(--danger);font-size:0.75rem;">חוב: ₪${acc.totalDebt}</span>`
       : '';
@@ -5685,7 +5715,12 @@ function renderTenantAccountsModal() {
           </select></div>
         <button class="btn btn-danger-soft btn-sm" onclick="taModalAccounts.splice(${i},1);renderTenantAccountsModal();" style="height:36px;margin-top:18px;">🗑️</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
+        <div><label style="font-size:0.75rem;">משלם</label>
+          <select onchange="taModalAccounts[${i}].payer=this.value" style="width:100%;">
+            <option value="owner"  ${acc.payer!=='tenant'?'selected':''}>בעלים</option>
+            <option value="tenant" ${acc.payer==='tenant'?'selected':''}>שוכר</option>
+          </select></div>
         <div><label style="font-size:0.75rem;">חוב פתוח ₪</label>
           <input type="number" value="${acc.openingDebt||0}" onchange="taModalAccounts[${i}].openingDebt=parseFloat(this.value)||0" style="width:100%;"></div>
         <div><label style="font-size:0.75rem;">מילות חיפוש בנק</label>
@@ -5723,11 +5758,11 @@ function addTenantAccountRow() {
         const tpl=opts[idx];
         const already=taModalAccounts.some(a=>a.label.trim().toLowerCase()===tpl.label.trim().toLowerCase());
         if(already){toast('חשבון זה כבר קיים לדייר','error');document.getElementById('_tplAddBar').remove();return;}
-        taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',active:true});
+        taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',payer:'owner',active:true});
         document.getElementById('_tplAddBar').remove();
         renderTenantAccountsModal();">הוסף מתבנית</button>
       <button class="btn btn-secondary btn-sm" onclick="
-        taModalAccounts.push({id:'acc_'+Date.now(),label:'',type:'fixed',frequency:'monthly',amount:0,openingDebt:0,matchKeywords:'',active:true});
+        taModalAccounts.push({id:'acc_'+Date.now(),label:'',type:'fixed',frequency:'monthly',amount:0,openingDebt:0,matchKeywords:'',payer:'owner',active:true});
         document.getElementById('_tplAddBar').remove();
         renderTenantAccountsModal();">חשבון ריק</button>`;
     const bar = document.createElement('div');
@@ -5736,7 +5771,7 @@ function addTenantAccountRow() {
     bar.innerHTML = '<span style="font-size:0.82rem;color:var(--text2);">בחר תבנית:</span>' + html;
     document.getElementById('taModalList').after(bar);
   } else {
-    taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', active: true });
+    taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', payer: 'owner', active: true });
     renderTenantAccountsModal();
   }
 }
@@ -5753,7 +5788,7 @@ async function saveTenantAccounts() {
     const r = await fetch(API + '/tenant-accounts/' + taModalTenantId, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ accounts: taModalAccounts })
+      body: JSON.stringify({ accounts: taModalAccounts, owner: taModalOwner, tenant: taModalTenant })
     });
     const d = await r.json();
     if (d.ok) {

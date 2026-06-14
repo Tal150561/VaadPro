@@ -1120,6 +1120,65 @@ app.post('/api/reconnect', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// buildAccountsBlock(d, tenant, month) — SINGLE source of truth for the {חשבונות}
+// block. Replaces the 3 duplicated copies (send / send-all / AutoSend).
+// Returns: { block, recipients }
+//   block      — the '\n'-prefixed accounts text (or '' when none open), IDENTICAL
+//                 byte-for-byte to the old code when no openingDebt and no payer.
+//   recipients — Map<payerPhone, [accLabels]> for future per-payer routing (שלב 1
+//                 surfaces the data; actual split-send is OUT of scope). Reminder is
+//                 still sent to the tenant's main phone in this stage.
+// Phone resolution per account uses staged fallback:
+//   payer-slot phone → owner phone → tenant phone → main tenant.phone
+// ─────────────────────────────────────────────────────────────────────────────
+function resolvePayerPhone(tenant, acc) {
+  const payer = acc && acc.payer; // 'owner' | 'tenant' | undefined
+  const owner  = tenant.owner  || {};
+  const renter = tenant.tenant || {};
+  if (payer === 'owner'  && String(owner.phone  || '').trim()) return String(owner.phone).trim();
+  if (payer === 'tenant' && String(renter.phone || '').trim()) return String(renter.phone).trim();
+  // staged fallback: owner → tenant → main
+  if (String(owner.phone  || '').trim()) return String(owner.phone).trim();
+  if (String(renter.phone || '').trim()) return String(renter.phone).trim();
+  return String(tenant.phone || '').trim();
+}
+
+function buildAccountsBlock(d, tenant, month) {
+  const sentLog = d.sentLog || {};
+  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
+  const recipients = {};
+  if (!extraAccounts.length) return { block: '', recipients };
+
+  const lines = extraAccounts.map(acc => {
+    const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
+    const lv = String(sentLog[slKey] || '');
+    const paid = lv.startsWith('manual_paid') || lv.startsWith('bank_import');
+    if (paid) return null;
+
+    const amount = parseFloat(acc.amount) || 0;
+    const openingDebt = Math.max(0, parseFloat(acc.openingDebt) || 0);
+    let line;
+    if (openingDebt > 0) {
+      const total = Math.round((amount + openingDebt) * 100) / 100;
+      line = `• ${acc.label}: *${amount} ₪* + חוב קודם ${openingDebt} ₪ = *${total} ₪*`;
+    } else {
+      line = `• ${acc.label}: *${amount} ₪*`;
+    }
+
+    // track intended recipient (data only — no split-send in שלב 1)
+    const phone = resolvePayerPhone(tenant, acc);
+    if (phone) {
+      if (!recipients[phone]) recipients[phone] = [];
+      recipients[phone].push(acc.label);
+    }
+    return line;
+  }).filter(Boolean);
+
+  const block = lines.length ? '\n' + lines.join('\n') : '';
+  return { block, recipients };
+}
+
 // Send to single tenant
 app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
@@ -1132,20 +1191,8 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const mk     = getMonthKey(d.config);
   const debt   = calcTotalDebt(d, tenant.id, mk);
   const total  = amount + debt;
-  // בנה רשימת חשבונות נוספים פתוחים
-  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
-  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
-  let accountsBlock = '';
-  if (extraAccounts.length) {
-    const lines = extraAccounts.map(acc => {
-      const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
-      const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
-                || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
-      if (paid) return null;
-      return `• ${acc.label}: *${acc.amount} ₪*`;
-    }).filter(Boolean);
-    if (lines.length) accountsBlock = '\n' + lines.join('\n');
-  }
+  // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
+  const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
   const portalUrl1 = tmpl.includes('{לינק_פורטל}')
     ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
     : '';
@@ -1185,19 +1232,8 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
     const amount = tenant.customAmount || globalAmount;
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
-    // בנה רשימת חשבונות נוספים פתוחים
-    const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
-    let accountsBlock = '';
-    if (extraAccounts.length) {
-      const lines = extraAccounts.map(acc => {
-        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
-        const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
-                  || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
-        if (paid) return null;
-        return `• ${acc.label}: *${acc.amount} ₪*`;
-      }).filter(Boolean);
-      if (lines.length) accountsBlock = '\n' + lines.join('\n');
-    }
+    // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
+    const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
     const portalUrlSA = tmpl.includes('{לינק_פורטל}')
       ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
       : '';
@@ -2705,19 +2741,8 @@ async function doAutoSend(user) {
     const portalUrlAuto = tmpl.includes('{לינק_פורטל}')
       ? getOrCreatePortalUrl(user.tenantId, tenant.id, tenant.name)
       : '';
-    // extra accounts block
-    const extraAccountsAuto = (tenant.extraAccounts || []).filter(a => a.active !== false);
-    let accountsBlockAuto = '';
-    if (extraAccountsAuto.length) {
-      const lines = extraAccountsAuto.map(acc => {
-        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
-        const paid = String((d.sentLog||{})[slKey]||'').startsWith('manual_paid')
-                  || String((d.sentLog||{})[slKey]||'').startsWith('bank_import');
-        if (paid) return null;
-        return `• ${acc.label}: *${acc.amount} ₪*`;
-      }).filter(Boolean);
-      if (lines.length) accountsBlockAuto = '\n' + lines.join('\n');
-    }
+    // extra accounts block (helper יחיד — מקור אמת אחד)
+    const { block: accountsBlockAuto } = buildAccountsBlock(d, tenant, month);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
@@ -4562,7 +4587,7 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     const totalDebt = Math.max(0, historyDebt + openingDebt);
     return { ...acc, totalDebt, historyDebt };
   });
-  res.json({ ok: true, accounts: enriched });
+  res.json({ ok: true, accounts: enriched, owner: tenant.owner || {}, tenant: tenant.tenant || {} });
 });
 
 // POST /api/tenant-accounts/:tenantId — save tenant's extra accounts
@@ -4586,10 +4611,22 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
       openingDebt: prev ? (parseFloat(acc.openingDebt) ?? parseFloat(prev.openingDebt) ?? 0) : (parseFloat(acc.openingDebt) || 0),
       matchKeywords: acc.matchKeywords || '',
       formulaNote: acc.formulaNote || '',
+      payer:       (acc.payer === 'owner' || acc.payer === 'tenant') ? acc.payer : (prev && prev.payer) || 'owner', // שלב 1: מי משלם
       active:      acc.active !== false, // default true
     };
   });
   d.tenants[tenantIdx].extraAccounts = merged;
+  // שלב 1: שמירת סלוטי בעלים/שוכר (אם נשלחו) — שדות שם/טלפון/אימייל לכל סלוט
+  const cleanSlot = (o) => {
+    if (!o || typeof o !== 'object') return undefined;
+    return {
+      name:  String(o.name  || '').trim(),
+      phone: String(o.phone || '').trim().replace(/\D/g, ''),
+      email: String(o.email || '').trim(),
+    };
+  };
+  if (req.body.owner  !== undefined) d.tenants[tenantIdx].owner  = cleanSlot(req.body.owner);
+  if (req.body.tenant !== undefined) d.tenants[tenantIdx].tenant = cleanSlot(req.body.tenant);
   saveTenantData(req.user.tenantId, { tenants: d.tenants });
   res.json({ ok: true });
 });
