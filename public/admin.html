@@ -901,6 +901,32 @@
   </div>
 </div>
 
+<!-- Labels Modal (Stage 2 — Super-Admin terminology) -->
+<div class="modal-bg" id="labelsModal">
+  <div class="modal" style="width:440px">
+    <h2>🏷️ מונחים / סוג ארגון</h2>
+    <input type="hidden" id="labelsEmail" />
+    <div style="font-size:13px;color:var(--muted,#888);margin-bottom:12px;" id="labelsCustomerName"></div>
+    <div class="field">
+      <label>סוג הארגון</label>
+      <select id="labelsOrgType">
+        <option value="vaad">ועד בית</option>
+        <option value="kibbutz">קיבוץ</option>
+      </select>
+    </div>
+    <div style="border-top:1px solid var(--border,#333);padding-top:10px;margin-top:6px;">
+      <div style="font-size:13px;color:var(--muted,#888);margin-bottom:8px;">דריסת מונחים (ריק = ברירת מחדל של סוג הארגון)</div>
+      <div class="field"><label>יחיד (דייר)</label><input type="text" id="labelsOvPerson" /></div>
+      <div class="field"><label>רבים (דיירים)</label><input type="text" id="labelsOvPersons" /></div>
+      <div class="field"><label>יחידת דיור (דירה)</label><input type="text" id="labelsOvUnit" /></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('labelsModal')">ביטול</button>
+      <button class="btn btn-blue" onclick="saveLabels()">שמור</button>
+    </div>
+  </div>
+</div>
+
 <!-- CRM Modal -->
 <div class="modal-bg" id="crmModal" style="align-items:flex-start;padding:20px;overflow-y:auto;">
   <div class="modal" style="width:620px;max-width:98vw;">
@@ -1295,6 +1321,7 @@ function renderCustomers(users) {
         <div style="display:flex;gap:6px">
           <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")'>Plan</button>
           <button class="btn btn-sm btn-ghost" onclick='editCustomer("${u.email}")'>✏️</button>
+          <button class="btn btn-sm btn-ghost" onclick='openLabelsModal("${u.email}","${(u.buildingName||u.email).replace(/"/g,"&quot;")}")' title="מונחים / סוג ארגון">🏷️</button>
           <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")'>📨</button>
           <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")'>📋</button>
           <button class="btn btn-sm btn-red" onclick='deleteCustomer("${u.email}")'>🗑</button>
@@ -1900,6 +1927,56 @@ async function saveCustomer() {
   } else {
     toast(data.error || 'שגיאה', 'err');
   }
+}
+
+// ── Stage 2: Super-Admin label overrides ────────────────────
+async function openLabelsModal(email, name) {
+  document.getElementById('labelsEmail').value = email;
+  document.getElementById('labelsCustomerName').textContent = name || email;
+  // reset
+  document.getElementById('labelsOrgType').value = 'vaad';
+  document.getElementById('labelsOvPerson').value = '';
+  document.getElementById('labelsOvPersons').value = '';
+  document.getElementById('labelsOvUnit').value = '';
+  try {
+    const res = await fetch('/api/admin/labels/' + encodeURIComponent(email), { headers: adminHeaders() });
+    const d = await res.json();
+    if (d.ok) {
+      document.getElementById('labelsOrgType').value = d.orgType || 'vaad';
+      const ov = (d.labelOverrides && d.labelOverrides.he) || {};
+      document.getElementById('labelsOvPerson').value = ov.person || '';
+      document.getElementById('labelsOvPersons').value = ov.persons || '';
+      document.getElementById('labelsOvUnit').value = ov.unit || '';
+      // placeholders show the org-type defaults so the operator sees the fallback
+      const base = (d.baseSets && d.baseSets[d.orgType]) || (d.baseSets && d.baseSets.vaad) || {};
+      document.getElementById('labelsOvPerson').placeholder = base.person || '';
+      document.getElementById('labelsOvPersons').placeholder = base.persons || '';
+      document.getElementById('labelsOvUnit').placeholder = base.unit || '';
+    } else {
+      toast(d.error || 'שגיאה בטעינה', 'err');
+    }
+  } catch(e) { toast('שגיאת רשת', 'err'); }
+  openModal('labelsModal');
+}
+
+async function saveLabels() {
+  const email = document.getElementById('labelsEmail').value;
+  const orgType = document.getElementById('labelsOrgType').value;
+  const he = {};
+  const p = document.getElementById('labelsOvPerson').value.trim();
+  const ps = document.getElementById('labelsOvPersons').value.trim();
+  const u = document.getElementById('labelsOvUnit').value.trim();
+  if (p) he.person = p;
+  if (ps) he.persons = ps;
+  if (u) he.unit = u;
+  const labelOverrides = Object.keys(he).length ? { he: he } : {};
+  const res = await fetch('/api/admin/labels/' + encodeURIComponent(email), {
+    method: 'POST', headers: adminHeaders(),
+    body: JSON.stringify({ orgType: orgType, labelOverrides: labelOverrides })
+  });
+  const d = await res.json();
+  if (d.ok) { toast('מונחים עודכנו ✓', 'ok'); closeModal('labelsModal'); }
+  else toast(d.error || 'שגיאה', 'err');
 }
 
 async function deleteCustomer(email) {

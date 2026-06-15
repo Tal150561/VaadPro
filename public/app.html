@@ -424,7 +424,7 @@ function vpLogout() {
 
 <div class="tabs-outer">
   <div class="tabs">
-    <button class="tab-btn active" onclick="switchTab('tenants')">👥 דיירים <span class="tbadge green" id="tbT">0</span></button>
+    <button class="tab-btn active" id="tabBtnTenants" onclick="switchTab('tenants')">👥 דיירים <span class="tbadge green" id="tbT">0</span></button>
     <button class="tab-btn" onclick="switchTab('payments')">💳 תשלומים <span class="tbadge" id="tbP">0</span></button>
     <button class="tab-btn" onclick="switchTab('reports')">📊 דוחות הוצאות</button>
     <button class="tab-btn" onclick="switchTab('trends')">📈 ניתוח מגמות</button>
@@ -450,6 +450,7 @@ function vpLogout() {
       <div id="addTenantBody" style="display:none;">
       <div class="card-body">
         <div class="add-row">
+          <div><label>תווית נכס <span style="opacity:.5;">(אופציונלי — "דירה 4" / "נחלה 12")</span></label><input type="text" id="inPropertyLabel" placeholder="ריק = שם איש הקשר" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>שם מלא</label><input type="text" id="inName" placeholder="ישראל ישראלי" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>טלפון</label><input type="tel" id="inPhone" placeholder="0501234567" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
@@ -504,7 +505,7 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="exportTenantsExcel()">📤 ייצא לאקסל</button></div>
+      <div class="card-header" id="tenantsListHeader">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="exportTenantsExcel()">📤 ייצא לאקסל</button></div>
       <div id="tenantsWrap"><div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div></div>
     </div>
 
@@ -783,6 +784,32 @@ function vpLogout() {
           <span id="lastAutoSendStatus" style="font-size:0.82rem;"></span>
           <button class="btn btn-secondary" id="btnResendAuto" onclick="resendAuto()" style="height:32px;padding:0 14px;font-size:0.82rem;">🔁 שלח עכשיו</button>
           <span id="resendAutoStatus" style="font-size:0.78rem;color:var(--text3);"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-header">🏢 סוג הארגון ומונחים</div>
+      <div class="card-body">
+        <div style="margin-bottom:14px;">
+          <label style="display:block;margin-bottom:8px;">סוג הארגון</label>
+          <label style="margin-left:18px;cursor:pointer;"><input type="radio" name="orgType" value="vaad" onchange="saveOrgSettings()"> ועד בית</label>
+          <label style="cursor:pointer;"><input type="radio" name="orgType" value="kibbutz" onchange="saveOrgSettings()"> קיבוץ</label>
+          <div class="hint" style="margin-top:6px;">משנה את המונחים במערכת (דיירים / חברים). לא משפיע על תבנית ה-WhatsApp או על חישוב החוב.</div>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:12px;">
+          <div style="cursor:pointer;user-select:none;font-size:0.88rem;color:var(--text2);" onclick="toggleLabelAdvanced()">
+            <span id="lblAdvIcon">▸</span> הגדרות מתקדמות (התאמת מונחים)
+          </div>
+          <div id="lblAdvBody" style="display:none;margin-top:12px;">
+            <div class="hint" style="margin-bottom:10px;">ריק = ברירת המחדל של סוג הארגון. למשל: דייר → תושב.</div>
+            <div style="display:grid;gap:8px;max-width:380px;">
+              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">יחיד (דייר)</span><input type="text" id="ovPerson" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">רבים (דיירים)</span><input type="text" id="ovPersons" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">יחידת דיור (דירה)</span><input type="text" id="ovUnit" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
+            </div>
+            <span id="orgSaveStatus" style="font-size:0.78rem;color:var(--text3);display:block;margin-top:8px;"></span>
+          </div>
         </div>
       </div>
     </div>
@@ -1442,7 +1469,7 @@ function vpLogout() {
   <!-- TENANT ACCOUNTS MODAL -->
   <div class="modal-bg" id="tenantAccountsModal" style="display:none;" onclick="if(event.target===this)closeTenantAccountsModal()">
     <div class="modal" style="max-width:560px;">
-      <h2>💳 חשבונות לדייר: <span id="taModalName" style="color:var(--accent);"></span></h2>
+      <h2><span id="taModalTitleLabel">💳 חשבונות לדייר: </span><span id="taModalName" style="color:var(--accent);"></span></h2>
       <div id="taModalList" style="display:grid;gap:10px;margin:14px 0;"></div>
       <button class="btn btn-secondary btn-sm" onclick="addTenantAccountRow()">➕ הוסף חשבון</button>
       <div style="display:flex;gap:10px;margin-top:18px;">
@@ -1459,6 +1486,55 @@ function vpLogout() {
 const API = '/api';
 let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
+
+// ── Stage 2 (Neve Yam): labels mirror ────────────────────────────────
+// Same LABELS + same staged fallback as server.js getLabels()/t(). The server
+// also sends data.labels (computed); window.LBL is the single frontend source.
+// orgType absent -> 'vaad' -> existing strings -> existing customer sees NO change.
+const LABELS = {
+  he: {
+    vaad:    { org:'ועד הבית', person:'דייר', persons:'דיירים', unit:'דירה', body:'ועד הבית' },
+    kibbutz: { org:'קיבוץ', person:'חבר', persons:'חברים', unit:'בית/נכס', body:'הנהלת הקיבוץ' }
+  }
+};
+const LABEL_LANG = 'he';
+window.LBL = Object.assign({}, LABELS.he.vaad); // default until loadData computes it
+
+function computeLabels(config) {
+  config = config || {};
+  const orgType = (config.orgType === 'kibbutz') ? 'kibbutz' : 'vaad';
+  const lang = LABEL_LANG;
+  const base = (LABELS[lang] && LABELS[lang][orgType]) || LABELS.he.vaad;
+  const fallback = LABELS.he.vaad;
+  const ov = (config.labelOverrides && config.labelOverrides[lang]) || {};
+  const out = {};
+  Object.keys(fallback).forEach(function(k){
+    const o = ov[k];
+    out[k] = (o != null && String(o).trim() !== '') ? String(o)
+           : (base[k] != null ? base[k] : fallback[k]);
+  });
+  return out;
+}
+// t(key) — reads the live window.LBL (set in loadData). Never empty.
+function t(key) {
+  if (window.LBL && window.LBL[key] != null) return window.LBL[key];
+  return (LABELS.he.vaad[key] != null) ? LABELS.he.vaad[key] : key;
+}
+// applyLabels() — rewrites the prominent visible strings from window.LBL.
+// Stage 2 first pass: tab, tenants-table card header, accounts-modal title.
+function applyLabels() {
+  const tab = document.getElementById('tabBtnTenants');
+  if (tab) tab.firstChild.textContent = '\uD83D\uDC65 ' + t('persons') + ' ';
+  const lh = document.getElementById('tenantsListHeader');
+  if (lh) lh.childNodes[0].textContent = '\uD83D\uDCCB רשימת ' + t('persons');
+  const taTitle = document.getElementById('taModalTitleLabel');
+  if (taTitle) taTitle.textContent = '\uD83D\uDCB3 חשבונות ל' + t('person') + ': ';
+}
+// displayName for a property record: propertyLabel (Stage 2) || name (bank-match key).
+function tenantDisplayName(t2) {
+  return (t2 && t2.propertyLabel && String(t2.propertyLabel).trim()) ? String(t2.propertyLabel).trim() : (t2 ? t2.name : '');
+}
+
 let vpPlan = { plan:'trial', features:'all', maxTenants:20, currentTenants:0 };
 
 async function loadPlan() {
@@ -1714,6 +1790,9 @@ async function loadData() {
   try {
     const r = await fetch(API+'/data');
     data = await r.json();
+    // Stage 2: compute labels from config (server also sends data.labels — same logic).
+    window.LBL = (data && data.labels) ? data.labels : computeLabels(data && data.config);
+    applyLabels();
     if (data.blMessages) blMessages = data.blMessages;
     if (data.reports) savedReports = data.reports;
     if (data.rptLayouts) {
@@ -1747,6 +1826,7 @@ function fillForm() {
   const sel=document.getElementById('cfgMonth');
   if(c.manualMonth){ for(let o of sel.options){if(o.text===c.manualMonth){o.selected=true;break;}} }
   else { sel.value=''; }
+  fillOrgSettings();
   updateSchedule(); updatePreview();
 }
 
@@ -1871,8 +1951,57 @@ async function saveConfig() {
   updateSchedule();updatePreview();
   clearTimeout(saveTimer);
   saveTimer=setTimeout(async function(){
-    try{ const r=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:config})}); const d=await r.json(); if(d.effectiveMonth) data.effectiveMonth=d.effectiveMonth; toast('💾 הגדרות נשמרו','success'); } catch(e){}
+    // Send the FULL merged config (not just the changed keys): the server replaces
+    // the whole config object on save, so orgType/labelOverrides must ride along.
+    try{ const r=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:data.config})}); const d=await r.json(); if(d.effectiveMonth) data.effectiveMonth=d.effectiveMonth; toast('💾 הגדרות נשמרו','success'); } catch(e){}
   },800);
+}
+
+// ── Stage 2: orgType + label overrides ──────────────────────────────
+function toggleLabelAdvanced(){
+  const b=document.getElementById('lblAdvBody'), ic=document.getElementById('lblAdvIcon');
+  if(!b) return;
+  const open=b.style.display==='none';
+  b.style.display=open?'block':'none';
+  if(ic) ic.textContent=open?'▾':'▸';
+}
+// Populate the settings card from data.config (called on load).
+function fillOrgSettings(){
+  const c=data.config||{};
+  const orgType=(c.orgType==='kibbutz')?'kibbutz':'vaad';
+  const radios=document.querySelectorAll('input[name="orgType"]');
+  radios.forEach(function(r){ r.checked=(r.value===orgType); });
+  const ov=(c.labelOverrides&&c.labelOverrides.he)||{};
+  const p=document.getElementById('ovPerson'); if(p) p.value=ov.person||'';
+  const ps=document.getElementById('ovPersons'); if(ps) ps.value=ov.persons||'';
+  const u=document.getElementById('ovUnit'); if(u) u.value=ov.unit||'';
+}
+let orgSaveTimer=null;
+// Save orgType + overrides. Sends the WHOLE config so the top-level Object.assign
+// merge on the server keeps amount/template/etc intact alongside the new keys.
+function saveOrgSettings(){
+  const sel=document.querySelector('input[name="orgType"]:checked');
+  const orgType=sel?sel.value:'vaad';
+  const ovIn={
+    person:(document.getElementById('ovPerson')||{}).value||'',
+    persons:(document.getElementById('ovPersons')||{}).value||'',
+    unit:(document.getElementById('ovUnit')||{}).value||''
+  };
+  const he={};
+  Object.keys(ovIn).forEach(function(k){ if(String(ovIn[k]).trim()!=='') he[k]=String(ovIn[k]).trim(); });
+  const labelOverrides = Object.keys(he).length ? { he: he } : {};
+  // merge into the in-memory config and recompute labels live
+  data.config=Object.assign({},data.config,{orgType:orgType,labelOverrides:labelOverrides});
+  window.LBL=computeLabels(data.config);
+  applyLabels(); render();
+  const st=document.getElementById('orgSaveStatus'); if(st) st.textContent='שומר...';
+  clearTimeout(orgSaveTimer);
+  orgSaveTimer=setTimeout(async function(){
+    try{
+      await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:data.config})});
+      if(st) st.textContent='✓ נשמר';
+    }catch(e){ if(st) st.textContent='⚠ שגיאת שמירה'; }
+  },700);
 }
 
 function updateSchedule() {
@@ -1995,8 +2124,9 @@ async function addTenant() {
   const customAmount = ca ? parseInt(ca) : null;
   const od=document.getElementById('inOpeningDebt').value.trim();
   const openingDebt = od ? parseFloat(od) : 0;
-  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0});
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';
+  const propertyLabel=document.getElementById('inPropertyLabel').value.trim();
+  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||''});
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
   if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');
@@ -2023,7 +2153,7 @@ function startEdit(id) {
   const row=document.getElementById('row-'+id); if(!row) return;
   isEditing = true;
   const cells=row.querySelectorAll('td');
-  cells[0].innerHTML='<input id="en-'+id+'" value="'+t.name+'" style="width:100%;margin-bottom:4px;" placeholder="שם">';
+  cells[0].innerHTML='<input id="epl-'+id+'" value="'+(t.propertyLabel||'').replace(/"/g,'&quot;')+'" style="width:100%;margin-bottom:4px;font-size:0.79rem;" placeholder="תווית נכס (אופציונלי)"><input id="en-'+id+'" value="'+t.name+'" style="width:100%;" placeholder="שם איש קשר">';
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מילות חיפוש">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
@@ -2049,7 +2179,9 @@ async function saveEdit(id) {
   const od = odEl ? (odEl.value.trim() ? parseFloat(odEl.value) : 0) : (t.openingDebt||0);
   if(!n){toast('⚠️ שם לא יכול להיות ריק','error');return;}
   if(!/^0[0-9]{8,9}$/.test(p)){toast('⚠️ מספר טלפון לא תקין','error');return;}
-  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;
+  const plEl=document.getElementById('epl-'+id);
+  const pl = plEl ? plEl.value.trim() : (t.propertyLabel||'');
+  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -2597,7 +2729,7 @@ function render() {
       else if(isW) sb='<span class="badge badge-sent">📱 נשלח</span>';
       else sb='<span class="badge badge-pending">⏳ ממתין</span>';
       h+='<tr id="row-'+t.id+'">';
-      h+='<td><strong>'+t.name+'</strong></td>';
+      h+='<td><strong>'+tenantDisplayName(t)+'</strong></td>';
       h+='<td style="font-size:0.77rem;color:var(--text2);">'+(t.keywords||'<span style="opacity:.4;">—</span>')+'</td>';
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
@@ -2689,7 +2821,7 @@ function render() {
       }
             h+='<tr>';
       h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"></td>';
-      h+='<td><strong>'+t.name+'</strong></td>';
+      h+='<td><strong>'+tenantDisplayName(t)+'</strong></td>';
       h+='<td>'+debtCell+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td>'+toggle+'</td>';

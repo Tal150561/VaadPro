@@ -991,6 +991,9 @@ app.get('/api/data', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
   d.effectiveMonth    = getEffectiveMonth(d.config);
   d.currentAutoMonth  = getEffectiveMonth(d.config);
+  // Stage 2: computed labels (orgType + overrides) so the frontend mirrors the
+  // SAME LABELS + fallback as the server. orgType absent -> vaad -> existing strings.
+  d.labels = getLabels(d.config);
   // Attach creditBalance per tenant so frontend can display credit info
   if (d.tenants) {
     d.tenants = d.tenants.map(t => ({
@@ -1129,6 +1132,66 @@ app.post('/api/reconnect', authMiddleware, async (req, res) => {
 //   recipients — Map<payerPhone, [accLabels]> for future per-payer routing (שלב 1
 //                 surfaces the data; actual split-send is OUT of scope). Reminder is
 //                 still sent to the tenant's main phone in this stage.
+// ─────────────────────────────────────────────────
+// LABELS / getLabels(config) / t(labels, key) — שלב 2 (Neve Yam)
+// SINGLE source of truth for visible terminology. Same principle as
+// buildAccountsBlock: server AND frontend (app.html) mirror the SAME LABELS
+// + the SAME staged fallback, so there is zero drift between UI / email / PDF.
+//
+// Layers: (A) LABELS global hardcoded, language-keyed, two base sets (vaad/kibbutz).
+//         (B) config.orgType ('vaad' default | 'kibbutz')  — per-customer choice.
+//         (C) config.labelOverrides[lang][key]             — per-customer override.
+//
+// t(labels, key) staged fallback (never empty):
+//   labelOverrides[lang][key] ?? LABELS[lang][orgType][key] ?? LABELS['he']['vaad'][key]
+//
+// ⚠ DEFAULT RULE: orgType missing → 'vaad' → overrides empty → t() returns the
+//   EXISTING strings → an existing vaad customer sees ZERO change (byte-identical).
+// Minimal key set this stage: org / person / persons / unit / body.
+// ──────────────────────────────────────────────────
+const LABELS = {
+  he: {
+    vaad: {
+      org:     'ועד הבית',
+      person:  'דייר',
+      persons: 'דיירים',
+      unit:    'דירה',
+      body:    'ועד הבית'
+    },
+    kibbutz: {
+      org:     'קיבוץ',
+      person:  'חבר',
+      persons: 'חברים',
+      unit:    'בית/נכס',
+      body:    'הנהלת הקיבוץ'
+    }
+  }
+};
+const LABEL_LANG = 'he'; // שלב 2: he בלבד. המבנה מוכן לשפות נוספות בלי שינוי מבנה.
+
+// getLabels(config) → flat { key: value } for the customer's orgType, overrides applied.
+function getLabels(config) {
+  config = config || {};
+  const orgType = (config.orgType === 'kibbutz') ? 'kibbutz' : 'vaad';
+  const lang = LABEL_LANG;
+  const base = (LABELS[lang] && LABELS[lang][orgType]) || LABELS.he.vaad;
+  const fallback = LABELS.he.vaad;
+  const ov = (config.labelOverrides && config.labelOverrides[lang]) || {};
+  const out = {};
+  Object.keys(fallback).forEach(function (k) {
+    const o = ov[k];
+    out[k] = (o != null && String(o).trim() !== '') ? String(o)
+           : (base[k] != null ? base[k] : fallback[k]);
+  });
+  return out;
+}
+
+// t(labels, key) — single label lookup off a computed labels object.
+function t(labels, key) {
+  if (labels && labels[key] != null) return labels[key];
+  return (LABELS.he.vaad[key] != null) ? LABELS.he.vaad[key] : key;
+}
+
 // Phone resolution per account uses staged fallback:
 //   payer-slot phone → owner phone → tenant phone → main tenant.phone
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2103,6 +2166,47 @@ app.post('/api/admin/edit-customer', superAdminMiddleware, async (req, res) => {
   }
   saveUsers(users);
   res.json({ ok: true });
+});
+
+// ── Stage 2: Super-Admin label-override editor ──────────────────────────────
+// Reads/writes config.orgType + config.labelOverrides for a customer's tenant
+// data file (by email). Writes merge into the EXISTING config (saveTenantData does
+// a top-level Object.assign, so we load → merge config → save the whole config).
+app.get('/api/admin/labels/:email', superAdminMiddleware, (req, res) => {
+  const users = loadUsers();
+  const user  = users.find(u => u.email === String(req.params.email || '').toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+  const d = loadTenantData(user.tenantId);
+  const cfg = d.config || {};
+  res.json({
+    ok: true,
+    orgType: (cfg.orgType === 'kibbutz') ? 'kibbutz' : 'vaad',
+    labelOverrides: cfg.labelOverrides || {},
+    labels: getLabels(cfg),
+    baseSets: LABELS.he
+  });
+});
+
+app.post('/api/admin/labels/:email', superAdminMiddleware, (req, res) => {
+  const users = loadUsers();
+  const user  = users.find(u => u.email === String(req.params.email || '').toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+  const { orgType, labelOverrides } = req.body || {};
+  const d = loadTenantData(user.tenantId);
+  const cfg = Object.assign({}, d.config || {});
+  if (orgType === 'vaad' || orgType === 'kibbutz') cfg.orgType = orgType;
+  if (labelOverrides && typeof labelOverrides === 'object') {
+    // sanitize: keep only known keys under he, drop empties
+    const he = {};
+    const allowed = Object.keys(LABELS.he.vaad);
+    const src = labelOverrides.he || {};
+    allowed.forEach(function (k) {
+      if (src[k] != null && String(src[k]).trim() !== '') he[k] = String(src[k]).trim();
+    });
+    cfg.labelOverrides = Object.keys(he).length ? { he: he } : {};
+  }
+  saveTenantData(user.tenantId, { config: cfg });
+  res.json({ ok: true, labels: getLabels(cfg) });
 });
 
 // ── Admin: מחיקת לקוח ───────────────────────────────────────────
