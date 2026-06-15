@@ -4133,10 +4133,34 @@ app.get('/api/portal/:token', (req, res) => {
       const result = {};
       for (const acc of (tenant.extraAccounts || [])) {
         const phKey = String(entry.tenantId) + '__acc__' + acc.id;
-        result[acc.id] = ((d.paymentHistory || {})[phKey] || [])
+        const recs = ((d.paymentHistory || {})[phKey] || [])
           .sort((a, b) => b.month.localeCompare(a.month)).slice(0, 12);
+        // ⚠️ Same reconciliation as the main account (see comment above): the
+        // per-account sentLog key is the source of truth for the current month.
+        // An old bank import can write paid:true into the account's paymentHistory
+        // without the matching sentLog entry — force the current-month record to
+        // agree with sentLog so "שולם"/"ממתין" can never contradict each other.
+        const accSentKey = phKey + '_' + currentMonthName;
+        const accSentVal = String((d.sentLog || {})[accSentKey] || '');
+        const accPaidBySentLog = accSentVal.startsWith('manual_paid') || accSentVal.startsWith('bank_import');
+        for (const r of recs) {
+          if (r.month === currentMonthKey) r.paid = accPaidBySentLog;
+        }
+        result[acc.id] = recs;
       }
       return result;
+    })(),
+    // Authoritative current-month paid flag per extra account (from sentLog).
+    // The frontend uses THIS — never the raw paymentHistory record — to decide
+    // the current-month status badge for each account.
+    extraCurrentStatus: (() => {
+      const status = {};
+      for (const acc of (tenant.extraAccounts || [])) {
+        const accSentKey = String(entry.tenantId) + '__acc__' + acc.id + '_' + currentMonthName;
+        const v = String((d.sentLog || {})[accSentKey] || '');
+        status[acc.id] = (v.startsWith('manual_paid') || v.startsWith('bank_import')) ? 'paid' : 'unpaid';
+      }
+      return status;
     })(),
     lastBankImport: d.lastBankSyncImport
       ? { timestamp: d.lastBankSyncImport.timestamp, month: d.lastBankSyncImport.month }

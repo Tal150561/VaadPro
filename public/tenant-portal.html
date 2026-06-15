@@ -935,18 +935,23 @@ function renderExtraAccountsPortal(d) {
   var mk = d.current && d.current.monthKey;  // YYYY-MM
   var em = d.current && d.current.monthLabel; // ינואר etc.
   var ph = d.extraPaymentHistory || {};       // { accId: [{month,paid,amount,...}] }
+  var ecs = d.extraCurrentStatus || {};        // { accId: 'paid'|'unpaid' } — from sentLog (source of truth)
   var freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
 
   list.innerHTML = active.map(function(acc) {
     var history = ph[acc.id] || [];
-    var paidRec = history.find(function(r){ return r.month === mk && r.paid; });
-    var unpaidHistory = history.filter(function(r){ return !r.paid; });
+    // ⚠️ Current-month status comes from sentLog (extraCurrentStatus), NOT from
+    // the paymentHistory record — see server comment. This prevents an old bank
+    // import from showing "✅ שולם" when sentLog says otherwise.
+    var isPaidNow = ecs[acc.id] === 'paid';
+    // Exclude the current month from prior-debt (it is the current row, not history).
+    var unpaidHistory = history.filter(function(r){ return !r.paid && r.month !== mk; });
     var histDebt = unpaidHistory.reduce(function(s,r){ return s+(parseFloat(r.amount)||acc.amount||0); }, 0);
     var openDebt = parseFloat(acc.openingDebt) || 0;
     var totalDebt = Math.max(0, histDebt + openDebt);
 
     var statusColor, statusText, bg, border;
-    if (paidRec) {
+    if (isPaidNow) {
       statusColor='var(--accent)'; statusText='✅ שולם';
       bg='rgba(37,211,102,.06)'; border='rgba(37,211,102,.3)';
     } else {
@@ -955,7 +960,7 @@ function renderExtraAccountsPortal(d) {
     }
 
     var debtHtml = '';
-    if (!paidRec && totalDebt > 0) {
+    if (!isPaidNow && totalDebt > 0) {
       debtHtml = '<div style="margin-top:6px;font-size:0.8rem;color:#f85149;font-weight:700;">חוב מצטבר: ₪' + totalDebt + '</div>';
     }
 
