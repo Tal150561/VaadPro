@@ -5910,28 +5910,38 @@ function addTenantAccountRow() {
       return;
     }
 
+    const freqLabel = { monthly:'חודשי', quarterly:'רבעוני', yearly:'שנתי' };
     const opts = availableTemplates.map((t, i) =>
-      `<option value="${i}">${t.label} — ₪${t.amount} (${{monthly:'חודשי',quarterly:'רבעוני',yearly:'שנתי'}[t.frequency]})</option>`
+      `<option value="${i}">${t.label} — ₪${t.amount} (${freqLabel[t.frequency] || ''})</option>`
     ).join('');
-    const html = `<select id="_tplSel" style="margin-left:8px;">${opts}</select>
-      <button class="btn btn-green btn-sm" onclick="
-        const idx=parseInt(document.getElementById('_tplSel').value);
-        const opts=${JSON.stringify(availableTemplates)};
-        const tpl=opts[idx];
-        const already=taModalAccounts.some(a=>a.label.trim().toLowerCase()===tpl.label.trim().toLowerCase());
-        if(already){toast('חשבון זה כבר קיים לדייר','error');document.getElementById('_tplAddBar').remove();return;}
-        taModalAccounts.push({id:'acc_'+Date.now(),label:tpl.label,type:tpl.type,frequency:tpl.frequency,amount:tpl.amount,openingDebt:0,matchKeywords:'',payer:'owner',active:true});
-        document.getElementById('_tplAddBar').remove();
-        renderTenantAccountsModal();">הוסף מתבנית</button>
-      <button class="btn btn-secondary btn-sm" onclick="
-        taModalAccounts.push({id:'acc_'+Date.now(),label:'',type:'fixed',frequency:'monthly',amount:0,openingDebt:0,matchKeywords:'',payer:'owner',active:true});
-        document.getElementById('_tplAddBar').remove();
-        renderTenantAccountsModal();">חשבון ריק</button>`;
+
     const bar = document.createElement('div');
     bar.id = '_tplAddBar';
     bar.style.cssText = 'display:flex;align-items:center;gap:8px;padding:8px 0;flex-wrap:wrap;';
-    bar.innerHTML = '<span style="font-size:0.82rem;color:var(--text2);">בחר תבנית:</span>' + html;
+    bar.innerHTML =
+      '<span style="font-size:0.82rem;color:var(--text2);">בחר תבנית:</span>' +
+      `<select id="_tplSel" style="margin-left:8px;">${opts}</select>` +
+      '<button id="_tplAddBtn" class="btn btn-green btn-sm">הוסף מתבנית</button>' +
+      '<button id="_tplEmptyBtn" class="btn btn-secondary btn-sm">חשבון ריק</button>';
     document.getElementById('taModalList').after(bar);
+
+    // Wire handlers via addEventListener — never inline onclick with JSON.stringify
+    // (embedding JSON in an attribute breaks on its double-quotes/Hebrew and leaks code into the UI)
+    bar.querySelector('#_tplAddBtn').addEventListener('click', () => {
+      const idx = parseInt(document.getElementById('_tplSel').value);
+      const tpl = availableTemplates[idx];
+      if (!tpl) { bar.remove(); return; }
+      const already = taModalAccounts.some(a => a.label.trim().toLowerCase() === tpl.label.trim().toLowerCase());
+      if (already) { toast('חשבון זה כבר קיים לדייר', 'error'); bar.remove(); return; }
+      taModalAccounts.push({ id: 'acc_' + Date.now(), label: tpl.label, type: tpl.type, frequency: tpl.frequency, amount: tpl.amount, openingDebt: 0, matchKeywords: '', payer: 'owner', active: true });
+      bar.remove();
+      renderTenantAccountsModal();
+    });
+    bar.querySelector('#_tplEmptyBtn').addEventListener('click', () => {
+      taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', payer: 'owner', active: true });
+      bar.remove();
+      renderTenantAccountsModal();
+    });
   } else {
     taModalAccounts.push({ id: 'acc_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0, matchKeywords: '', payer: 'owner', active: true });
     renderTenantAccountsModal();
