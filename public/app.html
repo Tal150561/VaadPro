@@ -834,7 +834,7 @@ function vpLogout() {
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
-          <button class="btn btn-ghost" onclick="fixPaymentHistoryMonth()" style="font-size:0.75rem;color:var(--text3);margin-right:auto;" title="תיקון נתונים: מחק רשומות חודש שגויות">🔧 תקן נתונים</button>
+          <button class="btn btn-ghost" onclick="fixPaymentHistoryMonth()" style="font-size:0.75rem;color:var(--text3);margin-right:auto;" title="תיקון נתונים: מחק רק רשומות 'שולם' שסותרות את נתוני האמת (sentLog) — מציג מה יימחק לפני אישור">🔧 תקן נתונים</button>
         </div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <input type="text" id="cfgAiInstruction" placeholder='לדוגמה: "יותר נחמד", "קצר ב-50%"' style="flex:1;min-width:180px;height:34px;font-size:0.82rem;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
@@ -2087,13 +2087,33 @@ function insertVar(v) {
 }
 
 async function fixPaymentHistoryMonth() {
-  const month = prompt('חודש למחיקה מהיסטוריית תשלומים (YYYY-MM):', new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0'));
+  const month = prompt('חודש לבדיקה/תיקון בהיסטוריית תשלומים (YYYY-MM):', new Date().getFullYear() + '-' + String(new Date().getMonth()+1).padStart(2,'0'));
   if (!month) return;
-  if (!confirm('למחוק את כל רשומות ' + month + ' מהיסטוריית התשלומים של הבניין?')) return;
   try {
+    // שלב 1 — בדיקה (dry-run): מוצאים רק רשומות "שולם" שסותרות את sentLog
+    const chk = await fetch(API + '/fix-payment-history', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ month, mode: 'inconsistent', dryRun: true })
+    });
+    const cd = await chk.json();
+    if (!cd.ok) { toast('שגיאה: ' + (cd.error || ''), 'error'); return; }
+    if (!cd.fixed) { toast('לא נמצאו רשומות שגויות ל-' + month + ' ✓', 'success'); return; }
+
+    // הצג בדיוק מה יימחק לפני אישור
+    const lines = (cd.removed || []).map(function(x){
+      return '• ' + x.tenant + ' — ' + (x.amount || '') + '₪ (' + (x.type || '') + ')';
+    }).join('\n');
+    const ok = confirm(
+      'נמצאו ' + cd.fixed + ' רשומות "שולם" ל-' + month + ' שסותרות את נתוני האמת (sentLog):\n\n' +
+      lines + '\n\n' +
+      'למחוק רק את הרשומות השגויות האלה? (רשומות תקינות יישמרו)'
+    );
+    if (!ok) return;
+
+    // שלב 2 — מחיקה ממוקדת בפועל
     const r = await fetch(API + '/fix-payment-history', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ month })
+      body: JSON.stringify({ month, mode: 'inconsistent', dryRun: false })
     });
     const d = await r.json();
     if (d.ok) { toast(d.message, 'success'); await loadData(); render(); }

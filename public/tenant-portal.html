@@ -531,7 +531,10 @@ function render(d) {
    // otherwise if creditBalance exists (pre-cron), use it as a negative offset
    const effectiveOpeningDebt = (openingDebt < 0) ? openingDebt
      : (creditBalance > 0 ? -creditBalance : openingDebt);
-   const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid; });
+   // Exclude the current month from prior-debt — it is already counted as c.amount below.
+   // (The server now keeps the current-month history record in sync with sentLog,
+   //  but it must NOT also be summed here or the current month is double-charged.)
+   const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid && r.monthKey !== c.monthKey; });
    const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || c.amount); }, 0);
 
    // amountDue: total to pay (current month + prior debt), after applying any credit
@@ -614,11 +617,14 @@ function render(d) {
     bankNotice.style.display = 'none';
   }
   const list = document.getElementById('historyList');
-  if (!d.history || !d.history.length) {
+  // The current month is already shown in the current-month card (and the month
+  // selector re-injects it labeled "נוכחי"), so don't repeat it in the list below.
+  const historyRows = (d.history || []).filter(function(r){ return r.monthKey !== c.monthKey; });
+  if (!historyRows.length) {
     list.innerHTML = '<div class="empty-history">אין היסטוריית תשלומים עדיין</div>';
     return;
   }
-  list.innerHTML = d.history.map(function(r) {
+  list.innerHTML = historyRows.map(function(r) {
     const isPaid = r.paid;
     const iconClass = isPaid ? 'paid' : 'unpaid';
     const icon = isPaid ? '✅' : '❌';

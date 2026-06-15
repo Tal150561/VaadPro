@@ -1720,20 +1720,82 @@ app.post('/api/admin/extend-trial', adminAuthMiddleware, (req, res) => {
 
 // ── Admin: ניקוי לוג שליחות ─────────────────────────────────────
 // ── תיקון נתונים: מחק רשומות paymentHistory שגויות לחודש ספציפי (של הלקוח המחובר בלבד) ──
+// תיקון נתונים — שני מצבים:
+//   mode='inconsistent' (מומלץ, ברירת מחדל): מוחק רק רשומות paymentHistory
+//        ש"שולם" אבל סותרות את sentLog (מקור האמת). פותר בדיוק את התקלה של
+//        קובץ בנק ישן שכתב paid:true בלי שsentLog עודכן. רשומות תקינות נשמרות.
+//   mode='all' (ההתנהגות הישנה): מוחק את כל רשומות החודש — גס, משאיר לתאימות לאחור.
+// dryRun=true: רק מדווח מה היה נמחק, בלי לשמור — לתצוגה למשתמש לפני אישור.
+//
+// המפתחות ב-paymentHistory הם או tenantId רגיל או '<tenantId>__acc__<accId>'
+// לחשבונות נוספים. החודש ב-sentLog הוא שם החודש העברי, ולא YYYY-MM, ולכן
+// משווים מול שם החודש הנגזר מ-config של אותו חודש.
 app.post('/api/fix-payment-history', authMiddleware, (req, res) => {
   const { month } = req.body;
+  const mode   = req.body.mode === 'all' ? 'all' : 'inconsistent';
+  const dryRun = req.body.dryRun === true;
   if (!month || !/^\d{4}-\d{2}$/.test(month)) return res.json({ ok: false, error: 'חסר month תקין (YYYY-MM)' });
   try {
     const d = loadTenantData(req.user.tenantId);
-    if (!d.paymentHistory) return res.json({ ok: true, fixed: 0, message: 'אין paymentHistory' });
+    if (!d.paymentHistory) return res.json({ ok: true, fixed: 0, removed: [], message: 'אין paymentHistory' });
+
+    const sentLog = d.sentLog || {};
+    // שם החודש העברי עבור החודש שנבחר (sentLog ממופתח בשם חודש, לא ב-YYYY-MM)
+    const [yy, mm] = month.split('-').map(Number);
+    const HEB_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    const hebMonthName = HEB_MONTHS[mm - 1];
+
+    // האם sentLog אומר ש"שולם" עבור tenantId נתון בחודש הזה?
+    const sentSaysPaid = (tenantId) => {
+      const v = sentLog[tenantId + '_' + hebMonthName];
+      if (!v) return false;
+      const s = String(v);
+      return s.startsWith('manual_paid') || s.startsWith('bank_import');
+    };
+
+    const removed = [];   // לתיעוד/תצוגה: מה נמחק (או יימחק ב-dry-run)
     let fixed = 0;
-    Object.keys(d.paymentHistory).forEach(tid => {
-      const before = d.paymentHistory[tid].length;
-      d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== month);
-      fixed += before - d.paymentHistory[tid].length;
+
+    Object.keys(d.paymentHistory).forEach(key => {
+      // הוצא את ה-tenantId הבסיסי גם ממפתח של חשבון נוסף
+      const baseTenantId = key.split('__acc__')[0];
+      const tenant = (d.tenants || []).find(t => String(t.id) === String(baseTenantId));
+      const tenantName = tenant ? tenant.name : baseTenantId;
+
+      const before = d.paymentHistory[key].length;
+      d.paymentHistory[key] = d.paymentHistory[key].filter(r => {
+        if (r.month !== month) return true; // חודש אחר — לא נוגעים
+        if (mode === 'all') {
+          // התנהגות ישנה: מחק את כל רשומות החודש
+          removed.push({ tenant: tenantName, key, paid: r.paid, amount: r.amount, type: r.type, reason: 'all' });
+          return false;
+        }
+        // mode='inconsistent': מחק רק אם הרשומה "שולם" אך sentLog לא מאשר
+        const recordSaysPaid = r.paid === true;
+        if (recordSaysPaid && !sentSaysPaid(baseTenantId)) {
+          removed.push({ tenant: tenantName, key, paid: r.paid, amount: r.amount, type: r.type, reason: 'sentLog לא מאשר תשלום' });
+          return false; // מוחק את הרשומה הסותרת
+        }
+        return true; // רשומה תקינה (תואמת sentLog, או רשומת "לא שולם") — נשמרת
+      });
+      fixed += before - d.paymentHistory[key].length;
     });
+
+    if (dryRun) {
+      return res.json({
+        ok: true, dryRun: true, fixed, removed,
+        message: fixed > 0
+          ? `נמצאו ${fixed} רשומות שגויות ל-${month}` +
+            (mode === 'inconsistent' ? ' (סותרות את sentLog)' : '')
+          : `לא נמצאו רשומות למחיקה ל-${month}`
+      });
+    }
+
     if (fixed > 0) saveTenantData(req.user.tenantId, { paymentHistory: d.paymentHistory });
-    res.json({ ok: true, fixed, message: `נמחקו ${fixed} רשומות ${month}` });
+    res.json({
+      ok: true, fixed, removed,
+      message: fixed > 0 ? `נמחקו ${fixed} רשומות שגויות ל-${month}` : `לא נמצאו רשומות למחיקה ל-${month}`
+    });
   } catch(e) { res.json({ ok: false, error: e.message }); }
 });
 
@@ -3997,6 +4059,27 @@ app.get('/api/portal/:token', (req, res) => {
     if (String(sentVal).startsWith('manual_paid')) { currentStatus = 'paid'; currentType = 'manual'; }
     else if (String(sentVal).startsWith('bank_import')) { currentStatus = 'paid'; currentType = 'bank'; }
     else if (String(sentVal).startsWith('sent_')) { currentStatus = 'reminded'; currentType = 'wa_sent'; }
+  }
+
+  // ⚠️ Reconcile the current month between the two stores. sentLog is the
+  // documented source of truth for the portal's current-month status, but the
+  // history list reads `paid` from paymentHistory. These can diverge — e.g. an
+  // OLD bank file gets imported, recordPayment writes paid:true into
+  // paymentHistory for the current month, yet sentLog for the current month was
+  // never set to bank_import. That makes the current month show "ממתין לתשלום"
+  // in the card AND "שולם" in the history at the same time.
+  // Force the current-month history record to agree with sentLog so the portal
+  // never shows two contradictory states for the same month.
+  const currentPaidBySentLog = (currentStatus === 'paid');
+  for (const r of history) {
+    if (r.month === currentMonthKey) {
+      r.paid = currentPaidBySentLog;
+      if (!currentPaidBySentLog) {
+        // Strip stale "paid" metadata so the row renders cleanly as unpaid.
+        r.type = currentType || r.type;
+        r.amount = r.amount; // keep amount for the unpaid-debt calc
+      }
+    }
   }
 
   // Build Hebrew month label for display
