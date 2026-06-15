@@ -789,8 +789,10 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">🏢 סוג הארגון ומונחים</div>
-      <div class="card-body">
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleOrgCard()">🏢 סוג הארגון ומונחים
+        <span id="orgCardIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="orgCardBody" style="display:none;">
         <div style="margin-bottom:14px;">
           <label style="display:block;margin-bottom:8px;">סוג הארגון</label>
           <label style="margin-left:18px;cursor:pointer;"><input type="radio" name="orgType" value="vaad" onchange="saveOrgSettings()"> ועד בית</label>
@@ -1958,6 +1960,14 @@ async function saveConfig() {
 }
 
 // ── Stage 2: orgType + label overrides ──────────────────────────────
+// Collapse/expand the whole org-settings card (default collapsed).
+function toggleOrgCard(){
+  const b=document.getElementById('orgCardBody'), ic=document.getElementById('orgCardIcon');
+  if(!b) return;
+  const open=b.style.display==='none';
+  b.style.display=open?'block':'none';
+  if(ic) ic.textContent=open?'▼ כווץ':'▶ הרחב';
+}
 function toggleLabelAdvanced(){
   const b=document.getElementById('lblAdvBody'), ic=document.getElementById('lblAdvIcon');
   if(!b) return;
