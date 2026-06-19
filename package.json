@@ -4,7 +4,9 @@
   "description": "VaadPro — SaaS לניהול ועד בית",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "check:guide": "node scripts/check-guide-coverage.js",
+    "check": "node --check public/vaadpro-guide.js && node scripts/check-guide-coverage.js"
   },
   "engines": {
     "node": ">=18.0.0"
