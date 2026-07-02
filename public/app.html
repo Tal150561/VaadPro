@@ -599,12 +599,27 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">💳 סטטוס תשלומים החודש<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="exportAnnualPayments()">📊 ייצא מעקב שנתי לאקסל</button></div>
+      <div class="card-header">💳 סטטוס תשלומים<div class="spacer"></div>
+        <select id="viewMonthSelect" style="font-size:0.82rem;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);margin-left:8px;"></select>
+        <button class="btn btn-secondary btn-sm" onclick="showPayersReport()" style="margin-left:8px;">📄 דו"ח משלמים</button>
+        <button class="btn btn-secondary btn-sm" onclick="exportAnnualPayments()">📊 ייצא מעקב שנתי לאקסל</button></div>
+      <div id="viewMonthBanner" style="display:none;padding:8px 12px;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;margin-bottom:10px;font-size:0.85rem;color:#818cf8;">👁️ מציג חודש היסטורי — לקריאה בלבד. פעולות נעולות. <a href="#" onclick="resetViewMonth();return false;" style="color:#818cf8;text-decoration:underline;">חזור לחודש הנוכחי</a></div>
       <div id="paymentsWrap"><div class="empty"><div class="empty-icon">💳</div><div>אין דיירים</div></div></div>
     </div>
 
   </div>
 
+
+  <!-- Payers Report Modal -->
+  <div class="modal-bg" id="payersReportModal" style="display:none;" onclick="if(event.target===this)closeModal('payersReportModal')">
+    <div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto;">
+      <h2 style="margin-bottom:4px;">📄 דו"ח משלמים</h2>
+      <div id="payersReportBody"></div>
+      <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+        <button class="btn btn-secondary btn-sm" onclick="closeModal('payersReportModal')">סגור</button>
+      </div>
+    </div>
+  </div>
 
   <!-- TAB REPORTS -->
   <div class="tab-panel" id="tab-reports">
@@ -2636,6 +2651,112 @@ function getEffectiveMonth() {
   return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
 }
 
+// ── תצוגת מצב היסטורית (שלב 1) ──────────────────────────────
+// viewMonthOverride: null = חודש פעיל; אחרת שם חודש עברי לתצוגה בלבד
+let viewMonthOverride = null;
+const VP_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+// החודש להצגה בטאב תשלומים (שם עברי) — override אם נבחר, אחרת החודש הפעיל
+function getViewMonth() {
+  return viewMonthOverride || getEffectiveMonth();
+}
+// true אם מוצג חודש היסטורי (לא הפעיל) → תצוגה לקריאה בלבד
+function isHistoricalView() {
+  return !!viewMonthOverride && viewMonthOverride !== getEffectiveMonth();
+}
+function resetViewMonth() {
+  viewMonthOverride = null;
+  const sel = document.getElementById('viewMonthSelect');
+  if (sel) sel.value = getEffectiveMonth();
+  render();
+}
+// מאכלס את בורר החודש: 12 חודשים אחורה, החודש הפעיל מסומן
+function populateViewMonthSelect() {
+  const sel = document.getElementById('viewMonthSelect');
+  if (!sel) return;
+  const active = getEffectiveMonth();
+  const now = new Date();
+  sel.innerHTML = '';
+  for (var i = 0; i < 12; i++) {
+    var d2 = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    var name = VP_MONTHS[d2.getMonth()];
+    var opt = document.createElement('option');
+    opt.value = name;
+    opt.textContent = name + ' ' + d2.getFullYear() + (name === active ? ' (נוכחי)' : '');
+    sel.appendChild(opt);
+  }
+  // ודא שהחודש הפעיל קיים כאופציה גם אם הוא מחוץ ל-12 (manualMonth)
+  if (active && !Array.from(sel.options).some(function(o){return o.value===active;})) {
+    var o0 = document.createElement('option');
+    o0.value = active; o0.textContent = active + ' (נוכחי)';
+    sel.insertBefore(o0, sel.firstChild);
+  }
+  sel.value = viewMonthOverride || active;
+  if (!sel._wired) {
+    sel.addEventListener('change', function(){
+      viewMonthOverride = (this.value === getEffectiveMonth()) ? null : this.value;
+      render();
+    });
+    sel._wired = true;
+  }
+}
+
+// דו"ח משלמים לחודש המוצג — נגזר כולו מ-sentLog (קריאה בלבד)
+function showPayersReport() {
+  if (!data.tenants.length) { toast('אין דיירים רשומים','error'); return; }
+  const vm = getViewMonth();
+  const globalAmount = parseInt(document.getElementById('cfgAmount').value) || (data.config && data.config.amount) || 300;
+  const paid = [], unpaid = [];
+  let collected = 0, expected = 0;
+  data.tenants.forEach(function(t){
+    const amt = t.customAmount || globalAmount;
+    expected += amt;
+    const lv = data.sentLog[t.id+'_'+vm];
+    const isPaid = lv && (String(lv).startsWith('manual_paid') || String(lv).startsWith('bank_import'));
+    if (isPaid) {
+      let a = amt;
+      const m = String(lv).match(/_amount_([\d.]+)/) || String(lv).match(/_([\d.]+)_payer_/);
+      if (m) a = parseFloat(m[1]) || amt;
+      collected += a;
+      paid.push({ name: tenantDisplayName(t), amount: a, via: String(lv).startsWith('manual_paid') ? 'ידני' : 'בנק' });
+    } else {
+      unpaid.push({ name: tenantDisplayName(t), amount: amt });
+    }
+  });
+  const total = data.tenants.length;
+  const rate = total ? Math.round(paid.length / total * 100) : 0;
+  const now = new Date();
+  const y = (function(){ var idx=VP_MONTHS.indexOf(vm); return idx>=0 && now.getMonth()<idx ? now.getFullYear()-1 : now.getFullYear(); })();
+
+  let h = '';
+  h += '<div style="font-size:0.85rem;color:var(--text2);margin-bottom:14px;">חודש: <strong>'+vm+' '+y+'</strong></div>';
+  h += '<div style="display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin-bottom:16px;">';
+  h += '<div class="stat-card"><div class="stat-num">'+paid.length+' / '+total+'</div><div class="stat-label">שילמו</div></div>';
+  h += '<div class="stat-card"><div class="stat-num warn">'+unpaid.length+'</div><div class="stat-label">לא שילמו</div></div>';
+  h += '<div class="stat-card"><div class="stat-num" style="color:var(--accent);">'+rate+'%</div><div class="stat-label">אחוז גבייה</div></div>';
+  h += '<div class="stat-card"><div class="stat-num" style="font-size:1.15rem;">'+collected.toLocaleString()+' / '+expected.toLocaleString()+'₪</div><div class="stat-label">נגבה מתוך צפוי</div></div>';
+  h += '</div>';
+
+  if (unpaid.length) {
+    h += '<div style="margin-bottom:8px;font-weight:700;color:var(--danger);">⏳ טרם שילמו ('+unpaid.length+'):</div>';
+    h += '<ul style="margin:0 0 16px;padding-right:20px;font-size:0.88rem;line-height:1.7;">';
+    unpaid.forEach(function(u){ h += '<li>'+u.name+' <span style="color:var(--text3);">— '+u.amount.toLocaleString()+'₪</span></li>'; });
+    h += '</ul>';
+  } else {
+    h += '<div style="color:var(--accent);font-weight:700;margin-bottom:16px;">✅ כל הדיירים שילמו!</div>';
+  }
+
+  if (paid.length) {
+    h += '<div style="margin-bottom:8px;font-weight:700;color:var(--accent);">✓ שילמו ('+paid.length+'):</div>';
+    h += '<ul style="margin:0;padding-right:20px;font-size:0.88rem;line-height:1.7;">';
+    paid.forEach(function(p){ h += '<li>'+p.name+' <span style="color:var(--text3);">— '+p.amount.toLocaleString()+'₪ ('+p.via+')</span></li>'; });
+    h += '</ul>';
+  }
+
+  document.getElementById('payersReportBody').innerHTML = h;
+  openModal('payersReportModal');
+}
+
 function openModal(id) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -2730,8 +2851,14 @@ function render() {
   // Save checked state before re-render
   const checkedIds = new Set(Array.from(document.querySelectorAll('.pay-select:checked')).map(function(el){return el.dataset.id;}));
   const em=getEffectiveMonth();
+  const vm=getViewMonth();              // חודש התצוגה (עשוי להיות היסטורי)
+  const histView=isHistoricalView();    // האם מוצג חודש שאינו הפעיל
+  populateViewMonthSelect();
+  var vmBanner=document.getElementById('viewMonthBanner');
+  if(vmBanner) vmBanner.style.display = histView ? 'block' : 'none';
   const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
-  const paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+em];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
+  // הסטטיסטיקות ("שילמו"/"ממתינים") משקפות את חודש התצוגה
+  const paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+vm];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
   const pending=data.tenants.length-paidCount;
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;
@@ -2792,7 +2919,7 @@ function render() {
       '<th>שם</th><th>חוב</th><th>סטטוס תשלום</th><th>סימון ידני</th><th>שליחה</th>' +
       '</tr></thead><tbody>';
     data.tenants.forEach(function(t){
-      const key=t.id+'_'+em, lv=data.sentLog[key], paid=!!lv;
+      const key=t.id+'_'+vm, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
       const isB=paid&&String(lv).startsWith('bank_import');
       const isW=paid&&!isM&&!isB;
@@ -2808,9 +2935,11 @@ function render() {
       else if(isB) sb='<span class="badge badge-paid-bank">🏦 שילם (בנק)'+bankAmount+'</span>';
       else if(isW) sb='<span class="badge badge-sent">📱 תזכורת נשלחה '+st+'</span>';
       else sb='<span class="badge badge-pending">⏳ לא שילם</span>';
-      const toggle=paid
-        ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
-        :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>';
+      const toggle = histView
+        ? '<span style="font-size:0.75rem;color:var(--text3);">🔒</span>'
+        : (paid
+          ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
+          :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>');
        // Debt: cumulative = openingDebt + unpaid history months + current month if unpaid
        const tHistory = ph[String(t.id)] || [];
        const amount = t.customAmount || (data.config && data.config.amount) || 300;
@@ -2850,12 +2979,16 @@ function render() {
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }
             h+='<tr>';
-      h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"></td>';
+      h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"'+(histView?' disabled':'')+'></td>';
       h+='<td><strong>'+tenantDisplayName(t)+'</strong></td>';
       h+='<td>'+debtCell+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td>'+toggle+'</td>';
-      h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
+      if (histView) {
+        h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td>';
+      } else {
+        h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
+      }
       h+='</tr>';
     });
     h+='</tbody></table></div>';
