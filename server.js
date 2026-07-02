@@ -1047,9 +1047,26 @@ app.post('/api/data', authMiddleware, (req, res) => {
     const mk = req.body.bankMonthOverride || getMonthKey(config);
     const tenants = current.tenants || [];
     if (!current.paymentHistory) current.paymentHistory = {};
+    // ⚠️ Record each payment against the month named IN ITS OWN sentLog key,
+    // NOT against `mk` (current month / bankMonthOverride). The old code used `mk`
+    // for every entry, so a stray old bank_import value present anywhere in the
+    // posted sentLog would be re-recorded as paid:true for the CURRENT month —
+    // this is exactly what wrote the bogus June record for tenant "תמי" (see SKILL
+    // "sentLog/paymentHistory divergence"). The sentLog key is `tenantId_<hebMonth>`.
+    // Year is taken from `mk` (approach A) — ⚠️ NOT year-boundary safe (importing a
+    // December file in January mis-years it). Documented in SKILL for a future fix.
+    const mkYear = String(mk).split('-')[0];
     Object.entries(req.body.sentLog).forEach(([key, val]) => {
       if (!val) return;
-      const [tenantId] = key.split('_');
+      if (key.includes('__acc__')) return; // extra accounts handled by the dedicated import path
+      // Derive tenantId + month from the key end (month name has no '_', so split from the last '_').
+      const lastSep = key.lastIndexOf('_');
+      if (lastSep < 0) return;
+      const tenantId = key.slice(0, lastSep);
+      const hebMonth = key.slice(lastSep + 1);
+      const monthIdx = HEBREW_MONTHS.indexOf(hebMonth);
+      if (monthIdx < 0) return; // unexpected key (e.g. legacy ISO key like _2026-04) — leave untouched
+      const keyMonthKey = mkYear + '-' + String(monthIdx + 1).padStart(2, '0');
       const tenant = tenants.find(t => String(t.id) === tenantId);
       if (!tenant) return;
       const amount = tenant.customAmount || (config.amount || 300);
@@ -1070,7 +1087,7 @@ app.post('/api/data', authMiddleware, (req, res) => {
         const bankAmtMatch = String(val).match(/bank_import_[^_]+_([\d.]+)_/);
         if (bankAmtMatch) paidAmount = parseFloat(bankAmtMatch[1]);
       }
-      if (type) recordPayment(current, tenantId, mk, type, amount, tenant.name, payerName, paidAmount);
+      if (type) recordPayment(current, tenantId, keyMonthKey, type, amount, tenant.name, payerName, paidAmount);
     });
     req.body.paymentHistory = current.paymentHistory;
     delete req.body.bankMonthOverride; // don't save this field to tenant data
@@ -2715,6 +2732,7 @@ function closeMonthUnpaid() {
   // חודש קודם כ-YYYY-MM
   const prevDate  = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const prevKey   = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+  const prevHebMonth = HEBREW_MONTHS[prevDate.getMonth()]; // שם עברי לחודש הקודם (למפתח sentLog)
 
   const users = loadUsers();
   let closed = 0;
@@ -2747,6 +2765,17 @@ function closeMonthUnpaid() {
             changed = true;
             closed++;
           } else {
+            // ⚠️ הרשומה אומרת paid:true — אמת מול sentLog (מקור האמת).
+            // אם sentLog של החודש הקודם לא מאשר תשלום (לא bank_import/manual_paid),
+            // זו רשומה חשודה כמו מקרה "תמי" (paid:true שנכתב בלי אישור sentLog).
+            // מצב שמרני מכוון: רק מזהירים בלוג, לא פועלים אוטומטית — כי מחיקת
+            // רשומת paid:true אוטומטית עלולה לחייב שלא בצדק אם קיים מסלול תשלום
+            // שכותב paid בלי sentLog. בדיקה/תיקון ידני דרך הכפתור "תקן נתונים".
+            const slVal = String((d.sentLog || {})[tid + '_' + prevHebMonth] || '');
+            const sentSaysPaid = slVal.startsWith('bank_import') || slVal.startsWith('manual_paid');
+            if (!sentSaysPaid) {
+              console.warn(`[closeMonthUnpaid] ⚠️ סתירה: דייר ${tenant.name} (${tid}) — paymentHistory אומר שולם ל-${prevKey} אך sentLog[${prevHebMonth}]="${slVal || '(ריק)'}" לא מאשר. לא בוצעה פעולה אוטומטית — בדוק ידנית (כפתור "תקן נתונים").`);
+            }
             // שולמה — בדוק אם יש עודף תשלום → יתרה שלילית ב-openingDebt
             const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? amount);
             const overpay = Math.round((paidAmt - amount) * 100) / 100;
@@ -4070,6 +4099,10 @@ app.get('/api/portal/:token', (req, res) => {
   // in the card AND "שולם" in the history at the same time.
   // Force the current-month history record to agree with sentLog so the portal
   // never shows two contradictory states for the same month.
+  // NOTE: `history` items are still references into d.paymentHistory (filter/slice
+  // copy the array, not the objects). Mutating r.paid here is display-only — this
+  // is a READ endpoint with no saveTenantData, so nothing persists to disk. Safe,
+  // and consistent with the pre-existing current-month mutation below.
   const currentPaidBySentLog = (currentStatus === 'paid');
   for (const r of history) {
     if (r.month === currentMonthKey) {
@@ -4079,6 +4112,19 @@ app.get('/api/portal/:token', (req, res) => {
         r.type = currentType || r.type;
         r.amount = r.amount; // keep amount for the unpaid-debt calc
       }
+    } else if (r.paid) {
+      // ⚠️ Extended reconciliation (Diff 3): historical months too, not just current.
+      // A paid:true record with no confirming sentLog entry for that month (the
+      // "תמי" case) must NOT paint the month as "שולם" in the portal history.
+      // sentLog is the source of truth. Display-only — does not touch the debt calc
+      // or disk. (Aggressive here, unlike the conservative closeMonthUnpaid warning,
+      // precisely BECAUSE this is display-only and reversible; closeMonthUnpaid writes
+      // openingDebt to disk so it only warns. See SKILL.)
+      const rm = parseInt(r.month.split('-')[1], 10);
+      const rHeb = HEBREW_MONTHS[rm - 1];
+      const rSlVal = String((d.sentLog || {})[entry.tenantId + '_' + rHeb] || '');
+      const rPaidBySl = rSlVal.startsWith('bank_import') || rSlVal.startsWith('manual_paid');
+      if (!rPaidBySl) r.paid = false;
     }
   }
 
@@ -5105,7 +5151,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.10.18 – SaaS Server       ║');
+  console.log('║   VaadPro v2.13.6 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
