@@ -2652,53 +2652,9 @@ function getEffectiveMonth() {
   return (data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
 }
 
-// ── תשלום חלקי — מראה של הלוגיקה בשרת (v2.13.8) ──────────────
-// ⚠️ חובה לשמור על זהות מלאה מול server.js: parseSentLogAmount /
-// getExpectedAmount / calcMonthBalance. אם משנים שם — משנים גם כאן.
-// אותו עיקרון כמו LABELS/computeLabels (v2.13.0): מראה מכוון, לא עותק חופשי.
-// מקור הסכום ששולם = ערך sentLog. מקור הסכום הצפוי = paymentHistory.amount
-// (תעריף מוקפא). הדגל paid לא נקרא לעולם (כלל תמי, v2.13.2).
-function vpParseSentLogAmount(val) {
-  const s = String(val || '');
-  if (!s) return null;
-  if (s.indexOf('bank_import') === 0) {
-    const m = s.match(/^bank_import_[^_]+_([\d.]+)_payer_/);
-    return m ? parseFloat(m[1]) : null;
-  }
-  if (s.indexOf('manual_paid') === 0) {
-    const m = s.match(/_amount_([\d.]+)/);
-    return m ? parseFloat(m[1]) : null;
-  }
-  return null;
-}
-function vpSentLogIsPayment(val) {
-  const s = String(val || '');
-  return s.indexOf('bank_import') === 0 || s.indexOf('manual_paid') === 0;
-}
-function vpGetExpectedAmount(history, monthKey, fallbackAmount) {
-  const rec = (history || []).find(function(r){ return r.month === monthKey && r.type !== 'wa_sent'; });
-  if (rec && rec.amount != null && !isNaN(parseFloat(rec.amount))) return parseFloat(rec.amount);
-  return parseFloat(fallbackAmount) || 0;
-}
-// status: 'paid' | 'partial' | 'unpaid' | 'reminded'
-function vpCalcMonthBalance(sentLogVal, expectedAmount) {
-  const expected = parseFloat(expectedAmount) || 0;
-  if (!vpSentLogIsPayment(sentLogVal)) {
-    return { status: String(sentLogVal||'').indexOf('sent_')===0 ? 'reminded' : 'unpaid',
-             paidAmount: 0, expected: expected, shortfall: expected, credit: 0 };
-  }
-  const parsed = vpParseSentLogAmount(sentLogVal);
-  if (parsed === null) return { status:'paid', paidAmount:expected, expected:expected, shortfall:0, credit:0 };
-  const diff = Math.round((parsed - expected) * 100) / 100;
-  if (diff < 0) return { status:'partial', paidAmount:parsed, expected:expected, shortfall:Math.abs(diff), credit:0 };
-  return { status:'paid', paidAmount:parsed, expected:expected, shortfall:0, credit:diff };
-}
-// ממיר שם חודש עברי -> YYYY-MM (שנה מהשנה הנוכחית — approach A, כמו בשרת)
-function vpMonthKeyFromHeb(hebMonth) {
-  const idx = VP_MONTHS.indexOf(hebMonth);
-  if (idx < 0) return null;
-  return new Date().getFullYear() + '-' + String(idx + 1).padStart(2, '0');
-}
+// (v2.13.10: the client-side mirror of the server's payment math was REMOVED.
+// All debt/credit/status figures now arrive precomputed from the server —
+// see GET /api/data. Do not reintroduce local money math here.)
 
 // ── תצוגת מצב היסטורית (שלב 1) ──────────────────────────────
 // viewMonthOverride: null = חודש פעיל; אחרת שם חודש עברי לתצוגה בלבד
@@ -2940,13 +2896,17 @@ function render() {
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
       const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
+      // ⚠️ v2.13.10 — unified with the payments tab and the portal.
+      // Previously this showed the RAW openingDebt field, which is only the
+      // banked/rolled-over portion — it ignored short-paid months and unpaid
+      // history, so the same tenant could read "חוב: ₪0" here and "150₪" in the
+      // payments tab. Both now render the server's single totalDebt figure.
       const creditBal = parseFloat(t.creditBalance) || 0;
+      const tenantDebt = parseFloat(t.totalDebt) || 0;
       const displayDebt = creditBal > 0
         ? '<br><span style="color:#22c55e;font-size:0.72rem;font-weight:700;">✅ קרדיט: ₪'+creditBal+'</span>'
-        : (t.openingDebt && t.openingDebt !== 0
-            ? (t.openingDebt > 0
-                ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+t.openingDebt+'</span>'
-                : '<br><span style="color:var(--accent);font-size:0.72rem;font-weight:700;">יתרה: ₪'+Math.abs(t.openingDebt)+'</span>')
+        : (tenantDebt > 0
+            ? '<br><span style="color:var(--danger);font-size:0.72rem;font-weight:700;">חוב: ₪'+tenantDebt+'</span>'
             : '');
       h+='<td style="font-size:0.82rem;">'+displayAmount+displayDebt+'</td>';
       h+='<td>'+sb+'</td>';
@@ -2979,12 +2939,10 @@ function render() {
         const amtMatch = String(lv).match(/_([\d.]+)_payer_/);
         if(amtMatch) bankAmount = ' · ' + parseFloat(amtMatch[1]).toLocaleString() + '₪';
       }
-      // v2.13.8: partial-payment detection for the VIEWED month (vm).
-      // Source of truth = sentLog value; expected = frozen paymentHistory.amount.
-      const vmKey = vpMonthKeyFromHeb(vm);
-      const vmHist = (data.paymentHistory || {})[String(t.id)] || [];
-      const vmExpected = vpGetExpectedAmount(vmHist, vmKey, (t.customAmount || (data.config && data.config.amount) || 300));
-      const vmBal = vpCalcMonthBalance(lv, vmExpected);
+      // v2.13.10: per-month balance comes from the SERVER (t.monthBalances),
+      // keyed by Hebrew month name. No client-side derivation.
+      const vmBal = (t.monthBalances && t.monthBalances[vm])
+        || { status: (lv ? 'reminded' : 'unpaid'), paidAmount: 0, expected: 0, shortfall: 0, credit: 0 };
       const isPartial = (vmBal.status === 'partial');
       let sb='';
       if(isPartial) sb='<span class="badge badge-partial">⚠️ שולם חלקית · '+vmBal.paidAmount.toLocaleString()+'/'+vmBal.expected.toLocaleString()+'₪</span>'
@@ -2999,40 +2957,17 @@ function render() {
         : (paid
           ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
           :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>');
-       // Debt: cumulative = openingDebt + unpaid history months + current month if unpaid
-       const tHistory = ph[String(t.id)] || [];
-       const amount = t.customAmount || (data.config && data.config.amount) || 300;
-       const openingDebt = parseFloat(t.openingDebt) || 0; // can be negative (credit)
+       // ⚠️ v2.13.10 — CONSUME, DO NOT COMPUTE.
+       // totalDebt / creditBalance / currentBalance are computed ONCE on the
+       // server (GET /api/data) and shipped per tenant. The page must never
+       // re-derive money. Local duplicates of this math are exactly what made
+       // the payments tab show "שולם" on a partial payment while the portal
+       // disagreed. Need a new figure? Add it to the server, not here.
+       const amount = t.effectiveAmount || t.customAmount || (data.config && data.config.amount) || 300;
+       const openingDebt = parseFloat(t.openingDebt) || 0;
        const creditBalance = parseFloat(t.creditBalance) || 0;
        const paidThisMonth = isM || isB;
-       // unpaid months in history (all months, including current if recorded)
-        const currentMonthKey = (function(){ var mn=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר']; var idx=mn.indexOf(em); var y=new Date().getFullYear(); return idx>=0?(y+'-'+String(idx+1).padStart(2,'0')):(new Date().getFullYear()+'-'+String(new Date().getMonth()+1).padStart(2,'0')); })();
-        const unpaidHistory = tHistory.filter(function(r){ return !r.paid && r.type !== 'wa_sent' && r.month !== currentMonthKey; });
-       const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || amount); }, 0);
-       // current month debt: add only if not paid AND current month not already in history
-       const currentInHistory = tHistory.some(function(r){ return r.month === currentMonthKey && r.paid; });
-       // v2.13.8: a short-paid month owes its shortfall, not its full fee and not zero.
-       // em-keyed (debt is a live cumulative figure — deliberately NOT vm).
-       const emKey = vpMonthKeyFromHeb(em);
-       const emLv  = data.sentLog[t.id+'_'+em];
-       const emBal = vpCalcMonthBalance(emLv, vpGetExpectedAmount(tHistory, emKey, amount));
-       const currentMonthDebt = (emBal.status === 'partial')
-         ? emBal.shortfall
-         : ((paidThisMonth || currentInHistory) ? 0 : amount);
-       // Shortfalls from OTHER months already in sentLog (excluding the active month).
-       let otherShortfall = 0;
-       Object.keys(data.sentLog || {}).forEach(function(k){
-         if (k.indexOf('__acc__') >= 0) return;
-         const sep = k.lastIndexOf('_');
-         if (sep < 0 || String(k.slice(0,sep)) !== String(t.id)) return;
-         const hm = k.slice(sep+1);
-         if (hm === em) return;                       // active month handled above
-         const mkk = vpMonthKeyFromHeb(hm);
-         if (!mkk) return;                            // legacy/ISO key
-         const b = vpCalcMonthBalance(data.sentLog[k], vpGetExpectedAmount(tHistory, mkk, amount));
-         if (b.status === 'partial') otherShortfall += b.shortfall;
-       });
-       const totalDebt = Math.max(0, openingDebt + historyDebt + currentMonthDebt + otherShortfall);
+       const totalDebt = parseFloat(t.totalDebt) || 0;
        let debtCell;
       if (creditBalance > 0 && totalDebt === 0) {
         debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ קרדיט: ₪'+creditBalance+'</span>'

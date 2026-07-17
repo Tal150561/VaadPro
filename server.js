@@ -1131,12 +1131,44 @@ app.get('/api/data', authMiddleware, (req, res) => {
   // Stage 2: computed labels (orgType + overrides) so the frontend mirrors the
   // SAME LABELS + fallback as the server. orgType absent -> vaad -> existing strings.
   d.labels = getLabels(d.config);
-  // Attach creditBalance per tenant so frontend can display credit info
+  // ⚠️ v2.13.10 — SINGLE SOURCE OF TRUTH for all money math.
+  // The server computes every derived figure ONCE and ships it; app.html and
+  // tenant-portal.html CONSUME these and must NEVER recompute debt/credit
+  // locally. Duplicated client-side math is what produced both the "paid +
+  // 30 due" portal contradiction and the payments-tab "שולם" on a partial
+  // payment. Same rule as buildAccountsBlock (v2.12.0): one definition, many
+  // call sites. If a new figure is needed by a screen, ADD IT HERE — do not
+  // recompute it in the page.
   if (d.tenants) {
-    d.tenants = d.tenants.map(t => ({
-      ...t,
-      creditBalance: getCreditBalance(d, String(t.id))
-    }));
+    const mkNow = getMonthKey(d.config || {});
+    const emNow = getEffectiveMonth(d.config || {});
+    d.tenants = d.tenants.map(t => {
+      const tid  = String(t.id);
+      const hist = (d.paymentHistory || {})[tid] || [];
+      const live = t.customAmount || (d.config && d.config.amount) || 300;
+      // Per-month balance map for every month present in sentLog (main account).
+      const monthBalances = {};
+      Object.keys(d.sentLog || {}).forEach(key => {
+        if (key.includes('__acc__')) return;
+        const sep = key.lastIndexOf('_');
+        if (sep < 0 || String(key.slice(0, sep)) !== tid) return;
+        const heb = key.slice(sep + 1);
+        const idx = HEBREW_MONTHS.indexOf(heb);
+        if (idx < 0) return; // legacy/ISO key — untouched
+        const mKey = String(mkNow).split('-')[0] + '-' + String(idx + 1).padStart(2, '0');
+        monthBalances[heb] = calcMonthBalance(d.sentLog[key], getExpectedAmount(hist, mKey, live));
+      });
+      // Balance for a month with NO sentLog entry (unpaid) — still needed by views.
+      const emBal = monthBalances[emNow] || calcMonthBalance(null, getExpectedAmount(hist, mkNow, live));
+      return {
+        ...t,
+        creditBalance: getCreditBalance(d, tid),
+        totalDebt:     calcTotalDebt(d, tid, mkNow),
+        effectiveAmount: live,        // resolved customAmount || config.amount || 300
+        monthBalances,                // { hebMonth: {status, paidAmount, expected, shortfall, credit} }
+        currentBalance: emBal         // balance for the ACTIVE month (em)
+      };
+    });
   }
   res.json(d);
 });
@@ -4292,15 +4324,48 @@ app.get('/api/portal/:token', (req, res) => {
       }))
     },
     building: { name: d.config?.buildingName || '' },
-    current: {
-      monthKey:   currentMonthKey,
-      monthLabel: currentMonthName,
-      amount,
-      status:     currentStatus,
-      type:       currentType,
-      typeLabel:  typeLabel(currentType),
-      payerName:  currentPayerName
-    },
+    current: (() => {
+      // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
+      // page renders it verbatim. Previously tenant-portal.html did this math
+      // itself and produced "שולם ✅" together with "לתשלום 30 ₪": the surplus
+      // was born from THIS month's payment and was then subtracted from this
+      // month's own charge again. One source of truth prevents that class of bug.
+      const hist   = (d.paymentHistory || {})[entry.tenantId] || [];
+      const bal    = calcMonthBalance((d.sentLog || {})[sentKey], getExpectedAmount(hist, currentMonthKey, amount));
+      const credit = getCreditBalance(d, entry.tenantId);
+      const od     = parseFloat(tenant.openingDebt) || 0;
+      // ⚠️ Prior debt = everything owed BEFORE this month. calcTotalDebt already
+      // folds in the current month IF it is short-paid (sentLog partial) or IF an
+      // unpaid paymentHistory record exists for it — but NOT when the month simply
+      // has no record yet. Subtract only what was actually included, or an unpaid
+      // month with openingDebt yields priorDebt=0 (caught by test: od=200 → 430).
+      const total = calcTotalDebt(d, entry.tenantId, currentMonthKey);
+      const currentInTotal =
+        (bal.status === 'partial' ? bal.shortfall : 0) +
+        (hist.some(r => r.month === currentMonthKey && !r.paid && r.type !== 'wa_sent')
+          ? (parseFloat(hist.find(r => r.month === currentMonthKey).amount) || 0) : 0);
+      const priorDebt = Math.max(0, total - currentInTotal);
+      // The current month is only due if sentLog says it was not fully paid.
+      const currentCharge = (bal.status === 'paid') ? 0
+                          : (bal.status === 'partial') ? bal.shortfall
+                          : amount;
+      const amountDue = Math.max(0, currentCharge + priorDebt - credit);
+      return {
+        monthKey:   currentMonthKey,
+        monthLabel: currentMonthName,
+        amount,
+        status:     currentStatus,
+        type:       currentType,
+        typeLabel:  typeLabel(currentType),
+        payerName:  currentPayerName,
+        // ── computed, consume-only ──
+        balance:      bal,            // {status,paidAmount,expected,shortfall,credit}
+        amountDue:    amountDue,      // what the tenant actually owes right now
+        priorDebt:    priorDebt,
+        creditBalance: credit,
+        openingDebt:  od
+      };
+    })(),
     history: history.map(r => ({
       monthKey:   r.month,
       monthLabel: monthLabel(r.month),
@@ -5288,7 +5353,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.9 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.10 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

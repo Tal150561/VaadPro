@@ -531,64 +531,51 @@ function render(d) {
 
    // Opening debt banner — כולל חוב פתוח + חודשים שלא שולמו בהיסטוריה
    const debtBanner = document.getElementById('openingDebtBanner');
-   const openingDebt = parseFloat(d.tenant.openingDebt) || 0; // can be negative (credit from cron)
-   // creditBalance = real-time credit from overpayment (positive = tenant has credit)
-   // only relevant when openingDebt is still 0 (before the 1st-of-month cron updates it)
-   const creditBalance = parseFloat(d.tenant.creditBalance) || 0;
-   // effectiveOpeningDebt: if server already set openingDebt negative, use it;
-   // otherwise if creditBalance exists (pre-cron), use it as a negative offset
-   const effectiveOpeningDebt = (openingDebt < 0) ? openingDebt
-     : (creditBalance > 0 ? -creditBalance : openingDebt);
-   // Exclude the current month from prior-debt — it is already counted as c.amount below.
-   // (The server now keeps the current-month history record in sync with sentLog,
-   //  but it must NOT also be summed here or the current month is double-charged.)
-   const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid && r.monthKey !== c.monthKey; });
-   const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || c.amount); }, 0);
-
-   // ⚠️ v2.13.8: the current month's own charge is only DUE if sentLog says it
-   // was not paid. Before this guard, a tenant who overpaid the CURRENT month
-   // (e.g. paid 430 on a 230 fee) saw "שולם ✅" and "לתשלום 30 ₪" at the same
-   // time: the 200 surplus was BORN from July's payment and was then subtracted
-   // from July's own charge again — the same money counted twice. This could not
-   // surface before credit became real-time (it was 0 until the 1st-of-month cron).
-   // c.status comes from sentLog = the documented source of truth.
-   const currentPaid = (c.status === 'paid');
-   const currentCharge = currentPaid ? 0 : c.amount;
-   // amountDue: total to pay (current month if unpaid + prior debt), after applying any credit
-   const amountDue = Math.max(0, currentCharge + effectiveOpeningDebt + historyDebt);
-   // remaining credit after covering history (used for display only)
-   const creditAfterHistory = Math.min(0, effectiveOpeningDebt + historyDebt); // negative = still has credit
-
-   // currentAmount shows the monthly fee (same for everyone).
-   // Total debt is shown in the banner below.
-   document.getElementById('currentAmount').innerHTML = c.amount + ' <span>₪</span>';
-
-   const totalPriorDebt = Math.max(0, effectiveOpeningDebt + historyDebt);
-   const creditShown = creditBalance > 0 ? creditBalance : Math.abs(openingDebt);
-   if (currentPaid && effectiveOpeningDebt < 0 && amountDue === 0) {
-     // ⚠️ v2.13.8: month already PAID and a surplus remains. The credit was born
-     // from THIS month's payment, so it does not "cover" the month — it carries
-     // forward. Say that, instead of implying the month was settled by credit.
+   // ⚠️ v2.13.10 — CONSUME, DO NOT COMPUTE.
+   // Every figure below is calculated once on the server (GET /api/portal/:token)
+   // and rendered here verbatim. Recomputing debt in the page is what caused the
+   // "שולם ✅ + לתשלום 30 ₪" contradiction. If a new number is needed, add it to
+   // the server's `current` block — never re-derive it here.
+   const openingDebt   = parseFloat(c.openingDebt) || 0;
+   const creditBalance = parseFloat(c.creditBalance) || 0;
+   const amountDue     = parseFloat(c.amountDue) || 0;
+   const historyDebt   = parseFloat(c.priorDebt) || 0;
+   const bal           = c.balance || { status: c.status, shortfall: 0, credit: 0 };
+   const currentPaid   = (bal.status === 'paid');
+   const isPartial     = (bal.status === 'partial');
+   const creditShown   = creditBalance;
+   // Branch order matters: most specific state first. All values come from the
+   // server — this block only chooses wording.
+   if (isPartial) {
+     // Short payment: tell the tenant exactly what is still missing.
+     debtBanner.style.display = 'block';
+     debtBanner.style.background = 'rgba(245,166,35,.1)';
+     debtBanner.style.borderColor = 'rgba(245,166,35,.3)';
+     debtBanner.style.color = '#f5a623';
+     debtBanner.innerHTML = '⚠️ שולם חלקית: <strong>' + bal.paidAmount + ' ₪</strong> מתוך ' + bal.expected + ' ₪' +
+       (historyDebt > 0 ? '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">חוב קודם: ' + historyDebt + '₪</span>' : '') +
+       '<br><span style="font-size:0.78rem;font-weight:400;">נותר לתשלום: <strong>' + amountDue + ' ₪</strong></span>';
+   } else if (currentPaid && creditBalance > 0) {
+     // Paid, with surplus carried forward. The credit was born from THIS month's
+     // payment, so it does not "cover" the month — it rolls to the next one.
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(52,209,122,.1)';
      debtBanner.style.borderColor = 'rgba(52,209,122,.3)';
      debtBanner.style.color = '#34d17a';
-     const remainingPaid = Math.abs(creditAfterHistory);
-     debtBanner.innerHTML = '✅ שולם' +
-       (remainingPaid > 0 ? ' — נותרת יתרה של <strong>' + remainingPaid + ' ₪</strong> לחודש הבא' : '') +
+     debtBanner.innerHTML = '✅ שולם — נותרת יתרה של <strong>' + creditBalance + ' ₪</strong> לחודש הבא' +
        '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">סה״כ לתשלום החודש: <strong>0 ₪</strong></span>';
-   } else if (effectiveOpeningDebt < 0 && amountDue === 0) {
-     // Full credit — covers this month and possibly more
+   } else if (!currentPaid && creditBalance > 0 && amountDue === 0) {
+     // Credit from earlier months fully covers this month.
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(52,209,122,.1)';
      debtBanner.style.borderColor = 'rgba(52,209,122,.3)';
      debtBanner.style.color = '#34d17a';
-     const remaining = Math.abs(creditAfterHistory);
+     const leftover = Math.round((creditBalance - c.amount) * 100) / 100;
      debtBanner.innerHTML = '✅ יתרה לזכותך מכסה את החודש' +
-       (remaining > 0 ? ' — נותרת יתרה של <strong>' + remaining + ' ₪</strong>' : ' במלואו') +
+       (leftover > 0 ? ' — נותרת יתרה של <strong>' + leftover + ' ₪</strong>' : ' במלואו') +
        '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">סה״כ לתשלום החודש: <strong>0 ₪</strong></span>';
-   } else if (effectiveOpeningDebt < 0 && amountDue > 0) {
-     // Partial credit — reduces this month
+   } else if (!currentPaid && creditBalance > 0 && amountDue > 0) {
+     // Credit partially reduces this month.
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(245,166,35,.1)';
      debtBanner.style.borderColor = 'rgba(245,166,35,.3)';
@@ -596,17 +583,13 @@ function render(d) {
      debtBanner.innerHTML = '💳 יתרה לזכותך: <strong>' + creditShown + ' ₪</strong> קוזזה מהתשלום' +
        (historyDebt > 0 ? '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">חודשים קודמים: ' + historyDebt + '₪</span>' : '') +
        '<br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: <strong>' + amountDue + ' ₪</strong></span>';
-   } else if (totalPriorDebt > 0) {
-     // Regular debt
+   } else if (historyDebt > 0) {
+     // Prior debt outstanding.
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(248,81,73,.12)';
      debtBanner.style.borderColor = 'rgba(248,81,73,.3)';
      debtBanner.style.color = '#f85149';
-     var breakdown = [];
-     if (historyDebt > 0) breakdown.push('חודשים קודמים: ' + historyDebt + '₪');
-     if (openingDebt > 0) breakdown.push('חוב פתוח: ' + openingDebt + '₪');
-     debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + totalPriorDebt + ' ₪</strong>' +
-       (breakdown.length ? '<br><span style="font-size:0.78rem;font-weight:400;color:rgba(255,255,255,0.7);">' + breakdown.join(' · ') + '</span>' : '') +
+     debtBanner.innerHTML = '⚠️ חוב פתוח מחודשים קודמים: <strong>' + historyDebt + ' ₪</strong>' +
        '<br><span style="font-size:0.78rem;font-weight:400;">סה״כ לתשלום: ' + amountDue + ' ₪</span>';
    } else {
      debtBanner.style.display = 'none';
@@ -651,8 +634,8 @@ function render(d) {
   renderUnifiedBreakdown(d, {
     mainLabel: (d.building && d.building.name) ? d.building.name : 'ועד הבית',
     mainCurrent: c.amount,
-    mainPaid: (c.status === 'paid'),
-    mainPriorDebt: totalPriorDebt,       // openingDebt + history (already ≥0, credit applied)
+    mainPaid: currentPaid,               // from server balance.status, not raw c.status
+    mainPriorDebt: historyDebt,          // = c.priorDebt from the server (already ≥0)
     mainAmountDue: amountDue             // current + prior debt after credit
   });
   const list = document.getElementById('historyList');
