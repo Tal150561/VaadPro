@@ -545,8 +545,17 @@ function render(d) {
    const unpaidHistory = (d.history || []).filter(function(r){ return !r.paid && r.monthKey !== c.monthKey; });
    const historyDebt = unpaidHistory.reduce(function(s,r){ return s + (parseFloat(r.amount) || c.amount); }, 0);
 
-   // amountDue: total to pay (current month + prior debt), after applying any credit
-   const amountDue = Math.max(0, c.amount + effectiveOpeningDebt + historyDebt);
+   // ⚠️ v2.13.8: the current month's own charge is only DUE if sentLog says it
+   // was not paid. Before this guard, a tenant who overpaid the CURRENT month
+   // (e.g. paid 430 on a 230 fee) saw "שולם ✅" and "לתשלום 30 ₪" at the same
+   // time: the 200 surplus was BORN from July's payment and was then subtracted
+   // from July's own charge again — the same money counted twice. This could not
+   // surface before credit became real-time (it was 0 until the 1st-of-month cron).
+   // c.status comes from sentLog = the documented source of truth.
+   const currentPaid = (c.status === 'paid');
+   const currentCharge = currentPaid ? 0 : c.amount;
+   // amountDue: total to pay (current month if unpaid + prior debt), after applying any credit
+   const amountDue = Math.max(0, currentCharge + effectiveOpeningDebt + historyDebt);
    // remaining credit after covering history (used for display only)
    const creditAfterHistory = Math.min(0, effectiveOpeningDebt + historyDebt); // negative = still has credit
 
@@ -556,7 +565,19 @@ function render(d) {
 
    const totalPriorDebt = Math.max(0, effectiveOpeningDebt + historyDebt);
    const creditShown = creditBalance > 0 ? creditBalance : Math.abs(openingDebt);
-   if (effectiveOpeningDebt < 0 && amountDue === 0) {
+   if (currentPaid && effectiveOpeningDebt < 0 && amountDue === 0) {
+     // ⚠️ v2.13.8: month already PAID and a surplus remains. The credit was born
+     // from THIS month's payment, so it does not "cover" the month — it carries
+     // forward. Say that, instead of implying the month was settled by credit.
+     debtBanner.style.display = 'block';
+     debtBanner.style.background = 'rgba(52,209,122,.1)';
+     debtBanner.style.borderColor = 'rgba(52,209,122,.3)';
+     debtBanner.style.color = '#34d17a';
+     const remainingPaid = Math.abs(creditAfterHistory);
+     debtBanner.innerHTML = '✅ שולם' +
+       (remainingPaid > 0 ? ' — נותרת יתרה של <strong>' + remainingPaid + ' ₪</strong> לחודש הבא' : '') +
+       '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">סה״כ לתשלום החודש: <strong>0 ₪</strong></span>';
+   } else if (effectiveOpeningDebt < 0 && amountDue === 0) {
      // Full credit — covers this month and possibly more
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(52,209,122,.1)';
