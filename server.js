@@ -763,6 +763,25 @@ function calcMonthBalance(sentLogVal, expectedAmount) {
   return { status: 'paid', paidAmount: parsed, expected, shortfall: 0, credit: diff };
 }
 
+// ⚠️⚠️ DOUBLE-COUNT GUARD — read this before touching credit logic.
+// An overpayment is visible in TWO places, but only ever counts ONCE:
+//   1. Derived live from sentLog (surplus in the month value)  -> pre-close
+//   2. Written into a NEGATIVE openingDebt by closeMonthUnpaid -> post-close (1st)
+// After closeMonthUnpaid runs, both are true at the same time; naively adding
+// them would double the tenant's credit. Rule: a NEGATIVE openingDebt means the
+// surplus has ALREADY been banked to disk, so the derived credit is suppressed.
+// (openingDebt >= 0 -> nothing banked yet -> derived credit is the only source.)
+// This mirrors the "conservative on disk, aggressive on display" rule: we never
+// write here, we only decide which of the two already-existing sources to trust.
+function getDerivedCredit(tenantData, tenantId, creditTotal) {
+  if (!creditTotal) return 0;
+  const openingDebt = parseFloat(
+    (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
+  );
+  if (openingDebt < 0) return 0; // already banked by closeMonthUnpaid — do not count twice
+  return creditTotal;
+}
+
 // Sum of unpaid + short-paid amounts across ALL months present in sentLog for a
 // tenant, EXCLUDING the month keys' current-month handling (callers decide).
 // Derives every month from sentLog; paymentHistory supplies only frozen amounts.
@@ -774,6 +793,7 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
   const live    = (tenant && tenant.customAmount) || (tenantData.config && tenantData.config.amount) || 300;
   const year    = o.year || new Date().getFullYear();
   let total = 0;
+  let creditTotal = 0;
   const months = [];
   Object.keys(sentLog).forEach(key => {
     if (key.includes('__acc__')) return;                 // extra accounts: separate path
@@ -788,8 +808,15 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
     const expected = getExpectedAmount(history, monthKey, live);
     const bal = calcMonthBalance(sentLog[key], expected);
     if (bal.status === 'partial') { total += bal.shortfall; months.push({ monthKey, hebMonth, shortfall: bal.shortfall }); }
+    // v2.13.8: overpayment in a month is credit the moment it lands — do NOT
+    // wait for closeMonthUnpaid to write a negative openingDebt on the 1st.
+    else if (bal.credit > 0) { creditTotal += bal.credit; months.push({ monthKey, hebMonth, credit: bal.credit }); }
   });
-  return { total: Math.round(total * 100) / 100, months };
+  return {
+    total: Math.round(total * 100) / 100,
+    creditTotal: Math.round(creditTotal * 100) / 100,
+    months
+  };
 }
 
 // Calculate total cumulative debt for a tenant:
@@ -806,12 +833,16 @@ function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
   // v2.13.8: add short-paid months (paid < expected). Derived from sentLog only;
   // openingDebt is NOT mutated here (accrual stays in closeMonthUnpaid).
   // currentMonthKey is NOT excluded: a partial payment this month is real debt now.
-  const shortfall = calcShortfallFromSentLog(tenantData, tenantId, {
+  const sf = calcShortfallFromSentLog(tenantData, tenantId, {
     year: currentMonthKey ? parseInt(String(currentMonthKey).split('-')[0]) : undefined
-  }).total;
+  });
+  // ⚠️ Overpayment counts as credit IMMEDIATELY (sf.creditTotal), symmetric with
+  // sf.total. Once closeMonthUnpaid runs it writes the same surplus into a
+  // negative openingDebt — see getDerivedCredit() for the double-count guard.
+  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal);
   // openingDebt can be negative (credit from overpayment) — offsets historyDebt
   // Math.max(0,...) — total debt shown cannot be negative; credit shown separately via getCreditBalance()
-  return Math.max(0, historyDebt + openingDebt + shortfall);
+  return Math.max(0, historyDebt + openingDebt + sf.total - derivedCredit);
 }
 
 // Returns the credit balance (positive number = tenant has credit).
@@ -820,15 +851,18 @@ function getCreditBalance(tenantData, tenantId) {
   const openingDebt = parseFloat(
     (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
   );
-  if (openingDebt >= 0) return 0;
   const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
   const historyDebt = history
     .filter(r => !r.paid && r.type !== 'wa_sent')
     .reduce((s, r) => s + (r.amount || 0), 0);
-  // v2.13.8: short-paid months consume credit before it is displayed.
-  const shortfall = calcShortfallFromSentLog(tenantData, tenantId, {}).total;
-  // Net: positive means credit remaining after covering any unpaid history
-  const net = -(historyDebt + openingDebt) - shortfall; // openingDebt is negative
+  const sf = calcShortfallFromSentLog(tenantData, tenantId, {});
+  // v2.13.8: credit is SYMMETRIC with shortfall — an overpayment is credit the
+  // moment the bank row lands, not only after closeMonthUnpaid writes a negative
+  // openingDebt on the 1st. The old `if (openingDebt >= 0) return 0` early-exit
+  // hid all pre-close credit and is deliberately removed.
+  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal);
+  // Net: positive means credit remaining after covering any unpaid history/shortfall
+  const net = -(historyDebt + openingDebt) + derivedCredit - sf.total;
   return Math.max(0, Math.round(net * 100) / 100);
 }
 
