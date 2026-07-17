@@ -697,6 +697,101 @@ function getEffectiveMonth(config) {
 // Returns YYYY-MM key for paymentHistory (independent of display month name)
 const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
+// ════════════════════════════════════════════════════════════════
+// PARTIAL PAYMENT SUPPORT (v2.13.8) — Stage 1: derivation only
+// ════════════════════════════════════════════════════════════════
+// ⚠️ READ-ONLY. Nothing here writes to disk or mutates openingDebt.
+// Accrual to openingDebt stays EXCLUSIVELY in closeMonthUnpaid.
+//
+// Two stores, two roles (see SKILL "sentLog / paymentHistory Architecture"):
+//   • HOW MUCH ARRIVED -> sentLog VALUE. Source of truth. Both import paths
+//     (Agent /api/import-bank and manual POST /api/data) encode it identically.
+//   • HOW MUCH WAS DUE -> paymentHistory.amount — the tariff FROZEN at payment
+//     time. Required: reading the live customAmount for a historical month
+//     would retroactively invent debt on settled months after any tariff change.
+// ⚠️ The paymentHistory `paid` FLAG is NEVER read here. That flag is what
+//    produced the v2.13.2 "Tami" divergence. The `amount` field is a different
+//    field with a different history and is safe. Do not conflate the two.
+
+// Parse the amount actually paid out of a sentLog VALUE.
+//   bank_import_<ISO>_<AMOUNT>_payer_<NAME>  |  manual_paid_<ISO>_amount_<AMOUNT>
+// Returns null for reminders (sent_) and for legacy values with no amount.
+function parseSentLogAmount(val) {
+  const s = String(val || '');
+  if (!s) return null;
+  if (s.startsWith('bank_import')) {
+    const m = s.match(/^bank_import_[^_]+_([\d.]+)_payer_/);
+    return m ? parseFloat(m[1]) : null;
+  }
+  if (s.startsWith('manual_paid')) {
+    const m = s.match(/_amount_([\d.]+)/);
+    return m ? parseFloat(m[1]) : null;
+  }
+  return null;
+}
+
+// Does sentLog say a payment (of any size) arrived? Same predicate the rest of
+// the codebase already uses — kept identical on purpose.
+function sentLogIsPayment(val) {
+  const s = String(val || '');
+  return s.startsWith('bank_import') || s.startsWith('manual_paid');
+}
+
+// Expected charge for a month: frozen paymentHistory.amount, else live fallback.
+function getExpectedAmount(history, monthKey, fallbackAmount) {
+  const rec = (history || []).find(r => r.month === monthKey && r.type !== 'wa_sent');
+  if (rec && rec.amount != null && !isNaN(parseFloat(rec.amount))) return parseFloat(rec.amount);
+  return parseFloat(fallbackAmount) || 0;
+}
+
+// Per-month balance derived ONLY from sentLog + the frozen expected amount.
+// status: 'paid' | 'partial' | 'unpaid' | 'reminded'
+function calcMonthBalance(sentLogVal, expectedAmount) {
+  const expected = parseFloat(expectedAmount) || 0;
+  if (!sentLogIsPayment(sentLogVal)) {
+    return {
+      status: String(sentLogVal || '').startsWith('sent_') ? 'reminded' : 'unpaid',
+      paidAmount: 0, expected, shortfall: expected, credit: 0
+    };
+  }
+  const parsed = parseSentLogAmount(sentLogVal);
+  // Legacy value with no amount encoded -> treat as a full payment (preserves
+  // pre-v2.13.8 behaviour for existing data; no retroactive debt).
+  if (parsed === null) return { status: 'paid', paidAmount: expected, expected, shortfall: 0, credit: 0 };
+  const diff = Math.round((parsed - expected) * 100) / 100;
+  if (diff < 0) return { status: 'partial', paidAmount: parsed, expected, shortfall: Math.abs(diff), credit: 0 };
+  return { status: 'paid', paidAmount: parsed, expected, shortfall: 0, credit: diff };
+}
+
+// Sum of unpaid + short-paid amounts across ALL months present in sentLog for a
+// tenant, EXCLUDING the month keys' current-month handling (callers decide).
+// Derives every month from sentLog; paymentHistory supplies only frozen amounts.
+function calcShortfallFromSentLog(tenantData, tenantId, opts) {
+  const o = opts || {};
+  const sentLog = tenantData.sentLog || {};
+  const history = (tenantData.paymentHistory || {})[String(tenantId)] || [];
+  const tenant  = (tenantData.tenants || []).find(t => String(t.id) === String(tenantId));
+  const live    = (tenant && tenant.customAmount) || (tenantData.config && tenantData.config.amount) || 300;
+  const year    = o.year || new Date().getFullYear();
+  let total = 0;
+  const months = [];
+  Object.keys(sentLog).forEach(key => {
+    if (key.includes('__acc__')) return;                 // extra accounts: separate path
+    const lastSep = key.lastIndexOf('_');
+    if (lastSep < 0) return;
+    if (String(key.slice(0, lastSep)) !== String(tenantId)) return;
+    const hebMonth = key.slice(lastSep + 1);
+    const idx = HEBREW_MONTHS.indexOf(hebMonth);
+    if (idx < 0) return;                                  // legacy/ISO key -> untouched
+    const monthKey = year + '-' + String(idx + 1).padStart(2, '0');
+    if (o.excludeMonthKey && monthKey === o.excludeMonthKey) return;
+    const expected = getExpectedAmount(history, monthKey, live);
+    const bal = calcMonthBalance(sentLog[key], expected);
+    if (bal.status === 'partial') { total += bal.shortfall; months.push({ monthKey, hebMonth, shortfall: bal.shortfall }); }
+  });
+  return { total: Math.round(total * 100) / 100, months };
+}
+
 // Calculate total cumulative debt for a tenant:
 // unpaid paymentHistory months + openingDebt (includes current month)
 // openingDebt can be negative (tenant has credit) — it offsets historyDebt
@@ -708,9 +803,15 @@ function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
   const historyDebt = history
     .filter(r => !r.paid && r.type !== 'wa_sent')
     .reduce((s, r) => s + (r.amount || 0), 0);
+  // v2.13.8: add short-paid months (paid < expected). Derived from sentLog only;
+  // openingDebt is NOT mutated here (accrual stays in closeMonthUnpaid).
+  // currentMonthKey is NOT excluded: a partial payment this month is real debt now.
+  const shortfall = calcShortfallFromSentLog(tenantData, tenantId, {
+    year: currentMonthKey ? parseInt(String(currentMonthKey).split('-')[0]) : undefined
+  }).total;
   // openingDebt can be negative (credit from overpayment) — offsets historyDebt
   // Math.max(0,...) — total debt shown cannot be negative; credit shown separately via getCreditBalance()
-  return Math.max(0, historyDebt + openingDebt);
+  return Math.max(0, historyDebt + openingDebt + shortfall);
 }
 
 // Returns the credit balance (positive number = tenant has credit).
@@ -724,8 +825,10 @@ function getCreditBalance(tenantData, tenantId) {
   const historyDebt = history
     .filter(r => !r.paid && r.type !== 'wa_sent')
     .reduce((s, r) => s + (r.amount || 0), 0);
+  // v2.13.8: short-paid months consume credit before it is displayed.
+  const shortfall = calcShortfallFromSentLog(tenantData, tenantId, {}).total;
   // Net: positive means credit remaining after covering any unpaid history
-  const net = -(historyDebt + openingDebt); // openingDebt is negative
+  const net = -(historyDebt + openingDebt) - shortfall; // openingDebt is negative
   return Math.max(0, Math.round(net * 100) / 100);
 }
 
@@ -5151,7 +5254,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.7 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.8 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
