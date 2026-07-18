@@ -53,7 +53,10 @@ const SERVER_FNS = [
   'getEffectiveMonth', 'getMonthKey',
   'parseSentLogAmount', 'sentLogIsPayment', 'getExpectedAmount',
   'calcMonthBalance', 'getDerivedCredit', 'calcShortfallFromSentLog',
-  'calcTotalDebt', 'getCreditBalance', 'recordPayment'
+  'calcTotalDebt', 'getCreditBalance', 'recordPayment',
+  // Column A (v2.13.16) — fixed-amount tariff history
+  'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate',
+  'closeAndOpenInterval', 'seedTariffsIfMissing'
 ];
 
 function loadServer() {

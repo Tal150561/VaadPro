@@ -738,10 +738,121 @@ function sentLogIsPayment(val) {
 }
 
 // Expected charge for a month: frozen paymentHistory.amount, else live fallback.
+// ⚠️ READ-PATH function. It reads what was FROZEN into paymentHistory at payment
+// time. It intentionally does NOT do interval lookup — the tariff table (below)
+// is consulted at FREEZE time only, then the resolved rate is frozen here as
+// `amount`. Do not wire resolveTariffRate into this function; that would make
+// past months mutate whenever the tariff table changes (the exact bug we fix).
 function getExpectedAmount(history, monthKey, fallbackAmount) {
   const rec = (history || []).find(r => r.month === monthKey && r.type !== 'wa_sent');
   if (rec && rec.amount != null && !isNaN(parseFloat(rec.amount))) return parseFloat(rec.amount);
   return parseFloat(fallbackAmount) || 0;
+}
+
+// ════════════════════════════════════════════════════════════════
+// COLUMN A — fixed-amount tariff history (v2.13.16)
+// ════════════════════════════════════════════════════════════════
+// The phantom-debt fix. A retroactive bank/manual import must freeze the tariff
+// that was in effect FOR THE IMPORTED MONTH, not today's customAmount. The
+// system now stores tariff INTERVALS instead of a single scalar:
+//
+//   • Building default:  tenantData.defaultTariffs = [{ rate, startDate, endDate|null }]
+//   • Per-tenant override: tenant.personalTariffs   = [{ rate, startDate, endDate|null }]
+//
+// endDate:null = the currently-open interval. A change (fee raise / per-tenant
+// amount) CLOSES the open interval (endDate = today) and OPENS a new one — the
+// past never mutates. See SKILL "The column-A model (locked with Tal, session 2)".
+//
+// ⚠️ These helpers are used at FREEZE time only (the 3 write sites: /api/sentlog-key
+// manual mark, /api/data sentLog-sync loop, /api/import-bank). Display/read paths
+// keep reading the frozen paymentHistory.amount via getExpectedAmount above.
+
+// Is a monthKey ("YYYY-MM") within [startDate, endDate]? Dates are "YYYY-MM-DD"
+// (or "YYYY-MM"); we compare on the year-month prefix so a mid-month startDate
+// still covers its own month. endDate:null / '' = open (covers everything after
+// startDate).
+function monthInInterval(monthKey, interval) {
+  if (!interval || !interval.startDate) return false;
+  const mk = String(monthKey).slice(0, 7);
+  const start = String(interval.startDate).slice(0, 7);
+  if (mk < start) return false;
+  if (interval.endDate == null || interval.endDate === '') return true;
+  const end = String(interval.endDate).slice(0, 7);
+  return mk <= end;
+}
+
+// Pick the rate from an interval array for a given month. If several match
+// (shouldn't happen with disciplined close/open, but be defensive), the one with
+// the LATEST startDate wins. Returns null when nothing matches.
+function pickRateFromIntervals(intervals, monthKey) {
+  if (!Array.isArray(intervals) || !intervals.length) return null;
+  let best = null;
+  for (const iv of intervals) {
+    if (!monthInInterval(monthKey, iv)) continue;
+    if (iv.rate == null || isNaN(parseFloat(iv.rate))) continue;
+    if (!best || String(iv.startDate) > String(best.startDate)) best = iv;
+  }
+  return best ? parseFloat(best.rate) : null;
+}
+
+// The heart of Column A — resolve the tariff to FREEZE for `monthKey`.
+// Resolution order (locked with Tal, session 2):
+//   1. tenant.personalTariffs interval containing monthKey  -> its rate
+//   2. defaultTariffs interval containing monthKey          -> its rate
+//   3. legacyFallback (current customAmount || config.amount) — legacy data we
+//      cannot reconstruct. NEVER returns 0/undefined silently: if even the
+//      fallback is missing/zero we still return the numeric fallback (caller +
+//      migration guarantee a non-zero default exists). A silent 0 is an inverse
+//      phantom-debt (a tenant who owes money recorded as owing nothing).
+function resolveTariffRate(tenant, defaultTariffs, monthKey, legacyFallback) {
+  const personal = pickRateFromIntervals(tenant && tenant.personalTariffs, monthKey);
+  if (personal != null) return personal;
+  const dflt = pickRateFromIntervals(defaultTariffs, monthKey);
+  if (dflt != null) return dflt;
+  return parseFloat(legacyFallback) || 0;
+}
+
+// Close the open interval (endDate=null) at `asOf` and open a new one at `rate`.
+// Used when a fee changes. Mutates + returns the array. Idempotent-ish: if the
+// open interval already has this exact rate, it's a no-op (no churn on re-save).
+function closeAndOpenInterval(intervals, rate, asOf) {
+  const arr = Array.isArray(intervals) ? intervals.slice() : [];
+  const day = String(asOf || new Date().toISOString().split('T')[0]).slice(0, 10);
+  const open = arr.find(iv => iv.endDate == null || iv.endDate === '');
+  if (open && parseFloat(open.rate) === parseFloat(rate)) return arr; // unchanged
+  if (open) {
+    // Close yesterday so the new interval starts today without a 1-day overlap.
+    open.endDate = day;
+  }
+  arr.push({ rate: parseFloat(rate), startDate: day, endDate: null });
+  return arr;
+}
+
+// Lazy seed (SKILL migration decision: LAZY, no bulk boot write). Given a
+// building's tenantData, ensure defaultTariffs exists; if absent, seed ONE open
+// interval from the building's current default amount. Per-tenant personalTariffs
+// are seeded only when a tenant's customAmount differs from the default. Returns
+// true if anything was seeded (so the caller can persist).
+function seedTariffsIfMissing(tenantData) {
+  let changed = false;
+  const buildingDefault = (tenantData.config && tenantData.config.amount) || 300;
+  if (!Array.isArray(tenantData.defaultTariffs) || !tenantData.defaultTariffs.length) {
+    tenantData.defaultTariffs = [{ rate: parseFloat(buildingDefault), startDate: '2000-01-01', endDate: null }];
+    changed = true;
+  }
+  const dfltRate = pickRateFromIntervals(tenantData.defaultTariffs, '2999-12') // open interval rate
+                  ?? parseFloat(buildingDefault);
+  (tenantData.tenants || []).forEach(t => {
+    if (Array.isArray(t.personalTariffs) && t.personalTariffs.length) return; // already has history
+    const ca = t.customAmount;
+    if (ca != null && ca !== '' && parseFloat(ca) !== parseFloat(dfltRate)) {
+      // customAmount differs from default -> one open personal interval.
+      t.personalTariffs = [{ rate: parseFloat(ca), startDate: '2000-01-01', endDate: null }];
+      changed = true;
+    }
+    // customAmount == default (or null) -> no personalTariffs; tenant rides default.
+  });
+  return changed;
 }
 
 // Per-month balance derived ONLY from sentLog + the frozen expected amount.
@@ -1226,11 +1337,18 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
   // time an earlier reminder was sent. recordPayment overwrites any stale record
   // for this month, so a customAmount changed before marking paid takes effect.
   if (String(value).startsWith('manual_paid') && tenant && monthKey) {
+    // Column A (v2.13.16): freeze the tariff that was in effect FOR monthKey,
+    // not today's customAmount. resolveTariffRate consults personalTariffs ->
+    // defaultTariffs -> legacy customAmount. Lazy-seed the tables first.
+    const seeded = seedTariffsIfMissing(d);
     const liveAmount = tenant.customAmount || (d.config && d.config.amount) || 300;
+    const expected   = resolveTariffRate(tenant, d.defaultTariffs, monthKey, liveAmount);
     const amtMatch = String(value).match(/_amount_([\d.]+)/);
-    const paidAmount = amtMatch ? parseFloat(amtMatch[1]) : liveAmount;
-    recordPayment(d, tenantId, monthKey, 'manual', liveAmount, tenant.name, '', paidAmount);
-    saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+    const paidAmount = amtMatch ? parseFloat(amtMatch[1]) : expected;
+    recordPayment(d, tenantId, monthKey, 'manual', expected, tenant.name, '', paidAmount);
+    const savePayload = { sentLog: d.sentLog, paymentHistory: d.paymentHistory };
+    if (seeded) { savePayload.defaultTariffs = d.defaultTariffs; savePayload.tenants = d.tenants; }
+    saveTenantData(req.user.tenantId, savePayload);
     return res.json({ ok: true });
   }
 
@@ -1250,11 +1368,75 @@ app.post('/api/data', authMiddleware, (req, res) => {
         return res.json({ ok: false, limitError: true, error: `הגעת למגבלת ${maxT} דיירים בתוכנית ${planName} — צור קשר לשדרוג`, max: maxT });
       }
     }
+    // ── Column A (v2.13.16): maintain personalTariffs on fee change ──────
+    // The tenants tab edits a scalar customAmount. Per the locked model, a fee
+    // change must CLOSE the tenant's open personalTariffs interval and OPEN a new
+    // one (past months keep resolving to their historical rate). We diff each
+    // posted tenant against the stored one; on a customAmount change we close/open.
+    // Carry forward existing personalTariffs the client didn't send (the tenants
+    // tab doesn't know about the interval array yet — checkpoint 2 adds the UI).
+    try {
+      const prev = loadTenantData(req.user.tenantId);
+      const prevById = {};
+      (prev.tenants || []).forEach(t => { prevById[String(t.id)] = t; });
+      const dfltRateNow = pickRateFromIntervals(prev.defaultTariffs, '2999-12');
+      const today = new Date().toISOString().split('T')[0];
+      req.body.tenants.forEach(t => {
+        const before = prevById[String(t.id)];
+        // Preserve any interval history the client omitted.
+        if (before && Array.isArray(before.personalTariffs) && !Array.isArray(t.personalTariffs)) {
+          t.personalTariffs = before.personalTariffs;
+        }
+        const newAmt = (t.customAmount == null || t.customAmount === '') ? null : parseFloat(t.customAmount);
+        const oldAmt = before && before.customAmount != null && before.customAmount !== '' ? parseFloat(before.customAmount) : null;
+        if (!before) {
+          // NEW tenant: open a personal interval only if the fee differs from the
+          // building default (matches seed logic; keeps tenants-on-default clean).
+          if (newAmt != null && dfltRateNow != null && newAmt !== dfltRateNow) {
+            t.personalTariffs = closeAndOpenInterval([], newAmt, today);
+          }
+        } else if (newAmt !== oldAmt) {
+          if (newAmt == null) {
+            // Fee cleared -> revert to building default from today forward: close the
+            // open personal interval, don't open a new one.
+            const arr = Array.isArray(t.personalTariffs) ? t.personalTariffs.slice() : [];
+            const open = arr.find(iv => iv.endDate == null || iv.endDate === '');
+            if (open) open.endDate = today;
+            t.personalTariffs = arr;
+          } else {
+            t.personalTariffs = closeAndOpenInterval(t.personalTariffs, newAmt, today);
+          }
+        }
+      });
+    } catch (e) { console.error('[tariff-maint]', e.message); }
+  }
+  // ── Column A (v2.13.16): building-default tariff maintenance ─────────
+  // When the building fee (config.amount) changes, close the open defaultTariffs
+  // interval and open a new one — so past months keep their historical default.
+  // Tenants with an active personalTariffs override are unaffected (resolution
+  // checks personal first). This is the "מעלים דמי ועד לכולם" behaviour.
+  if (req.body.config && req.body.config.amount != null) {
+    try {
+      const prevCfg = loadTenantData(req.user.tenantId);
+      const oldAmt = prevCfg.config && prevCfg.config.amount != null ? parseFloat(prevCfg.config.amount) : null;
+      const newAmt = parseFloat(req.body.config.amount);
+      let dt = Array.isArray(prevCfg.defaultTariffs) ? prevCfg.defaultTariffs.slice() : null;
+      if (!dt || !dt.length) {
+        // First time: seed one open interval at the NEW amount (no history to preserve).
+        dt = [{ rate: newAmt, startDate: '2000-01-01', endDate: null }];
+      } else if (oldAmt == null || newAmt !== oldAmt) {
+        dt = closeAndOpenInterval(dt, newAmt, new Date().toISOString().split('T')[0]);
+      }
+      if (req.body.defaultTariffs == null) req.body.defaultTariffs = dt;
+    } catch (e) { console.error('[default-tariff-maint]', e.message); }
   }
   // If sentLog is being updated, sync manual/bank payments to paymentHistory
   if (req.body.sentLog) {
     const current = loadTenantData(req.user.tenantId);
     const config  = current.config || {};
+    // Column A (v2.13.16): lazy-seed tariff tables so the per-key freeze below
+    // can resolve the historical rate for each imported month.
+    const seededSync = seedTariffsIfMissing(current);
     // Use bankMonthOverride if provided (from bank import month selector), else current month
     const mk = req.body.bankMonthOverride || getMonthKey(config);
     const tenants = current.tenants || [];
@@ -1281,7 +1463,11 @@ app.post('/api/data', authMiddleware, (req, res) => {
       const keyMonthKey = mkYear + '-' + String(monthIdx + 1).padStart(2, '0');
       const tenant = tenants.find(t => String(t.id) === tenantId);
       if (!tenant) return;
-      const amount = tenant.customAmount || (config.amount || 300);
+      // Column A: freeze the tariff in effect FOR keyMonthKey (the key's own
+      // month), NOT the live customAmount. This is the retroactive-import fix —
+      // importing an old-month file no longer stamps today's rate onto it.
+      const legacyFallback = tenant.customAmount || (config.amount || 300);
+      const amount = resolveTariffRate(tenant, current.defaultTariffs, keyMonthKey, legacyFallback);
       let type = null;
       let payerName = '';
       let paidAmount = null;
@@ -1302,6 +1488,12 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (type) recordPayment(current, tenantId, keyMonthKey, type, amount, tenant.name, payerName, paidAmount);
     });
     req.body.paymentHistory = current.paymentHistory;
+    // Column A: persist lazily-seeded tariff tables (only if the caller didn't
+    // already send them and seeding actually happened).
+    if (seededSync) {
+      if (req.body.defaultTariffs == null) req.body.defaultTariffs = current.defaultTariffs;
+      if (req.body.tenants == null) req.body.tenants = current.tenants;
+    }
     delete req.body.bankMonthOverride; // don't save this field to tenant data
   }
   const merged = saveTenantData(req.user.tenantId, req.body);
@@ -1478,9 +1670,12 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   if (!tenant) return res.json({ ok: false, error: 'דייר לא נמצא' });
   const month  = getEffectiveMonth(d.config);
   const globalAmount = (d.config||{}).amount || 300;
-  const amount = tenant.customAmount || globalAmount;
-  const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   const mk     = getMonthKey(d.config);
+  // Column A: reminder amount = current-month tariff (personal override -> default
+  // -> legacy customAmount). No seeding here (read/display path); absent tables
+  // fall back to customAmount, preserving pre-v2.13.16 behavior exactly.
+  const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
+  const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   const debt   = calcTotalDebt(d, tenant.id, mk);
   const total  = amount + debt;
   // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
@@ -1521,7 +1716,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   const mk = getMonthKey(d.config);
   let sent = 0;
   for (const tenant of d.tenants) {
-    const amount = tenant.customAmount || globalAmount;
+    const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
     // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
@@ -3142,7 +3337,7 @@ async function doAutoSend(user) {
   for (const tenant of (d.tenants || [])) {
     const key = tenant.id + '_' + month;
     if (d.sentLog[key]) continue; // already paid or reminded — skip
-    const amount = tenant.customAmount || globalAmount;
+    const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
     const portalUrlAuto = tmpl.includes('{לינק_פורטל}')
@@ -5015,6 +5210,9 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
 
     // רשום paymentHistory לדיירים רגילים שזוהו
     const tenantDataForHistory = { paymentHistory: Object.assign({}, d.paymentHistory || {}) };
+    // Column A (v2.13.16): lazy-seed tariff tables so a retroactive import freezes
+    // the historical rate for importMonthKey, not today's customAmount.
+    const seededImport = seedTariffsIfMissing(d);
     const importMonthKey = monthKey || (() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0'); })();
     matched.forEach(m => {
       if (String(m.tenantId).includes('__acc__')) return; // extraAccounts מטופלים בנפרד
@@ -5026,7 +5224,8 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       const amtMatch = slVal.match(/bank_import_[^_]+_([\d.]+)_/);
       if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
       const tenant = (d.tenants || []).find(t => String(t.id) === String(m.tenantId));
-      const amount = (tenant && tenant.customAmount) || (d.config && d.config.amount) || 300;
+      const legacyFallback = (tenant && tenant.customAmount) || (d.config && d.config.amount) || 300;
+      const amount = resolveTariffRate(tenant, d.defaultTariffs, importMonthKey, legacyFallback);
       recordPayment(tenantDataForHistory, String(m.tenantId), importMonthKey, 'bank', amount, m.name, payerName, paidAmount);
     });
 
@@ -5051,7 +5250,14 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // Accrual is deferred to closeMonthUnpaid. We now write ONLY sentLog + paymentHistory
     // + the import receipt, exactly like the manual path's footprint (sentLog only, plus
     // the server-side paymentHistory sync).
-    saveTenantData(req.user.tenantId, { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult });
+    // Column A (v2.13.16): persist ONLY the building-level defaultTariffs if it was
+    // lazily seeded. We deliberately do NOT write `tenants` here (honoring Fix #0) —
+    // per-tenant personalTariffs seeding stays in-memory for this request's freeze and
+    // re-seeds deterministically from customAmount on any later path; the freeze above
+    // already used the seeded values, so history is correct either way.
+    const importSave = { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult };
+    if (seededImport && d.defaultTariffs) importSave.defaultTariffs = d.defaultTariffs;
+    saveTenantData(req.user.tenantId, importSave);
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
   } catch (err) {
@@ -5416,7 +5622,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.15 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.16 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

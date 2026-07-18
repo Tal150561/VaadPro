@@ -270,4 +270,116 @@ t.section('Fix #0 — Agent import does not net openingDebt');
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// COLUMN A — fixed-amount tariff history (v2.13.16)
+// ════════════════════════════════════════════════════════════════
+// The phantom-debt fix: a retroactive import must freeze the tariff in effect
+// FOR the imported month, not today's customAmount. These tests run against the
+// REAL server helpers extracted by test-lib (monthInInterval, pickRateFromIntervals,
+// resolveTariffRate, closeAndOpenInterval, seedTariffsIfMissing).
+
+t.section('Column A — monthInInterval');
+t.eq('month inside an open interval', S.monthInInterval('2026-05', { rate: 230, startDate: '2026-01-01', endDate: null }), true);
+t.eq('month before start', S.monthInInterval('2025-12', { rate: 230, startDate: '2026-01-01', endDate: null }), false);
+t.eq('month inside a closed interval', S.monthInInterval('2026-03', { rate: 230, startDate: '2026-01-01', endDate: '2026-06-30' }), true);
+t.eq('month after a closed interval', S.monthInInterval('2026-07', { rate: 230, startDate: '2026-01-01', endDate: '2026-06-30' }), false);
+t.eq('start month itself is covered (mid-month start)', S.monthInInterval('2026-01', { rate: 230, startDate: '2026-01-15', endDate: null }), true);
+
+t.section('Column A — pickRateFromIntervals (latest start wins)');
+t.eq('empty → null', S.pickRateFromIntervals([], '2026-05'), null);
+t.eq('single open interval', S.pickRateFromIntervals([{ rate: 230, startDate: '2026-01-01', endDate: null }], '2026-05'), 230);
+t.eq('picks the historical closed interval for an old month',
+  S.pickRateFromIntervals([
+    { rate: 230, startDate: '2026-01-01', endDate: '2026-06-30' },
+    { rate: 350, startDate: '2026-07-01', endDate: null }
+  ], '2026-04'), 230);
+t.eq('picks the current open interval for a recent month',
+  S.pickRateFromIntervals([
+    { rate: 230, startDate: '2026-01-01', endDate: '2026-06-30' },
+    { rate: 350, startDate: '2026-07-01', endDate: null }
+  ], '2026-08'), 350);
+t.eq('no interval covers the month → null', S.pickRateFromIntervals([{ rate: 230, startDate: '2026-05-01', endDate: null }], '2026-01'), null);
+
+t.section('Column A — resolveTariffRate (THE resolution order)');
+{
+  const dflt = [{ rate: 300, startDate: '2000-01-01', endDate: null }];
+  // 1. personal override wins
+  const tenantWithPersonal = { personalTariffs: [{ rate: 230, startDate: '2026-01-01', endDate: null }] };
+  t.eq('personal overrides default', S.resolveTariffRate(tenantWithPersonal, dflt, '2026-05', 999), 230);
+  // 2. falls to default when no personal covers the month
+  t.eq('default when no personal', S.resolveTariffRate({ personalTariffs: [] }, dflt, '2026-05', 999), 300);
+  // 3. legacy fallback when nothing resolves
+  t.eq('legacy fallback when no tables', S.resolveTariffRate({}, null, '2026-05', 250), 250);
+  // 4. NEVER a silent 0/undefined — returns the numeric fallback
+  t.eq('never silent undefined — returns numeric fallback', S.resolveTariffRate({}, [], '2026-05', 300), 300);
+}
+
+t.section('Column A — THE phantom-debt bug: retroactive import uses HISTORICAL rate');
+{
+  // Tal's real incident: on 230 Jan–Jun, changed to 350 in July, then imported
+  // old Apr/May/Jun files. Old code stamped 350 (today) → 3×120 = 360 phantom debt.
+  const tenant = { id: 't1', personalTariffs: [
+    { rate: 230, startDate: '2026-01-01', endDate: '2026-06-30' },
+    { rate: 350, startDate: '2026-07-01', endDate: null }
+  ]};
+  const dflt = [{ rate: 300, startDate: '2000-01-01', endDate: null }];
+  // Importing April (a closed-interval month) must freeze 230, NOT 350.
+  t.eq('retroactive April import freezes 230, not today\'s 350',
+    S.resolveTariffRate(tenant, dflt, '2026-04', 350), 230);
+  t.eq('retroactive May import freezes 230', S.resolveTariffRate(tenant, dflt, '2026-05', 350), 230);
+  t.eq('current-month (July) payment freezes 350', S.resolveTariffRate(tenant, dflt, '2026-07', 350), 350);
+  // The full record then carries the correct expected, so calcMonthBalance is right:
+  const aprBal = S.calcMonthBalance(bank(230), S.resolveTariffRate(tenant, dflt, '2026-04', 350));
+  t.eq('April 230/230 reads as PAID (no phantom shortfall)',
+    aprBal, { status: 'paid', paidAmount: 230, expected: 230, shortfall: 0, credit: 0 });
+}
+
+t.section('Column A — closeAndOpenInterval');
+{
+  const before = [{ rate: 230, startDate: '2026-01-01', endDate: null }];
+  const after = S.closeAndOpenInterval(before, 350, '2026-07-18');
+  t.eq('open interval is closed at asOf', after[0].endDate, '2026-07-18');
+  t.eq('new open interval opened at asOf', after[1], { rate: 350, startDate: '2026-07-18', endDate: null });
+  t.eq('same-rate re-save is a no-op (no churn)',
+    S.closeAndOpenInterval([{ rate: 230, startDate: '2026-01-01', endDate: null }], 230, '2026-07-18').length, 1);
+  t.eq('opening on an empty array', S.closeAndOpenInterval([], 300, '2026-07-18'),
+    [{ rate: 300, startDate: '2026-07-18', endDate: null }]);
+}
+
+t.section('Column A — delete reverts to default (past keeps override)');
+{
+  // "revert to default": close the open personal interval, don't open a new one.
+  const arr = [{ rate: 230, startDate: '2026-01-01', endDate: null }];
+  const open = arr.find(iv => iv.endDate == null);
+  open.endDate = '2026-07-18';
+  const dflt = [{ rate: 300, startDate: '2000-01-01', endDate: null }];
+  const tenant = { personalTariffs: arr };
+  t.eq('past month still uses the override 230', S.resolveTariffRate(tenant, dflt, '2026-03', 999), 230);
+  t.eq('month after deletion reverts to default 300', S.resolveTariffRate(tenant, dflt, '2026-08', 999), 300);
+}
+
+t.section('Column A — seedTariffsIfMissing (lazy migration)');
+{
+  // customAmount == default → NO personalTariffs (rides default).
+  const dOnDefault = { config: { amount: 300 }, tenants: [{ id: 'a', customAmount: 300 }] };
+  const seeded1 = S.seedTariffsIfMissing(dOnDefault);
+  t.eq('seeding happened (defaultTariffs created)', seeded1, true);
+  t.eq('defaultTariffs seeded from config.amount', dOnDefault.defaultTariffs, [{ rate: 300, startDate: '2000-01-01', endDate: null }]);
+  t.eq('tenant on default gets NO personalTariffs', dOnDefault.tenants[0].personalTariffs, undefined);
+
+  // customAmount != default → one open personal interval.
+  const dDiffers = { config: { amount: 300 }, tenants: [{ id: 'b', customAmount: 230 }] };
+  S.seedTariffsIfMissing(dDiffers);
+  t.eq('tenant differing from default gets one open personal interval',
+    dDiffers.tenants[0].personalTariffs, [{ rate: 230, startDate: '2000-01-01', endDate: null }]);
+
+  // Idempotent: second seed is a no-op.
+  t.eq('second seed is a no-op', S.seedTariffsIfMissing(dDiffers), false);
+
+  // null customAmount → rides default, no personal.
+  const dNull = { config: { amount: 300 }, tenants: [{ id: 'c', customAmount: null }] };
+  S.seedTariffsIfMissing(dNull);
+  t.eq('null customAmount → no personalTariffs', dNull.tenants[0].personalTariffs, undefined);
+}
+
 process.exit(t.done() ? 1 : 0);

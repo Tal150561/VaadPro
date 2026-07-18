@@ -1497,6 +1497,34 @@ function vpLogout() {
     </div>
   </div>
 
+  <!-- Column A (v2.13.16): tenant tariff-history editor -->
+  <div class="modal-bg" id="tenantTariffModal" style="display:none;" onclick="if(event.target===this)closeModal('tenantTariffModal')">
+    <div class="modal" style="max-width:520px;max-height:90vh;overflow-y:auto;">
+      <h2>📊 היסטוריית תעריף: <span id="ttName" style="color:var(--accent);"></span></h2>
+      <p style="font-size:0.82rem;color:var(--text2);line-height:1.6;margin:6px 0 14px;">
+        סכום קבוע לדייר לאורך זמן. שינוי תעריף <strong>סוגר</strong> את התקופה הנוכחית ו<strong>פותח</strong> חדשה — חודשים שכבר שולמו שומרים על התעריף ההיסטורי שלהם.
+      </p>
+      <div id="ttCurrent" style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:14px;font-size:0.9rem;"></div>
+      <div style="font-weight:600;font-size:0.85rem;margin-bottom:8px;">תקופות תעריף</div>
+      <div id="ttList" style="display:grid;gap:8px;margin-bottom:16px;"></div>
+      <div class="divider"></div>
+      <div style="font-weight:600;font-size:0.85rem;margin-bottom:10px;">שינוי תעריף מהיום</div>
+      <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap;">
+        <div style="flex:1;min-width:140px;">
+          <label style="font-size:0.78rem;">תעריף חדש (₪)</label>
+          <input type="number" id="ttNewRate" min="1" placeholder="לדוגמה: 350">
+        </div>
+        <button class="btn btn-green" onclick="applyTenantTariffChange()">💾 החל שינוי</button>
+      </div>
+      <div style="margin-top:10px;">
+        <button class="btn btn-secondary btn-sm" onclick="revertTenantToDefault()" title="חזרה לברירת מחדל של הבניין מהיום">↩️ חזרה לברירת מחדל</button>
+      </div>
+      <div style="display:flex;gap:10px;margin-top:18px;">
+        <button class="btn btn-secondary" onclick="closeModal('tenantTariffModal')">סגור</button>
+      </div>
+    </div>
+  </div>
+
 <div id="toast"></div>
 
 <script data-cfasync="false" src="/cdn-cgi/scripts/5c5dd728/cloudflare-static/email-decode.min.js" onerror="void(0)"></script>
@@ -2779,6 +2807,109 @@ function showPayersReport() {
   openModal('payersReportModal');
 }
 
+// ── Column A (v2.13.16): tenant tariff-history modal ─────────────────
+// DISPLAY ONLY. The interval close/open is done SERVER-SIDE in /api/data when a
+// changed customAmount is posted (single source of truth). This modal just shows
+// the history and posts a new customAmount; it never builds intervals itself.
+let ttTenantId = null;
+
+// Mirror of the server's monthInInterval/pickRateFromIntervals — for DISPLAY of
+// the current effective rate only. If this ever disagrees with the server, the
+// server wins (it's what freezes payments).
+function ttPickRate(intervals, monthKey) {
+  if (!Array.isArray(intervals) || !intervals.length) return null;
+  const mk = String(monthKey).slice(0,7);
+  let best = null;
+  intervals.forEach(function(iv){
+    if (!iv || !iv.startDate) return;
+    const start = String(iv.startDate).slice(0,7);
+    if (mk < start) return;
+    if (iv.endDate != null && iv.endDate !== '' && mk > String(iv.endDate).slice(0,7)) return;
+    if (iv.rate == null || isNaN(parseFloat(iv.rate))) return;
+    if (!best || String(iv.startDate) > String(best.startDate)) best = iv;
+  });
+  return best ? parseFloat(best.rate) : null;
+}
+
+function openTenantTariff(id) {
+  const t = data.tenants.find(function(x){ return x.id == id; });
+  if (!t) return;
+  ttTenantId = id;
+  document.getElementById('ttName').textContent = tenantDisplayName(t);
+  const now = new Date();
+  const nowKey = now.getFullYear() + '-' + String(now.getMonth()+1).padStart(2,'0');
+  const buildingDefault = (data.config && data.config.amount) || 300;
+  const personalNow = ttPickRate(t.personalTariffs, nowKey);
+  const defaultNow  = ttPickRate(data.defaultTariffs, nowKey);
+  const effective = personalNow != null ? personalNow
+                  : (defaultNow != null ? defaultNow
+                  : (t.customAmount != null && t.customAmount !== '' ? parseFloat(t.customAmount) : buildingDefault));
+  const source = personalNow != null ? 'סכום אישי'
+               : (defaultNow != null ? 'ברירת מחדל של הבניין' : 'סכום נוכחי');
+  document.getElementById('ttCurrent').innerHTML =
+    'תעריף נוכחי: <strong style="color:var(--accent);">₪' + effective + '</strong>' +
+    ' <span style="color:var(--text2);font-size:0.8rem;">(' + source + ')</span>';
+
+  // Build the interval list (personal overrides + a note about the default).
+  const list = document.getElementById('ttList');
+  const ivs = Array.isArray(t.personalTariffs) ? t.personalTariffs.slice() : [];
+  ivs.sort(function(a,b){ return String(a.startDate) < String(b.startDate) ? 1 : -1; }); // newest first
+  if (!ivs.length) {
+    list.innerHTML = '<div style="color:var(--text2);font-size:0.85rem;padding:6px 0;">אין תעריף אישי — הדייר על ברירת המחדל של הבניין (₪' + (defaultNow != null ? defaultNow : buildingDefault) + ').</div>';
+  } else {
+    let hh = '';
+    ivs.forEach(function(iv){
+      const open = (iv.endDate == null || iv.endDate === '');
+      const range = ttFmt(iv.startDate) + ' → ' + (open ? '<span style="color:var(--accent);">כיום</span>' : ttFmt(iv.endDate));
+      hh += '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;">' +
+            '<span style="font-weight:700;">₪' + iv.rate + '</span>' +
+            '<span style="font-size:0.8rem;color:var(--text2);direction:ltr;">' + range + '</span>' +
+            '</div>';
+    });
+    list.innerHTML = hh;
+  }
+  document.getElementById('ttNewRate').value = '';
+  openModal('tenantTariffModal');
+}
+
+function ttFmt(d) {
+  if (!d) return '';
+  const s = String(d).slice(0,10);
+  const p = s.split('-');
+  return p.length >= 3 ? (p[2] + '/' + p[1] + '/' + p[0]) : s;
+}
+
+async function applyTenantTariffChange() {
+  const t = data.tenants.find(function(x){ return x.id == ttTenantId; });
+  if (!t) return;
+  const raw = document.getElementById('ttNewRate').value.trim();
+  const rate = raw ? parseInt(raw) : null;
+  if (!rate || rate < 1) { toast('⚠️ הכנס תעריף תקין','error'); return; }
+  // Set the scalar; the SERVER closes/opens the personalTariffs interval on save.
+  t.customAmount = rate;
+  try {
+    await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});
+    toast('💾 התעריף עודכן — תקופה חדשה נפתחה','success');
+  } catch(e) { toast('❌ שגיאה בשמירה','error'); return; }
+  await loadData();        // pull back server-computed intervals
+  openTenantTariff(ttTenantId); // re-render with fresh data
+  render();
+}
+
+async function revertTenantToDefault() {
+  const t = data.tenants.find(function(x){ return x.id == ttTenantId; });
+  if (!t) return;
+  if (!confirm('להחזיר את הדייר לברירת המחדל של הבניין מהיום? חודשים קודמים ישמרו על התעריף שלהם.')) return;
+  t.customAmount = null; // server closes the open personal interval, reverts to default
+  try {
+    await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});
+    toast('↩️ הדייר הוחזר לברירת מחדל','success');
+  } catch(e) { toast('❌ שגיאה','error'); return; }
+  await loadData();
+  openTenantTariff(ttTenantId);
+  render();
+}
+
 function openModal(id) {
   const el = document.getElementById(id);
   if (!el) return;
@@ -2912,7 +3043,8 @@ function render() {
       h+='<td style="font-size:0.77rem;color:var(--text2);">'+(t.keywords||'<span style="opacity:.4;">—</span>')+'</td>';
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
-      const displayAmount = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
+      const amtInner = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
+      const displayAmount = '<span class="tariff-open" title="היסטוריית תעריפים" onclick="openTenantTariff('+t.id+')" style="cursor:pointer;border-bottom:1px dashed var(--border);">'+amtInner+' 📊</span>';
       // ⚠️ v2.13.10 — unified with the payments tab and the portal.
       // Previously this showed the RAW openingDebt field, which is only the
       // banked/rolled-over portion — it ignored short-paid months and unpaid
