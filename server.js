@@ -4784,6 +4784,11 @@ function bankSyncAuth(req, res, next) {
 // Applies a payment amount against a tenant's openingDebt first,
 // then returns how much (if any) remains as credit for the current month.
 // Mutates tenant.openingDebt in-place. Returns { debtReduced, creditForMonth }.
+// ⚠️ NO LIVE CALLERS as of Fix #0 (v2.13.15). It was previously called from the
+// Agent import path (analyzeBankRowsServer); that call was removed so accrual lives
+// ONLY in closeMonthUnpaid. Kept intentionally — the "payment applies to prior debt
+// first" logic is needed by the Stage 3/4 partial-payment work. Do NOT re-wire it into
+// any import path without re-opening the Agent/manual-divergence question.
 function applyPaymentToDebt(tenant, amount) {
   const debt = Math.max(0, parseFloat(tenant.openingDebt) || 0);
   if (debt === 0) return { debtReduced: 0, creditForMonth: amount };
@@ -4890,12 +4895,21 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     if (tenantMatches.length > 0) {
       const totalAmount = tenantMatches.reduce((s, m) => s + m.amount, 0);
       const payerName   = tenantMatches[0].payerName || '';
-      // Apply payment to opening debt first (mutates tenant.openingDebt in-place)
-      applyPaymentToDebt(tenant, totalAmount);
-      // Always mark sentLog on bank match — even if payment only covered old debt (creditForMonth was 0).
+      // ── Fix #0 (v2.13.15): do NOT net the payment against openingDebt here. ──
+      // Previously this called applyPaymentToDebt(tenant, totalAmount), which mutated
+      // tenant.openingDebt at IMPORT time and was persisted to disk (saveTenantData ...
+      // tenants: updatedTenants). The MANUAL bank-import path (browser analyzeBankRows
+      // -> POST /api/data) never did this — it only sets sentLog. So the same bank file
+      // produced different openingDebt depending on the path (Agent vs manual), and the
+      // Agent-side netting double-counted once closeMonthUnpaid also accrued the shortfall.
+      // Accrual now lives EXCLUSIVELY in closeMonthUnpaid (the single disk-writing debt
+      // path), so both import paths are identical: they set sentLog and nothing else.
+      // The response shape is unchanged (matched/unmatched/month); the Agent only reads
+      // counts + month, never debtReduced.
+      // Always mark sentLog on bank match — even if payment only covered old debt.
       // Bug #7 fix: old guard `if (creditForMonth > 0)` caused AutoSend to fire on tenants who already paid.
       newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
-      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: (parseFloat(tenant.openingDebt)||0) === 0 });
+      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false });
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
     }
@@ -5031,7 +5045,13 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       matchedTenants: matched,
       unmatchedTenants: unmatched,
     };
-    saveTenantData(req.user.tenantId, { sentLog: newSentLog, tenants: updatedTenants, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult });
+    // Fix #0 (v2.13.15): tenants are NO LONGER written from this route. Since the
+    // openingDebt netting was removed above, updatedTenants is an unmodified clone —
+    // persisting it would be a no-op that risks clobbering a concurrent tenant edit.
+    // Accrual is deferred to closeMonthUnpaid. We now write ONLY sentLog + paymentHistory
+    // + the import receipt, exactly like the manual path's footprint (sentLog only, plus
+    // the server-side paymentHistory sync).
+    saveTenantData(req.user.tenantId, { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult });
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
   } catch (err) {
@@ -5396,7 +5416,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.14 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.15 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

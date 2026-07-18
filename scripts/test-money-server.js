@@ -220,4 +220,54 @@ t.section('★ customAmount changed before marking paid (v2.13.14)');
     S2.getExpectedAmount(d.paymentHistory.x, '2026-03', 500), 450);
 }
 
+// ════════════════════════════════════════════════════════════════
+// Fix #0 (v2.13.15) — the Agent import path must NOT net openingDebt.
+// Accrual lives ONLY in closeMonthUnpaid, so a bank import via the Agent
+// (analyzeBankRowsServer) leaves openingDebt untouched — identical footprint
+// to the manual path (which only sets sentLog). Re-introducing the netting
+// call (applyPaymentToDebt inside analyzeBankRowsServer) MUST fail these.
+// ════════════════════════════════════════════════════════════════
+t.section('Fix #0 — Agent import does not net openingDebt');
+{
+  const { loadBankAnalyzer } = require('./test-lib');
+  const B = loadBankAnalyzer();
+
+  // helper: one tenant with an opening debt, one bank row that matches by name.
+  const runImport = (openingDebt, rowAmount) => {
+    const rows = [
+      ['שם', 'סכום'],            // header
+      ['דוד כהן', String(rowAmount)]
+    ];
+    const mapping = { colName: 0, colAmount: 1, colDate: -1, colNote: -1 };
+    const tenants = [{ id: 'dk', name: 'דוד כהן', phone: '0501234567', keywords: '', customAmount: 230, openingDebt }];
+    return B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-07', { amount: 230 });
+  };
+
+  // (a) a payment larger than the debt used to zero openingDebt — now it must stay put.
+  {
+    const r = runImport(500, 230);
+    t.eq('matched the tenant', r.matched.length, 1);
+    t.eq('openingDebt is UNCHANGED by the import (was 500)', r.updatedTenants[0].openingDebt, 500);
+    t.eq('sentLog is set on match', String(r.newSentLog['dk_יולי'] || '').startsWith('bank_import_'), true);
+  }
+  // (b) a partial payment used to reduce openingDebt — now it must stay put.
+  {
+    const r = runImport(300, 100);
+    t.eq('openingDebt is UNCHANGED by a partial import (was 300)', r.updatedTenants[0].openingDebt, 300);
+  }
+  // (c) debtReduced is now always false (no netting happens at import time).
+  {
+    const r = runImport(500, 230);
+    t.eq('matched[].debtReduced is false (netting deferred to closeMonthUnpaid)', r.matched[0].debtReduced, false);
+  }
+  // (d) applyPaymentToDebt itself is unchanged (kept for Stage 3/4) — it still nets
+  //     when called directly. This proves the fix removed the CALL, not the logic.
+  {
+    const tt = { openingDebt: 500 };
+    const out = B.applyPaymentToDebt(tt, 230);
+    t.eq('applyPaymentToDebt still nets when called directly (logic intact)', tt.openingDebt, 270);
+    t.eq('applyPaymentToDebt returns creditForMonth 0 on partial', out.creditForMonth, 0);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

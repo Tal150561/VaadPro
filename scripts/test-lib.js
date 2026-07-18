@@ -53,7 +53,7 @@ const SERVER_FNS = [
   'getEffectiveMonth', 'getMonthKey',
   'parseSentLogAmount', 'sentLogIsPayment', 'getExpectedAmount',
   'calcMonthBalance', 'getDerivedCredit', 'calcShortfallFromSentLog',
-  'calcTotalDebt', 'getCreditBalance'
+  'calcTotalDebt', 'getCreditBalance', 'recordPayment'
 ];
 
 function loadServer() {
@@ -63,6 +63,20 @@ function loadServer() {
   const code = months[0] + '\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';
+  return runInSandbox(code);
+}
+
+// ── Load the Agent bank-import analyzer (Fix #0 / v2.13.15) ────────
+// analyzeBankRowsServer is the server-side (Agent) port of the manual
+// analyzeBankRows. Fix #0 removed its openingDebt netting so accrual lives
+// ONLY in closeMonthUnpaid. Extracted here so the test runs against the REAL
+// source: re-introducing applyPaymentToDebt(tenant, ...) inside it must fail.
+function loadBankAnalyzer() {
+  const src = readSource('server.js');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
+  const code = (months ? months[0] + '\n' : '')
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'analyzeBankRowsServer'])
+    + 'module.exports={getMonthKey,applyPaymentToDebt,analyzeBankRowsServer};';
   return runInSandbox(code);
 }
 
@@ -155,6 +169,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };
