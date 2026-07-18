@@ -173,4 +173,51 @@ t.eq('no paymentHistory, no customAmount ⇒ falls back to config.amount (300)',
 t.eq('customAmount = 0 is falsy ⇒ default applies',
   S.calcTotalDebt(J(T(0, 0, { '1_יולי': bank(300) }, [])), '1', '2026-07'), 0);
 
+// ── customAmount changed BEFORE payment (the v2.13.14 bug) ────────
+// approach A: the amount owed is decided at PAYMENT time. A stale frozen
+// record from an earlier reminder must not win once the tenant pays.
+t.section('★ customAmount changed before marking paid (v2.13.14)');
+{
+  const mk = S.getMonthKey({});
+  // recordPayment with the LIVE amount (350) must overwrite a stale 230 record.
+  const d = {
+    config: { amount: 230 },
+    tenants: [{ id: 'tal', customAmount: 350, openingDebt: 0, name: 'טל' }],
+    sentLog: { '1_ignored': '' },
+    paymentHistory: { tal: [{ month: mk, paid: true, amount: 230, paidAmount: 0, type: 'manual' }] }
+  };
+  // This mirrors exactly what the /sentlog-key manual-mark branch now does:
+  const live = d.tenants[0].customAmount || d.config.amount || 300;
+  // (recordPayment is loaded by loadServer)
+  const S2 = require('./test-lib').loadServer();
+  S2.recordPayment(d, 'tal', mk, 'manual', live, 'טל', '', 150);
+  t.eq('stale 230 record is refreshed to the live 350', d.paymentHistory.tal[0].amount, 350);
+  t.eq('paidAmount kept at 150', d.paymentHistory.tal[0].paidAmount, 150);
+}
+// And the expected amount must equal the refreshed tariff, giving debt 350-150.
+{
+  const S2 = require('./test-lib').loadServer();
+  const mk = S2.getMonthKey({});
+  const d = {
+    config: { amount: 230 },
+    tenants: [{ id: 'tal', customAmount: 350, openingDebt: 0, name: 'טל' }],
+    sentLog: { ['tal_' + S2.HEBREW_MONTHS[parseInt(mk.split('-')[1]) - 1]]: 'manual_paid_x_amount_150' },
+    paymentHistory: { tal: [{ month: mk, paid: true, amount: 350, paidAmount: 150, type: 'manual' }] }
+  };
+  t.eq('debt after refreshed tariff = 350 − 150 = 200', S2.calcTotalDebt(JSON.parse(JSON.stringify(d)), 'tal', mk), 200);
+}
+// A GENUINE historical tariff change must STILL be frozen (the guard we keep).
+{
+  const S2 = require('./test-lib').loadServer();
+  const d = {
+    config: { amount: 300 },
+    tenants: [{ id: 'x', customAmount: 500, openingDebt: 0 }],
+    sentLog: { '1_ignored': '' },
+    paymentHistory: { x: [{ month: '2026-03', paid: true, amount: 450, paidAmount: 450, type: 'manual' }] }
+  };
+  // March was paid at 450; raising the fee to 500 today must not add debt to March.
+  t.eq('a settled historical month keeps its own tariff (no retroactive debt)',
+    S2.getExpectedAmount(d.paymentHistory.x, '2026-03', 500), 450);
+}
+
 process.exit(t.done() ? 1 : 0);

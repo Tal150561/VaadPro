@@ -1181,16 +1181,59 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
   if (!key) return res.json({ ok: false, error: 'חסר key' });
   const d = loadTenantData(req.user.tenantId);
   if (!d.sentLog) d.sentLog = {};
+  if (!d.paymentHistory) d.paymentHistory = {};
+
+  // ⚠️ v2.13.14 — this endpoint MUST keep paymentHistory in sync with sentLog.
+  // Previously it wrote ONLY sentLog, which caused two bugs:
+  //   • markPaid → sentLog set, but no paymentHistory record → the frozen tariff
+  //     was never (re)written, so a customAmount changed BEFORE marking paid was
+  //     ignored and the OLD amount stuck (Tal: 350 fee, but 230 used).
+  //   • markUnpaid → sentLog deleted, but the paid paymentHistory record
+  //     survived → closeMonthUnpaid on the 1st resurrected the credit/debt.
+  // Resolve the tenant + Hebrew month → monthKey so we can record/clear properly.
+  const lastSep = String(key).lastIndexOf('_');
+  const tenantId = lastSep >= 0 ? String(key).slice(0, lastSep) : null;
+  const hebMonth = lastSep >= 0 ? String(key).slice(lastSep + 1) : null;
+  const monthIdx = hebMonth ? HEBREW_MONTHS.indexOf(hebMonth) : -1;
+  const tenant = tenantId ? (d.tenants || []).find(t => String(t.id) === tenantId) : null;
+  const monthKey = monthIdx >= 0
+    ? (String(getMonthKey(d.config || {})).split('-')[0] + '-' + String(monthIdx + 1).padStart(2, '0'))
+    : null;
+
   if (value === null || value === undefined) {
     delete d.sentLog[key];
-  } else {
-    // אם כבר קיים manual_paid או bank_import — לא דורסים
-    const existing = String(d.sentLog[key] || '');
-    if (existing.startsWith('manual_paid') || existing.startsWith('bank_import')) {
-      return res.json({ ok: true, skipped: true });
+    // Keep paymentHistory consistent: drop the matching PAID record so a manual
+    // "unmark" cannot be resurrected by closeMonthUnpaid. (Do NOT touch a
+    // wa_sent-only record — there was no payment to remove.)
+    if (tenantId && monthKey && d.paymentHistory[tenantId]) {
+      d.paymentHistory[tenantId] = d.paymentHistory[tenantId].filter(
+        r => !(r.month === monthKey && (r.type === 'manual' || r.type === 'bank'))
+      );
     }
-    d.sentLog[key] = value;
+    saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+    return res.json({ ok: true });
   }
+
+  // אם כבר קיים manual_paid או bank_import — לא דורסים את ה-sentLog
+  const existing = String(d.sentLog[key] || '');
+  if (existing.startsWith('manual_paid') || existing.startsWith('bank_import')) {
+    return res.json({ ok: true, skipped: true });
+  }
+  d.sentLog[key] = value;
+
+  // If this write is an actual PAYMENT (manual mark), freeze the CURRENT tariff
+  // now — approach A: the amount owed is decided at payment time, not at the
+  // time an earlier reminder was sent. recordPayment overwrites any stale record
+  // for this month, so a customAmount changed before marking paid takes effect.
+  if (String(value).startsWith('manual_paid') && tenant && monthKey) {
+    const liveAmount = tenant.customAmount || (d.config && d.config.amount) || 300;
+    const amtMatch = String(value).match(/_amount_([\d.]+)/);
+    const paidAmount = amtMatch ? parseFloat(amtMatch[1]) : liveAmount;
+    recordPayment(d, tenantId, monthKey, 'manual', liveAmount, tenant.name, '', paidAmount);
+    saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+    return res.json({ ok: true });
+  }
+
   saveTenantData(req.user.tenantId, { sentLog: d.sentLog });
   res.json({ ok: true });
 });
@@ -5353,7 +5396,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.13 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.14 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

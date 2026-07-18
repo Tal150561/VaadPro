@@ -1,6 +1,6 @@
 {
   "name": "vaadpro",
-  "version": "2.13.13",
+  "version": "2.13.14",
   "description": "VaadPro — SaaS לניהול ועד בית",
   "main": "server.js",
   "scripts": {
