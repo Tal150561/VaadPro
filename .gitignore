@@ -2,5 +2,9 @@ node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
 data/
+/app/data/
+wa_sessions/
 *.log
+*.bak
 .env
+.DS_Store
