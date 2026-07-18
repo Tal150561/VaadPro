@@ -1,11 +1,16 @@
 {
   "name": "vaadpro",
-  "version": "2.13.12",
+  "version": "2.13.13",
   "description": "VaadPro — SaaS לניהול ועד בית",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "test": "npm run check:syntax && npm run check:guide && npm run test:money && npm run test:contract && npm run test:render",
+    "check:syntax": "node scripts/check-syntax.js",
     "check:guide": "node scripts/check-guide-coverage.js",
+    "test:money": "node scripts/test-money-server.js",
+    "test:contract": "node scripts/test-contract-e2e.js",
+    "test:render": "node scripts/test-render-frontend.js",
     "check": "node --check public/vaadpro-guide.js && node scripts/check-guide-coverage.js"
   },
   "engines": {
