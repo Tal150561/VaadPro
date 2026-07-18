@@ -2985,12 +2985,27 @@ function render() {
        const creditBalance = parseFloat(t.creditBalance) || 0;
        const paidThisMonth = isM || isB;
        const totalDebt = parseFloat(t.totalDebt) || 0;
+       // Breakdown pieces for display ONLY — derived from server-supplied values,
+       // never recomputed. (v2.13.11: these were referenced but undefined after
+       // the v2.13.10 refactor deleted the local computation -> ReferenceError
+       // inside render() -> empty table -> checkStatus catch -> false
+       // "disconnected" WA badge looping every 2.5s.)
+       const emBal = t.currentBalance || { status: 'unpaid', shortfall: 0 };
+       const currentMonthDebt = paidThisMonth
+         ? (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0)
+         : Math.max(0, totalDebt - Math.max(0, openingDebt));
+       const historyDebt = Math.max(0, totalDebt - Math.max(0, openingDebt) - currentMonthDebt);
        let debtCell;
       if (creditBalance > 0 && totalDebt === 0) {
         debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ קרדיט: ₪'+creditBalance+'</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">יתרה תקוזז בחודש הבא</span>';
       } else if (paidThisMonth && totalDebt === 0) {
         debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
+      } else if (paidThisMonth && emBal.status === 'partial') {
+        // v2.13.11: short payment this month — label the shortfall correctly
+        // instead of calling it "חוב קודם" (it is THIS month's balance).
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+totalDebt+'₪</span>'
+          + '<span style="font-size:0.72rem;color:var(--warn);margin-right:4px;">חסר החודש</span>';
       } else if (paidThisMonth && totalDebt > 0) {
         // Paid this month but has prior accumulated debt
         debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+totalDebt+'₪</span>'
