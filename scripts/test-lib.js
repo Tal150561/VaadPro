@@ -1,0 +1,160 @@
+// ════════════════════════════════════════════════════════════════
+// test-lib.js — shared harness for VaadPro's money-math tests
+// ════════════════════════════════════════════════════════════════
+// WHY THIS EXISTS: server.js is a single 5k-line file that binds an Express
+// app and a Baileys socket at require() time, so it cannot simply be
+// require()'d from a test. Instead we EXTRACT the pure functions by name and
+// evaluate them in an isolated vm context. That keeps the tests running
+// against the REAL source — no copies to drift out of sync.
+//
+// ⚠️ If you rename a function in server.js, these tests fail loudly. That is
+// intentional: a silent rename is exactly how a mirror drifts.
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const ROOT = path.join(__dirname, '..');
+
+function readSource(rel) {
+  return fs.readFileSync(path.join(ROOT, rel), 'utf8');
+}
+
+// Pull top-level `function name(...) { ... }` blocks out of a source string.
+// Relies on the codebase convention that top-level functions start at column 0
+// and close with a `}` at column 0.
+function extractFunctions(src, names, { optional = [] } = {}) {
+  let out = '';
+  const missing = [];
+  for (const name of names) {
+    const re = new RegExp('^(?:async )?function ' + name + '\\s*\\([\\s\\S]*?^\\}', 'm');
+    const m = src.match(re);
+    if (m) out += m[0] + '\n';
+    else if (!optional.includes(name)) missing.push(name);
+  }
+  if (missing.length) {
+    throw new Error(
+      'test-lib: function(s) not found in source: ' + missing.join(', ') +
+      '\n  → they were renamed or deleted. Update the test or restore the function.'
+    );
+  }
+  return out;
+}
+
+function runInSandbox(code, extraGlobals = {}) {
+  const ctx = Object.assign({ module: { exports: {} }, console, Date, JSON, Math, parseFloat, parseInt, isNaN, String, Object, Array }, extraGlobals);
+  vm.createContext(ctx);
+  vm.runInContext(code, ctx);
+  return ctx.module.exports;
+}
+
+// ── Load the server's money functions ──────────────────────────────
+const SERVER_FNS = [
+  'getEffectiveMonth', 'getMonthKey',
+  'parseSentLogAmount', 'sentLogIsPayment', 'getExpectedAmount',
+  'calcMonthBalance', 'getDerivedCredit', 'calcShortfallFromSentLog',
+  'calcTotalDebt', 'getCreditBalance'
+];
+
+function loadServer() {
+  const src = readSource('server.js');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
+  if (!months) throw new Error('test-lib: HEBREW_MONTHS not found in server.js');
+  const code = months[0] + '\n'
+    + extractFunctions(src, SERVER_FNS)
+    + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';
+  return runInSandbox(code);
+}
+
+// Reproduces the GET /api/data enrichment. Kept here (not extracted) because it
+// lives inline in a route handler. If you change the route, change this too —
+// the E2E test asserts the shape the frontend depends on.
+function enrichTenants(S, d) {
+  const mkNow = S.getMonthKey(d.config || {});
+  const emNow = S.getEffectiveMonth(d.config || {});
+  return (d.tenants || []).map(t => {
+    const tid = String(t.id);
+    const hist = (d.paymentHistory || {})[tid] || [];
+    const live = t.customAmount || (d.config && d.config.amount) || 300;
+    const monthBalances = {};
+    Object.keys(d.sentLog || {}).forEach(key => {
+      if (key.includes('__acc__')) return;
+      const sep = key.lastIndexOf('_');
+      if (sep < 0 || String(key.slice(0, sep)) !== tid) return;
+      const heb = key.slice(sep + 1);
+      const idx = S.HEBREW_MONTHS.indexOf(heb);
+      if (idx < 0) return;
+      const mKey = String(mkNow).split('-')[0] + '-' + String(idx + 1).padStart(2, '0');
+      monthBalances[heb] = S.calcMonthBalance(d.sentLog[key], S.getExpectedAmount(hist, mKey, live));
+    });
+    const emBal = monthBalances[emNow] || S.calcMonthBalance(null, S.getExpectedAmount(hist, mkNow, live));
+    return Object.assign({}, t, {
+      creditBalance: S.getCreditBalance(d, tid),
+      totalDebt: S.calcTotalDebt(d, tid, mkNow),
+      effectiveAmount: live,
+      monthBalances,
+      currentBalance: emBal
+    });
+  });
+}
+
+// Reproduces the portal's server-side amountDue block.
+function portalCurrent(S, d, tid, amount, monthKey, sentKey) {
+  const hist = (d.paymentHistory || {})[tid] || [];
+  const bal = S.calcMonthBalance((d.sentLog || {})[sentKey], S.getExpectedAmount(hist, monthKey, amount));
+  const credit = S.getCreditBalance(d, tid);
+  const total = S.calcTotalDebt(d, tid, monthKey);
+  const rec = hist.find(r => r.month === monthKey && !r.paid && r.type !== 'wa_sent');
+  const currentInTotal = (bal.status === 'partial' ? bal.shortfall : 0)
+    + (rec ? (parseFloat(rec.amount) || 0) : 0);
+  const priorDebt = Math.max(0, total - currentInTotal);
+  const currentCharge = (bal.status === 'paid') ? 0
+    : (bal.status === 'partial') ? bal.shortfall : amount;
+  const amountDue = Math.max(0, currentCharge + priorDebt - credit);
+  return { balance: bal, amountDue, priorDebt, creditBalance: credit };
+}
+
+// ── Extract a JS region from an HTML page and make it runnable ─────
+function extractHtmlRegion(rel, startMarker, endMarker) {
+  const src = readSource(rel);
+  const i = src.indexOf(startMarker);
+  if (i < 0) throw new Error('test-lib: start marker not found in ' + rel + ': ' + startMarker.slice(0, 40));
+  const j = src.indexOf(endMarker, i);
+  if (j < 0) throw new Error('test-lib: end marker not found in ' + rel + ': ' + endMarker.slice(0, 40));
+  return src.slice(i, j);
+}
+
+// ── Tiny assertion helpers ─────────────────────────────────────────
+function makeRunner(title) {
+  let pass = 0, fail = 0;
+  const failures = [];
+  return {
+    section(name) { console.log('\n  ── ' + name + ' ──'); },
+    eq(name, actual, expected) {
+      const a = JSON.stringify(actual), e = JSON.stringify(expected);
+      if (a === e) { pass++; console.log('    ✓ ' + name); }
+      else {
+        fail++; failures.push(name);
+        console.log('    ✗ ' + name + '\n        got:      ' + a + '\n        expected: ' + e);
+      }
+    },
+    noThrow(name, fn) {
+      try { fn(); pass++; console.log('    ✓ ' + name); }
+      catch (e) {
+        fail++; failures.push(name);
+        console.log('    ✗ ' + name + ' → THREW: ' + e.message);
+      }
+    },
+    done() {
+      console.log('\n  ' + (fail === 0 ? '✅ ' + title + ': ' + pass + ' passed'
+                                       : '❌ ' + title + ': ' + fail + ' FAILED (' + failures.join(', ') + ')'));
+      return fail;
+    }
+  };
+}
+
+module.exports = {
+  readSource, extractFunctions, runInSandbox,
+  loadServer, enrichTenants, portalCurrent,
+  extractHtmlRegion, makeRunner
+};
