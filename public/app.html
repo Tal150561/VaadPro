@@ -584,12 +584,13 @@ function vpLogout() {
             <div style="flex:1;min-width:120px;"><label style="font-size:0.8rem;">סבילות (±₪)</label>
               <input type="number" id="bankTolerance" value="5" min="0" style="margin-top:3px;font-size:0.82rem;"></div>
           </div>
-          <!-- Month selector for history -->
-          <div style="margin-top:12px;">
-            <label style="font-size:0.8rem;">חודש שייך לקובץ זה</label>
-            <select id="bankMonth" style="width:100%;margin-top:3px;font-size:0.82rem;">
+          <!-- Month selector for the imported file (self-contained; independent of the global current-month setting) -->
+          <div style="margin-top:12px;padding:10px;border:1px solid var(--accent);border-radius:8px;background:rgba(37,211,102,0.06);">
+            <label style="font-size:0.85rem;font-weight:700;color:var(--accent);">📥 חודש הקובץ לייבוא</label>
+            <select id="bankMonth" style="width:100%;margin-top:5px;font-size:0.85rem;">
             </select>
-            <div class="hint">בחר את החודש שאליו שייכים התשלומים בקובץ זה</div>
+            <div class="hint">התשלומים בקובץ יירשמו תחת החודש הזה — ללא קשר לחודש המוצג במערכת</div>
+            <div id="bankManualMonthWarn" style="display:none;margin-top:6px;font-size:0.78rem;color:#f0ad4e;line-height:1.5;"></div>
           </div>
           <button class="btn btn-accent" onclick="runBankAnalysis()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
         </div>
@@ -3283,6 +3284,19 @@ function showMappingPanel(rows, fileName){
       if (key === currentKey) opt.selected = true;
       sel.appendChild(opt);
     }
+    // v2.13.17: if a manual global month is set, remind the user it does NOT drive
+    // the import — the selector above does. Prevents the "change Settings to import
+    // an old month" anti-pattern that mis-tagged files.
+    const warn = document.getElementById('bankManualMonthWarn');
+    if (warn) {
+      const mm = (data.config && data.config.manualMonth) ? String(data.config.manualMonth) : '';
+      if (mm) {
+        warn.style.display = 'block';
+        warn.textContent = '⚠️ החודש הנוכחי במערכת מוגדר ידנית ל"' + mm + '". הייבוא משתמש בבורר שלמעלה, לא בהגדרה הזו — אין צורך לשנות הגדרות כדי לייבא חודש אחר.';
+      } else {
+        warn.style.display = 'none';
+      }
+    }
   })();
 }
 
@@ -3380,10 +3394,56 @@ function analyzeBankRows(rows,fileName){
     em = MONTH_NAMES_HE[parseInt(m)-1]; // Hebrew name for sentLog key
     selectedMonthKey = bankMonthKey;     // YYYY-MM for paymentHistory
   } else {
-    em = getEffectiveMonth();
-    selectedMonthKey = null; // will use server's getMonthKey()
+    // v2.13.17: fall back to the ACTUAL current calendar month, NOT the global
+    // manualMonth (getEffectiveMonth). Importing a file must never depend on — or
+    // require changing — the building-wide "current month" setting. This was the
+    // root cause of the July/June mis-tagging: with an empty bankMonth the old code
+    // fell to getEffectiveMonth() = manualMonth, so the only way to affect the
+    // import month was to change the global setting, which then mis-tagged the file
+    // and desynced sentLog from paymentHistory (see SKILL "import month must be
+    // self-contained"). The bankMonth selector is always populated (current month
+    // preselected), so this branch is a safety net, not the normal path.
+    const nowD = new Date();
+    em = MONTH_NAMES_HE[nowD.getMonth()];
+    selectedMonthKey = nowD.getFullYear() + '-' + String(nowD.getMonth()+1).padStart(2,'0');
   }
   const matched=[],unmatched=[];
+  let mismatchCancelled = false;
+
+  // ── v2.13.17: soft warning if the file's dates don't match the chosen month ──
+  // Root-cause guard for the July/June mis-tag. We tally the month of every matched
+  // row's date and, if the MAJORITY falls in a different month than the selected
+  // bankMonth, warn once (soft — the user can proceed). Uses the same parseDate
+  // helper defined below (function-hoisted). Silent if dates are unparseable.
+  (function warnMonthMismatch(){
+    if (!selectedMonthKey) return;
+    const tally = {};
+    let dated = 0;
+    mr.forEach(function(m){
+      const dv = m.dateVal;
+      if (!dv) return;
+      const dd = parseDate(dv);
+      if (!dd || isNaN(dd.getTime())) return;
+      const key = dd.getFullYear() + '-' + String(dd.getMonth()+1).padStart(2,'0');
+      tally[key] = (tally[key]||0) + 1;
+      dated++;
+    });
+    if (dated < 2) return; // too few dated rows to judge
+    let topKey = null, topN = 0;
+    Object.keys(tally).forEach(function(k){ if (tally[k] > topN) { topN = tally[k]; topKey = k; } });
+    if (topKey && topKey !== selectedMonthKey && topN > dated/2) {
+      const heb = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+      const fileM = heb[parseInt(topKey.split('-')[1])-1] + ' ' + topKey.split('-')[0];
+      const selM  = heb[parseInt(selectedMonthKey.split('-')[1])-1] + ' ' + selectedMonthKey.split('-')[0];
+      const ok = confirm('⚠️ שים לב: רוב התנועות בקובץ (' + topN + '/' + dated + ') הן מחודש ' + fileM +
+        ',\nאבל בחרת לייבא לחודש ' + selM + '.\n\nהתשלומים יירשמו תחת ' + selM + '.\nלהמשיך בכל זאת?');
+      if (!ok) { mismatchCancelled = true; }
+    }
+  })();
+  if (mismatchCancelled) {
+    toast('הייבוא בוטל — בחר את החודש הנכון בבורר "חודש שייך לקובץ זה"','error');
+    return;
+  }
 
   data.tenants.forEach(function(tenant){
     const kw=tenant.keywords

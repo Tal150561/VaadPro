@@ -136,4 +136,24 @@ for (const dead of ['effectiveOpeningDebt', 'creditAfterHistory', 'totalPriorDeb
   t.eq(dead + ' is not an orphan', used && !declared, false);
 }
 
+t.section('app.html — import month is self-contained (v2.13.17)');
+// The July/June mis-tag root cause: with an empty bankMonth, analyzeBankRows fell
+// back to getEffectiveMonth() = the global manualMonth, so importing an old month
+// required changing the building-wide setting (which then mis-tagged the file).
+// Guard: the bankMonth fallback must derive from the real calendar date, and must
+// NOT call getEffectiveMonth in that branch.
+// Isolate JUST the month-selection if/else, and strip // comments so the guard
+// tests real code, not explanatory prose that mentions getEffectiveMonth.
+const selStart = app.indexOf('const bankMonthKey = document.getElementById');
+const selRaw = selStart >= 0 ? app.slice(selStart, selStart + 1600) : '';
+const selCode = selRaw.split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
+t.eq('month-selection code does NOT call getEffectiveMonth',
+  /getEffectiveMonth\s*\(/.test(selCode), false);
+t.eq('month-selection else branch derives from new Date()',
+  /new Date\(\)/.test(selCode), true);
+t.eq('month-mismatch soft warning exists',
+  /warnMonthMismatch/.test(app), true);
+t.eq('manualMonth reminder in import panel exists',
+  /bankManualMonthWarn/.test(app), true);
+
 process.exit(t.done() ? 1 : 0);
