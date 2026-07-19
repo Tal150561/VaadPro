@@ -685,7 +685,7 @@ function vpLogout() {
             <div class="rpt-step-title"><span class="rpt-step-num">4</span> נסח הודעה</div>
             <div style="margin-bottom:10px;">
               <label>תבנית הודעה</label>
-              <textarea id="rptTemplate" onInput="rptUpdatePreview()" style="min-height:130px;" placeholder="שלום {שם},&#10;להלן סיכום הוצאות ועד הבית:&#10;&#10;{הוצאות}&#10;&#10;סה&quot;כ הוצאות: *{סכום_כולל} ₪*&#10;יתרת חשבון: *{יתרה} ₪*&#10;&#10;תודה!"></textarea>
+              <textarea id="rptTemplate" onInput="rptUpdatePreview()" style="min-height:130px;unicode-bidi:plaintext;text-align:right;" placeholder="שלום {שם},&#10;להלן סיכום הוצאות ועד הבית:&#10;&#10;{הוצאות}&#10;&#10;סה&quot;כ הוצאות: *{סכום_כולל} ₪*&#10;יתרת חשבון: *{יתרה} ₪*&#10;&#10;תודה!"></textarea>
               <div class="var-tags" style="margin-top:7px;">
                 <span style="font-size:0.73rem;color:var(--text2);align-self:center;">משתנים:</span>
                 <span class="var-tag" onclick="rptInsertVar('{שם}')">{ שם }</span>
@@ -836,7 +836,7 @@ function vpLogout() {
     <div class="card">
       <div class="card-header">✉️ תבנית הודעה</div>
       <div class="card-body">
-        <textarea id="cfgTemplate" onInput="updatePreview()" style="min-height:110px;"></textarea>
+        <textarea id="cfgTemplate" onInput="updatePreview()" style="min-height:110px;unicode-bidi:plaintext;text-align:right;"></textarea>
         <div class="var-tags">
           <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
           <span class="var-tag" onclick="insertVar('{שם}')">{ שם }</span>
@@ -1011,7 +1011,7 @@ function vpLogout() {
 
         <div>
           <label>תוכן ההודעה</label>
-          <textarea id="blBody" style="min-height:140px;line-height:1.7;" placeholder="שלום לכולם,&#10;ברצוננו לעדכן כי...&#10;&#10;בברכה,&#10;ועד הבית" onInput="blUpdatePreview()"></textarea>
+          <textarea id="blBody" style="min-height:140px;line-height:1.7;unicode-bidi:plaintext;text-align:right;" placeholder="שלום לכולם,&#10;ברצוננו לעדכן כי...&#10;&#10;בברכה,&#10;ועד הבית" onInput="blUpdatePreview()"></textarea>
           <div class="var-tags" style="margin-top:6px;">
             <span style="font-size:0.73rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
             <span class="var-tag" onclick="blInsertVar('{שם}')">{ שם }</span>
