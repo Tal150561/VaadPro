@@ -156,4 +156,19 @@ t.eq('month-mismatch soft warning exists',
 t.eq('manualMonth reminder in import panel exists',
   /bankManualMonthWarn/.test(app), true);
 
+t.section('app.html — boot-load guard survives loadData (v2.13.20)');
+// The template-textarea overwrite bug: checkStatus's one-time fillForm() was
+// guarded by data._loaded, but loadData() does `data = await r.json()` which
+// REPLACES data and wipes the flag → fillForm re-ran every 2.5s and clobbered the
+// user's typing. The guard MUST be a standalone variable, not a property on data.
+// Strip // comments so the guard tests real code, not the explanatory comment
+// that mentions data._loaded.
+const appNoComments = app.split('\n').map(l => l.replace(/\/\/.*$/, '')).join('\n');
+t.eq('boot-load guard is a standalone flag, not data._loaded',
+  /data\._loaded/.test(appNoComments), false);
+t.eq('standalone _dataLoadedOnce flag is declared',
+  /let _dataLoadedOnce/.test(app), true);
+t.eq('checkStatus uses the standalone flag',
+  /if\(!_dataLoadedOnce\)/.test(app), true);
+
 process.exit(t.done() ? 1 : 0);

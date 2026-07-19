@@ -1534,6 +1534,7 @@ function vpLogout() {
 const API = '/api';
 let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,manualMonth:'',template:'שלום {שם}! \uD83D\uDC4B\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} \u20AA*\n\nתודה! \uD83D\uDE4F'}, sentLog:{}, currentAutoMonth:'', effectiveMonth:'' };
 let statusInterval=null, saveTimer=null;
+let _dataLoadedOnce = false; // one-time boot data load guard — survives loadData() replacing `data`
 
 // ── Stage 2 (Neve Yam): labels mirror ────────────────────────────────
 // Same LABELS + same staged fallback as server.js getLabels()/t(). The server
@@ -1923,7 +1924,14 @@ async function checkStatus() {
       closeQR();
       _waDisconnectedSince = null;
       showWaBanner(false);
-      if(!data._loaded){data._loaded=true;await loadData();fillForm();render();}
+      // ⚠️ _dataLoadedOnce is a STANDALONE flag — NOT data._loaded. loadData() does
+      // `data = await r.json()` which REPLACES the whole data object, wiping any
+      // flag stored on it. The old `data._loaded` therefore reset on every loadData
+      // (send message, edit tenant…), so this poll re-ran fillForm() every 2.5s and
+      // OVERWROTE whatever the user was typing in the message-template textarea
+      // (the "chip appears then vanishes / text reverts" bug). A module-level flag
+      // survives the data reassignment, so fillForm runs exactly once.
+      if(!_dataLoadedOnce){ _dataLoadedOnce=true; await loadData(); fillForm(); render(); }
     }
     // ניהול banner ניתוק
     if(s.status==='disconnected' || s.status==='logged_out') {
