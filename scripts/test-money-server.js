@@ -429,4 +429,120 @@ t.section('Stage 3 — autoSendShouldRemind (partial payer NOT skipped)');
     S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_300_payer_x' }), tn, mk), false);
 }
 
+// ════════════════════════════════════════════════════════════════
+// Stage 4 (v2.13.21) — closeMonthUnpaid accrues partial-payment shortfall
+// ════════════════════════════════════════════════════════════════
+// The ONLY stage that touches debt logic. Runs the REAL closeMonthUnpaid via
+// loadCloseMonth (stubbed I/O), so re-removing the overpay<0 branch fails here.
+const { loadCloseMonth } = require('./test-lib');
+
+t.section('Stage 4 — closeMonthUnpaid partial-payment shortfall accrual');
+{
+  // Freeze "now" to 1 July 2026 → prevKey = 2026-06 (June), prevHebMonth = יוני.
+  const NOW = new Date('2026-07-01T08:00:00.000Z');
+  const cfg = { amount: 230 };
+
+  // Helper: build a one-tenant building for June (prevKey), run close, return
+  // the tenant + the captured save patch.
+  const runClose = (tenant, sentLog) => {
+    const building = { config: cfg, tenants: [tenant], paymentHistory: { [tenant.id]: [] }, sentLog: sentLog || {} };
+    if (tenant._hist) building.paymentHistory[tenant.id] = tenant._hist;
+    const { run, saved } = loadCloseMonth(building, NOW);
+    run();
+    return { tenant: building.tenants[0], saved, building };
+  };
+
+  // (a) PARTIAL payment (paid 150 / expected 230) → shortfall 80 accrues.
+  {
+    const tn = { id: 'p1', name: 'לימור', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 150, type: 'bank' }] };
+    const { tenant } = runClose(tn, { 'p1_יוני': bank(150) });
+    t.eq('partial 150/230 → openingDebt += 80', tenant.openingDebt, 80);
+  }
+
+  // (a′) The record is stamped shortfallBanked:true (double-count marker).
+  {
+    const tn = { id: 'p1', name: 'לימור', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 150, type: 'bank' }] };
+    const { building } = runClose(tn, { 'p1_יוני': bank(150) });
+    const rec = building.paymentHistory['p1'].find(r => r.month === '2026-06');
+    t.eq('partial record stamped shortfallBanked:true', rec.shortfallBanked, true);
+    t.eq('partial record kept paid:true (money did arrive)', rec.paid, true);
+  }
+
+  // (b) PARTIAL on top of existing debt → adds to it.
+  {
+    const tn = { id: 'p1', name: 'לימור', customAmount: 230, openingDebt: 100,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 200, type: 'bank' }] };
+    const { tenant } = runClose(tn, { 'p1_יוני': bank(200) });
+    t.eq('partial 200/230 with prior debt 100 → 130', tenant.openingDebt, 130);
+  }
+
+  // (c) FULL payment (230/230) → no accrual, no marker.
+  {
+    const tn = { id: 'p1', name: 'x', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] };
+    const { tenant, building } = runClose(tn, { 'p1_יוני': bank(230) });
+    t.eq('full payment → openingDebt stays 0', tenant.openingDebt, 0);
+    const rec = building.paymentHistory['p1'].find(r => r.month === '2026-06');
+    t.eq('full payment → no shortfallBanked marker', !!rec.shortfallBanked, false);
+  }
+
+  // (d) OVERPAYMENT (300/230) → credit (negative openingDebt), unchanged behaviour.
+  {
+    const tn = { id: 'p1', name: 'x', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 300, type: 'bank' }] };
+    const { tenant } = runClose(tn, { 'p1_יוני': bank(300) });
+    t.eq('overpay 300/230 → openingDebt −70 (credit)', tenant.openingDebt, -70);
+  }
+
+  // (e) FROZEN expected wins over live customAmount (Column A drift guard).
+  // Tenant paid 230 in June (frozen amount:230) but fee was RAISED to 350 today.
+  // Shortfall must be 0 (paid full 230 of the June rate), NOT 120.
+  {
+    const tn = { id: 'p1', name: 'x', customAmount: 350, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] };
+    const { tenant } = runClose(tn, { 'p1_יוני': bank(230) });
+    t.eq('frozen June rate 230 (not live 350) → no phantom shortfall', tenant.openingDebt, 0);
+  }
+
+  // (f) No record at all → full month accrues (pre-existing behaviour, unchanged).
+  {
+    const tn = { id: 'p1', name: 'x', customAmount: 230, openingDebt: 0, _hist: [] };
+    const { tenant } = runClose(tn, {});
+    t.eq('no record → full 230 accrues', tenant.openingDebt, 230);
+  }
+}
+
+t.section('Stage 4 — double-count guard (banked shortfall not re-added live)');
+{
+  // After closeMonthUnpaid has banked June's 80 shortfall into openingDebt AND
+  // stamped shortfallBanked:true, the live derivation must NOT add it again —
+  // symmetric with the negative-openingDebt credit guard (getDerivedCredit).
+  const cfg = { amount: 230, manualMonth: 'יולי' }; // current month = July, so June is history
+  const base = tid => ({
+    config: cfg,
+    sentLog: { [tid + '_יוני']: bank(150) }, // June: partial 150/230 (shortfall 80)
+    tenants: [{ id: tid, name: 'לימור', customAmount: 230, openingDebt: 80 }],
+    paymentHistory: { [tid]: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 150, type: 'bank', shortfallBanked: true }] }
+  });
+
+  const d1 = base('p1');
+  t.eq('shortfallBanked June skipped by calcShortfallFromSentLog',
+    S.calcShortfallFromSentLog(d1, 'p1', { year: 2026 }).total, 0);
+  // totalDebt = openingDebt(80) + historyDebt(0, record is paid) + live shortfall(0, banked) = 80
+  t.eq('totalDebt = 80 (banked once, not doubled to 160)',
+    S.calcTotalDebt(d1, 'p1', '2026-07'), 80);
+
+  // Contrast: WITHOUT the banked marker (mid-month, pre-close) the live shortfall
+  // DOES count — openingDebt 0, live shortfall 80 → 80. (Not doubled either way.)
+  const d2 = base('p2');
+  d2.tenants[0].openingDebt = 0;
+  d2.paymentHistory['p2'][0].shortfallBanked = false;
+  t.eq('un-banked partial counts live (pre-close)',
+    S.calcShortfallFromSentLog(d2, 'p2', { year: 2026 }).total, 80);
+  t.eq('totalDebt pre-close = 80 (live shortfall only)',
+    S.calcTotalDebt(d2, 'p2', '2026-07'), 80);
+}
+
 process.exit(t.done() ? 1 : 0);

@@ -918,7 +918,18 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
     if (o.excludeMonthKey && monthKey === o.excludeMonthKey) return;
     const expected = getExpectedAmount(history, monthKey, live);
     const bal = calcMonthBalance(sentLog[key], expected);
-    if (bal.status === 'partial') { total += bal.shortfall; months.push({ monthKey, hebMonth, shortfall: bal.shortfall }); }
+    if (bal.status === 'partial') {
+      // ⚠️ Stage 4 double-count guard (symmetric with getDerivedCredit).
+      // Once closeMonthUnpaid banks a partial-payment shortfall into openingDebt
+      // it stamps `shortfallBanked:true` on that month's paymentHistory record.
+      // sentLog still shows the partial bank_import, so this live derivation would
+      // otherwise add the SAME shortfall again (already in openingDebt) → doubled
+      // debt. Skip a month whose shortfall is already banked. (Un-banked partials
+      // — e.g. current month before the 1st — still count live, as before.)
+      const rec = (history || []).find(r => r.month === monthKey && r.type !== 'wa_sent');
+      if (rec && rec.shortfallBanked) return;
+      total += bal.shortfall; months.push({ monthKey, hebMonth, shortfall: bal.shortfall });
+    }
     // v2.13.8: overpayment in a month is credit the moment it lands — do NOT
     // wait for closeMonthUnpaid to write a negative openingDebt on the 1st.
     else if (bal.credit > 0) { creditTotal += bal.credit; months.push({ monthKey, hebMonth, credit: bal.credit }); }
@@ -3231,9 +3242,14 @@ function closeMonthUnpaid() {
             if (!sentSaysPaid) {
               console.warn(`[closeMonthUnpaid] ⚠️ סתירה: דייר ${tenant.name} (${tid}) — paymentHistory אומר שולם ל-${prevKey} אך sentLog[${prevHebMonth}]="${slVal || '(ריק)'}" לא מאשר. לא בוצעה פעולה אוטומטית — בדוק ידנית (כפתור "תקן נתונים").`);
             }
-            // שולמה — בדוק אם יש עודף תשלום → יתרה שלילית ב-openingDebt
-            const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? amount);
-            const overpay = Math.round((paidAmt - amount) * 100) / 100;
+            // paid:true מכסה גם תשלום מלא, גם עודף וגם תשלום *חלקי*
+            // (recordPayment קובע paid לפי סוג התשלום, לא לפי הסכום — לכן
+            // תשלום חלקי נכתב paid:true עם paidAmount<amount). משווים את מה
+            // ששולם בפועל מול הסכום ה"מוקפא" של אותו חודש (Column A) — לא מול
+            // customAmount החי, אחרת שינוי תעריף מאוחר יסיט את המחסור/העודף.
+            const expectedPrev = parseFloat(existing.amount ?? amount) || amount;
+            const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? expectedPrev);
+            const overpay = Math.round((paidAmt - expectedPrev) * 100) / 100;
             if (overpay > 0) {
               // הפחת עודף מ-openingDebt (יכול להפוך שלילי = קרדיט)
               tenant.openingDebt = Math.round(
@@ -3241,8 +3257,24 @@ function closeMonthUnpaid() {
               ) / 100;
               changed = true;
               console.log(`[closeMonthUnpaid] עודף תשלום לדייר ${tenant.name}: ${overpay} ₪ → openingDebt=${tenant.openingDebt}`);
+            } else if (overpay < 0) {
+              // ⭐ Stage 4 — תשלום חלקי: צבור את המחסור (shortfall) ל-openingDebt.
+              // עד עכשיו מחסור בסגירת חודש נעלם בשקט (אובדן הכנסה). כעת הוא
+              // נצבר לחוב, בדיוק כפי שחודש שלא שולם כלל נצבר.
+              const shortfall = Math.abs(overpay);
+              tenant.openingDebt = Math.round(
+                ((parseFloat(tenant.openingDebt) || 0) + shortfall) * 100
+              ) / 100;
+              // סמן את הרשומה כ"מחסור נצבר" כדי שהגזירה החיה
+              // (calcShortfallFromSentLog) לא תספור את אותו מחסור פעם שנייה —
+              // sentLog עדיין מציג bank_import חלקי. שומר על הרשומה כ-paid:true
+              // (הכסף אכן שולם חלקית) ולא מוחק אותה.
+              existing.shortfallBanked = true;
+              changed = true;
+              closed++;
+              console.log(`[closeMonthUnpaid] תשלום חלקי לדייר ${tenant.name}: שולם ${paidAmt}/${expectedPrev} ₪ → נצבר מחסור ${shortfall} ₪ → openingDebt=${tenant.openingDebt}`);
             }
-            // אין צורך להסיר רשומה ששולמה — היא כבר paid:true
+            // תשלום מלא (overpay===0) — אין צורך בפעולה, הרשומה כבר paid:true
           }
         } else {
           // אין רשומה כלל — הדייר לא שילם ולא נרשם → צבור ל-openingDebt
@@ -5682,7 +5714,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.18 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.21 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

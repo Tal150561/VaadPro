@@ -85,6 +85,34 @@ function loadBankAnalyzer() {
   return runInSandbox(code);
 }
 
+// ── Load the REAL closeMonthUnpaid (Stage 4 / v2.13.21) ───────────
+// closeMonthUnpaid is the ONLY function that accrues debt to disk. Stage 4 added
+// the `overpay < 0` partial-payment shortfall branch. We extract it and inject
+// stubs for its only external deps (loadUsers / loadTenantData / saveTenantData)
+// so the test runs the ACTUAL accrual logic, not a copy. saveTenantData captures
+// the written patch so the test can assert openingDebt + shortfallBanked.
+// It also needs the money helpers in scope (none, actually — it is self-contained
+// on HEBREW_MONTHS + the injected I/O), so we extract just the function.
+function loadCloseMonth(building, nowDate) {
+  const src = readSource('server.js');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
+  if (!months) throw new Error('test-lib: HEBREW_MONTHS not found');
+  const code = months[0] + '\n'
+    + extractFunctions(src, ['closeMonthUnpaid'])
+    + 'module.exports={closeMonthUnpaid};';
+  // building is mutated in place by closeMonthUnpaid via the loadTenantData ref.
+  const saved = [];
+  const stubs = {
+    loadUsers: () => [{ tenantId: 'T1' }],
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); },
+    // Freeze "now" so prevKey/prevHebMonth are deterministic.
+    Date: nowDate ? class extends Date { constructor(...a){ super(...(a.length?a:[nowDate])); } } : Date
+  };
+  const mod = runInSandbox(code, stubs);
+  return { run: mod.closeMonthUnpaid, saved, building };
+}
+
 // Reproduces the GET /api/data enrichment. Kept here (not extracted) because it
 // lives inline in a route handler. If you change the route, change this too —
 // the E2E test asserts the shape the frontend depends on.
@@ -174,6 +202,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };
