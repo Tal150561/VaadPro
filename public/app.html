@@ -845,9 +845,10 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{חוב_קודם}')">{ חוב_קודם }</span>
           <span class="var-tag" onclick="insertVar('{סה&quot;כ}')">{ סה״כ }</span>
           <span class="var-tag" onclick="insertVar('{חשבונות}')">{ חשבונות }</span>
+          <span class="var-tag" onclick="insertVar('{יתרה}')">{ יתרה }</span>
           <span class="var-tag" onclick="insertVar('{לינק_פורטל}')">{ לינק_פורטל }</span>
         </div>
-        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
+        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {חוב_קודם} ו-{סה״כ} יופיעו רק אם לדייר יש חוב פתוח &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {יתרה} יופיע רק אם הדייר שילם חלקית החודש &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
@@ -2137,7 +2138,8 @@ function updatePreview() {
   if(el) el.textContent=t
     .replace(/{שם}/g,name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount)
     .replace(/{חוב_קודם}/g,sampleDebt).replace(/{סה"כ}/g,sampleTotal)
-    .replace(/{חשבונות}/g,sampleAccounts);
+    .replace(/{חשבונות}/g,sampleAccounts)
+    .replace(/{יתרה}/g,'שילמת 150 ₪, נותר לתשלום: *80 ₪*');
 }
 
 function insertVar(v) {
@@ -6477,7 +6479,7 @@ async function aiImprove(textareaId, instructionId, statusId, context) {
   if (statusEl) statusEl.textContent = '';
 
   const placeholderNote = context === 'settings'
-    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {חוב_קודם} {סה"כ} {חשבונות} {לינק_פורטל}'
+    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {חוב_קודם} {סה"כ} {חשבונות} {יתרה} {לינק_פורטל}'
     : 'שמור על כל הפלייסהולדרים בפורמט {משתנה}. הפלייסהולדרים: {שם} {תאריך}';
 
   const systemPrompt = 'אתה עוזר למנהלי ועד בית לשפר הודעות WhatsApp בעברית. כללים: כתוב בעברית טבעית ומכובדת. ' + placeholderNote + '. החזר רק את ההודעה המשופרת בלבד, ללא הסברים וללא מרכאות.';

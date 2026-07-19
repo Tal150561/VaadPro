@@ -382,4 +382,51 @@ t.section('Column A — seedTariffsIfMissing (lazy migration)');
   t.eq('null customAmount → no personalTariffs', dNull.tenants[0].personalTariffs, undefined);
 }
 
+// ════════════════════════════════════════════════════════════════
+// STAGE 3 — partial-payment balance reminder (v2.13.18)
+// ════════════════════════════════════════════════════════════════
+// A partial payer must (a) get a {יתרה} balance line, and (b) NOT be skipped by
+// AutoSend. A full payer gets neither. Delegates to calcMonthBalance (one source).
+
+t.section('Stage 3 — buildBalanceLine ({יתרה})');
+{
+  // Pin the effective month to מאי (May) so the sentLog key + mk line up.
+  const cfg = { amount: 230, manualMonth: 'מאי' };
+  const mk = '2026-05';
+  const mkTenant = { id: 'p1', name: 'דנה' };
+  // partial: paid 150 of 230 → line present
+  const dPartial = { config: cfg, sentLog: { 'p1_מאי': 'bank_import_2026-05-10T00:00:00Z_150_payer_x' }, paymentHistory: {}, tenants: [mkTenant] };
+  t.eq('partial payer gets a balance line',
+    S.buildBalanceLine(dPartial, mkTenant, mk), 'שילמת 150 ₪, נותר לתשלום: *80 ₪*');
+  // full: paid 230 → empty
+  const dFull = { config: cfg, sentLog: { 'p1_מאי': 'bank_import_2026-05-10T00:00:00Z_230_payer_x' }, paymentHistory: {}, tenants: [mkTenant] };
+  t.eq('full payer gets no balance line', S.buildBalanceLine(dFull, mkTenant, mk), '');
+  // unpaid: no sentLog payment → empty
+  const dUnpaid = { config: cfg, sentLog: {}, paymentHistory: {}, tenants: [mkTenant] };
+  t.eq('unpaid tenant gets no balance line', S.buildBalanceLine(dUnpaid, mkTenant, mk), '');
+  // reminded only: sent_ → empty
+  const dReminded = { config: cfg, sentLog: { 'p1_מאי': 'sent_2026-05-10T00:00:00Z' }, paymentHistory: {}, tenants: [mkTenant] };
+  t.eq('reminded-only tenant gets no balance line', S.buildBalanceLine(dReminded, mkTenant, mk), '');
+  // overpay: paid 300 of 230 → NOT partial → empty (credit, not balance)
+  const dOver = { config: cfg, sentLog: { 'p1_מאי': 'bank_import_2026-05-10T00:00:00Z_300_payer_x' }, paymentHistory: {}, tenants: [mkTenant] };
+  t.eq('overpayer gets no balance line', S.buildBalanceLine(dOver, mkTenant, mk), '');
+}
+
+t.section('Stage 3 — autoSendShouldRemind (partial payer NOT skipped)');
+{
+  const cfg = { amount: 230, manualMonth: 'מאי' };
+  const mk = '2026-05';
+  const tn = { id: 'p2', name: 'עמית' };
+  const mk2 = (sl) => ({ config: cfg, sentLog: sl, paymentHistory: {}, tenants: [tn] });
+  t.eq('nothing yet → remind', S.autoSendShouldRemind(mk2({}), tn, mk), true);
+  t.eq('already reminded (sent_) → skip',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'sent_2026-05-10T00:00:00Z' }), tn, mk), false);
+  t.eq('full payment → skip',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_230_payer_x' }), tn, mk), false);
+  t.eq('PARTIAL payment → remind (the Stage 3 fix)',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_150_payer_x' }), tn, mk), true);
+  t.eq('overpayment → skip',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_300_payer_x' }), tn, mk), false);
+}
+
 process.exit(t.done() ? 1 : 0);

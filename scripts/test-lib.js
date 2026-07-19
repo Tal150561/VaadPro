@@ -56,7 +56,9 @@ const SERVER_FNS = [
   'calcTotalDebt', 'getCreditBalance', 'recordPayment',
   // Column A (v2.13.16) — fixed-amount tariff history
   'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate',
-  'closeAndOpenInterval', 'seedTariffsIfMissing'
+  'closeAndOpenInterval', 'seedTariffsIfMissing',
+  // Stage 3 (v2.13.18) — partial-payment balance reminder
+  'buildBalanceLine', 'autoSendShouldRemind'
 ];
 
 function loadServer() {

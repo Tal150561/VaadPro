@@ -1663,6 +1663,50 @@ function buildAccountsBlock(d, tenant, month) {
   return { block, recipients };
 }
 
+// ════════════════════════════════════════════════════════════════
+// STAGE 3 — partial-payment balance reminder (v2.13.18)
+// ════════════════════════════════════════════════════════════════
+// buildBalanceLine(d, tenant, mk) — the {יתרה} placeholder. Returns the balance
+// sentence ONLY when the tenant short-paid the CURRENT month (sentLog value is a
+// bank_import/manual_paid whose amount < the expected tariff). Empty otherwise —
+// exactly like {חוב_קודם} appears only when there is prior debt.
+//
+// SINGLE SOURCE OF TRUTH: partial detection is delegated to calcMonthBalance (the
+// one place, per the locked design). This helper does NOT reimplement the maths —
+// it reads calcMonthBalance's {status,paidAmount,shortfall} and formats one line.
+// Full payments and unpaid months return '' so the reminder text is unchanged for
+// everyone except genuine partial payers.
+function buildBalanceLine(d, tenant, mk) {
+  const sentLog = d.sentLog || {};
+  const month = getEffectiveMonth(d.config || {});
+  const key = tenant.id + '_' + month;
+  const val = sentLog[key];
+  if (!sentLogIsPayment(val)) return '';           // unpaid / reminded → no balance line
+  const history = (d.paymentHistory || {})[String(tenant.id)] || [];
+  const live = (tenant.customAmount) || ((d.config || {}).amount) || 300;
+  const expected = getExpectedAmount(history, mk, live);
+  const bal = calcMonthBalance(val, expected);
+  if (bal.status !== 'partial') return '';         // paid in full → no balance line
+  return 'שילמת ' + bal.paidAmount + ' ₪, נותר לתשלום: *' + bal.shortfall + ' ₪*';
+}
+
+// Should AutoSend still remind this tenant for the current month? A partial payer
+// must NOT be skipped (they still owe the balance); a full payer / already-reminded
+// tenant IS skipped. Delegates status to calcMonthBalance — the one source.
+function autoSendShouldRemind(d, tenant, mk) {
+  const sentLog = d.sentLog || {};
+  const month = getEffectiveMonth(d.config || {});
+  const val = sentLog[tenant.id + '_' + month];
+  if (!val) return true;                            // nothing yet → remind (unpaid)
+  if (String(val).startsWith('sent_')) return false;// already reminded → skip
+  if (!sentLogIsPayment(val)) return true;          // unknown non-payment → remind
+  const history = (d.paymentHistory || {})[String(tenant.id)] || [];
+  const live = (tenant.customAmount) || ((d.config || {}).amount) || 300;
+  const expected = getExpectedAmount(history, mk, live);
+  const bal = calcMonthBalance(val, expected);
+  return bal.status === 'partial';                  // partial → remind for the balance; paid → skip
+}
+
 // Send to single tenant
 app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
@@ -1683,6 +1727,7 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const portalUrl1 = tmpl.includes('{לינק_פורטל}')
     ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
     : '';
+  const balanceLine1 = buildBalanceLine(d, tenant, mk);
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
@@ -1690,6 +1735,7 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
     .replace(/{סה"כ}/g, debt > 0 ? total : amount)
     .replace(/{חשבונות}/g, accountsBlock)
+    .replace(/{יתרה}/g, balanceLine1)
     .replace(/{לינק_פורטל}/g, portalUrl1);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
@@ -1724,6 +1770,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
     const portalUrlSA = tmpl.includes('{לינק_פורטל}')
       ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
       : '';
+    const balanceLineSA = buildBalanceLine(d, tenant, mk);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
@@ -1731,6 +1778,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlock)
+      .replace(/{יתרה}/g, balanceLineSA)
       .replace(/{לינק_פורטל}/g, portalUrlSA);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
@@ -3336,7 +3384,11 @@ async function doAutoSend(user) {
 
   for (const tenant of (d.tenants || [])) {
     const key = tenant.id + '_' + month;
-    if (d.sentLog[key]) continue; // already paid or reminded — skip
+    // Stage 3 (v2.13.18): a PARTIAL payer must still be reminded (for the balance).
+    // Old logic `if (d.sentLog[key]) continue` skipped anyone with any sentLog value,
+    // so a short payment silenced the reminder. autoSendShouldRemind delegates the
+    // decision to calcMonthBalance: paid→skip, reminded→skip, unpaid/partial→remind.
+    if (!autoSendShouldRemind(d, tenant, mk)) continue;
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
     const debt   = calcTotalDebt(d, tenant.id, mk);
     const total  = amount + debt;
@@ -3345,6 +3397,7 @@ async function doAutoSend(user) {
       : '';
     // extra accounts block (helper יחיד — מקור אמת אחד)
     const { block: accountsBlockAuto } = buildAccountsBlock(d, tenant, month);
+    const balanceLineAuto = buildBalanceLine(d, tenant, mk);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
@@ -3352,10 +3405,17 @@ async function doAutoSend(user) {
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlockAuto)
+      .replace(/{יתרה}/g, balanceLineAuto)
       .replace(/{לינק_פורטל}/g, portalUrlAuto);
         try {
       await sendWaMsg(user.tenantId, tenant.phone, msg);
-      d.sentLog[key] = 'sent_' + new Date().toISOString();
+      // Stage 3: a reminder must NOT clobber the bank_import/manual_paid value of a
+      // partial payer (that would erase the record of what they DID pay, and next
+      // run would treat them as fully unpaid). Only write 'sent_' when the current
+      // value is not a payment.
+      if (!sentLogIsPayment(d.sentLog[key])) {
+        d.sentLog[key] = 'sent_' + new Date().toISOString();
+      }
       recordPayment(d, String(tenant.id), mk, 'wa_sent', amount, tenant.name);
       sent++;
       await new Promise(r => setTimeout(r, 1200));
@@ -5622,7 +5682,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.16 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.18 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
