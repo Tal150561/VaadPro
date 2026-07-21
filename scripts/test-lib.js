@@ -58,7 +58,9 @@ const SERVER_FNS = [
   'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate',
   'closeAndOpenInterval', 'seedTariffsIfMissing',
   // Stage 3 (v2.13.18) — partial-payment balance reminder
-  'buildBalanceLine', 'autoSendShouldRemind'
+  'buildBalanceLine', 'autoSendShouldRemind',
+  // v2.13.23 — year-boundary-safe Hebrew-month → monthKey
+  'hebMonthToMonthKey'
 ];
 
 function loadServer() {

@@ -633,4 +633,31 @@ t.section('markUnpaid → closeMonthUnpaid — cancelled payment is NOT resurrec
   }
 }
 
+// ── hebMonthToMonthKey — year-boundary safety (v2.13.23) ──────────
+// sentLog keys carry no year; the year is inferred from a reference monthKey,
+// correcting for the Dec↔Jan boundary. Old "approach A" mis-yeared a December
+// file imported in January. These lock the correct behaviour and prove the
+// same-year (99%) path is untouched.
+t.section('hebMonthToMonthKey — Dec↔Jan year boundary');
+t.eq('THE FIX: December file imported in January → previous year',
+  S.hebMonthToMonthKey('דצמבר', '2027-01'), '2026-12');
+t.eq('November imported in January → previous year',
+  S.hebMonthToMonthKey('נובמבר', '2026-01'), '2025-11');
+t.eq('same-year, current month (June in July) — UNCHANGED',
+  S.hebMonthToMonthKey('יוני', '2026-07'), '2026-06');
+t.eq('same-year, same month (Jan in Jan) — boundary, NOT flipped',
+  S.hebMonthToMonthKey('ינואר', '2026-01'), '2026-01');
+t.eq('same-year, current month (July in July)',
+  S.hebMonthToMonthKey('יולי', '2026-07'), '2026-07');
+t.eq('same-year, several months back (Feb in December)',
+  S.hebMonthToMonthKey('פברואר', '2026-12'), '2026-02');
+t.eq('December imported in December (same month) — not flipped',
+  S.hebMonthToMonthKey('דצמבר', '2026-12'), '2026-12');
+t.eq('legacy ISO key (not a Hebrew month) → null (caller skips)',
+  S.hebMonthToMonthKey('2026-04', '2026-07'), null);
+t.eq('empty string → null',
+  S.hebMonthToMonthKey('', '2026-07'), null);
+t.eq('malformed ref monthKey → null (no silent wrong date)',
+  S.hebMonthToMonthKey('יוני', 'garbage'), null);
+
 process.exit(t.done() ? 1 : 0);

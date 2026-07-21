@@ -697,6 +697,30 @@ function getEffectiveMonth(config) {
 // Returns YYYY-MM key for paymentHistory (independent of display month name)
 const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
+// Convert a Hebrew month name → 'YYYY-MM', inferring the year relative to a
+// reference monthKey (usually the current/import month). sentLog keys carry no
+// year, so we take it from `refMonthKey` — but correct for the year boundary:
+// if the key's month is LATER in the calendar than the reference month, it
+// belongs to the PREVIOUS year (e.g. importing a דצמבר file while the reference
+// month is ינואר → the file is last December, not next December). This replaces
+// the old "approach A" (blind year-from-mk) which mis-yeared Dec-imported-in-Jan.
+// Returns null for a non-Hebrew-month key (e.g. legacy ISO key _2026-04) so the
+// caller skips it, identical to the old indexOf<0 behaviour.
+// NOTE: assumes the file is < 1 year old (true for every real import); a file
+// older than a year would still mis-year. That edge needs an explicit year
+// picker in the UI — out of scope here.
+function hebMonthToMonthKey(hebMonth, refMonthKey) {
+  const monthIdx = HEBREW_MONTHS.indexOf(hebMonth);
+  if (monthIdx < 0) return null;
+  const monthNum = monthIdx + 1; // 1..12
+  const parts = String(refMonthKey).split('-');
+  let year = parseInt(parts[0], 10);
+  const refMon = parseInt(parts[1], 10);
+  if (!Number.isFinite(year) || !Number.isFinite(refMon)) return null;
+  if (monthNum > refMon) year -= 1; // key month is later than ref → previous year
+  return year + '-' + String(monthNum).padStart(2, '0');
+}
+
 // ════════════════════════════════════════════════════════════════
 // PARTIAL PAYMENT SUPPORT (v2.13.8) — Stage 1: derivation only
 // ════════════════════════════════════════════════════════════════
@@ -1316,11 +1340,9 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
   const lastSep = String(key).lastIndexOf('_');
   const tenantId = lastSep >= 0 ? String(key).slice(0, lastSep) : null;
   const hebMonth = lastSep >= 0 ? String(key).slice(lastSep + 1) : null;
-  const monthIdx = hebMonth ? HEBREW_MONTHS.indexOf(hebMonth) : -1;
   const tenant = tenantId ? (d.tenants || []).find(t => String(t.id) === tenantId) : null;
-  const monthKey = monthIdx >= 0
-    ? (String(getMonthKey(d.config || {})).split('-')[0] + '-' + String(monthIdx + 1).padStart(2, '0'))
-    : null;
+  // Year-boundary safe (v2.13.23): infer the year relative to the current month.
+  const monthKey = hebMonth ? hebMonthToMonthKey(hebMonth, getMonthKey(d.config || {})) : null;
 
   if (value === null || value === undefined) {
     delete d.sentLog[key];
@@ -1458,9 +1480,9 @@ app.post('/api/data', authMiddleware, (req, res) => {
     // posted sentLog would be re-recorded as paid:true for the CURRENT month —
     // this is exactly what wrote the bogus June record for tenant "תמי" (see SKILL
     // "sentLog/paymentHistory divergence"). The sentLog key is `tenantId_<hebMonth>`.
-    // Year is taken from `mk` (approach A) — ⚠️ NOT year-boundary safe (importing a
-    // December file in January mis-years it). Documented in SKILL for a future fix.
-    const mkYear = String(mk).split('-')[0];
+    // Year is inferred relative to `mk` via hebMonthToMonthKey — YEAR-BOUNDARY
+    // SAFE (v2.13.23): a December file imported in January is correctly dated to
+    // the previous year, not the next. (Superseded the old blind "year-from-mk".)
     Object.entries(req.body.sentLog).forEach(([key, val]) => {
       if (!val) return;
       if (key.includes('__acc__')) return; // extra accounts handled by the dedicated import path
@@ -1469,9 +1491,8 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (lastSep < 0) return;
       const tenantId = key.slice(0, lastSep);
       const hebMonth = key.slice(lastSep + 1);
-      const monthIdx = HEBREW_MONTHS.indexOf(hebMonth);
-      if (monthIdx < 0) return; // unexpected key (e.g. legacy ISO key like _2026-04) — leave untouched
-      const keyMonthKey = mkYear + '-' + String(monthIdx + 1).padStart(2, '0');
+      const keyMonthKey = hebMonthToMonthKey(hebMonth, mk);
+      if (!keyMonthKey) return; // unexpected key (e.g. legacy ISO key like _2026-04) — leave untouched
       const tenant = tenants.find(t => String(t.id) === tenantId);
       if (!tenant) return;
       // Column A: freeze the tariff in effect FOR keyMonthKey (the key's own
@@ -5714,7 +5735,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.22 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.23 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
