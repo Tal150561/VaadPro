@@ -113,6 +113,41 @@ function loadCloseMonth(building, nowDate) {
   return { run: mod.closeMonthUnpaid, saved, building };
 }
 
+// ── Load the /api/sentlog-key DELETE-branch cleanup (v2.13.14) ─────
+// The "unmark paid" path (markUnpaid / resetSent / delete-tenant) posts value:null
+// to /api/sentlog-key. v2.13.14 made that branch ALSO strip the matching
+// manual/bank paymentHistory record, so closeMonthUnpaid can't resurrect a
+// cancelled payment (the "orphan record" bug). That logic lives INLINE in the
+// route handler, not in a named function, so we cannot extractFunctions() it.
+// Instead we lift the exact filter predicate out of the route source by a stable
+// anchor and expose it as a testable function. If the cleanup is ever removed,
+// the anchor vanishes and this throws — a loud regression signal.
+function loadSentlogKeyDelete() {
+  const src = readSource('server.js');
+  // Anchor on the route so we only match the real handler, then find the
+  // paymentHistory-cleanup filter inside its delete branch.
+  const routeIdx = src.indexOf("app.post('/api/sentlog-key'");
+  if (routeIdx < 0) throw new Error('test-lib: /api/sentlog-key route not found');
+  const region = src.slice(routeIdx, routeIdx + 3000);
+  // The delete branch filters out paid records of type manual|bank for the month.
+  const m = region.match(/d\.paymentHistory\[tenantId\]\s*=\s*d\.paymentHistory\[tenantId\]\.filter\(\s*([\s\S]*?)\);/);
+  if (!m) {
+    throw new Error(
+      'test-lib: unmark-cleanup filter NOT FOUND in /api/sentlog-key delete branch.\n' +
+      '  → the paymentHistory cleanup (v2.13.14) was removed. The "orphan record"\n' +
+      '    bug is back: closeMonthUnpaid will resurrect a cancelled payment.'
+    );
+  }
+  // The extracted arrow is `r => <expr>` where <expr> closes over `monthKey`.
+  // Re-bind both as explicit params so the REAL predicate body drives the test.
+  const body = m[1].trim().replace(/^r\s*=>\s*/, '');
+  const predicate = new Function('r', 'monthKey', 'return (' + body + ');');
+  // Apply the REAL filter for a given tenant's records + resolved monthKey.
+  return function cleanupOnUnmark(records, monthKey) {
+    return records.filter(r => predicate(r, monthKey));
+  };
+}
+
 // Reproduces the GET /api/data enrichment. Kept here (not extracted) because it
 // lives inline in a route handler. If you change the route, change this too —
 // the E2E test asserts the shape the frontend depends on.
@@ -202,6 +237,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadSentlogKeyDelete, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };

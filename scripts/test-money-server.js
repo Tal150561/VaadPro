@@ -545,4 +545,92 @@ t.section('Stage 4 — double-count guard (banked shortfall not re-added live)')
     S.calcTotalDebt(d2, 'p2', '2026-07'), 80);
 }
 
+// ════════════════════════════════════════════════════════════════
+// markUnpaid orphan cleanup (v2.13.14) — a cancelled payment must NOT
+// be resurrected by closeMonthUnpaid on the 1st of the month.
+// ════════════════════════════════════════════════════════════════
+// The bug: markUnpaid / resetSent / delete-tenant used to delete ONLY the
+// sentLog key, leaving the paid paymentHistory record behind. closeMonthUnpaid
+// reads that record's paidAmount and re-derives credit/debt from the dead
+// payment — the "Tami" shape (paid:true with no confirming sentLog).
+// The fix: the /api/sentlog-key delete branch also strips the matching
+// manual/bank record. These tests run the REAL cleanup predicate (extracted
+// from the route) AND the REAL closeMonthUnpaid, so removing either fails here.
+const { loadSentlogKeyDelete } = require('./test-lib');
+
+t.section('markUnpaid cleanup — the real delete-branch predicate (v2.13.14)');
+{
+  const cleanup = loadSentlogKeyDelete(); // throws loudly if the fix was removed
+  // June orphan (manual) removed; unrelated May bank record survives.
+  const recs = [
+    { month: '2026-06', paid: true, type: 'manual', amount: 230, paidAmount: 230, date: '2026-07-18' },
+    { month: '2026-05', paid: true, type: 'bank',   amount: 230, paidAmount: 230, date: '2026-05-10' }
+  ];
+  const after = cleanup(recs, '2026-06');
+  t.eq('June manual record removed on unmark', after.length, 1);
+  t.eq('unrelated May record survives', after[0].month, '2026-05');
+
+  // A wa_sent-only record for the month must NOT be touched (no payment to undo).
+  const waOnly = [{ month: '2026-06', paid: false, type: 'wa_sent', date: '2026-06-05' }];
+  t.eq('wa_sent record is left intact on unmark',
+    cleanup(waOnly, '2026-06').length, 1);
+
+  // A bank record for the unmarked month is removed too (same as manual).
+  const bankRec = [{ month: '2026-06', paid: true, type: 'bank', amount: 230, paidAmount: 230 }];
+  t.eq('bank record for the month removed on unmark',
+    cleanup(bankRec, '2026-06').length, 0);
+}
+
+t.section('markUnpaid → closeMonthUnpaid — cancelled payment is NOT resurrected');
+{
+  const cleanup = loadSentlogKeyDelete();
+  const NOW = new Date('2026-07-01T08:00:00.000Z'); // prevKey = 2026-06 (June)
+  const cfg = { amount: 230 };
+
+  // ── Scenario: tenant was marked paid for June (manual 230), then the manager
+  // clicks "✕ בטל". The sentLog key is deleted AND the paymentHistory record is
+  // stripped by the real cleanup. On the 1st, closeMonthUnpaid runs.
+  {
+    const tid = 'u1';
+    // State BEFORE unmark: paid record + confirming sentLog.
+    let hist = [{ month: '2026-06', paid: true, type: 'manual', amount: 230, paidAmount: 230, date: '2026-06-20' }];
+    // ── Unmark: delete sentLog key (not modelled here) + run the REAL cleanup.
+    hist = cleanup(hist, '2026-06');
+    t.eq('after unmark: no June record left', hist.length, 0);
+
+    // ── 1st of month: run the REAL closeMonthUnpaid with the cleaned state.
+    const building = {
+      config: cfg,
+      tenants: [{ id: tid, name: 'דן', customAmount: 230, openingDebt: 0 }],
+      paymentHistory: { [tid]: hist },
+      sentLog: {} // key was deleted on unmark
+    };
+    const { run } = loadCloseMonth(building, NOW);
+    run();
+    const tenant = building.tenants[0];
+    // Correct outcome: the month is treated as genuinely UNPAID (payment was
+    // cancelled) → full 230 accrues. NOT a resurrected credit, NOT 0.
+    t.eq('cancelled payment → June accrues as unpaid (230), no resurrection',
+      tenant.openingDebt, 230);
+  }
+
+  // ── Contrast (proves the test bites): if the orphan record SURVIVES (old buggy
+  // behaviour — cleanup skipped), closeMonthUnpaid reads it as paid and does NOT
+  // accrue the 230. This is the resurrection the fix prevents.
+  {
+    const tid = 'u2';
+    const building = {
+      config: cfg,
+      tenants: [{ id: tid, name: 'דן', customAmount: 230, openingDebt: 0 }],
+      // Orphan left behind (simulating the pre-v2.13.14 bug): paid:true, no sentLog.
+      paymentHistory: { [tid]: [{ month: '2026-06', paid: true, type: 'manual', amount: 230, paidAmount: 230 }] },
+      sentLog: {}
+    };
+    const { run } = loadCloseMonth(building, NOW);
+    run();
+    t.eq('WITHOUT cleanup the orphan suppresses accrual (openingDebt stays 0) — the bug',
+      building.tenants[0].openingDebt, 0);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);
