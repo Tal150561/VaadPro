@@ -894,6 +894,15 @@
     <div class="field"><label>כתובת</label><input type="text" id="editAddress" /></div>
     <div class="field"><label>סיסמה חדשה (השאר ריק לשמור קיימת)</label>
       <input type="password" id="editPassword" placeholder="••••••" /></div>
+    <div class="field" style="margin-top:-4px">
+      <button class="btn btn-sm btn-ghost" id="btnSendResetLink" style="width:100%">
+        📧 שלח ללקוח קישור לאיפוס סיסמה
+      </button>
+      <div style="font-size:11px;opacity:.6;margin-top:6px;line-height:1.5">
+        הסיסמאות מאוחסנות מוצפנות (bcrypt) ולא ניתנות לצפייה.
+        מומלץ לשלוח קישור — הלקוח בוחר סיסמה בעצמו והיא נשארת ידועה רק לו.
+      </div>
+    </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('editCustomerModal')">ביטול</button>
       <button class="btn btn-blue" onclick="saveCustomer()">שמור שינויים</button>
@@ -1899,8 +1908,48 @@ function editCustomer(email) {
   document.getElementById('editBuildingName').value = u.buildingName || '';
   document.getElementById('editAddress').value = u.address || '';
   document.getElementById('editPassword').value = '';
+  const btn = document.getElementById('btnSendResetLink');
+  if (btn) {
+    btn.disabled = false;
+    btn.textContent = '📧 שלח ללקוח קישור לאיפוס סיסמה';
+  }
   openModal('editCustomerModal');
 }
+
+// שולח ללקוח קישור איפוס (token לשעה). לא משנה את הסיסמה בעצמו.
+async function sendCustomerResetLink() {
+  const email = document.getElementById('editCustomerEmail').value;
+  if (!email) return;
+  if (!confirm('לשלוח קישור לאיפוס סיסמה אל ' + email + '?')) return;
+
+  const btn = document.getElementById('btnSendResetLink');
+  btn.disabled = true;
+  btn.textContent = 'שולח…';
+  try {
+    const res = await fetch('/api/admin/send-reset-link', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ email })
+    });
+    const data = await res.json();
+    if (data.ok) {
+      toast('קישור איפוס נשלח ללקוח ✓', 'ok');
+      btn.textContent = '✓ הקישור נשלח';
+    } else {
+      toast(data.error || 'שגיאה בשליחה', 'err');
+      btn.disabled = false;
+      btn.textContent = '📧 שלח ללקוח קישור לאיפוס סיסמה';
+    }
+  } catch (e) {
+    toast('שגיאת רשת', 'err');
+    btn.disabled = false;
+    btn.textContent = '📧 שלח ללקוח קישור לאיפוס סיסמה';
+  }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('btnSendResetLink');
+  if (btn) btn.addEventListener('click', sendCustomerResetLink);
+});
 
 async function saveCustomer() {
   const oldEmail = document.getElementById('editCustomerEmail').value;

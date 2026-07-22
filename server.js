@@ -4022,6 +4022,45 @@ app.post('/api/auth/reset', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── Admin: שליחת קישור איפוס סיסמה ללקוח ─────────────────────────
+// משתמש באותו מנגנון token של /api/auth/forgot — לא מייצר לוגיקת reset חדשה.
+// בניגוד ל-/api/auth/forgot, כאן כן מחזירים שגיאה אם הלקוח לא נמצא
+// (אין חשש enumeration — הנתיב מוגן ב-superAdminMiddleware).
+app.post('/api/admin/send-reset-link', superAdminMiddleware, async (req, res) => {
+  const { email } = req.body;
+  if (!email) return res.json({ ok: false, error: 'חסר אימייל' });
+  const users = loadUsers();
+  const user  = users.find(u => u.email === email.toLowerCase());
+  if (!user) return res.json({ ok: false, error: 'לקוח לא נמצא' });
+
+  const token   = uuidv4();
+  const expires = Date.now() + 60 * 60 * 1000; // 1 hour
+  resetTokens[token] = { email: user.email, expires };
+
+  const appUrl   = process.env.APP_URL || 'https://vaadpro.org';
+  const resetUrl = `${appUrl}/reset-password.html?token=${token}`;
+
+  try {
+    await sendEmailResend(user.email, 'איפוס סיסמה — VaadPro', `שלום,
+
+צוות VaadPro יזם עבורך איפוס סיסמה.
+
+לחץ על הלינק הבא לבחירת סיסמה חדשה:
+${resetUrl}
+
+הלינק תקף לשעה אחת.
+
+אם לא ביקשת זאת — פנה אלינו.
+
+צוות VaadPro`);
+    console.log(`[Reset] admin-initiated link sent to ${user.email}`);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('[Reset] admin link email failed:', e.message);
+    res.json({ ok: false, error: 'שליחת המייל נכשלה' });
+  }
+});
+
 // ── Admin: איפוס סיסמה ידני ──────────────────────────────────────
 app.post('/api/admin/reset-password', superAdminMiddleware, async (req, res) => {
   const { email, newPassword } = req.body;
@@ -6203,7 +6242,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.24 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.25 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
