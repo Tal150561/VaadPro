@@ -1,3 +1,40 @@
+// ════════════════════════════════════════════════════════════════════
+//  VaadPro — server.js
+//  Israeli HOA (ועד בית) management SaaS. Node/Express, JSON files on a
+//  Railway volume (/app/data), no database.
+// ────────────────────────────────────────────────────────────────────
+//  NAVIGATION MAP (search for "SECTION n —")
+//    1  Plans & feature gating          13  Building maintenance
+//    2  Users store                     14  Month close (DEBT ACCRUAL)
+//    3  Tenant data store (Layer 1)     15  Cron jobs
+//    4  Backup layers 2 & 3             16  Password reset / heartbeat
+//    5  JWT auth middleware             17  Legacy installer / Bridge
+//    6  WhatsApp engine (Baileys)       18  Tenant portal
+//    7  Month keys & Hebrew months      19  Tickets
+//    8  MONEY CORE (debt/credit)        20  Meetings
+//    9  Email helpers & auth routes     21  Bank import (BankSync)
+//   10  Tenant API routes               22  Multi-account
+//   11  Message composition & sending   23  AI assist, boot & startup
+//   12  Admin system & CRM
+// ────────────────────────────────────────────────────────────────────
+//  NON-NEGOTIABLE INVARIANTS (full detail in the vaadpro SKILL)
+//   • sentLog is the SOURCE OF TRUTH for payment status.
+//     paymentHistory is DERIVED. Never let the latter override the former.
+//   • Hebrew month names are INTERNAL DATA KEYS inside sentLog
+//     (e.g. `tenantId_מאי`). Only the display layer is translatable.
+//   • openingDebt accrues in closeMonthUnpaid and NOWHERE ELSE.
+//   • recordPayment() is called only from its sanctioned paths
+//     (/api/data sync, /api/sentlog-key, /api/import-bank).
+//   • Disk-writing paths → conservative (log anomalies, don't auto-fix).
+//     Read-only/display paths → aggressive reconciliation is safe.
+//   • Never copy-paste send logic; reuse buildAccountsBlock/buildBalanceLine.
+//   • Railway runs UTC — convert to Asia/Jerusalem before comparing times.
+//
+//  ⚠️ WHEN YOU CHANGE A FUNCTION, UPDATE ITS DOC BLOCK IN THE SAME COMMIT.
+//     A stale comment is worse than no comment — it actively misleads.
+//     If a function is deleted or its contract changes, the JSDoc above it
+//     and any SECTION banner text that describes it must change too.
+// ════════════════════════════════════════════════════════════════════
 /**
  * VaadPro – SaaS Server v1.9.0
  * Multi-tenant ועד הבית management
@@ -37,6 +74,11 @@ const USERS_FILE = path.join(DATA_DIR, '_users.json');
 const WA_SESSIONS_DIR = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, 'wa_sessions') : path.join(__dirname, 'wa_sessions');
 [DATA_DIR, WA_SESSIONS_DIR].forEach(d => { if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true }); });
 
+
+// ====================================================================
+// SECTION 1 — PLANS & FEATURE GATING
+// Subscription tiers, tenant caps and per-feature access checks.
+// ====================================================================
 // ── Plans ────────────────────────────────────────────────────────
 const PLANS = {
   trial:    { maxTenants: 20,  features: 'all' },
@@ -47,15 +89,34 @@ const PLANS = {
   suspended:{ maxTenants: 0,   features: [] }
 };
 
+/**
+ * Resolve a plan name to its PLANS entry.
+ * Unknown / missing plan names fall back to `trial` — never undefined, so
+ * callers can always read `.maxTenants` / `.features` without a guard.
+ * @param {string} planName
+ * @returns {{maxTenants:number, features:'all'|string[]}}
+ */
 function getPlan(planName) {
   return PLANS[planName] || PLANS['trial'];
 }
 
+/**
+ * Feature-gate check for a plan. `features:'all'` short-circuits to true.
+ * @param {string} planName
+ * @param {string} feature - e.g. 'reports', 'email', 'trends'
+ * @returns {boolean}
+ */
 function planHasFeature(planName, feature) {
   const p = getPlan(planName);
   return p.features === 'all' || (Array.isArray(p.features) && p.features.includes(feature));
 }
 
+/**
+ * Max tenants allowed for a user. A per-user `maxTenantsOverride` (set by
+ * Super Admin) wins over the plan's own limit.
+ * @param {{plan:string, maxTenantsOverride?:number}} user
+ * @returns {number}
+ */
 function getPlanMaxTenants(user) {
   if (user.maxTenantsOverride) return user.maxTenantsOverride;
   return getPlan(user.plan).maxTenants;
@@ -67,21 +128,46 @@ app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ extended: true, limit: '25mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
+
+// ====================================================================
+// SECTION 2 — USERS STORE
+// users.json: accounts, plans, tenantId → building mapping.
+// ====================================================================
 // ── Users store ──────────────────────────────────────────────────
 function loadUsers() {
   if (!fs.existsSync(USERS_FILE)) return [];
   try { return JSON.parse(fs.readFileSync(USERS_FILE, 'utf8')); } catch(e) { return []; }
 }
 
+/**
+ * Persist the whole users array to USERS_FILE (full overwrite, not a patch).
+ * Callers must loadUsers() → mutate → saveUsers() to avoid clobbering.
+ * @param {object[]} users
+ */
 function saveUsers(users) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(users, null, 2), 'utf8');
 }
+
+// ====================================================================
+// SECTION 3 — TENANT DATA STORE  (BACKUP LAYER 1)
+// One JSON file per building on the Railway volume. Atomic write +
+// .bak fallback. Every money read/write in the app funnels through here.
+// ====================================================================
 
 // ── Tenant data store ────────────────────────────────────────────
 function tenantFile(tenantId) {
   return path.join(DATA_DIR, tenantId + '.json');
 }
 
+/**
+ * Read one building's data file.
+ * BACKUP LAYER 1 (read side): if the primary JSON is corrupt/unparseable we
+ * fall back to the `.bak` sibling written by saveTenantData before giving up.
+ * Never throws and never returns undefined — an unreadable/absent file yields
+ * an empty shape so every caller can read `.tenants` / `.sentLog` safely.
+ * @param {string} tenantId
+ * @returns {{tenants:object[], sentLog:object, config:object, reports:object[], rptLayouts:object}}
+ */
 function loadTenantData(tenantId) {
   const f = tenantFile(tenantId);
   const empty = () => ({ tenants: [], sentLog: {}, config: {}, reports: [], rptLayouts: {} });
@@ -103,6 +189,22 @@ function loadTenantData(tenantId) {
   }
 }
 
+/**
+ * Shallow-merge `patch` into the building's data file and persist it.
+ *
+ * BACKUP LAYER 1 (write side) — atomic write: .tmp → copy current to .bak →
+ * rename. Guarantees the money file is never left 0-byte / half-written if
+ * Railway is killed mid-write.
+ *
+ * ⚠️ TOP-LEVEL MERGE ONLY. `Object.assign` replaces whole keys — posting a
+ * partial `sentLog` REPLACES the stored sentLog, it does not merge into it.
+ * Read-modify-write the full sub-object before calling.
+ * ⚠️ DISK-WRITING PATH. Per the "conservative on disk" rule, callers must not
+ * add speculative reconciliation here; anomalies get logged, not auto-fixed.
+ * @param {string} tenantId
+ * @param {object} patch - top-level keys to overwrite
+ * @returns {object} the merged object that was written
+ */
 function saveTenantData(tenantId, patch) {
   const current = loadTenantData(tenantId);
   const merged  = Object.assign(current, patch);
@@ -120,6 +222,13 @@ function saveTenantData(tenantId, patch) {
   fs.renameSync(tmp, f);
   return merged;
 }
+
+// ====================================================================
+// SECTION 4 — BACKUP LAYERS 2 & 3
+// Layer 2 = daily point-in-time ZIP of the whole data dir (on-volume).
+// Layer 3 = the newest ZIP emailed off-site — the only copy that
+// survives total loss of the Railway volume.
+// ====================================================================
 
 // ════════════════════════════════════════════════════════════════
 // Backup Layer 2 — rolling daily snapshots of ALL data files
@@ -160,7 +269,14 @@ if (!fs.existsSync(BACKUPS_DIR)) { try { fs.mkdirSync(BACKUPS_DIR, { recursive: 
 //   emailFreq ∈ {'off','daily','weekly','monthly'} (default 'weekly')
 //   lastEmailSent: ISO string of the last successful off-site email (for cadence)
 const _VALID_EMAIL_FREQ = ['off', 'daily', 'weekly', 'monthly'];
+// Coerce+clamp a keepDays value into 1..365; non-numeric → default 14.
 function _clampKeepDays(n) { n = parseInt(n, 10); if (!Number.isFinite(n)) return 14; return Math.max(1, Math.min(365, n)); }
+/**
+ * Read backup settings with precedence: saved _backup_config.json → env
+ * BACKUP_KEEP_DAYS → default. keepDays is clamped to 1..365; an invalid
+ * emailFreq is ignored rather than stored. Never throws.
+ * @returns {{keepDays:number, emailFreq:'off'|'daily'|'weekly'|'monthly', lastEmailSent:string|null}}
+ */
 function loadBackupConfig() {
   let keepDays = null, emailFreq = null, lastEmailSent = null;
   try {
@@ -177,6 +293,12 @@ function loadBackupConfig() {
   if (emailFreq == null) emailFreq = 'weekly';
   return { keepDays, emailFreq, lastEmailSent };
 }
+/**
+ * Merge `patch` into backup settings and persist atomically (.tmp → rename).
+ * Values are validated/clamped on the way in; only known keys are stored.
+ * @param {{keepDays?:number, emailFreq?:string, lastEmailSent?:string|null}} patch
+ * @returns {object} the settings actually written
+ */
 function saveBackupConfig(patch) {
   const cur = loadBackupConfig();
   const next = {
@@ -193,6 +315,7 @@ function saveBackupConfig(patch) {
   fs.renameSync(tmp, BACKUP_CONFIG_FILE);
   return next;
 }
+// Convenience reader for just the retention window. @returns {number}
 function getBackupKeepDays() { return loadBackupConfig().keepDays; }
 
 // CRC-32 table (built once)
@@ -201,6 +324,7 @@ const _crc32Table = (() => {
   for (let n = 0; n < 256; n++) { c = n; for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1); t[n] = c >>> 0; }
   return t;
 })();
+// CRC-32 of a buffer — required by the ZIP local/central headers.
 function _crc32(buf) {
   let c = 0xFFFFFFFF;
   for (let i = 0; i < buf.length; i++) c = _crc32Table[(c ^ buf[i]) & 0xFF] ^ (c >>> 8);
@@ -310,6 +434,16 @@ function pruneOldBackups() {
 // but a DEDICATED sender (sendEmailResend has no attachment support).
 const RESEND_MAX_ATTACH_MB = 25; // Resend hard limit ~25MB
 
+/**
+ * BACKUP LAYER 3 — email the snapshot ZIP off-site to ADMIN_EMAIL.
+ * The only copy that survives total loss of the Railway volume.
+ * Uses a DEDICATED Resend call rather than sendEmailResend(), which has no
+ * attachment support. Best-effort: resolves false on failure, never throws,
+ * so a mail outage can never break the backup cron.
+ * @param {string} zipPath - path of the snapshot to attach
+ * @param {string} reason  - shown in the subject ('daily' | 'manual' | ...)
+ * @returns {Promise<boolean>} true if the email was accepted
+ */
 async function sendBackupEmail(zipPath, reason) {
   const adminEmail = process.env.ADMIN_EMAIL || '';
   if (!adminEmail) { console.log('[Backup] ADMIN_EMAIL not set — skipping off-site email'); return false; }
@@ -387,6 +521,10 @@ async function runOffsiteBackup(force) {
   return ok;
 }
 
+// ====================================================================
+// SECTION 5 — JWT AUTH MIDDLEWARE
+// ====================================================================
+
 // ── JWT Auth middleware ──────────────────────────────────────────
 function authMiddleware(req, res, next) {
   const header = req.headers['authorization'];
@@ -413,10 +551,23 @@ function authMiddleware(req, res, next) {
 const WA_MODE = process.env.WA_MODE || 'server'; // 'server' (Baileys on Railway) | 'cloud' (external Bridge) | 'local' (legacy)
 const BRIDGE_SECRET = process.env.BRIDGE_SECRET || 'vaadpro-bridge-secret';
 
+// ====================================================================
+// SECTION 6 — WHATSAPP ENGINE (Baileys, server mode)
+// Per-building socket, QR burn-protection, restart handling and the
+// single send entry point (sendWaMsg).
+// ====================================================================
+
 // ── WhatsApp state (used in both modes) ─────────────────────────
 const waClients = {}; // tenantId → { client?, status, qrData, phone, restarting, healthTimer }
 const deletedTenants = new Set(); // tenantId-ים שנמחקו — חוסם reconnect/init של session יתום
 
+/**
+ * Get (lazily creating) the in-memory WhatsApp state slot for a building.
+ * State is process-local — a Railway restart wipes it, which is why sessions
+ * are re-initialised from disk on boot. Always returns an object.
+ * @param {string} tenantId
+ * @returns {{client:object|null, status:string, qrData:string|null, phone:string|null, restarting:boolean, healthTimer:*, qrCount:number, qrTimer:*}}
+ */
 function getWa(tenantId) {
   if (!waClients[tenantId]) {
     waClients[tenantId] = { client: null, status: 'disconnected', qrData: null, phone: null, restarting: false, healthTimer: null, qrCount: 0, qrTimer: null };
@@ -436,10 +587,24 @@ const pinoLogger = require('pino')({ level: 'silent' });
 const QR_MAX_REFRESHES = 4;        // עד 4 QR-ים (~1.5 דק') ואז סוגרים
 const QR_IDLE_TIMEOUT_MS = 90000;  // או 90ש' ללא סריקה — מה שמגיע קודם
 
+/**
+ * Cancel the pending QR idle-timeout for a WA slot. Safe on a null/absent
+ * timer, so it can be called unconditionally on any state change.
+ * @param {object} wa - a getWa() slot
+ */
 function stopQrWatch(wa) {
   if (wa && wa.qrTimer) { clearTimeout(wa.qrTimer); wa.qrTimer = null; }
 }
 
+/**
+ * QR BURN-PROTECTION: close a socket that has been showing a QR nobody scanned.
+ * Every regenerated QR counts at WhatsApp as a link attempt; too many in a row
+ * gets the number temporarily blocked ("Can't link new devices right now").
+ * No-ops unless status is still 'qr' (already scanned/closed in the meantime).
+ * Leaves status 'qr_expired' so the UI can prompt for a fresh QR.
+ * @param {string} tenantId
+ * @param {string} reason - logged ('idle timeout' | 'max refreshes')
+ */
 function closeIdleQr(tenantId, reason) {
   const wa = getWa(tenantId);
   stopQrWatch(wa);
@@ -452,6 +617,13 @@ function closeIdleQr(tenantId, reason) {
   wa.qrCount = 0;
 }
 
+/**
+ * Tear down and re-initialise a building's Baileys socket after a drop.
+ * Guarded by `wa.restarting` so concurrent disconnect events collapse into a
+ * single restart. Waits 3s before initWa() to let the old socket settle.
+ * @param {string} tenantId
+ * @param {string} reason - logged
+ */
 async function restartWa(tenantId, reason) {
   const wa = getWa(tenantId);
   if (wa.restarting) return;
@@ -469,6 +641,14 @@ async function restartWa(tenantId, reason) {
   initWa(tenantId);
 }
 
+/**
+ * Start a Baileys socket for one building and wire its event handlers
+ * (QR → store for the UI, open → mark ready, close → decide restart vs stop).
+ * Auth state lives at /app/data/wa_sessions/{tenantId}/ so a scanned session
+ * survives redeploys. Refuses to start for a tenant in `deletedTenants`.
+ * Failures self-schedule a retry rather than throwing to the caller.
+ * @param {string} tenantId
+ */
 async function initWa(tenantId) {
   if (WA_MODE !== 'server') return; // Only run in server mode
   if (deletedTenants.has(tenantId)) {
@@ -578,6 +758,21 @@ async function initWa(tenantId) {
   }
 }
 
+/**
+ * Send one WhatsApp text message on behalf of a building.
+ *
+ * ⚠️ ALWAYS sends through THAT building's own session. The old cross-tenant
+ * fallback was removed deliberately: it sent messages from a stranger's number
+ * and broke lastConnectedAt tracking. Do not reintroduce it.
+ *
+ * Normalises the phone to E.164-digits (leading 0 → 972). Branches on WA_MODE:
+ * 'server' = Baileys here on Railway (the live path); 'cloud' = queue for an
+ * external Bridge to poll; 'local' = legacy whatsapp-web.js.
+ * @param {string} tenantId - building whose session sends; falsy = any ready session
+ * @param {string} phone    - Israeli or international format
+ * @param {string} message  - already-rendered text (placeholders resolved by caller)
+ * @throws {Error} Hebrew user-facing message when no session is connected
+ */
 async function sendWaMsg(tenantId, phone, message) {
   // חובה לשלוח דרך ה-session של הלקוח עצמו — לעולם לא דרך מספר של לקוח אחר.
   // (fallback חוצה-לקוחות נמחק: הוא גרם להודעות להישלח ממספר זר ומנע שמירת lastConnectedAt)
@@ -683,6 +878,12 @@ app.post('/api/bridge/ack', (req, res) => {
   const [msg] = queue.splice(idx, 1);
   if (ok) msg.resolve();
   else msg.reject(new Error(error || 'שגיאה בשליחה'));
+
+// ====================================================================
+// SECTION 7 — MONTH KEYS & HEBREW MONTH MAPPING
+// Hebrew month names are INTERNAL DATA KEYS in sentLog — the display
+// layer alone is translatable. Never rename them.
+// ====================================================================
   res.json({ ok: true });
 });
 
@@ -877,6 +1078,12 @@ function seedTariffsIfMissing(tenantData) {
     // customAmount == default (or null) -> no personalTariffs; tenant rides default.
   });
   return changed;
+
+// ====================================================================
+// SECTION 8 — MONEY CORE: balances, debt, credit
+// ⚠️ The highest-risk code in the project. Derived from sentLog only.
+// Read-only: nothing here writes to disk or mutates openingDebt.
+// ====================================================================
 }
 
 // Per-month balance derived ONLY from sentLog + the frozen expected amount.
@@ -1012,6 +1219,15 @@ function getCreditBalance(tenantData, tenantId) {
   return Math.max(0, Math.round(net * 100) / 100);
 }
 
+/**
+ * Current billing month as a 'YYYY-MM' key for paymentHistory.
+ * Honours `config.manualMonth` (a Hebrew month name) by mapping it back to a
+ * number against the CURRENT year, otherwise uses today's date.
+ * ⚠️ Year is always the current year — see the known December↔January boundary
+ * edge case; hebMonthToMonthKey() handles that correctly for import paths.
+ * @param {{manualMonth?:string}} config
+ * @returns {string} 'YYYY-MM'
+ */
 function getMonthKey(config) {
   // If manual month is set, map Hebrew name back to YYYY-MM
   if (config && config.manualMonth) {
@@ -1052,6 +1268,11 @@ function recordPayment(tenantData, tenantId, monthKey, type, amount, tenantName,
   }
 }
 
+// ====================================================================
+// SECTION 9 — EMAIL HELPERS & AUTH ROUTES
+// Resend transport, welcome/notification mail, register / login / me.
+// ====================================================================
+
 // ════════════════════════════════════════════════════════════════
 // AUTH ROUTES
 // ════════════════════════════════════════════════════════════════
@@ -1064,6 +1285,15 @@ const SMTP_PASS = process.env.SMTP_PASS || '';
 const SMTP_FROM = process.env.SMTP_FROM || 'VaadPro <noreply@vaadpro.co.il>';
 const RESEND_API_KEY = process.env.RESEND_API_KEY || '';
 
+/**
+ * Send a plain-text/HTML email via Resend. No attachment support — use
+ * sendBackupEmail() for those. Best-effort: logs and resolves falsy on
+ * failure so a mail outage never breaks the calling flow.
+ * @param {string} to
+ * @param {string} subject
+ * @param {string} body
+ * @returns {Promise<boolean>}
+ */
 async function sendEmailResend(to, subject, body) {
   const fromAddr = SMTP_FROM || 'VaadPro <onboarding@resend.dev>';
   const adminEmail = process.env.ADMIN_EMAIL || '';
@@ -1084,6 +1314,13 @@ async function sendEmailResend(to, subject, body) {
   return data;
 }
 
+/**
+ * Welcome email sent once on successful registration.
+ * Fire-and-forget — a failure must never fail the signup request itself.
+ * @param {string} email
+ * @param {string} buildingName
+ * @param {string} tenantId
+ */
 async function sendWelcomeEmail(email, buildingName, tenantId) {
   if (!RESEND_API_KEY && (!SMTP_HOST || !SMTP_USER)) {
     console.log('[Email] Email not configured — skipping welcome email');
@@ -1247,6 +1484,11 @@ app.get('/api/plan', authMiddleware, (req, res) => {
   });
 });
 
+// ====================================================================
+// SECTION 10 — TENANT API ROUTES (auth-protected)
+// Data CRUD, sentLog edits, backup trigger, WA init/reconnect.
+// ====================================================================
+
 // ════════════════════════════════════════════════════════════════
 // TENANT API ROUTES (כל route מוגן ב-auth)
 // ════════════════════════════════════════════════════════════════
@@ -1389,6 +1631,25 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// ⚠️⚠️ THE BIG WRITE PATH — the most dangerous route in the file. Read this.
+// Full-object save of a building's data from the frontend. Because
+// saveTenantData does a TOP-LEVEL merge, whatever the client posts REPLACES
+// that key wholesale.
+// Responsibilities, in order:
+//   1. Plan limit check on `tenants`.
+//   2. Column A upkeep: a changed customAmount CLOSES the tenant's open
+//      personalTariffs interval and OPENS a new one, so past months keep
+//      resolving to their historical rate (the phantom-debt fix). Interval
+//      history the client omitted is carried forward.
+//   3. sentLog → paymentHistory sync: each new payment key freezes the
+//      resolved tariff into paymentHistory.amount and calls recordPayment().
+//      The month is derived from the HEBREW MONTH NAME encoded in the key via
+//      hebMonthToMonthKey (v2.13.6 fix) — NOT blindly from the current mk.
+// ⚠️ sentLog is the source of truth; paymentHistory is derived. Never invert.
+// ⚠️ recordPayment() is called here as a SANCTIONED path. Do not add new call
+//    sites elsewhere.
+// ⚠️ When repairing corrupt data, bypass this route (direct file edit / a
+//    dedicated fix endpoint) so the sync logic doesn't re-fire on bad input.
 app.post('/api/data', authMiddleware, (req, res) => {
   // בדוק מגבלת דיירים אם יש עדכון של רשימת דיירים
   if (req.body.tenants) {
@@ -1576,6 +1837,13 @@ app.post('/api/reconnect', authMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// ====================================================================
+// SECTION 11 — MESSAGE COMPOSITION & SENDING
+// Labels/terminology (getLabels/t), the {חשבונות} and {יתרה} blocks,
+// the AutoSend skip predicate, and the send routes.
+// ⚠️ Never copy-paste send logic — reuse these helpers.
+// ====================================================================
+
 // ─────────────────────────────────────────────────────────────────────────────
 // buildAccountsBlock(d, tenant, month) — SINGLE source of truth for the {חשבונות}
 // block. Replaces the 3 duplicated copies (send / send-all / AutoSend).
@@ -1660,6 +1928,19 @@ function resolvePayerPhone(tenant, acc) {
   return String(tenant.phone || '').trim();
 }
 
+/**
+ * SINGLE SOURCE OF TRUTH for the {חשבונות} placeholder. Replaced three
+ * duplicated copies (send / send-all / AutoSend) — do not inline a fourth.
+ *
+ * `block` is byte-identical to the pre-refactor text when the tenant has no
+ * openingDebt and no per-account payer, so existing buildings see no change.
+ * `recipients` surfaces per-payer routing data for a later stage; reminders
+ * still go to the tenant's main phone today.
+ * @param {object} d      - the building's tenantData
+ * @param {object} tenant - the tenant row
+ * @param {string} month  - Hebrew month name (sentLog display month)
+ * @returns {{block:string, recipients:Map<string,string[]>}} block is '' when no accounts are open
+ */
 function buildAccountsBlock(d, tenant, month) {
   const sentLog = d.sentLog || {};
   const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
@@ -1990,6 +2271,11 @@ app.get('/api/bridge/download', authMiddleware, (req, res) => {
 });
 
 
+// ====================================================================
+// SECTION 12 — ADMIN SYSTEM & CRM
+// Admin auth/roles, customer management, leads, templates, message log.
+// ====================================================================
+
 // ════════════════════════════════════════════════════════════════
 // ════════════════════════════════════════════════════════════════
 // ADMIN SYSTEM v1.4
@@ -1999,38 +2285,60 @@ const TEMPLATES_FILE = path.join(DATA_DIR, '_templates.json');
 const LEADS_FILE = path.join(DATA_DIR, '_leads.json');
 const INSTALL_STATUS_FILE = path.join(DATA_DIR, '_install_status.json');
 
+/**
+ * Read the installer status map. Missing/corrupt file yields {}. @returns {object} */
 function loadInstallStatus() {
   if (!fs.existsSync(INSTALL_STATUS_FILE)) return {};
   try { return JSON.parse(fs.readFileSync(INSTALL_STATUS_FILE, 'utf8')); } catch(e) { return {}; }
 }
+// Persist the installer status map (full replace).
 function saveInstallStatus(s) { fs.writeFileSync(INSTALL_STATUS_FILE, JSON.stringify(s, null, 2)); }
 
+/**
+ * Read the CRM leads array. Missing/corrupt file yields []. @returns {object[]} */
 function loadLeads() {
   if (!fs.existsSync(LEADS_FILE)) return [];
   try { return JSON.parse(fs.readFileSync(LEADS_FILE, 'utf8')); } catch(e) { return []; }
 }
+// Persist the CRM leads array (full replace).
 function saveLeads(leads) { fs.writeFileSync(LEADS_FILE, JSON.stringify(leads, null, 2)); }
 const CRM_FILE = path.join(DATA_DIR, '_crm.json');
 
+/**
+ * Read the whole CRM store (id → card). Missing/corrupt file yields {}.
+ * @returns {Object<string,{notes:object[],tasks:object[],status:string,calls:object[]}>} */
 function loadCRM() {
   if (!fs.existsSync(CRM_FILE)) return {};
   try { return JSON.parse(fs.readFileSync(CRM_FILE, 'utf8')); } catch(e) { return {}; }
 }
+// Persist the whole CRM store (full replace).
 function saveCRM(data) { fs.writeFileSync(CRM_FILE, JSON.stringify(data, null, 2)); }
+// Read one CRM card, returning an empty card shape when absent (never undefined).
 function getCRMCard(id) { const c = loadCRM(); return c[id] || { notes: [], tasks: [], status: '', calls: [] }; }
+// Write one CRM card back into the store (read-modify-write of the whole file).
 function saveCRMCard(id, card) { const c = loadCRM(); c[id] = card; saveCRM(c); }
 const MSG_LOG_FILE = path.join(DATA_DIR, '_msglog.json');
 
+/**
+ * Read saved admin message templates. Missing/corrupt file yields []. @returns {object[]} */
 function loadTemplates() {
   if (!fs.existsSync(TEMPLATES_FILE)) return [];
   try { return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8')); } catch(e) { return []; }
 }
+// Persist admin message templates (full replace).
 function saveTemplates(t) { fs.writeFileSync(TEMPLATES_FILE, JSON.stringify(t, null, 2)); }
 
+/**
+ * Read the admin outbound-message log. Missing/corrupt file yields []. @returns {object[]} */
 function loadMsgLog() {
   if (!fs.existsSync(MSG_LOG_FILE)) return [];
   try { return JSON.parse(fs.readFileSync(MSG_LOG_FILE, 'utf8')); } catch(e) { return []; }
 }
+/**
+ * Append one entry to the admin message log (capped — oldest trimmed).
+ * Best-effort audit trail; a write failure must not fail the send it records.
+ * @param {object} entry
+ */
 function addMsgLog(entry) {
   const log = loadMsgLog();
   log.unshift({ ...entry, ts: new Date().toISOString() });
@@ -2041,6 +2349,11 @@ function addMsgLog(entry) {
 }
 const ADMIN_JWT_SECRET = process.env.ADMIN_JWT_SECRET || JWT_SECRET + '-admin';
 
+/**
+ * Read admin users, seeding the bootstrap Super Admin from env on first run
+ * so a fresh deploy is never locked out.
+ * @returns {object[]}
+ */
 function loadAdmins() {
   if (!fs.existsSync(ADMIN_USERS_FILE)) {
     const defaultAdmin = [{
@@ -2066,6 +2379,7 @@ function loadAdmins() {
     return admins;
   } catch(e) { return []; }
 }
+// Persist admin users (full replace).
 function saveAdmins(admins) { fs.writeFileSync(ADMIN_USERS_FILE, JSON.stringify(admins, null, 2)); }
 
 // חסום צופים מפעולות כתיבה
@@ -2078,6 +2392,11 @@ function viewerBlockMiddleware(req, res, next) {
   } catch(e) { next(); }
 }
 
+/**
+ * Express middleware — require a valid admin JWT. Populates `req.admin`.
+ * Allows both 'admin' and 'super' roles; pair with viewerBlockMiddleware to
+ * additionally block read-only viewers from write routes.
+ */
 function adminAuthMiddleware(req, res, next) {
   const token = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'לא מחובר' });
@@ -2125,6 +2444,7 @@ app.get('/api/admin/admins', superAdminMiddleware, (req, res) => {
   res.json({ admins });
 });
 
+// Create an admin user (Super Admin only). Password is bcrypt-hashed here.
 app.post('/api/admin/admins', superAdminMiddleware, async (req, res) => {
   const { email, password, name, role } = req.body;
   if (!email || !password || !name) return res.json({ ok: false, error: 'חסרים שדות חובה' });
@@ -2137,6 +2457,7 @@ app.post('/api/admin/admins', superAdminMiddleware, async (req, res) => {
   res.json({ ok: true });
 });
 
+// Delete an admin user (Super Admin only). Refuses to remove the last Super Admin.
 app.delete('/api/admin/admins/:id', superAdminMiddleware, (req, res) => {
   const admins = loadAdmins();
   const target = admins.find(a => a.id === req.params.id);
@@ -2147,6 +2468,7 @@ app.delete('/api/admin/admins/:id', superAdminMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
+// Reset another admin's password (Super Admin only).
 app.post('/api/admin/admins/:id/password', superAdminMiddleware, async (req, res) => {
   const { password } = req.body;
   if (!password || password.length < 6) return res.json({ ok: false, error: 'סיסמה קצרה מדי' });
@@ -2303,6 +2625,7 @@ app.post('/api/fix-payment-history', authMiddleware, (req, res) => {
   } catch(e) { res.json({ ok: false, error: e.message }); }
 });
 
+// Truncate the admin outbound-message log. Audit data only — touches no building data.
 app.post('/api/admin/msglog/clean', adminAuthMiddleware, (req, res) => {
   const { days } = req.body;
   const d = parseInt(days) || 90;
@@ -2556,6 +2879,7 @@ app.get('/api/admin/leads', adminAuthMiddleware, (req, res) => {
   res.json({ leads: loadLeads() });
 });
 
+// Create or update a CRM lead.
 app.post('/api/admin/leads', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { id, name, phone, email, source, status, notes } = req.body;
   if (!name) return res.json({ ok: false, error: 'שם חובה' });
@@ -2568,12 +2892,14 @@ app.post('/api/admin/leads', adminAuthMiddleware, viewerBlockMiddleware, (req, r
   res.json({ ok: true, lead });
 });
 
+// Delete a CRM lead. Does not touch the lead's CRM card (notes/tasks/calls).
 app.delete('/api/admin/leads/:id', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const leads = loadLeads().filter(l => l.id !== req.params.id);
   saveLeads(leads);
   res.json({ ok: true });
 });
 
+// Bulk-import leads from pasted rows. Existing leads matched by phone are updated, not duplicated.
 app.post('/api/admin/leads/import', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { leads: newLeads } = req.body;
   if (!Array.isArray(newLeads)) return res.json({ ok: false, error: 'פורמט שגוי' });
@@ -2593,6 +2919,7 @@ app.get('/api/admin/templates', adminAuthMiddleware, (req, res) => {
   res.json({ templates: loadTemplates() });
 });
 
+// Create or update an admin message template.
 app.post('/api/admin/templates', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const { name, channel, subject, body } = req.body;
   if (!name || !body) return res.json({ ok: false, error: 'חסרים שדות' });
@@ -2605,6 +2932,7 @@ app.post('/api/admin/templates', adminAuthMiddleware, viewerBlockMiddleware, (re
   res.json({ ok: true, template });
 });
 
+// Delete an admin message template.
 app.delete('/api/admin/templates/:id', adminAuthMiddleware, viewerBlockMiddleware, (req, res) => {
   const templates = loadTemplates().filter(t => t.id !== req.params.id);
   saveTemplates(templates);
@@ -2670,6 +2998,11 @@ async function sendTrialEmail(user, type) {
   }
 }
 
+/**
+ * Scheduled sweep over all users: warn on trials nearing expiry and suspend
+ * those past it. Idempotent per day — safe to re-run manually from the admin
+ * panel. Never throws; per-user failures are logged and skipped.
+ */
 async function runTrialCheck() {
   const users = loadUsers();
   const now   = new Date();
@@ -2753,6 +3086,9 @@ app.get('/api/admin/labels/:email', superAdminMiddleware, (req, res) => {
   });
 });
 
+// Stage 2 — write a customer's orgType / labelOverrides (Super Admin only).
+// Empty overrides fall through to the built-in vaad labels, so an existing
+// customer sees byte-identical text.
 app.post('/api/admin/labels/:email', superAdminMiddleware, (req, res) => {
   const users = loadUsers();
   const user  = users.find(u => u.email === String(req.params.email || '').toLowerCase());
@@ -2850,6 +3186,7 @@ app.get('/api/admin/orphan-sessions', superAdminMiddleware, (req, res) => {
   res.json({ ok: true, count: orphans.length, orphans });
 });
 
+// Delete WA session dirs on the volume with no matching user (freed disk after tenant deletion).
 app.post('/api/admin/orphan-sessions/clean', superAdminMiddleware, (req, res) => {
   const users = loadUsers();
   const validIds = new Set(users.map(u => u.tenantId));
@@ -2998,6 +3335,7 @@ app.post('/api/admin/install-status', adminAuthMiddleware, viewerBlockMiddleware
   res.json({ ok: true });
 });
 
+// Admin dashboard list: customers registered but with no completed install yet.
 app.get('/api/admin/waiting-install', adminAuthMiddleware, (req, res) => {
   const users = loadUsers();
   const now = new Date();
@@ -3071,6 +3409,10 @@ app.get('/api/admin/trials', adminAuthMiddleware, (req, res) => {
   res.json({ trials });
 });
 
+// ====================================================================
+// SECTION 13 — BUILDING MAINTENANCE MODULE
+// ====================================================================
+
 // ═══════════════════════════════════════════════════════════════
 // ── תחזוקת בניין (Maintenance Module) ──────────────────────────
 // ═══════════════════════════════════════════════════════════════
@@ -3088,15 +3430,27 @@ const DEFAULT_MAINTENANCE_TASKS = [
   { name: 'טיפול גינה',              frequencyMonths: 1,  alertDaysBefore: 3,  icon: '🌿' },
 ];
 
+/**
+ * Read a building's maintenance task list. @param {string} tenantId @returns {object[]} */
 function loadMaintenance(tenantId) {
   const d = loadTenantData(tenantId);
   return d.maintenance || [];
 }
 
+/**
+ * Persist a building's maintenance task list (full replace of the array).
+ * @param {string} tenantId @param {object[]} tasks */
 function saveMaintenance(tenantId, tasks) {
   saveTenantData(tenantId, { maintenance: tasks });
 }
 
+/**
+ * Next due date = lastDone + frequencyMonths, as 'YYYY-MM-DD'.
+ * Returns null when the task has never been done (nothing to schedule from).
+ * @param {string|null} lastDone - 'YYYY-MM-DD'
+ * @param {number} frequencyMonths
+ * @returns {string|null}
+ */
 function calcNextDue(lastDone, frequencyMonths) {
   if (!lastDone) return null;
   const d = new Date(lastDone);
@@ -3211,6 +3565,12 @@ app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
   res.json({ ok: true, sentWa, sentEmail, errors });
 });
 
+// ====================================================================
+// SECTION 14 — MONTH CLOSE  (⚠️ DEBT ACCRUAL)
+// closeMonthUnpaid is the ONLY place unpaid balances accrue into
+// openingDebt. Do not replicate this logic anywhere else.
+// ====================================================================
+
 // ── סגירת חודש — רישום דיירים שלא שילמו ───────────────────────
 // רץ ב-1 לחודש, כותב paid:false לכל דייר שאין לו רשומה לחודש הקודם.
 // לא נוגע ברשומות קיימות — רק מוסיף חסרות.
@@ -3317,6 +3677,12 @@ function closeMonthUnpaid() {
 
   if (closed > 0) console.log(`[closeMonthUnpaid] נצברו ${closed} חובות לחודש ${prevKey} ל-openingDebt`);
   else console.log(`[closeMonthUnpaid] כל הדיירים שילמו לחודש ${prevKey}`);
+
+// ====================================================================
+// SECTION 15 — CRON JOBS
+// Inline cron since v2.9 — there is no scheduler.js in this repo.
+// ⚠️ Railway runs UTC; convert to Asia/Jerusalem before comparing times.
+// ====================================================================
 }
 // ── Cron יומי — בדיקת תחזוקה ───────────────────────────────────
 async function runMaintenanceCron() {
@@ -3383,6 +3749,12 @@ async function runMaintenanceCron() {
   await runMeetingReminderCron();
 }
 
+/**
+ * Per-minute cron: send WhatsApp reminders for meetings whose reminder time
+ * has arrived.
+ * ⚠️ Railway runs UTC — all schedule comparisons convert to Asia/Jerusalem
+ * first. Marks each meeting as reminded so a restart can't double-send.
+ */
 async function runMeetingReminderCron() {
   const users = loadUsers();
   const today = new Date(); today.setHours(0,0,0,0);
@@ -3489,6 +3861,15 @@ async function doAutoSend(user) {
   return { sent, month };
 }
 
+/**
+ * Per-minute cron: for each building whose configured AutoSend time has
+ * arrived, send this month's payment reminders.
+ * ⚠️ Railway runs UTC — comparisons convert to Asia/Jerusalem first.
+ * Skip decisions are delegated to autoSendShouldRemind() (partial payers are
+ * still reminded); message text reuses buildAccountsBlock/buildBalanceLine
+ * rather than re-implementing placeholder logic.
+ * ⚠️ Writes sentLog `sent_` markers — a change here affects payment state.
+ */
 async function runAutoSendCron() {
   // Use Israel time (UTC+2 winter / UTC+3 summer) for all schedule comparisons
   const nowUtc = new Date();
@@ -3573,9 +3954,15 @@ setTimeout(() => createBackup('startup'), 30 * 1000);
 console.log(`[Backup] Layer 2 active — daily snapshots, keeping ${getBackupKeepDays()} days`);
 
 
+// ====================================================================
+// SECTION 16 — PASSWORD RESET & BRIDGE HEARTBEAT
+// ====================================================================
+
 // ── שכחתי סיסמה ─────────────────────────────────────────────────
 const resetTokens = {}; // token → { email, expires }
 
+// Password reset — step 1: issue a time-limited token and email it.
+// Always replies ok:true regardless of whether the email exists (no account enumeration).
 app.post('/api/auth/forgot', async (req, res) => {
   const { email } = req.body;
   if (!email) return res.json({ ok: false, error: 'יש להזין אימייל' });
@@ -3611,6 +3998,7 @@ ${resetUrl}
   res.json({ ok: true });
 });
 
+// Password reset — step 2: verify the token, set the new bcrypt hash, consume the token.
 app.post('/api/auth/reset', async (req, res) => {
   const { token, password } = req.body;
   if (!token || !password) return res.json({ ok: false, error: 'פרמטרים חסרים' });
@@ -3662,6 +4050,12 @@ setInterval(() => {
 }, 60 * 1000); // check every minute
 
 
+// ====================================================================
+// SECTION 17 — LEGACY INSTALLER / BRIDGE DISTRIBUTION
+// Bridge-era setup scripts. Kept for backward compatibility;
+// removal pending a UI reference audit.
+// ====================================================================
+
 // ── Installer Token System ───────────────────────────────────────
 const installTokens = {}; // token → { tenantId, expires }
 
@@ -3704,6 +4098,7 @@ app.get('/vaadpro-start.bat', (req, res) => {
   res.send(VAADPRO_START_BAT);
 });
 
+// LEGACY installer route (Bridge era). Removal pending a UI reference audit.
 app.get('/vaadpro-setup.bat', (req, res) => {
   const appUrl = process.env.APP_URL || 'https://vaadpro.org';
   const bat = generateSetupBat(appUrl);
@@ -4135,6 +4530,7 @@ app.get('/api/bridge/bridge-js', authMiddleware, (req, res) => {
   res.send(BRIDGE_JS_CONTENT);
 });
 
+// Serve the Bridge installer payload files. Legacy Bridge distribution path.
 app.get('/api/bridge/download-files', (req, res) => {
   const FILES = {
     'bridge.js':         BRIDGE_JS_CONTENT,
@@ -4192,9 +4588,19 @@ app.get('/api/bridge/download-files', (req, res) => {
   res.send(zipBuf);
 });
 
+// ====================================================================
+// SECTION 18 — TENANT PORTAL
+// Token-based read-only view for residents.
+// Read path → aggressive reconciliation is safe here (no disk writes).
+// ⚠️ Specific /api/portal/* routes must precede the :token catch-all.
+// ====================================================================
+
 // ── Tenant Portal ────────────────────────────────────────────────
 const PORTAL_TOKENS_FILE = path.join(DATA_DIR, '_portal_tokens.json');
 
+/**
+ * Read the shared tenant-portal token map (token → {tenantDataId, tenantId}).
+ * Missing/corrupt file yields {}. @returns {object} */
 function loadPortalTokens() {
   if (!fs.existsSync(PORTAL_TOKENS_FILE)) return {};
   try {
@@ -4221,6 +4627,10 @@ function loadPortalTokens() {
   }
 }
 
+/**
+ * Persist the portal token map atomically (.tmp → rename). Shared across all
+ * buildings — read-modify-write the whole map, never a partial overwrite.
+ * @param {object} tokens */
 function savePortalTokens(tokens) {
   const tmp = PORTAL_TOKENS_FILE + '.tmp';
   const backup = PORTAL_TOKENS_FILE + '.bak';
@@ -4453,6 +4863,7 @@ app.get('/api/admin/fix-month', (req, res) => {
   res.json({ ok: true, fixed, message: `נמחקו ${fixed} רשומות ${targetMonth}` });
 });
 
+// One-off data-repair endpoint kept for historical incidents. Not part of normal flow.
 app.get('/api/admin/fix-wasent', (req, res) => {
   const token = req.query.token || (req.headers.authorization || '').replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'חסר token' });
@@ -4480,6 +4891,7 @@ app.get('/api/admin/fix-wasent', (req, res) => {
   res.json({ ok: true, fixed, message: `תוקנו ${fixed} רשומות wa_sent` });
 });
 
+// Read-only diagnostic dump of what the portal computes for one token. No writes.
 app.get('/api/portal/debug/:token', (req, res) => {
   const adminToken = (req.headers['x-admin-token'] || '').replace('Bearer ', '');
   let isAdmin = false;
@@ -4768,22 +5180,37 @@ app.get('/api/portal/:token', (req, res) => {
 });
 
 
+// ====================================================================
+// SECTION 19 — TICKETS (תיעוד תקלות)
+// ====================================================================
+
 // ── Tickets (תיעוד תקלות) ─────────────────────────────────────────
 
 const TICKET_CATEGORIES = ['אינסטלטור','חשמל','מעלית','גנרטור','שערים/דלתות','ניקיון','נזילה','תאורה','אינטרנט/תקשורת','אחר'];
 const TICKET_STATUSES   = ['פתוח','בטיפול','ממתין לחומרים','נקבע תור','נסגר','לא רלוונטי'];
 
+/**
+ * Path of a building's tickets file. @param {string} tenantDataId @returns {string} */
 function ticketsFile(tenantDataId) {
   return path.join(DATA_DIR, tenantDataId + '_tickets.json');
 }
+/**
+ * Read a building's maintenance tickets. Missing/corrupt yields [].
+ * @param {string} tenantDataId @returns {object[]} */
 function loadTickets(tenantDataId) {
   const f = ticketsFile(tenantDataId);
   if (!fs.existsSync(f)) return [];
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch(e) { return []; }
 }
+/**
+ * Persist a building's tickets (full replace).
+ * @param {string} tenantDataId @param {object[]} tickets */
 function saveTickets(tenantDataId, tickets) {
   fs.writeFileSync(ticketsFile(tenantDataId), JSON.stringify(tickets, null, 2));
 }
+/**
+ * Next free numeric ticket id (max existing + 1, 1 when empty).
+ * @param {object[]} tickets @returns {number} */
 function nextTicketId(tickets) {
   const year = new Date().getFullYear();
   const existing = tickets
@@ -4884,6 +5311,10 @@ app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
 });
 
 
+// ====================================================================
+// SECTION 20 — MEETINGS MODULE
+// ====================================================================
+
 // ════════════════════════════════════════════════════════════════════
 // MEETINGS API — אסיפות דיירים
 // ════════════════════════════════════════════════════════════════════
@@ -4891,14 +5322,23 @@ app.delete('/api/tickets/:id', authMiddleware, (req, res) => {
 function meetingsFile(tenantId) {
   return path.join(DATA_DIR, tenantId + '_meetings.json');
 }
+/**
+ * Read a building's meetings. Missing/corrupt yields [].
+ * @param {string} tenantId @returns {object[]} */
 function loadMeetings(tenantId) {
   const f = meetingsFile(tenantId);
   if (!fs.existsSync(f)) return [];
   try { return JSON.parse(fs.readFileSync(f, 'utf8')); } catch(e) { return []; }
 }
+/**
+ * Persist a building's meetings (full replace).
+ * @param {string} tenantId @param {object[]} meetings */
 function saveMeetings(tenantId, meetings) {
   fs.writeFileSync(meetingsFile(tenantId), JSON.stringify(meetings, null, 2));
 }
+/**
+ * Next free numeric meeting id (max existing + 1, 1 when empty).
+ * @param {object[]} meetings @returns {number} */
 function nextMeetingId(meetings) {
   const nums = meetings.map(m => { const n = parseInt((m.id||'').replace('mtg_','')); return isNaN(n) ? 0 : n; });
   return 'mtg_' + String((nums.length ? Math.max(...nums) : 0) + 1).padStart(4, '0');
@@ -5067,6 +5507,13 @@ app.post('/api/meetings/:id/send-summary', authMiddleware, async (req, res) => {
 
 // ── Start ────────────────────────────────────────────────────────
 
+// ====================================================================
+// SECTION 21 — BANK IMPORT (BankSync Agent target)
+// API-key-authenticated ingest from the otsar-agent scraper, plus the
+// server-side row analysis and payment→debt application.
+// ⚠️ A write path into sentLog — same care as /api/data.
+// ====================================================================
+
 // ════════════════════════════════════════════════════════════════════
 // BANK SYNC API
 // ════════════════════════════════════════════════════════════════════
@@ -5166,6 +5613,15 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     em = MONTHS_HE[parseInt(mm) - 1];
   }
 
+  /**
+   * Whitespace/punctuation-bounded keyword match used by bank-row analysis to
+   * map a transaction description to a tenant. Word-bounded on purpose so a
+   * short name can't match inside a longer word; keywords under 2 chars are
+   * ignored as too ambiguous. Regex metacharacters in keywords are escaped.
+   * @param {string[]} kws - candidate keywords
+   * @param {string} rt    - the raw transaction text
+   * @returns {boolean}
+   */
   function kwMatches(kws, rt) {
     return kws.some(k => {
       if (!k || k.length < 2) return false;
@@ -5379,6 +5835,12 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
   }
 });
 
+
+// ====================================================================
+// SECTION 22 — MULTI-ACCOUNT (collection accounts)
+// Account templates, per-tenant overrides, and the extra-accounts
+// month close. Neve Yam multi-stage data model.
+// ====================================================================
 
 // ════════════════════════════════════════════════════════════════
 // MULTI-ACCOUNT FEATURE (v2.10)
@@ -5659,6 +6121,12 @@ function scheduleDailyCronWithAccounts() {
 // the original only touches tenant.openingDebt and the new one only touches acc.openingDebt.
 scheduleDailyCronWithAccounts();
 
+// ====================================================================
+// SECTION 23 — AI ASSIST, BOOT & STARTUP
+// Claude proxy for text improvement, WA session auto-reconnect on
+// boot, and app.listen().
+// ====================================================================
+
 // ── POST /api/ai-improve ─────────────────────────────────────────
 // Anthropic Claude proxy — ANTHROPIC_API_KEY stays server-side only
 app.post('/api/ai-improve', (req, res, next) => {
@@ -5735,7 +6203,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.23 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.24 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
