@@ -419,7 +419,7 @@ function vpLogout() {
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
     <div class="stat-card"><div class="stat-num" id="sSent">0</div><div class="stat-label">שילמו החודש</div></div>
     <div class="stat-card"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">ממתינים</div></div>
-    <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
+    <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
   </div>
 </div>
 
@@ -6603,13 +6603,12 @@ function showCollectionBreakdown() {
      + '</div>';
 
   document.getElementById('collectionBreakdownBody').innerHTML = h;
-  document.getElementById('collectionBreakdownModal').style.display = 'flex';
+  // Use the project's own helper (sets align/padding/overflow), not a bare
+  // display:flex — v2.13.30: the card is bound via inline onclick in the markup,
+  // which cannot be missed the way a DOMContentLoaded binding can.
+  if (typeof openModal === 'function') openModal('collectionBreakdownModal');
+  else document.getElementById('collectionBreakdownModal').style.display = 'flex';
 }
-
-document.addEventListener('DOMContentLoaded', function() {
-  var card = document.getElementById('sAmountCard');
-  if (card) card.addEventListener('click', showCollectionBreakdown);
-});
 
 // ── Render extra accounts summary cell (used in tenant list) ──
 function renderExtraAccountsCell(tenantId) {

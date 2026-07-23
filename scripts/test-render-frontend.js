@@ -171,4 +171,49 @@ t.eq('standalone _dataLoadedOnce flag is declared',
 t.eq('checkStatus uses the standalone flag',
   /if\(!_dataLoadedOnce\)/.test(app), true);
 
+t.section('app.html — collection breakdown modal ACTUALLY OPENS (v2.13.30)');
+// v2.13.27 shipped the modal with the card bound only via a DOMContentLoaded
+// addEventListener. The user reported "I don't see the changes" — a modal that
+// never opens is indistinguishable from a feature that was never written.
+// These tests EXECUTE showCollectionBreakdown and assert the rendered labels,
+// so a silently-dead modal fails the suite instead of shipping.
+{
+  const fns = extractFunctions(app, ['computeCollectionBreakdown', 'showCollectionBreakdown']);
+
+  t.eq('card is bound with an inline onclick (cannot be missed)',
+    /id="sAmountCard"[^>]*onclick="showCollectionBreakdown\(\)"/.test(app), true);
+
+  const els = {};
+  const el = id => (els[id] = els[id] || { id, innerHTML: '', textContent: '', style: {} });
+  const doc = { getElementById: el };
+  const data = { tenants: [{ id: 11, name: 'דנה', totalDebt: 460, openingDebt: 230,
+      creditBalance: 0, currentBalance: { status: 'unpaid', shortfall: 230 }, effectiveAmount: 230 }],
+    sentLog: {}, config: { amount: 230 } };
+  const accountsStatus = { '11': [{ id: 'a1', label: 'חשמל', amount: 50,
+      paidThisMonth: false, totalDebt: 100, active: true }] };
+  let opened = null;
+  const api = new Function('document', 'data', 'accountsStatus', 'getEffectiveMonth', 'openModal',
+    'var collectionBreakdown=null;' + fns + '\n; return {computeCollectionBreakdown, showCollectionBreakdown};'
+  )(doc, data, accountsStatus, () => 'יולי', id => { opened = id; });
+
+  let threw = null;
+  try { api.showCollectionBreakdown(); } catch (e) { threw = e.message; }
+  t.eq('showCollectionBreakdown does not throw', threw, null);
+  t.eq('it opens the modal via openModal', opened, 'collectionBreakdownModal');
+
+  const html = el('collectionBreakdownBody').innerHTML;
+  t.eq('renders "חיוב החודש שטרם שולם"', html.includes('חיוב החודש שטרם שולם'), true);
+  t.eq('renders "חוב מחודשים קודמים"',   html.includes('חוב מחודשים קודמים'), true);
+  t.eq('renders the not-yet-collected note', html.includes('לא נגבה'), true);
+  t.eq('names the active month',          html.includes('יולי'), true);
+  t.eq('per-account "חיוב החודש:" line',  html.includes('חיוב החודש: '), true);
+  t.eq('per-account "חוב קודם:" line',    html.includes('חוב קודם: '), true);
+  t.eq('shows tenant counts',             /\d+ דיירים/.test(html), true);
+
+  const b = api.computeCollectionBreakdown(230);
+  t.eq('grandTotal = current 230 + prior 230 + extras 150', b.grandTotal, 610);
+  t.eq('mainCurrentCount counted', b.mainCurrentCount, 1);
+  t.eq('mainDebtCount counted',    b.mainDebtCount, 1);
+}
+
 process.exit(t.done() ? 1 : 0);
