@@ -6509,31 +6509,19 @@ function computeCollectionBreakdown(globalAmount) {
     const totalDebt = parseFloat(t.totalDebt) || 0;
     const credit = parseFloat(t.creditBalance) || 0;
 
-    // ⚠️ v2.13.31 — THE CURRENT MONTH IS NOT INSIDE totalDebt.
-    // calcTotalDebt = openingDebt + UNPAID paymentHistory rows + shortfalls.
-    // The active month only enters paymentHistory when closeMonthUnpaid runs on
-    // the 1st of the NEXT month. So for a tenant who simply hasn't paid July yet,
-    // totalDebt contributes nothing for July — his ₪230 is real but unaccrued.
-    //
-    // The old code derived the current month as `totalDebt - openingDebt`, copied
-    // from the payments-tab cell. That is wrong as an aggregate in two ways:
-    //   • it labelled לימור's accrued Apr+May+Jun (₪690) as "this month"
-    //   • it scored every not-yet-accrued unpaid tenant as ₪0
-    // Result: 690 instead of 1610 current, and 7 unpaid tenants counted as 1.
-    //
-    // Correct source for the active month is currentBalance (derived from
-    // sentLog + the frozen tariff), which is exactly what the tenant owes NOW:
-    //   unpaid  -> the full expected charge
-    //   partial -> the shortfall
-    //   paid    -> 0
+    // ⚠️ v2.13.32 — CONSUME, DO NOT COMPUTE.
+    // currentBalance.shortfall = what the ACTIVE month still owes
+    //   (unpaid -> full charge, partial -> shortfall, paid -> 0)
+    // priorDebt = accrued debt BEFORE the active month, computed on the server
+    //   with the same expression the tenant portal uses. It already excludes
+    //   whatever calcTotalDebt folded in for the current month, so adding the
+    //   two can never double-count.
+    // Do NOT reconstruct priorDebt from totalDebt here: totalDebt includes the
+    // current month when that month has a partial payment OR an unpaid history
+    // row, and getting that subtraction wrong is exactly what reported ₪460 for
+    // a tenant who owed ₪230 (v2.13.31).
     const currentMonthDebt = Math.max(0, parseFloat(bal.shortfall) || 0);
-
-    // Prior debt = everything already accrued (openingDebt + closed unpaid
-    // months). totalDebt already includes this month's shortfall for a PARTIAL
-    // payment, so subtract it to avoid double-counting; it never includes an
-    // unpaid current month, so nothing is lost for the unpaid case.
-    const alreadyInTotal = (bal.status === 'partial') ? currentMonthDebt : 0;
-    const priorDebt = Math.max(0, totalDebt - alreadyInTotal);
+    const priorDebt = Math.max(0, parseFloat(t.priorDebt) || 0);
 
     res.mainCurrent += currentMonthDebt;
     res.mainDebt    += priorDebt;

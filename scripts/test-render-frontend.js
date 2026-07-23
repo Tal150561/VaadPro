@@ -186,7 +186,7 @@ t.section('app.html — collection breakdown modal ACTUALLY OPENS (v2.13.30)');
   const els = {};
   const el = id => (els[id] = els[id] || { id, innerHTML: '', textContent: '', style: {} });
   const doc = { getElementById: el };
-  const data = { tenants: [{ id: 11, name: 'דנה', totalDebt: 460, openingDebt: 230,
+  const data = { tenants: [{ id: 11, name: 'דנה', totalDebt: 460, priorDebt: 460, openingDebt: 230,
       creditBalance: 0, currentBalance: { status: 'unpaid', shortfall: 230 }, effectiveAmount: 230 }],
     sentLog: {}, config: { amount: 230 } };
   const accountsStatus = { '11': [{ id: 'a1', label: 'חשמל', amount: 50,
@@ -233,12 +233,12 @@ t.section('app.html — collection totals: CURRENT MONTH IS NOT IN totalDebt (v2
 {
   const fns = extractFunctions(app, ['computeCollectionBreakdown']);
   const tenants = [
-    { id: 1, name: 'לימור', totalDebt: 2070, openingDebt: 1380, creditBalance: 0,
+    { id: 1, name: 'לימור', totalDebt: 2070, priorDebt: 2070, openingDebt: 1380, creditBalance: 0,
       currentBalance: { status: 'unpaid', shortfall: 230, expected: 230 } }
   ];
-  for (let i = 2; i <= 7; i++) tenants.push({ id: i, totalDebt: 0, openingDebt: 0, creditBalance: 0,
+  for (let i = 2; i <= 7; i++) tenants.push({ id: i, totalDebt: 0, priorDebt: 0, openingDebt: 0, creditBalance: 0,
       currentBalance: { status: 'unpaid', shortfall: 230, expected: 230 } });
-  for (let i = 8; i <= 12; i++) tenants.push({ id: i, totalDebt: 0, openingDebt: 0, creditBalance: 0,
+  for (let i = 8; i <= 12; i++) tenants.push({ id: i, totalDebt: 0, priorDebt: 0, openingDebt: 0, creditBalance: 0,
       currentBalance: { status: 'paid', shortfall: 0, expected: 230 } });
 
   const run = (tl, accs) => new Function('data', 'accountsStatus', 'getEffectiveMonth',
@@ -255,26 +255,45 @@ t.section('app.html — collection totals: CURRENT MONTH IS NOT IN totalDebt (v2
   t.eq('GRAND TOTAL = 1610 + 2070 + 50', b.grandTotal, 3730);
 
   // A tenant with NO accrued history still owes the current month.
-  const solo = run([{ id: 1, totalDebt: 0, openingDebt: 0, creditBalance: 0,
+  const solo = run([{ id: 1, totalDebt: 0, priorDebt: 0, openingDebt: 0, creditBalance: 0,
     currentBalance: { status: 'unpaid', shortfall: 230, expected: 230 } }]);
   t.eq('unpaid tenant with empty history still owes this month', solo.mainCurrent, 230);
   t.eq('...and is counted', solo.mainCurrentCount, 1);
 
   // Partial payment must NOT be double-counted (shortfall is inside totalDebt).
-  const part = run([{ id: 1, totalDebt: 530, openingDebt: 500, creditBalance: 0,
+  const part = run([{ id: 1, totalDebt: 530, priorDebt: 500, openingDebt: 500, creditBalance: 0,
     currentBalance: { status: 'partial', shortfall: 30, expected: 230 } }]);
   t.eq('partial: current = shortfall only', part.mainCurrent, 30);
   t.eq('partial: prior excludes the shortfall', part.mainDebt, 500);
   t.eq('partial: no double-count', part.grandTotal, 530);
 
+  // v2.13.32 — an UNPAID tenant whose current month ALREADY has an unpaid
+  // paymentHistory row. calcTotalDebt counts that row, so reconstructing prior
+  // debt as (totalDebt - partialShortfall) double-counted it: ₪230 owed was
+  // reported as ₪460. The page must consume server-supplied priorDebt instead.
+  const rowAlready = run([{ id: 1, totalDebt: 230, priorDebt: 0, openingDebt: 0, creditBalance: 0,
+    currentBalance: { status: 'unpaid', shortfall: 230, expected: 230 } }]);
+  t.eq('unpaid + existing history row: current 230', rowAlready.mainCurrent, 230);
+  t.eq('unpaid + existing history row: prior 0', rowAlready.mainDebt, 0);
+  t.eq('unpaid + existing history row: NO double-count', rowAlready.grandTotal, 230);
+
   // Paid-this-month tenant with old debt contributes nothing to "current".
-  const paidOld = run([{ id: 1, totalDebt: 800, openingDebt: 800, creditBalance: 0,
+  const paidOld = run([{ id: 1, totalDebt: 800, priorDebt: 800, openingDebt: 800, creditBalance: 0,
     currentBalance: { status: 'paid', shortfall: 0, expected: 230 } }]);
   t.eq('paid this month => current 0', paidOld.mainCurrent, 0);
   t.eq('paid this month => prior 800', paidOld.mainDebt, 800);
 
+  // Extra accounts must still be counted when the MAIN account is fully paid
+  // (Tal: אין חוב on the main account, ביטוח ₪50 still open).
+  const talExtras = run([{ id: 10, totalDebt: 0, priorDebt: 0, openingDebt: 0, creditBalance: 0,
+    currentBalance: { status: 'paid', shortfall: 0, expected: 230 } }],
+    { '10': [{ id: 'ins', label: 'ביטוח', amount: 50, paidThisMonth: false, totalDebt: 0, active: true }] });
+  t.eq('extras counted even when main account is paid', talExtras.extrasTotal, 50);
+  t.eq('extras appear in grandTotal', talExtras.grandTotal, 50);
+  t.eq('extras row labelled', talExtras.extras[0].label, 'ביטוח');
+
   // Credit is reported, never collected.
-  const cred = run([{ id: 1, totalDebt: 0, openingDebt: -100, creditBalance: 100,
+  const cred = run([{ id: 1, totalDebt: 0, priorDebt: 0, openingDebt: -100, creditBalance: 100,
     currentBalance: { status: 'paid', shortfall: 0, expected: 230 } }]);
   t.eq('credit excluded from grandTotal', cred.grandTotal, 0);
   t.eq('credit reported separately', cred.mainCredit, 100);

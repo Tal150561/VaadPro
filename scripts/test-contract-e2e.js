@@ -109,7 +109,16 @@ t.eq('credit is real-time (no wait for closeMonthUnpaid)', cur.creditBalance, 20
 // ── The route must still attach the fields ────────────────────────
 t.section('server.js — the enrichment is actually wired into the routes');
 const server = readSource('server.js');
-t.eq('GET /api/data attaches totalDebt', /totalDebt:\s*calcTotalDebt/.test(server), true);
+t.eq('GET /api/data computes totalDebt via calcTotalDebt',
+  /const totalNow = calcTotalDebt\(d, tid, mkNow\)/.test(server), true);
+t.eq('GET /api/data attaches totalDebt', /totalDebt:\s*totalNow/.test(server), true);
+// v2.13.32 — priorDebt must be shipped too, or app.html re-derives it and
+// double-counts an unpaid current-month history row (₪230 reported as ₪460).
+t.eq('GET /api/data attaches priorDebt', /priorDebt:\s*Math\.max\(0, totalNow - curInTotal\)/.test(server), true);
+t.eq('priorDebt subtracts the partial shortfall',
+  /emBal\.status === 'partial' \? \(parseFloat\(emBal\.shortfall\)/.test(server), true);
+t.eq('priorDebt subtracts an unpaid current-month history row',
+  /hist\.some\(r => r\.month === mkNow && !r\.paid && r\.type !== 'wa_sent'\)/.test(server), true);
 t.eq('GET /api/data attaches monthBalances', /monthBalances,/.test(server), true);
 t.eq('portal route attaches amountDue', /amountDue:\s*amountDue/.test(server), true);
 

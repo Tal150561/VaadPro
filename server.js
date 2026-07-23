@@ -1563,10 +1563,26 @@ app.get('/api/data', authMiddleware, (req, res) => {
       });
       // Balance for a month with NO sentLog entry (unpaid) — still needed by views.
       const emBal = monthBalances[emNow] || calcMonthBalance(null, getExpectedAmount(hist, mkNow, live));
+      // ⚠️ v2.13.32 — priorDebt shipped from the server (SAME logic as the portal,
+      // GET /api/portal/:token). calcTotalDebt is ACCRUED debt: it folds in the
+      // current month ONLY when that month is short-paid (partial) OR already has
+      // an unpaid paymentHistory row. It does NOT include a current month that
+      // simply has no record yet. So "what is owed right now" =
+      //     currentBalance.shortfall  +  priorDebt
+      // and priorDebt must subtract exactly what calcTotalDebt already counted for
+      // the current month — otherwise an unpaid current-month ROW is counted twice
+      // (₪230 owed reported as ₪460). app.html previously subtracted only the
+      // partial case and hit exactly that bug. One definition, two call sites.
+      const totalNow = calcTotalDebt(d, tid, mkNow);
+      const curInTotal =
+        (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
+        (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
+          ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0);
       return {
         ...t,
         creditBalance: getCreditBalance(d, tid),
-        totalDebt:     calcTotalDebt(d, tid, mkNow),
+        totalDebt:     totalNow,
+        priorDebt:     Math.max(0, totalNow - curInTotal), // accrued debt BEFORE the active month
         effectiveAmount: live,        // resolved customAmount || config.amount || 300
         monthBalances,                // { hebMonth: {status, paidAmount, expected, shortfall, credit} }
         currentBalance: emBal         // balance for the ACTIVE month (em)
@@ -6317,7 +6333,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.29 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.32 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
