@@ -893,6 +893,25 @@ function vpLogout() {
       </div>
     </div>
 
+    <!-- v2.13.28 — repair stale frozen tariffs (zero-life interval bug) -->
+    <div class="card">
+      <div class="card-header">🛠️ תיקון חובות שגויים מתעריף שבוטל</div>
+      <div class="card-body">
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;line-height:1.7;">
+          אם הגדרת לדייר תעריף אישי <strong>וביטלת אותו באותו חודש</strong>, ייתכן שנרשם לו חוב שגוי —
+          המערכת שמרה את התעריף שבוטל כסכום שהדייר היה אמור לשלם.<br>
+          הכלי הזה מחשב מחדש את <strong>הסכום הצפוי</strong> בכל חודש לפי טבלת התעריפים המתוקנת.
+          <strong>הוא לא משנה כמה כסף הדייר שילם בפועל</strong> — רק את הסכום שהיה אמור לשלם.
+        </p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-secondary" onclick="repairTariffs(true)">🔍 בדוק מה יתוקן</button>
+          <button class="btn btn-green" onclick="repairTariffs(false)">🛠️ בצע תיקון</button>
+        </div>
+        <div id="repairTariffsResult" style="margin-top:12px;"></div>
+        <div class="hint" style="margin-top:10px;">💡 מומלץ ללחוץ קודם "בדוק מה יתוקן" — הבדיקה לא משנה שום נתון.</div>
+      </div>
+    </div>
+
     <!-- כרטיס שיתוף וירלי -->
     <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
       <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
@@ -4533,6 +4552,45 @@ function blRenderHistory() {
       (recipientTags ? '<div class="bulletin-recipients">'+recipientTags+'</div>' : '') +
     '</div>';
   }).join('');
+}
+
+// ── v2.13.28 — repair stale frozen tariffs ──────────────────────
+// Calls POST /api/repair-tariffs. dryRun=true previews, false writes.
+// Only the EXPECTED charge is rewritten; paidAmount is never touched.
+async function repairTariffs(dryRun) {
+  const out = document.getElementById('repairTariffsResult');
+  if (!dryRun) {
+    if (!confirm('לבצע תיקון של הסכומים הצפויים?\n\nהפעולה מעדכנת רק כמה הדייר היה אמור לשלם — לא כמה שילם בפועל.\nמומלץ לגבות קודם.')) return;
+  }
+  if (out) out.innerHTML = '<span style="font-size:0.83rem;color:var(--text2);">⏳ בודק…</span>';
+  try {
+    const r = await fetch(API + '/repair-tariffs', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: !!dryRun })
+    });
+    const d = await r.json();
+    if (!d.ok) { if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ ' + (d.error || 'שגיאה') + '</span>'; return; }
+    if (!d.count) {
+      if (out) out.innerHTML = '<span style="color:var(--accent);font-size:0.85rem;">✅ לא נמצאו סכומים שגויים — הכל תקין.</span>';
+      return;
+    }
+    let h = '<div style="font-size:0.83rem;margin-bottom:6px;font-weight:600;">'
+          + (dryRun ? '🔍 נמצאו ' + d.count + ' רשומות לתיקון:' : '✅ תוקנו ' + d.count + ' רשומות:')
+          + '</div><div style="display:grid;gap:5px;">';
+    d.changes.forEach(function(c) {
+      h += '<div style="font-size:0.79rem;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">'
+         + '<strong>' + c.tenant + '</strong> · ' + c.month + ' — '
+         + 'סכום צפוי: <span style="color:var(--danger);text-decoration:line-through;">₪' + c.from + '</span> '
+         + '→ <span style="color:var(--accent);font-weight:700;">₪' + c.to + '</span>'
+         + (c.paidAmount != null ? ' <span style="color:var(--text3);">(שילם בפועל ₪' + c.paidAmount + ')</span>' : '')
+         + '</div>';
+    });
+    h += '</div>';
+    if (out) out.innerHTML = h;
+    if (!dryRun) { await loadData(); render(); toast('🛠️ תוקנו ' + d.count + ' רשומות', 'success'); }
+  } catch(e) {
+    if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ שגיאת רשת: ' + e.message + '</span>';
+  }
 }
 
 // ── גיבוי ושחזור ────────────────────────────────────────────────

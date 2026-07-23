@@ -1815,6 +1815,59 @@ app.post('/api/data', authMiddleware, (req, res) => {
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
 });
 
+// ── POST /api/repair-tariffs — re-freeze stale paymentHistory.amount ────
+// v2.13.28 — REPAIR PATH for the zero-life-interval bug (Tal's phantom ₪120).
+//
+// Why this endpoint has to exist: the v2.13.28 resolver fix corrects every
+// FUTURE freeze, but the wrong number was already written into
+// paymentHistory[tid][].amount. getExpectedAmount deliberately trusts that
+// stored value and never re-resolves (the v2.13.16 contract), and the
+// sentLog-sync loop in POST /api/data only runs when the caller posts a
+// `sentLog` — editing a tenant or reverting a tariff posts `{tenants}` only.
+// So nothing self-heals: the stale amount is permanent until re-frozen here.
+//
+// What it does: for every main-account payment record, recompute the expected
+// tariff for that record's OWN month with the corrected resolver, and rewrite
+// `amount` if it differs. It NEVER touches `paidAmount` (what the tenant
+// actually transferred), `paid`, `type`, `date`, `sentLog`, or `openingDebt`.
+// Only the expected-charge column is repaired, so the debt recomputes correctly.
+app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const config = d.config || {};
+  const mkNow = getMonthKey(config);
+  const dryRun = !!(req.body && req.body.dryRun);
+  const changes = [];
+
+  seedTariffsIfMissing(d);
+
+  for (const tenant of (d.tenants || [])) {
+    const tid = String(tenant.id);
+    const hist = (d.paymentHistory || {})[tid];
+    if (!Array.isArray(hist)) continue;
+    const legacyFallback = tenant.customAmount || config.amount || 300;
+    for (const rec of hist) {
+      if (!rec || rec.type === 'wa_sent') continue;      // reminders carry no charge
+      if (!rec.month) continue;
+      const correct = resolveTariffRate(tenant, d.defaultTariffs, rec.month, legacyFallback);
+      const stored  = parseFloat(rec.amount);
+      if (isNaN(correct) || correct <= 0) continue;      // never write a silent 0
+      if (!isNaN(stored) && Math.abs(stored - correct) < 0.005) continue; // already right
+      changes.push({
+        tenant: tenant.name || tid, tenantId: tid, month: rec.month,
+        from: isNaN(stored) ? null : stored, to: correct,
+        paidAmount: rec.paidAmount != null ? parseFloat(rec.paidAmount) : null
+      });
+      if (!dryRun) rec.amount = correct;
+    }
+  }
+
+  if (!dryRun && changes.length) {
+    saveTenantData(req.user.tenantId, { paymentHistory: d.paymentHistory, tenants: d.tenants, defaultTariffs: d.defaultTariffs });
+  }
+  console.log(`[repair-tariffs] tenant=${req.user.tenantId} dryRun=${dryRun} fixed=${changes.length}`);
+  res.json({ ok: true, dryRun, count: changes.length, changes, monthNow: mkNow });
+});
+
 // Backup Layer 2 — manual / pre-restore snapshot trigger.
 // Called by the frontend (restoreData) BEFORE a manual restore overwrites data,
 // so an accidental restore from a wrong/old file is itself recoverable.
@@ -6264,7 +6317,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.28 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.29 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
