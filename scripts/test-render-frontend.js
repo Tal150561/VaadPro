@@ -433,15 +433,19 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   t.eq('pending modal renders tenant names', html.includes('לימור'), true);
   t.eq('pending modal shows the grand total', html.includes('3,910₪'), true);
   t.eq('pending modal states it matches the main card', html.includes('סה״כ לגביה'), true);
-  t.eq('pending title set', el('tenantStatusListTitle').innerHTML.includes('ממתינים'), true);
+  t.eq('pending title set', el('tenantStatusListTitle').innerHTML.includes('חייבים'), true);
 
   ctx.showTenantStatusList('paid');
   const phtml = el('tenantStatusListBody').innerHTML;
   t.eq('paid modal lists only debt-free tenants', phtml.includes('חנה') && !phtml.includes('לימור'), true);
-  t.eq('paid title set', el('tenantStatusListTitle').innerHTML.includes('שילמו'), true);
+  t.eq('paid title set', el('tenantStatusListTitle').innerHTML.includes('ללא חוב'), true);
 
   // Wiring: the cards must be clickable
   t.eq('ממתינים card is bound to the list', /id="sPendingCard"[^>]*onclick="showTenantStatusList\('pending'\)"/.test(app), true);
+  t.eq('card label is "חייבים" (not the month-only "ממתינים")',
+    /id="sPendingCard"[\s\S]{0,300}?stat-label">חייבים/.test(app), true);
+  t.eq('card label is "ללא חוב" (not the month-only "שילמו החודש")',
+    /id="sSentCard"[\s\S]{0,300}?stat-label">ללא חוב/.test(app), true);
   t.eq('שילמו card is bound to the list', /id="sSentCard"[^>]*onclick="showTenantStatusList\('paid'\)"/.test(app), true);
   t.eq('stat counts derive from the shared classifier',
     /buildTenantStatusRows\(\)[\s\S]{0,200}?bucket==='pending'/.test(app), true);

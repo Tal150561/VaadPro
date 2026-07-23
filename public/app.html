@@ -417,8 +417,8 @@ function vpLogout() {
 <div class="stats-outer">
   <div class="stats-row">
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
-    <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">שילמו החודש 🔎</div></div>
-    <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">ממתינים 🔎</div></div>
+    <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">ללא חוב 🔎</div></div>
+    <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">חייבים 🔎</div></div>
     <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
   </div>
 </div>
@@ -541,7 +541,7 @@ function vpLogout() {
       <div class="card-body">
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
           <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">💬 WA לכולם</button>
-          <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA רק לממתינים</button>
+          <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA למי שלא שילם החודש</button>
           <button class="btn btn-secondary btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()">🔗 שלח פורטל לנבחרים</button>
           <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
           <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
@@ -2694,7 +2694,7 @@ async function sendUnpaidOnly() {
   if(!unpaid.length){toast('✅ כולם כבר שילמו!','success');return;}
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
   document.getElementById('sendingStatus').textContent='שולח '+unpaid.length+' הודעות...';
-  toast('📤 שולח רק לממתינים ('+unpaid.length+')...','success');
+  toast('📤 שולח למי שלא שילם החודש ('+unpaid.length+')...','success');
   for(let i=0;i<unpaid.length;i++){
     try{
       const r=await fetch(API+'/send/'+unpaid[i].id,{method:'POST'}); const d=await r.json();
@@ -3095,14 +3095,18 @@ function render() {
   var vmBanner=document.getElementById('viewMonthBanner');
   if(vmBanner) vmBanner.style.display = histView ? 'block' : 'none';
   const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
-  // הסטטיסטיקות ("שילמו"/"ממתינים") משקפות את חודש התצוגה
+  // הסטטיסטיקות ("ללא חוב"/"חייבים") משקפות את חודש התצוגה
   // v2.13.34 — counts derive from buildTenantStatusRows(), the SAME classifier
   // that fills the click-through modals, so a card can never contradict its own
   // list. Previously this counted "has a payment record in sentLog", which (a)
   // counted a PARTIAL payer as fully paid and (b) ignored prior debt entirely.
-  // "ממתינים" now means "owes money right now"; "שילמו החודש" means "owes
-  // nothing". They remain complements summing to tenants.length, and the
-  // ממתינים total now equals the "סה״כ לגביה" card by construction.
+  // The cards are named "חייבים" / "ללא חוב" (v2.13.35) because that is what
+  // they measure: "חייבים" = owes money right now (current shortfall + prior
+  // debt + extras), "ללא חוב" = owes nothing. They were called
+  // "ממתינים"/"שילמו החודש", which implied a MONTH-ONLY split and made a
+  // tenant who paid this month but carries prior debt look misfiled.
+  // They remain complements summing to tenants.length, and the "חייבים"
+  // total equals the "סה״כ לגביה" card by construction.
   // Historical view keeps the old sentLog-based split: priorDebt/currentBalance
   // are ACTIVE-month figures and say nothing about a past month.
   var paidCount, pending;
@@ -6610,7 +6614,7 @@ function computeCollectionBreakdown(globalAmount) {
   return res;
 }
 
-// ── v2.13.34 — per-tenant rows behind the "ממתינים" / "שילמו החודש" cards ──
+// ── v2.13.34 — per-tenant rows behind the "חייבים" / "ללא חוב" cards ──
 // SINGLE SOURCE: every money expression here is the SAME one used by
 // computeCollectionBreakdown() above — currentBalance.shortfall for the active
 // month, server-supplied t.priorDebt for everything accrued before it, and
@@ -6672,18 +6676,18 @@ function showTenantStatusList(bucket) {
   const isPending = (bucket === 'pending');
 
   document.getElementById('tenantStatusListTitle').innerHTML =
-    isPending ? '⏳ ממתינים לתשלום' : '✅ שילמו החודש';
+    isPending ? '💰 חייבים — יתרה לגבייה' : '✅ ללא חוב';
 
   let h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:4px;">חודש פעיל: ' + getEffectiveMonth() + '</div>';
   h += '<div style="font-size:0.75rem;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:14px;line-height:1.6;">'
      + (isPending
-        ? 'דיירים שעדיין חייבים כסף — כולל מי ששילם חלקית ומי ששילם את החודש אך נותר לו חוב קודם. הסכום כולל דמי ועד, חוב קודם וחשבונות נוספים.'
-        : 'דיירים שאינם חייבים דבר — שילמו את החודש במלואו ואין להם חוב קודם או חשבון נוסף פתוח.')
+        ? 'דיירים שחייבים כסף נכון לעכשיו — כולל מי ששילם חלקית ומי ששילם את החודש אך נותר לו חוב מחודשים קודמים. הסכום כולל דמי ועד, חוב קודם וחשבונות נוספים.'
+        : 'דיירים שאינם חייבים דבר — שילמו את החודש במלואו, ללא חוב קודם וללא חשבון נוסף פתוח.')
      + '</div>';
 
   if (!rows.length) {
     h += '<div style="font-size:0.85rem;color:var(--text3);padding:14px 4px;text-align:center;">'
-       + (isPending ? '🎉 אין ממתינים — כולם שילמו.' : 'אין דיירים ללא חוב.') + '</div>';
+       + (isPending ? '🎉 אין חייבים — כולם שילמו.' : 'אין דיירים ללא חוב.') + '</div>';
   } else {
     let sum = 0;
     for (const r of rows) {
