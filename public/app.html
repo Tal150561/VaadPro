@@ -3344,6 +3344,39 @@ function runBankAnalysis(){
   analyzeBankRows(bankRows, bankFileName);
 }
 
+// v2.13.26: parseDate חייבת להיות בסקופ העליון — גם analyzeBankRows
+// (warnMonthMismatch) וגם exportBankReport משתמשות בה. כשהיא הייתה מקומית
+// בתוך exportBankReport, ה-hoisting לא הגיע ל-analyzeBankRows ונזרק
+// ReferenceError שהרג את כל תהליך "זהה משלמים". אל תחזיר אותה פנימה.
+// המרת תאריך — תומך גם במספרים סידוריים של Excel (serial date)
+function parseDate(v){
+  if(!v && v!==0) return null;
+  const s = String(v).trim();
+
+  // מספר סידורי של Excel (למשל 45659)
+  const n = parseFloat(s);
+  if(!isNaN(n) && n > 40000 && n < 60000){
+    // Excel serial: ימים מ-1/1/1900 (עם תיקון leap year 1900 bug)
+    const d = new Date((n - 25569) * 86400 * 1000);
+    if(!isNaN(d.getTime())) return d;
+  }
+
+  // DD/MM/YYYY
+  if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){
+    const p=s.split('/'); return new Date(p[2],p[1]-1,p[0]);
+  }
+  // DD.MM.YYYY
+  if(/^\d{1,2}\.\d{1,2}\.\d{4}/.test(s)){
+    const p=s.split('.'); return new Date(p[2],p[1]-1,p[0]);
+  }
+  // YYYY-MM-DD
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)){
+    return new Date(s);
+  }
+  const d = new Date(v);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 function analyzeBankRows(rows,fileName){
   const taRaw = document.getElementById('bankAmount').value.trim();
   const ta = taRaw !== '' ? parseFloat(taRaw) : null;
@@ -3425,7 +3458,11 @@ function analyzeBankRows(rows,fileName){
   // row's date and, if the MAJORITY falls in a different month than the selected
   // bankMonth, warn once (soft — the user can proceed). Uses the same parseDate
   // helper defined below (function-hoisted). Silent if dates are unparseable.
+  // v2.13.26: כל הבלוק עטוף ב-try/catch. זו אזהרה רכה בלבד — היא לעולם
+  // לא אמורה להפיל את הייבוא עצמו. אם משהו כאן נשבר, מדלגים על האזהרה
+  // וממשיכים בזיהוי המשלמים כרגיל.
   (function warnMonthMismatch(){
+   try{
     if (!selectedMonthKey) return;
     const tally = {};
     let dated = 0;
@@ -3449,6 +3486,7 @@ function analyzeBankRows(rows,fileName){
         ',\nאבל בחרת לייבא לחודש ' + selM + '.\n\nהתשלומים יירשמו תחת ' + selM + '.\nלהמשיך בכל זאת?');
       if (!ok) { mismatchCancelled = true; }
     }
+   }catch(e){ console.warn('warnMonthMismatch skipped:', e); }
   })();
   if (mismatchCancelled) {
     toast('הייבוא בוטל — בחר את החודש הנכון בבורר "חודש שייך לקובץ זה"','error');
@@ -3576,34 +3614,9 @@ function exportBankReport(){
 
   const HEB_MONTHS=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
 
-  // המרת תאריך — תומך גם במספרים סידוריים של Excel (serial date)
-  function parseDate(v){
-    if(!v && v!==0) return null;
-    const s = String(v).trim();
-
-    // מספר סידורי של Excel (למשל 45659)
-    const n = parseFloat(s);
-    if(!isNaN(n) && n > 40000 && n < 60000){
-      // Excel serial: ימים מ-1/1/1900 (עם תיקון leap year 1900 bug)
-      const d = new Date((n - 25569) * 86400 * 1000);
-      if(!isNaN(d.getTime())) return d;
-    }
-
-    // DD/MM/YYYY
-    if(/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s)){
-      const p=s.split('/'); return new Date(p[2],p[1]-1,p[0]);
-    }
-    // DD.MM.YYYY
-    if(/^\d{1,2}\.\d{1,2}\.\d{4}/.test(s)){
-      const p=s.split('.'); return new Date(p[2],p[1]-1,p[0]);
-    }
-    // YYYY-MM-DD
-    if(/^\d{4}-\d{2}-\d{2}/.test(s)){
-      return new Date(s);
-    }
-    const d = new Date(v);
-    return isNaN(d.getTime()) ? null : d;
-  }
+  // v2.13.26: parseDate הועברה לסקופ העליון (ראו מעל analyzeBankRows).
+  // היא הייתה מוגדרת כאן, בתוך exportBankReport, ולכן warnMonthMismatch
+  // בתוך analyzeBankRows זרקה ReferenceError והרגה את "זהה משלמים".
 
   function monthKey(d){ return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0'); }
   function monthLabel(key){ const p=key.split('-'); return HEB_MONTHS[parseInt(p[1])-1]+' '+p[0]; }
