@@ -2882,11 +2882,18 @@ function openTenantTariff(id) {
     let hh = '';
     ivs.forEach(function(iv){
       const open = (iv.endDate == null || iv.endDate === '');
+      // v2.13.28 — an interval opened AND closed inside the same month never
+      // governed a billing cycle. Show it, but make clear it charges nothing,
+      // so a set-then-revert doesn't look like a real historical tariff.
+      const zeroLife = !open && String(iv.startDate).slice(0,7) === String(iv.endDate).slice(0,7);
       const range = ttFmt(iv.startDate) + ' → ' + (open ? '<span style="color:var(--accent);">כיום</span>' : ttFmt(iv.endDate));
-      hh += '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;">' +
-            '<span style="font-weight:700;">₪' + iv.rate + '</span>' +
+      hh += '<div style="display:flex;justify-content:space-between;align-items:center;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 12px;' + (zeroLife ? 'opacity:.55;' : '') + '">' +
+            '<span style="font-weight:700;' + (zeroLife ? 'text-decoration:line-through;' : '') + '">₪' + iv.rate + '</span>' +
             '<span style="font-size:0.8rem;color:var(--text2);direction:ltr;">' + range + '</span>' +
             '</div>';
+      if (zeroLife) {
+        hh += '<div style="font-size:0.72rem;color:var(--text3);margin:-4px 2px 2px;">↳ בוטל באותו חודש — לא חויב בפועל</div>';
+      }
     });
     list.innerHTML = hh;
   }
@@ -3051,8 +3058,8 @@ function render() {
   var hintEl = document.getElementById('sAmountHint');
   if (hintEl) {
     var hp = [];
-    if (collectionBreakdown.mainCurrent > 0) hp.push('שוטף ' + collectionBreakdown.mainCurrent.toLocaleString() + '₪');
-    if (collectionBreakdown.mainDebt > 0)    hp.push('חוב ' + collectionBreakdown.mainDebt.toLocaleString() + '₪');
+    if (collectionBreakdown.mainCurrent > 0) hp.push('החודש ' + collectionBreakdown.mainCurrent.toLocaleString() + '₪');
+    if (collectionBreakdown.mainDebt > 0)    hp.push('חוב קודם ' + collectionBreakdown.mainDebt.toLocaleString() + '₪');
     if (collectionBreakdown.extrasTotal > 0) hp.push('חשבונות ' + collectionBreakdown.extrasTotal.toLocaleString() + '₪');
     hintEl.textContent = hp.join(' · ');
   }
@@ -6425,11 +6432,13 @@ async function markAccountUnpaid(tenantId, accountId) {
 // money fields only (t.totalDebt, t.currentBalance, accountsStatus).
 function computeCollectionBreakdown(globalAmount) {
   const res = {
-    mainCurrent: 0,   // דמי ועד שוטפים לחודש הנוכחי (שטרם שולמו)
-    mainDebt: 0,      // חוב מצטבר מחודשים קודמים / חוב פתוח (חשבון ראשי)
-    mainCredit: 0,    // קרדיט לזכות דיירים (מקוזז)
-    extrasTotal: 0,   // סה״כ חשבונות נוספים (שוטף + חוב)
-    extras: [],       // [{label, current, debt, total, count}]
+    mainCurrent: 0,      // חיוב החודש שטרם שולם (חשבון ראשי)
+    mainCurrentCount: 0, // כמה דיירים
+    mainDebt: 0,         // חוב מחודשים קודמים + חוב פתוח
+    mainDebtCount: 0,    // כמה דיירים
+    mainCredit: 0,       // קרדיט לזכות דיירים (מקוזז, לא נגבה)
+    extrasTotal: 0,      // סה״כ חשבונות נוספים (החודש + חוב)
+    extras: [],          // [{label, current, debt, total, count}]
     grandTotal: 0
   };
   const em = getEffectiveMonth();
@@ -6453,6 +6462,8 @@ function computeCollectionBreakdown(globalAmount) {
 
     res.mainCurrent += currentMonthDebt;
     res.mainDebt    += priorDebt;
+    if (currentMonthDebt > 0) res.mainCurrentCount++;
+    if (priorDebt > 0)        res.mainDebtCount++;
     if (credit > 0 && totalDebt === 0) res.mainCredit += credit;
 
     // Extra accounts for this tenant
@@ -6495,11 +6506,20 @@ function showCollectionBreakdown() {
       + '</div>';
   };
 
-  let h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:10px;">חודש פעיל: ' + getEffectiveMonth() + '</div>';
+  let h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:4px;">חודש פעיל: ' + getEffectiveMonth() + '</div>';
+  h += '<div style="font-size:0.75rem;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:14px;line-height:1.6;">'
+     + 'זהו הסכום שעדיין <strong>לא נגבה</strong> — כלומר כמה כסף אמור להיכנס לקופה. סכומים שכבר שולמו אינם נכללים כאן.'
+     + '</div>';
 
   h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:12px 0 2px;">💰 דמי ועד (חשבון ראשי)</div>';
-  h += row('שוטף — החודש', b.mainCurrent, 'דיירים שטרם שילמו את החודש הנוכחי', 'var(--warn)');
-  h += row('חובות קודמים', b.mainDebt, 'חוב מצטבר מחודשים קודמים + חוב פתוח', 'var(--danger)');
+  h += row('חיוב החודש שטרם שולם',
+           b.mainCurrent,
+           'דמי הוועד של ' + getEffectiveMonth() + ' — ' + b.mainCurrentCount + ' דיירים שעדיין לא שילמו את החודש',
+           'var(--warn)');
+  h += row('חוב מחודשים קודמים',
+           b.mainDebt,
+           'יתרות שנשארו פתוחות מחודשים שעברו + חוב פתוח שהוזן ידנית — ' + b.mainDebtCount + ' דיירים',
+           'var(--danger)');
 
   h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:16px 0 2px;">💳 חשבונות נוספים</div>';
   if (!b.extras.length) {
@@ -6507,8 +6527,8 @@ function showCollectionBreakdown() {
   } else {
     for (const e of b.extras) {
       const parts = [];
-      if (e.current > 0) parts.push('שוטף: ' + nis(e.current));
-      if (e.debt > 0)    parts.push('חוב: ' + nis(e.debt));
+      if (e.current > 0) parts.push('חיוב החודש: ' + nis(e.current));
+      if (e.debt > 0)    parts.push('חוב קודם: ' + nis(e.debt));
       h += row(e.label + ' <span style="font-size:0.7rem;color:var(--text3);">(' + e.count + ' דיירים)</span>',
                e.total, parts.join(' · '), 'var(--warn)');
     }

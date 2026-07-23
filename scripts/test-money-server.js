@@ -314,6 +314,44 @@ t.section('Column A — resolveTariffRate (THE resolution order)');
   t.eq('never silent undefined — returns numeric fallback', S.resolveTariffRate({}, [], '2026-05', 300), 300);
 }
 
+t.section('Column A — v2.13.28: ZERO-LIFE interval (set-then-revert same month)');
+{
+  // Tal's second incident: personal tariff 350 set 18/07, reverted 19/07.
+  // The corpse [18/07 -> 19/07] swallowed ALL of July via month-prefix compare,
+  // so a 230 bank payment was scored against expected=350 => phantom 120 debt.
+  const dflt = [{ rate: 230, startDate: '2000-01-01', endDate: null }];
+  const zl = { rate: 350, startDate: '2026-07-18', endDate: '2026-07-19' };
+
+  t.eq('zero-life interval does NOT claim its own month',
+    S.monthInInterval('2026-07', zl), false);
+  t.eq('zero-life interval claims no later month',
+    S.monthInInterval('2026-08', zl), false);
+  t.eq('zero-life interval claims no earlier month',
+    S.monthInInterval('2026-06', zl), false);
+
+  const tal = { id: 'tal', personalTariffs: [zl] };
+  t.eq('July resolves to building default 230, not the reverted 350',
+    S.resolveTariffRate(tal, dflt, '2026-07', 230), 230);
+  t.eq('230 paid against 230 expected => NO shortfall',
+    S.calcMonthBalance('bank_import_1721_230_payer_TAL', 230).shortfall, 0);
+  t.eq('230 paid against 230 expected => status paid',
+    S.calcMonthBalance('bank_import_1721_230_payer_TAL', 230).status, 'paid');
+
+  // --- guards: the fix must NOT swallow legitimate intervals ---
+  t.eq('a STILL-OPEN mid-month change keeps owning its month',
+    S.resolveTariffRate({ personalTariffs: [{ rate: 350, startDate: '2026-07-18', endDate: null }] },
+      dflt, '2026-07', 230), 350);
+  const multi = { personalTariffs: [{ rate: 400, startDate: '2026-03-05', endDate: '2026-06-20' }] };
+  t.eq('real multi-month interval still owns its start month',
+    S.resolveTariffRate(multi, dflt, '2026-03', 230), 400);
+  t.eq('real multi-month interval still owns its end month',
+    S.resolveTariffRate(multi, dflt, '2026-06', 230), 400);
+  t.eq('real multi-month interval owns a middle month',
+    S.resolveTariffRate(multi, dflt, '2026-05', 230), 400);
+  t.eq('month after a real interval falls back to default',
+    S.resolveTariffRate(multi, dflt, '2026-07', 230), 230);
+}
+
 t.section('Column A — THE phantom-debt bug: retroactive import uses HISTORICAL rate');
 {
   // Tal's real incident: on 230 Jan–Jun, changed to 350 in July, then imported

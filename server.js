@@ -996,6 +996,19 @@ function getExpectedAmount(history, monthKey, fallbackAmount) {
 // (or "YYYY-MM"); we compare on the year-month prefix so a mid-month startDate
 // still covers its own month. endDate:null / '' = open (covers everything after
 // startDate).
+//
+// ⚠️ v2.13.28 — ZERO-LIFE INTERVAL GUARD (Tal's phantom ₪120).
+// A tariff that was set AND reverted inside the same month never governed a
+// billing cycle, but month-prefix comparison made it swallow the whole month:
+//   set 350 on 2026-07-18, revert on 2026-07-19
+//   -> [{rate:350, start:'2026-07-18', end:'2026-07-19'}]
+//   -> start prefix '2026-07' <= '2026-07' <= end prefix '2026-07'  => MATCH
+// The bank import then froze expected=350 against a ₪230 payment => ₪120 debt
+// that no reset could clear (the frozen amount, not sentLog, was wrong).
+// Rule: if an interval both OPENS and CLOSES within monthKey, it is a
+// same-month correction and does not own that month — fall through to the next
+// interval / building default. It still owns nothing before it, and a genuine
+// mid-month change that stays open (endDate:null) is unaffected.
 function monthInInterval(monthKey, interval) {
   if (!interval || !interval.startDate) return false;
   const mk = String(monthKey).slice(0, 7);
@@ -1003,6 +1016,8 @@ function monthInInterval(monthKey, interval) {
   if (mk < start) return false;
   if (interval.endDate == null || interval.endDate === '') return true;
   const end = String(interval.endDate).slice(0, 7);
+  // Opened and closed inside the same month as monthKey -> zero-life, skip it.
+  if (start === mk && end === mk) return false;
   return mk <= end;
 }
 
@@ -1696,7 +1711,14 @@ app.post('/api/data', authMiddleware, (req, res) => {
             const arr = Array.isArray(t.personalTariffs) ? t.personalTariffs.slice() : [];
             const open = arr.find(iv => iv.endDate == null || iv.endDate === '');
             if (open) open.endDate = today;
-            t.personalTariffs = arr;
+            // v2.13.28 — drop zero-life intervals (opened AND closed on the same
+            // day / in the same month). Tal set 350 and reverted the next day;
+            // the corpse stayed in the array and won resolution for all of July.
+            // monthInInterval now also ignores these at read time, but pruning
+            // here keeps the stored history honest for the tariff modal.
+            t.personalTariffs = arr.filter(iv =>
+              !(iv.endDate && String(iv.startDate).slice(0, 7) === String(iv.endDate).slice(0, 7))
+            );
           } else {
             t.personalTariffs = closeAndOpenInterval(t.personalTariffs, newAmt, today);
           }
@@ -6242,7 +6264,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.25 – SaaS Server        ║');
+  console.log('║   VaadPro v2.13.28 – SaaS Server        ║');
   console.log('║   http://localhost:' + PORT + '             ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
