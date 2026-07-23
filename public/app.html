@@ -3049,6 +3049,30 @@ async function sendPortalLink(tenantId, tenantName) {
 
 // v2.13.27 — cached breakdown of "סה״כ לגביה" (populated by render(), read by the modal)
 var collectionBreakdown = null;
+// v2.13.33 — accountsStatus is populated by an async fetch that resolves AFTER
+// render(). Declared here with `var` (hoisted, no temporal dead zone) so this
+// function is safe to call at any point; loadAccountsStatus() overwrites it.
+// NOTE: `typeof x === 'object'` does NOT protect against a TDZ — it throws a
+// ReferenceError for a `let` that has not been evaluated yet. Only hoisting does.
+var accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalDebt},...] }
+
+// Recompute and repaint the "סה״כ לגביה" card. Called from render() and again
+// from loadAccountsStatus() once the extra-accounts fetch resolves.
+function refreshCollectionCard() {
+  var amt = document.getElementById('sAmount');
+  if (!amt) return;
+  var globalAmount = parseInt((document.getElementById('cfgAmount') || {}).value) || 300;
+  collectionBreakdown = computeCollectionBreakdown(globalAmount);
+  amt.textContent = collectionBreakdown.grandTotal.toLocaleString() + '₪';
+  var hintEl = document.getElementById('sAmountHint');
+  if (hintEl) {
+    var hp = [];
+    if (collectionBreakdown.mainCurrent > 0) hp.push('החודש ' + collectionBreakdown.mainCurrent.toLocaleString() + '₪');
+    if (collectionBreakdown.mainDebt > 0)    hp.push('חוב קודם ' + collectionBreakdown.mainDebt.toLocaleString() + '₪');
+    if (collectionBreakdown.extrasTotal > 0) hp.push('חשבונות ' + collectionBreakdown.extrasTotal.toLocaleString() + '₪');
+    hintEl.textContent = hp.join(' · ');
+  }
+}
 
 function render() {
   if (isEditing) return; // אל תחדש את הטבלה בזמן עריכה
@@ -3070,18 +3094,12 @@ function render() {
   // v2.13.27 — "סה״כ לגביה" now reflects the REAL collectible figure:
   // main-account current month + main-account prior debt + extra accounts
   // (current charge + their own accumulated debt), broken down by account type.
-  // All money is CONSUMED from server-supplied fields (t.totalDebt, accountsStatus),
-  // never re-derived here.
-  collectionBreakdown = computeCollectionBreakdown(globalAmount);
-  document.getElementById('sAmount').textContent = collectionBreakdown.grandTotal.toLocaleString()+'₪';
-  var hintEl = document.getElementById('sAmountHint');
-  if (hintEl) {
-    var hp = [];
-    if (collectionBreakdown.mainCurrent > 0) hp.push('החודש ' + collectionBreakdown.mainCurrent.toLocaleString() + '₪');
-    if (collectionBreakdown.mainDebt > 0)    hp.push('חוב קודם ' + collectionBreakdown.mainDebt.toLocaleString() + '₪');
-    if (collectionBreakdown.extrasTotal > 0) hp.push('חשבונות ' + collectionBreakdown.extrasTotal.toLocaleString() + '₪');
-    hintEl.textContent = hp.join(' · ');
-  }
+  // All money is CONSUMED from server-supplied fields (t.priorDebt, currentBalance,
+  // accountsStatus), never re-derived here.
+  // v2.13.33: the actual update lives in refreshCollectionCard() so that
+  // loadAccountsStatus() can re-run it when the extra-accounts fetch resolves
+  // AFTER render() has already painted the card.
+  refreshCollectionCard();
   document.getElementById('tbT').textContent=data.tenants.length;
   document.getElementById('tbP').textContent=pending;
   document.getElementById('tbP').className=pending>0?'tbadge':'tbadge green';
@@ -6212,7 +6230,8 @@ async function downloadBridge() {
 
 // ── State ──────────────────────────────────────────────────────
 let accountTemplates = []; // building-level templates
-let accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalDebt},...] }
+// accountsStatus is declared with `var` near render() (v2.13.33) so it is hoisted
+// and safe to read before this async loader has populated it.
 let taModalTenantId = null; // currently editing tenant
 let taModalAccounts = [];   // working copy
 let taModalOwner  = { name:'', phone:'', email:'' }; // שלב 1: סלוט בעלים
@@ -6235,6 +6254,13 @@ async function loadAccountsStatus() {
     if (d.ok) {
       accountsStatus = d.status || {};
       injectExtraAccountsCells(); // רענן תצוגה מיד אחרי עדכון סטטוס
+      // ⚠️ v2.13.33 — the "סה״כ לגביה" card is computed inside render(), which
+      // has ALREADY run by the time this async fetch resolves (loadData fires
+      // loadAccountsIfNeeded without awaiting it). Refreshing only the tenant
+      // cells left the card showing a total with ZERO extra accounts — Tal's
+      // ביטוח ₪50 appeared in his row and in the portal but not on the
+      // dashboard. Recompute the card here too.
+      refreshCollectionCard();
     }
   } catch(e) {}
 }
@@ -6530,7 +6556,10 @@ function computeCollectionBreakdown(globalAmount) {
     if (credit > 0 && totalDebt === 0) res.mainCredit += credit;
 
     // Extra accounts for this tenant
-    const accs = (typeof accountsStatus === 'object' && accountsStatus) ? (accountsStatus[tid] || []) : [];
+    // accountsStatus is a hoisted `var` (see its declaration) — it is {} until the
+    // async loader resolves, and loadAccountsStatus() re-runs refreshCollectionCard()
+    // once it does. No typeof guard: it would not have protected against a TDZ anyway.
+    const accs = accountsStatus[tid] || [];
     for (const acc of accs) {
       if (acc.active === false) continue;
       const accCurrent = acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0);

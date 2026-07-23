@@ -299,4 +299,43 @@ t.section('app.html — collection totals: CURRENT MONTH IS NOT IN totalDebt (v2
   t.eq('credit reported separately', cred.mainCredit, 100);
 }
 
+t.section('app.html — extra accounts survive the async race (v2.13.33)');
+// Tal's ביטוח ₪50 showed in his tenant row and in the portal but NOT on the
+// dashboard card. Cause: loadData() fires loadAccountsIfNeeded() WITHOUT await,
+// so render() computes the card while accountsStatus is still {}. The tenant
+// row recovered because loadAccountsStatus() re-runs injectExtraAccountsCells();
+// the card had no such refresh and stayed at its accounts-less total forever.
+{
+  const fns = extractFunctions(app, ['computeCollectionBreakdown', 'refreshCollectionCard']);
+
+  t.eq('loadAccountsStatus refreshes the collection card',
+    /accountsStatus = d\.status \|\| \{\};[\s\S]{0,600}?refreshCollectionCard\(\)/.test(app), true);
+  t.eq('accountsStatus is a hoisted var, not a TDZ-prone let',
+    /var accountsStatus = \{\}/.test(app), true);
+  t.eq('no duplicate let accountsStatus declaration',
+    /let accountsStatus/.test(app), false);
+
+  const els = {};
+  const el = id => (els[id] = els[id] || { id, textContent: '', innerHTML: '', style: {}, value: '230' });
+  const data = { tenants: [{ id: 10, name: 'טל', totalDebt: 0, priorDebt: 0, openingDebt: 0,
+    creditBalance: 0, currentBalance: { status: 'paid', shortfall: 0, expected: 230 } }],
+    sentLog: {}, config: { amount: 230 } };
+  const ctx = new Function('document', 'data', 'getEffectiveMonth',
+    'var accountsStatus={};' + fns +
+    '\n; return { refreshCollectionCard, setAccounts: a => { accountsStatus = a; } };'
+  )({ getElementById: el }, data, () => 'יולי');
+
+  // T1 — render() paints the card before the accounts fetch resolves.
+  ctx.refreshCollectionCard();
+  t.eq('card before accounts arrive', el('sAmount').textContent, '0₪');
+
+  // T2 — the fetch resolves and loadAccountsStatus repaints the card.
+  ctx.setAccounts({ '10': [{ id: 'ins', label: 'ביטוח', amount: 50,
+    paidThisMonth: false, totalDebt: 0, active: true }] });
+  ctx.refreshCollectionCard();
+  t.eq('card AFTER accounts arrive includes the extra account',
+    el('sAmount').textContent, '50₪');
+  t.eq('hint names the extras', el('sAmountHint').textContent.includes('חשבונות 50₪'), true);
+}
+
 process.exit(t.done() ? 1 : 0);
