@@ -419,7 +419,18 @@ function vpLogout() {
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
     <div class="stat-card"><div class="stat-num" id="sSent">0</div><div class="stat-label">שילמו החודש</div></div>
     <div class="stat-card"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">ממתינים</div></div>
-    <div class="stat-card"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה</div></div>
+    <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
+  </div>
+</div>
+
+<!-- ===== v2.13.27 — פירוט "סה״כ לגביה" ===== -->
+<div class="modal-bg" id="collectionBreakdownModal" style="display:none;" onclick="if(event.target===this)closeModal('collectionBreakdownModal')">
+  <div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto;">
+    <h2 style="margin-bottom:4px;">🔎 פירוט סה״כ לגביה</h2>
+    <div id="collectionBreakdownBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('collectionBreakdownModal')">סגור</button>
+    </div>
   </div>
 </div>
 
@@ -3010,6 +3021,9 @@ async function sendPortalLink(tenantId, tenantName) {
   }
 }
 
+// v2.13.27 — cached breakdown of "סה״כ לגביה" (populated by render(), read by the modal)
+var collectionBreakdown = null;
+
 function render() {
   if (isEditing) return; // אל תחדש את הטבלה בזמן עריכה
   // Save checked state before re-render
@@ -3027,8 +3041,21 @@ function render() {
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;
   document.getElementById('sPending').textContent=pending;
-  const totalAmount=data.tenants.reduce(function(s,t){return s+(t.customAmount||globalAmount);},0);
-  document.getElementById('sAmount').textContent=totalAmount.toLocaleString()+'₪';
+  // v2.13.27 — "סה״כ לגביה" now reflects the REAL collectible figure:
+  // main-account current month + main-account prior debt + extra accounts
+  // (current charge + their own accumulated debt), broken down by account type.
+  // All money is CONSUMED from server-supplied fields (t.totalDebt, accountsStatus),
+  // never re-derived here.
+  collectionBreakdown = computeCollectionBreakdown(globalAmount);
+  document.getElementById('sAmount').textContent = collectionBreakdown.grandTotal.toLocaleString()+'₪';
+  var hintEl = document.getElementById('sAmountHint');
+  if (hintEl) {
+    var hp = [];
+    if (collectionBreakdown.mainCurrent > 0) hp.push('שוטף ' + collectionBreakdown.mainCurrent.toLocaleString() + '₪');
+    if (collectionBreakdown.mainDebt > 0)    hp.push('חוב ' + collectionBreakdown.mainDebt.toLocaleString() + '₪');
+    if (collectionBreakdown.extrasTotal > 0) hp.push('חשבונות ' + collectionBreakdown.extrasTotal.toLocaleString() + '₪');
+    hintEl.textContent = hp.join(' · ');
+  }
   document.getElementById('tbT').textContent=data.tenants.length;
   document.getElementById('tbP').textContent=pending;
   document.getElementById('tbP').className=pending>0?'tbadge':'tbadge green';
@@ -6391,6 +6418,120 @@ async function markAccountUnpaid(tenantId, accountId) {
     else toast('שגיאה: ' + d.error, 'error');
   } catch(e) { toast('שגיאת רשת', 'error'); }
 }
+
+// ══ v2.13.27 — "סה״כ לגביה" full breakdown ═══════════════════════
+// READ-ONLY / DISPLAY PATH. Touches no disk, no recordPayment,
+// no closeMonthUnpaid, no sentLog writes. Consumes server-computed
+// money fields only (t.totalDebt, t.currentBalance, accountsStatus).
+function computeCollectionBreakdown(globalAmount) {
+  const res = {
+    mainCurrent: 0,   // דמי ועד שוטפים לחודש הנוכחי (שטרם שולמו)
+    mainDebt: 0,      // חוב מצטבר מחודשים קודמים / חוב פתוח (חשבון ראשי)
+    mainCredit: 0,    // קרדיט לזכות דיירים (מקוזז)
+    extrasTotal: 0,   // סה״כ חשבונות נוספים (שוטף + חוב)
+    extras: [],       // [{label, current, debt, total, count}]
+    grandTotal: 0
+  };
+  const em = getEffectiveMonth();
+  const tenants = data.tenants || [];
+
+  for (const t of tenants) {
+    const tid = String(t.id);
+    const amount = parseFloat(t.effectiveAmount || t.customAmount || globalAmount) || 0;
+    const lv = data.sentLog[tid + '_' + em];
+    const paidThisMonth = !!lv && (String(lv).startsWith('manual_paid') || String(lv).startsWith('bank_import'));
+    const totalDebt = parseFloat(t.totalDebt) || 0;
+    const openingDebt = parseFloat(t.openingDebt) || 0;
+    const credit = parseFloat(t.creditBalance) || 0;
+    const bal = t.currentBalance || { status: 'unpaid', shortfall: 0 };
+
+    // Current-month share of the debt (mirrors the payments-tab split exactly)
+    const currentMonthDebt = paidThisMonth
+      ? (bal.status === 'partial' ? (parseFloat(bal.shortfall) || 0) : 0)
+      : Math.max(0, totalDebt - Math.max(0, openingDebt));
+    const priorDebt = Math.max(0, totalDebt - currentMonthDebt);
+
+    res.mainCurrent += currentMonthDebt;
+    res.mainDebt    += priorDebt;
+    if (credit > 0 && totalDebt === 0) res.mainCredit += credit;
+
+    // Extra accounts for this tenant
+    const accs = (typeof accountsStatus === 'object' && accountsStatus) ? (accountsStatus[tid] || []) : [];
+    for (const acc of accs) {
+      if (acc.active === false) continue;
+      const accCurrent = acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0);
+      const accDebt    = Math.max(0, parseFloat(acc.totalDebt) || 0);
+      if (accCurrent === 0 && accDebt === 0) continue;
+      const label = acc.label || 'חשבון נוסף';
+      let row = res.extras.find(function(r){ return r.label === label; });
+      if (!row) { row = { label: label, current: 0, debt: 0, total: 0, count: 0 }; res.extras.push(row); }
+      row.current += accCurrent;
+      row.debt    += accDebt;
+      row.total   += accCurrent + accDebt;
+      row.count   += 1;
+      res.extrasTotal += accCurrent + accDebt;
+    }
+  }
+
+  res.extras.sort(function(a,b){ return b.total - a.total; });
+  res.grandTotal = Math.round((res.mainCurrent + res.mainDebt + res.extrasTotal) * 100) / 100;
+  res.mainCurrent = Math.round(res.mainCurrent * 100) / 100;
+  res.mainDebt    = Math.round(res.mainDebt * 100) / 100;
+  res.extrasTotal = Math.round(res.extrasTotal * 100) / 100;
+  return res;
+}
+
+function showCollectionBreakdown() {
+  const b = collectionBreakdown || computeCollectionBreakdown(
+    parseInt(document.getElementById('cfgAmount').value) || 300
+  );
+  const nis = function(n){ return (Math.round(n*100)/100).toLocaleString() + '₪'; };
+  const row = function(label, val, sub, color) {
+    return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:9px 4px;border-bottom:1px solid var(--border);">'
+      + '<div><div style="font-size:0.88rem;">' + label + '</div>'
+      + (sub ? '<div style="font-size:0.7rem;color:var(--text3);margin-top:2px;">' + sub + '</div>' : '')
+      + '</div>'
+      + '<div style="font-weight:700;font-size:0.95rem;' + (color ? 'color:' + color + ';' : '') + '">' + nis(val) + '</div>'
+      + '</div>';
+  };
+
+  let h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:10px;">חודש פעיל: ' + getEffectiveMonth() + '</div>';
+
+  h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:12px 0 2px;">💰 דמי ועד (חשבון ראשי)</div>';
+  h += row('שוטף — החודש', b.mainCurrent, 'דיירים שטרם שילמו את החודש הנוכחי', 'var(--warn)');
+  h += row('חובות קודמים', b.mainDebt, 'חוב מצטבר מחודשים קודמים + חוב פתוח', 'var(--danger)');
+
+  h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:16px 0 2px;">💳 חשבונות נוספים</div>';
+  if (!b.extras.length) {
+    h += '<div style="font-size:0.8rem;color:var(--text3);padding:9px 4px;">אין חשבונות נוספים פתוחים לגבייה.</div>';
+  } else {
+    for (const e of b.extras) {
+      const parts = [];
+      if (e.current > 0) parts.push('שוטף: ' + nis(e.current));
+      if (e.debt > 0)    parts.push('חוב: ' + nis(e.debt));
+      h += row(e.label + ' <span style="font-size:0.7rem;color:var(--text3);">(' + e.count + ' דיירים)</span>',
+               e.total, parts.join(' · '), 'var(--warn)');
+    }
+    h += row('<strong>סה״כ חשבונות נוספים</strong>', b.extrasTotal, '', 'var(--text)');
+  }
+
+  if (b.mainCredit > 0) {
+    h += '<div style="font-size:0.74rem;color:#22c55e;margin-top:12px;">ℹ️ קיים קרדיט של ' + nis(b.mainCredit) + ' לזכות דיירים — יקוזז בחיוב הבא ואינו נכלל בסכום לגבייה.</div>';
+  }
+
+  h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding:12px 4px;border-top:2px solid var(--border);">'
+     + '<div style="font-weight:700;font-size:1rem;">סה״כ לגבייה</div>'
+     + '<div style="font-weight:800;font-size:1.25rem;color:var(--accent);">' + nis(b.grandTotal) + '</div>'
+     + '</div>';
+
+  document.getElementById('collectionBreakdownBody').innerHTML = h;
+  document.getElementById('collectionBreakdownModal').style.display = 'flex';
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+  var card = document.getElementById('sAmountCard');
+  if (card) card.addEventListener('click', showCollectionBreakdown);
+});
 
 // ── Render extra accounts summary cell (used in tenant list) ──
 function renderExtraAccountsCell(tenantId) {
