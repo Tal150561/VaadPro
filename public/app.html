@@ -417,8 +417,8 @@ function vpLogout() {
 <div class="stats-outer">
   <div class="stats-row">
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
-    <div class="stat-card"><div class="stat-num" id="sSent">0</div><div class="stat-label">שילמו החודש</div></div>
-    <div class="stat-card"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">ממתינים</div></div>
+    <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">שילמו החודש 🔎</div></div>
+    <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">ממתינים 🔎</div></div>
     <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
   </div>
 </div>
@@ -430,6 +430,16 @@ function vpLogout() {
     <div id="collectionBreakdownBody"></div>
     <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
       <button class="btn btn-secondary btn-sm" onclick="closeModal('collectionBreakdownModal')">סגור</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="tenantStatusListModal" style="display:none;" onclick="if(event.target===this)closeModal('tenantStatusListModal')">
+  <div class="modal" style="max-width:680px;max-height:90vh;overflow-y:auto;">
+    <h2 id="tenantStatusListTitle" style="margin-bottom:4px;">🔎 פירוט</h2>
+    <div id="tenantStatusListBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('tenantStatusListModal')">סגור</button>
     </div>
   </div>
 </div>
@@ -3086,8 +3096,24 @@ function render() {
   if(vmBanner) vmBanner.style.display = histView ? 'block' : 'none';
   const globalAmount=parseInt(document.getElementById('cfgAmount').value)||300;
   // הסטטיסטיקות ("שילמו"/"ממתינים") משקפות את חודש התצוגה
-  const paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+vm];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
-  const pending=data.tenants.length-paidCount;
+  // v2.13.34 — counts derive from buildTenantStatusRows(), the SAME classifier
+  // that fills the click-through modals, so a card can never contradict its own
+  // list. Previously this counted "has a payment record in sentLog", which (a)
+  // counted a PARTIAL payer as fully paid and (b) ignored prior debt entirely.
+  // "ממתינים" now means "owes money right now"; "שילמו החודש" means "owes
+  // nothing". They remain complements summing to tenants.length, and the
+  // ממתינים total now equals the "סה״כ לגביה" card by construction.
+  // Historical view keeps the old sentLog-based split: priorDebt/currentBalance
+  // are ACTIVE-month figures and say nothing about a past month.
+  var paidCount, pending;
+  if (histView) {
+    paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+vm];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
+    pending=data.tenants.length-paidCount;
+  } else {
+    var _statusRows=buildTenantStatusRows();
+    pending=_statusRows.filter(function(r){return r.bucket==='pending';}).length;
+    paidCount=_statusRows.length-pending;
+  }
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;
   document.getElementById('sPending').textContent=pending;
@@ -6582,6 +6608,129 @@ function computeCollectionBreakdown(globalAmount) {
   res.mainDebt    = Math.round(res.mainDebt * 100) / 100;
   res.extrasTotal = Math.round(res.extrasTotal * 100) / 100;
   return res;
+}
+
+// ── v2.13.34 — per-tenant rows behind the "ממתינים" / "שילמו החודש" cards ──
+// SINGLE SOURCE: every money expression here is the SAME one used by
+// computeCollectionBreakdown() above — currentBalance.shortfall for the active
+// month, server-supplied t.priorDebt for everything accrued before it, and
+// accountsStatus for extras. Nothing is re-derived. If you change a money
+// expression, change it in BOTH or the card and its list will disagree
+// (the exact class of bug v2.13.31/32 shipped twice).
+//
+// Classification (see the SKILL rule on card agreement):
+//   pending = owes anything right now  (current shortfall + prior debt + extras > 0)
+//   paid    = owes nothing at all
+// A partial payer has shortfall > 0, so they correctly land in `pending` and are
+// labelled "שילם חלקית X מתוך Y" — the v2.13.33 behaviour counted them as paid.
+function buildTenantStatusRows() {
+  const tenants = data.tenants || [];
+  const rows = [];
+  for (const t of tenants) {
+    const tid = String(t.id);
+    const bal = t.currentBalance || { status: 'unpaid', shortfall: 0, expected: 0, paidAmount: 0 };
+    const currentMonthDebt = Math.max(0, parseFloat(bal.shortfall) || 0);
+    const priorDebt        = Math.max(0, parseFloat(t.priorDebt) || 0);
+    const credit           = parseFloat(t.creditBalance) || 0;
+    const totalDebt        = parseFloat(t.totalDebt) || 0;
+
+    const accs = accountsStatus[tid] || [];
+    const extras = [];
+    let extrasTotal = 0;
+    for (const acc of accs) {
+      if (acc.active === false) continue;
+      const accCurrent = acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0);
+      const accDebt    = Math.max(0, parseFloat(acc.totalDebt) || 0);
+      if (accCurrent === 0 && accDebt === 0) continue;
+      extras.push({ label: acc.label || 'חשבון נוסף', current: accCurrent, debt: accDebt, total: accCurrent + accDebt });
+      extrasTotal += accCurrent + accDebt;
+    }
+
+    const owed = Math.round((currentMonthDebt + priorDebt + extrasTotal) * 100) / 100;
+    rows.push({
+      id: tid,
+      name: t.name || '(ללא שם)',
+      status: bal.status || 'unpaid',
+      paidAmount: parseFloat(bal.paidAmount) || 0,
+      expected: parseFloat(bal.expected) || 0,
+      currentMonthDebt: currentMonthDebt,
+      priorDebt: priorDebt,
+      extras: extras,
+      extrasTotal: Math.round(extrasTotal * 100) / 100,
+      credit: (credit > 0 && totalDebt === 0) ? credit : 0,
+      owed: owed,
+      bucket: owed > 0 ? 'pending' : 'paid'
+    });
+  }
+  return rows;
+}
+
+function showTenantStatusList(bucket) {
+  const all  = buildTenantStatusRows();
+  const rows = all.filter(function(r){ return r.bucket === bucket; });
+  const nis  = function(n){ return (Math.round(n*100)/100).toLocaleString() + '₪'; };
+  const isPending = (bucket === 'pending');
+
+  document.getElementById('tenantStatusListTitle').innerHTML =
+    isPending ? '⏳ ממתינים לתשלום' : '✅ שילמו החודש';
+
+  let h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:4px;">חודש פעיל: ' + getEffectiveMonth() + '</div>';
+  h += '<div style="font-size:0.75rem;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:14px;line-height:1.6;">'
+     + (isPending
+        ? 'דיירים שעדיין חייבים כסף — כולל מי ששילם חלקית ומי ששילם את החודש אך נותר לו חוב קודם. הסכום כולל דמי ועד, חוב קודם וחשבונות נוספים.'
+        : 'דיירים שאינם חייבים דבר — שילמו את החודש במלואו ואין להם חוב קודם או חשבון נוסף פתוח.')
+     + '</div>';
+
+  if (!rows.length) {
+    h += '<div style="font-size:0.85rem;color:var(--text3);padding:14px 4px;text-align:center;">'
+       + (isPending ? '🎉 אין ממתינים — כולם שילמו.' : 'אין דיירים ללא חוב.') + '</div>';
+  } else {
+    let sum = 0;
+    for (const r of rows) {
+      sum += r.owed;
+      const parts = [];
+      if (r.currentMonthDebt > 0) {
+        if (r.status === 'partial') {
+          parts.push('<span style="color:var(--warn);">שילם חלקית ' + nis(r.paidAmount) + ' מתוך ' + nis(r.expected) + '</span>'
+                   + ' · נותר ' + nis(r.currentMonthDebt));
+        } else {
+          parts.push('דמי ועד ' + getEffectiveMonth() + ': ' + nis(r.currentMonthDebt));
+        }
+      } else if (isPending) {
+        parts.push('<span style="color:#22c55e;">שילם את החודש ✓</span>');
+      }
+      if (r.priorDebt > 0)   parts.push('<span style="color:var(--danger);">חוב קודם: ' + nis(r.priorDebt) + '</span>');
+      for (const e of r.extras) {
+        const eb = [];
+        if (e.current > 0) eb.push('חיוב החודש ' + nis(e.current));
+        if (e.debt > 0)    eb.push('חוב ' + nis(e.debt));
+        parts.push(e.label + ': ' + nis(e.total) + ' <span style="color:var(--text3);">(' + eb.join(' · ') + ')</span>');
+      }
+      if (!isPending && r.credit > 0) parts.push('<span style="color:#22c55e;">קרדיט לזכותו: ' + nis(r.credit) + '</span>');
+
+      h += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;padding:9px 4px;border-bottom:1px solid var(--border);">'
+         + '<div style="min-width:0;"><div style="font-size:0.9rem;font-weight:600;">' + r.name + '</div>'
+         + (parts.length ? '<div style="font-size:0.72rem;color:var(--text3);margin-top:3px;line-height:1.7;">' + parts.join('<br>') + '</div>' : '')
+         + '</div>'
+         + '<div style="font-weight:700;font-size:0.95rem;white-space:nowrap;color:' + (isPending ? 'var(--danger)' : '#22c55e') + ';">'
+         + (isPending ? nis(r.owed) : '✓') + '</div>'
+         + '</div>';
+    }
+    if (isPending) {
+      h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:16px;padding:12px 4px;border-top:2px solid var(--border);">'
+         + '<div style="font-weight:700;font-size:1rem;">סה״כ (' + rows.length + ' דיירים)</div>'
+         + '<div style="font-weight:800;font-size:1.25rem;color:var(--accent);">' + nis(sum) + '</div>'
+         + '</div>'
+         + '<div style="font-size:0.72rem;color:var(--text3);margin-top:6px;">סכום זה זהה ל&quot;סה״כ לגביה&quot; בכרטיס הראשי.</div>';
+    } else {
+      h += '<div style="margin-top:16px;padding:12px 4px;border-top:2px solid var(--border);font-weight:700;font-size:0.95rem;">'
+         + 'סה״כ ' + rows.length + ' דיירים ללא חוב</div>';
+    }
+  }
+
+  document.getElementById('tenantStatusListBody').innerHTML = h;
+  if (typeof openModal === 'function') openModal('tenantStatusListModal');
+  else document.getElementById('tenantStatusListModal').style.display = 'flex';
 }
 
 function showCollectionBreakdown() {

@@ -338,4 +338,113 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   t.eq('hint names the extras', el('sAmountHint').textContent.includes('חשבונות 50₪'), true);
 }
 
+// ── v2.13.34: "ממתינים" / "שילמו החודש" click-through lists ──────
+// FIXTURE PROVENANCE: the 12-tenant fixture below is Tal's REAL building,
+// copied verbatim from a live GET /api/data (July 2026). Do not "tidy" the
+// numbers — the whole point is that the list total must equal the ₪3,910
+// the dashboard actually showed. The two `partial` tenants in the SECOND
+// fixture are SYNTHETIC (the live building had no partial payment at the
+// time); they keep the real ₪230 tariff shape.
+{
+  const app = readSource('public/app.html');
+  const fns = extractFunctions(app, ['buildTenantStatusRows', 'showTenantStatusList']);
+
+  // Real building, verbatim from /api/data
+  const REAL = [
+    ['תומר','unpaid',0,230,230,0],   ['חנה','paid',230,230,0,0],
+    ['רנדי','unpaid',0,230,230,0],   ['לימור','unpaid',0,230,230,2070],
+    ['עידו','unpaid',0,230,230,0],   ['ירין','paid',230,230,0,0],
+    ['תמי','paid',230,230,0,230],    ['טל','paid',230,230,0,0],
+    ['רוני','unpaid',0,230,230,0],   ['אורי','unpaid',0,230,230,0],
+    ['גיל','paid',230,230,0,0],      ['אור','unpaid',0,230,230,0]
+  ].map(([name,status,paidAmount,expected,shortfall,priorDebt],i)=>({
+    id:i+1, name, priorDebt, totalDebt:priorDebt, creditBalance:0,
+    currentBalance:{status,paidAmount,expected,shortfall,credit:0}
+  }));
+
+  const mk = (tenants, accountsStatus={}) => {
+    const els = {};
+    const el = id => (els[id] = els[id] || { id, textContent:'', innerHTML:'', style:{}, value:'230' });
+    const ctx = new Function('document','data','accountsStatus','getEffectiveMonth','openModal',
+      fns + '\n; return { buildTenantStatusRows, showTenantStatusList };'
+    )({ getElementById: el }, { tenants }, accountsStatus, () => 'יולי', () => {});
+    return { ctx, el };
+  };
+
+  const { ctx, el } = mk(REAL);
+  const rows = ctx.buildTenantStatusRows();
+  const pending = rows.filter(r => r.bucket === 'pending');
+  const paid    = rows.filter(r => r.bucket === 'paid');
+
+  t.eq('real building: 12 tenants classified', rows.length, 12);
+  t.eq('real building: 8 pending (7 unpaid + תמי who owes prior debt)', pending.length, 8);
+  t.eq('real building: 4 owe nothing', paid.length, 4);
+  t.eq('⭐ pending total EQUALS the סה״כ לגביה card (3910)',
+    Math.round(pending.reduce((a,r) => a + r.owed, 0) * 100) / 100, 3910);
+  t.eq('cards are complements (pending + paid = tenants)', pending.length + paid.length, rows.length);
+
+  // תמי: paid July in full, but carries prior debt → must NOT be counted as settled
+  const tami = rows.find(r => r.name === 'תמי');
+  t.eq('תמי paid the month but still owes', tami.bucket, 'pending');
+  t.eq('תמי owes exactly her prior debt', tami.owed, 230);
+  t.eq('תמי has no current-month charge', tami.currentMonthDebt, 0);
+
+  // לימור: the large accrued debt case
+  const limor = rows.find(r => r.name === 'לימור');
+  t.eq('לימור owes current + prior', limor.owed, 2300);
+
+  // אור: negative openingDebt (credit) must NOT reduce what he owes this month
+  const or = rows.find(r => r.name === 'אור');
+  t.eq('credit never nets against the collectible figure', or.owed, 230);
+
+  // Partial payments (SYNTHETIC — none existed live)
+  const PARTIAL = [
+    { id:1, name:'חלקי', priorDebt:0, totalDebt:80, creditBalance:0,
+      currentBalance:{ status:'partial', paidAmount:150, expected:230, shortfall:80, credit:0 } },
+    { id:2, name:'חלקי+חוב', priorDebt:500, totalDebt:630, creditBalance:0,
+      currentBalance:{ status:'partial', paidAmount:100, expected:230, shortfall:130, credit:0 } }
+  ];
+  const p = mk(PARTIAL);
+  const prows = p.ctx.buildTenantStatusRows();
+  t.eq('⭐ partial payer is PENDING, not "paid" (the v2.13.33 bug)', prows[0].bucket, 'pending');
+  t.eq('partial payer owes only the shortfall', prows[0].owed, 80);
+  t.eq('partial + prior debt sums both', prows[1].owed, 630);
+
+  p.ctx.showTenantStatusList('pending');
+  const ph = p.el('tenantStatusListBody').innerHTML;
+  t.eq('partial row shows "שילם חלקית X מתוך Y"', /שילם חלקית[\s\S]*?150₪[\s\S]*?מתוך[\s\S]*?230₪/.test(ph), true);
+  t.eq('partial row shows the remaining balance', ph.includes('נותר'), true);
+
+  // Extra accounts must appear in the per-tenant rows
+  const e = mk(
+    [{ id:3, name:'שילם', priorDebt:0, totalDebt:0, creditBalance:0,
+       currentBalance:{ status:'paid', paidAmount:230, expected:230, shortfall:0, credit:0 } }],
+    { '3': [{ id:'ins', label:'ביטוח', amount:50, paidThisMonth:false, totalDebt:0, active:true }] }
+  );
+  const erows = e.ctx.buildTenantStatusRows();
+  t.eq('dues paid but open extra account → still pending', erows[0].bucket, 'pending');
+  t.eq('extra account amount is included', erows[0].owed, 50);
+  e.ctx.showTenantStatusList('pending');
+  t.eq('extra account is named in the list', e.el('tenantStatusListBody').innerHTML.includes('ביטוח'), true);
+
+  // The modals must actually render without throwing
+  ctx.showTenantStatusList('pending');
+  const html = el('tenantStatusListBody').innerHTML;
+  t.eq('pending modal renders tenant names', html.includes('לימור'), true);
+  t.eq('pending modal shows the grand total', html.includes('3,910₪'), true);
+  t.eq('pending modal states it matches the main card', html.includes('סה״כ לגביה'), true);
+  t.eq('pending title set', el('tenantStatusListTitle').innerHTML.includes('ממתינים'), true);
+
+  ctx.showTenantStatusList('paid');
+  const phtml = el('tenantStatusListBody').innerHTML;
+  t.eq('paid modal lists only debt-free tenants', phtml.includes('חנה') && !phtml.includes('לימור'), true);
+  t.eq('paid title set', el('tenantStatusListTitle').innerHTML.includes('שילמו'), true);
+
+  // Wiring: the cards must be clickable
+  t.eq('ממתינים card is bound to the list', /id="sPendingCard"[^>]*onclick="showTenantStatusList\('pending'\)"/.test(app), true);
+  t.eq('שילמו card is bound to the list', /id="sSentCard"[^>]*onclick="showTenantStatusList\('paid'\)"/.test(app), true);
+  t.eq('stat counts derive from the shared classifier',
+    /buildTenantStatusRows\(\)[\s\S]{0,200}?bucket==='pending'/.test(app), true);
+}
+
 process.exit(t.done() ? 1 : 0);
