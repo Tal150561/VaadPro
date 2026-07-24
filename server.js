@@ -2111,6 +2111,318 @@ function autoSendShouldRemind(d, tenant, mk) {
   return bal.status === 'partial';                  // partial → remind for the balance; paid → skip
 }
 
+// ════════════════════════════════════════════════════════════════
+// SECTION 11b — EXCESSIVE DEBT (חוב חריג) — v2.14.0
+// ════════════════════════════════════════════════════════════════
+// A tenant is "חריג" when their TOTAL owed right now (current-month shortfall
+// + prior accrued debt + extra accounts) is >= config.excessDebtThreshold.
+//
+// ⚠️ SINGLE SOURCE OF TRUTH (v2.13.10 rule). Nothing here re-derives money.
+// Every figure is read from the SAME primitives the dashboard and the portal
+// already use: calcMonthBalance / getExpectedAmount for the active month,
+// calcTotalDebt for the accrued total, and the extraAccounts shape that
+// GET /api/accounts-status already returns. The per-month LIST below is new
+// PRESENTATION over existing data — it introduces no new arithmetic.
+
+/** Default threshold (₪) above which a debt is considered "חריג". */
+const EXCESS_DEBT_DEFAULT = 1000;
+
+/**
+ * Resolve the configured excessive-debt threshold for a building.
+ * @param {object} config - tenantData.config
+ * @returns {number} positive threshold; falls back to EXCESS_DEBT_DEFAULT.
+ */
+function getExcessDebtThreshold(config) {
+  const v = parseFloat((config || {}).excessDebtThreshold);
+  return (isFinite(v) && v > 0) ? v : EXCESS_DEBT_DEFAULT;
+}
+
+/**
+ * Month-by-month unpaid detail for ONE tenant, main account + extra accounts.
+ *
+ * ⚠️ Reads only: sentLog (source of truth for what arrived), the FROZEN
+ * paymentHistory.amount via getExpectedAmount (source of truth for what was
+ * due), and calcMonthBalance to classify. It never calls resolveTariffRate —
+ * the v2.13.16/v2.13.28 contract says read paths trust the frozen amount.
+ *
+ * @param {object} d        - tenant data file
+ * @param {object} tenant   - the tenant object
+ * @param {string} mkNow    - active month key 'YYYY-MM'
+ * @returns {{months:Array,accounts:Array,monthsTotal:number,accountsTotal:number}}
+ *   months[]   = [{monthKey, hebMonth, expected, paidAmount, shortfall, status}]
+ *   accounts[] = [{label, months:[{monthKey,hebMonth,amount}], openingDebt, total}]
+ */
+function buildDebtDetail(d, tenant, mkNow) {
+  const tid     = String(tenant.id);
+  const sentLog = d.sentLog || {};
+  const history = (d.paymentHistory || {})[tid] || [];
+  const live    = tenant.customAmount || ((d.config || {}).amount) || 300;
+  const year    = parseInt(String(mkNow).split('-')[0]);
+  const months  = [];
+
+  // (a) months that HAVE a sentLog entry but are unpaid / short-paid.
+  Object.keys(sentLog).forEach(key => {
+    if (key.includes('__acc__')) return;
+    const sep = key.lastIndexOf('_');
+    if (sep < 0 || String(key.slice(0, sep)) !== tid) return;
+    const heb = key.slice(sep + 1);
+    const idx = HEBREW_MONTHS.indexOf(heb);
+    if (idx < 0) return;                                  // legacy/ISO key — skip
+    const mKey = year + '-' + String(idx + 1).padStart(2, '0');
+    const expected = getExpectedAmount(history, mKey, live);
+    const bal = calcMonthBalance(sentLog[key], expected);
+    if (bal.status === 'paid' || bal.credit > 0) return;   // nothing owed for this month
+    months.push({
+      monthKey: mKey, hebMonth: heb,
+      expected: bal.expected, paidAmount: bal.paidAmount,
+      shortfall: bal.status === 'partial' ? bal.shortfall : bal.expected,
+      status: bal.status
+    });
+  });
+
+  // (b) accrued unpaid rows that have NO sentLog entry (written by
+  //     closeMonthUnpaid / unpaid_rollover). Skip wa_sent (a reminder is not a charge).
+  const seen = new Set(months.map(m => m.monthKey));
+  history.filter(r => !r.paid && r.type !== 'wa_sent' && !seen.has(r.month))
+         .forEach(r => {
+    const idx = parseInt(String(r.month).split('-')[1]) - 1;
+    months.push({
+      monthKey: r.month,
+      hebMonth: HEBREW_MONTHS[idx] || r.month,
+      expected: parseFloat(r.amount) || 0, paidAmount: 0,
+      shortfall: parseFloat(r.amount) || 0, status: 'unpaid'
+    });
+  });
+
+  // (c) the ACTIVE month when it is owed but has neither a sentLog entry nor a
+  //     history row yet (closeMonthUnpaid has not run for it). calcTotalDebt
+  //     omits it too, which is exactly why the dashboard adds
+  //     currentBalance.shortfall on top — see the v2.13.31 rule. Without this
+  //     the itemised list would silently under-report the very month being
+  //     chased (₪230 present in the total, absent from the letter).
+  if (!months.some(m => m.monthKey === mkNow)) {
+    const expNow = getExpectedAmount(history, mkNow, live);
+    const balNow = calcMonthBalance(sentLog[tid + '_' + getEffectiveMonth(d.config || {})], expNow);
+    if (balNow.status !== 'paid' && balNow.credit <= 0) {
+      const owedNow = balNow.status === 'partial' ? balNow.shortfall : balNow.expected;
+      if (owedNow > 0) months.push({
+        monthKey: mkNow, hebMonth: getEffectiveMonth(d.config || {}),
+        expected: balNow.expected, paidAmount: balNow.paidAmount,
+        shortfall: owedNow, status: balNow.status
+      });
+    }
+  }
+
+  months.sort((a, b) => String(a.monthKey).localeCompare(String(b.monthKey)));
+
+  // (d) openingDebt is carried-forward debt with NO month attribution — it
+  //     cannot be itemised per month, but it MUST appear or the itemised lines
+  //     will not add up to the total the tenant is being chased for.
+  const openingDebt = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+
+  // (e) extra accounts — unpaid months + the account's own carried openingDebt.
+  const em = getEffectiveMonth(d.config || {});
+  const accounts = [];
+  for (const acc of (tenant.extraAccounts || [])) {
+    if (acc.active === false) continue;
+    const phKey = tid + '__acc__' + acc.id;
+    const accHist = (d.paymentHistory || {})[phKey] || [];
+    const accMonths = accHist
+      .filter(r => !r.paid && r.type !== 'wa_sent')
+      .map(r => ({
+        monthKey: r.month,
+        hebMonth: HEBREW_MONTHS[parseInt(String(r.month).split('-')[1]) - 1] || r.month,
+        amount: parseFloat(r.amount) || 0
+      }));
+    const slKey = phKey + '_' + em;
+    const lv = String(sentLog[slKey] || '');
+    const paidNow = lv.startsWith('manual_paid') || lv.startsWith('bank_import');
+    if (!paidNow && !accMonths.some(m => m.monthKey === mkNow)) {
+      const amt = parseFloat(acc.amount) || 0;
+      if (amt > 0) accMonths.push({ monthKey: mkNow, hebMonth: em, amount: amt });
+    }
+    const openingDebt = Math.max(0, parseFloat(acc.openingDebt) || 0);
+    const total = Math.round((accMonths.reduce((s, m) => s + m.amount, 0) + openingDebt) * 100) / 100;
+    if (total <= 0) continue;
+    accMonths.sort((a, b) => String(a.monthKey).localeCompare(String(b.monthKey)));
+    accounts.push({ label: acc.label || 'חשבון נוסף', months: accMonths, openingDebt, total });
+  }
+
+  return {
+    months, accounts, openingDebt,
+    monthsTotal:   Math.round((months.reduce((s, m) => s + m.shortfall, 0) + openingDebt) * 100) / 100,
+    accountsTotal: Math.round(accounts.reduce((s, a) => s + a.total, 0) * 100) / 100
+  };
+}
+
+/**
+ * Build the list of tenants whose total owed >= threshold.
+ *
+ * ⚠️ `owed` is computed with the SAME expression as the dashboard's
+ * buildTenantStatusRows() / computeCollectionBreakdown() in app.html:
+ *     current-month shortfall + priorDebt + extra accounts.
+ * If that expression ever changes, change it here too (see the v2.13.31/32
+ * lesson — two copies of a debt split is how the card and its list diverged).
+ *
+ * @param {object} d - tenant data file
+ * @returns {{threshold:number, rows:Array}}
+ */
+function buildExcessDebtRows(d) {
+  const mkNow = getMonthKey(d.config || {});
+  const emNow = getEffectiveMonth(d.config || {});
+  const threshold = getExcessDebtThreshold(d.config);
+  const rows = [];
+  for (const tenant of (d.tenants || [])) {
+    const tid  = String(tenant.id);
+    const hist = (d.paymentHistory || {})[tid] || [];
+    const live = tenant.customAmount || ((d.config || {}).amount) || 300;
+    const emBal = calcMonthBalance(d.sentLog[tid + '_' + emNow], getExpectedAmount(hist, mkNow, live));
+    const totalNow = calcTotalDebt(d, tid, mkNow);
+    // Identical to the /api/data enrichment — see the priorDebt comment there.
+    const curInTotal =
+      (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
+      (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
+        ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0);
+    const priorDebt = Math.max(0, totalNow - curInTotal);
+    const currentMonthDebt = Math.max(0, parseFloat(emBal.shortfall) || 0);
+
+    const detail = buildDebtDetail(d, tenant, mkNow);
+    const owed = Math.round((currentMonthDebt + priorDebt + detail.accountsTotal) * 100) / 100;
+    if (owed < threshold) continue;
+    rows.push({
+      id: tid, name: tenant.name || '(ללא שם)',
+      phone: tenant.phone || '', email: tenant.email || '',
+      apartment: tenant.apartment || '',
+      currentMonthDebt, priorDebt,
+      extrasTotal: detail.accountsTotal,
+      owed,
+      months: detail.months, accounts: detail.accounts,
+      alerts: Array.isArray(tenant.excessDebtAlerts) ? tenant.excessDebtAlerts : []
+    });
+  }
+  rows.sort((a, b) => b.owed - a.owed);
+  return { threshold, rows };
+}
+
+/**
+ * Render the {פירוט_חוב} placeholder — a month-by-month plain-text breakdown
+ * used by the WhatsApp / email / letter alert. Pure formatting over
+ * buildDebtDetail(); no money is computed here.
+ * @returns {string} '' when nothing is owed.
+ */
+function buildDebtDetailBlock(detail) {
+  const lines = [];
+  for (const m of (detail.months || [])) {
+    lines.push(m.status === 'partial'
+      ? `• ${m.hebMonth}: שולם ${m.paidAmount} ₪ מתוך ${m.expected} ₪ — נותר *${m.shortfall} ₪*`
+      : `• ${m.hebMonth}: *${m.shortfall} ₪*`);
+  }
+  if ((detail.openingDebt || 0) > 0) {
+    lines.push(`• חוב שהועבר מתקופה קודמת: *${detail.openingDebt} ₪*`);
+  }
+  for (const a of (detail.accounts || [])) {
+    lines.push(`• ${a.label}:`);
+    for (const m of a.months) lines.push(`   ◦ ${m.hebMonth}: *${m.amount} ₪*`);
+    if (a.openingDebt > 0) lines.push(`   ◦ חוב קודם: *${a.openingDebt} ₪*`);
+  }
+  return lines.length ? lines.join('\n') : '';
+}
+
+/** Default template for the excessive-debt alert (used when none is configured). */
+const EXCESS_DEBT_DEFAULT_TEMPLATE =
+  'שלום {שם},\n\n' +
+  'ברישומי הוועד מופיע חוב פתוח על סך *{סה"כ_חוב} ₪*.\n\n' +
+  'פירוט החוב:\n{פירוט_חוב}\n\n' +
+  'נודה להסדרת התשלום בהקדם. אם ההודעה אינה תואמת את רישומיך, נשמח שתיצור קשר.\n\n' +
+  'בברכה,\nועד הבית';
+
+/**
+ * Compose the alert message for one excessive-debt row.
+ * Reuses the shared placeholder helpers — never a copy of send logic.
+ */
+function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
+  const template = tmpl || (d.config || {}).excessDebtTemplate || EXCESS_DEBT_DEFAULT_TEMPLATE;
+  const month = getEffectiveMonth(d.config || {});
+  const detailBlock = buildDebtDetailBlock({ months: row.months, accounts: row.accounts });
+  const portalUrl = (template.includes('{לינק_פורטל}') && tenantDataId)
+    ? getOrCreatePortalUrl(tenantDataId, tenant.id, tenant.name)
+    : '';
+  return template
+    .replace(/{שם}/g, tenant.name || '')
+    .replace(/{חודש}/g, month)
+    .replace(/{סה"כ_חוב}/g, row.owed)
+    .replace(/{סה״כ_חוב}/g, row.owed)
+    .replace(/{פירוט_חוב}/g, detailBlock)
+    .replace(/{חוב_קודם}/g, row.priorDebt > 0 ? row.priorDebt : '')
+    .replace(/{לינק_פורטל}/g, portalUrl);
+}
+
+// GET /api/excess-debt — the "חייבים חריגים" list + the active threshold.
+app.get('/api/excess-debt', authMiddleware, (req, res) => {
+  try {
+    const d = loadTenantData(req.user.tenantId);
+    const out = buildExcessDebtRows(d);
+    res.json({ ok: true, threshold: out.threshold, month: getEffectiveMonth(d.config || {}), rows: out.rows });
+  } catch (e) {
+    console.error('[excess-debt]', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/excess-debt/preview — rendered message for ONE tenant (no send, no write).
+app.post('/api/excess-debt/preview', authMiddleware, (req, res) => {
+  try {
+    const { tenantId, template } = req.body || {};
+    const d = loadTenantData(req.user.tenantId);
+    const row = buildExcessDebtRows(d).rows.find(r => String(r.id) === String(tenantId));
+    if (!row) return res.json({ ok: false, error: 'הדייר אינו ברשימת החריגים' });
+    const tenant = d.tenants.find(t => String(t.id) === String(tenantId));
+    res.json({ ok: true, message: buildExcessDebtMessage(d, tenant, row, template, req.user.tenantId), row });
+  } catch (e) {
+    console.error('[excess-debt/preview]', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
+// POST /api/excess-debt/send — send the alert via WhatsApp or email and STAMP the tenant.
+//
+// ⚠️ Deliberately does NOT touch sentLog, paymentHistory, openingDebt or any
+// tariff table. An alert is a NOTIFICATION, not a payment event — recording it
+// in sentLog would mark the month "reminded" and suppress the real AutoSend
+// reminder. The only write is the tenant's own excessDebtAlerts[] audit trail.
+app.post('/api/excess-debt/send', authMiddleware, async (req, res) => {
+  const { tenantId, channel, template } = req.body || {};
+  if (!tenantId || !channel) return res.json({ ok: false, error: 'חסרים פרטים' });
+  try {
+    const d = loadTenantData(req.user.tenantId);
+    const row = buildExcessDebtRows(d).rows.find(r => String(r.id) === String(tenantId));
+    if (!row) return res.json({ ok: false, error: 'הדייר אינו ברשימת החריגים' });
+    const tenant = d.tenants.find(t => String(t.id) === String(tenantId));
+    const msg = buildExcessDebtMessage(d, tenant, row, template, req.user.tenantId);
+
+    if (channel === 'wa') {
+      if (!tenant.phone) return res.json({ ok: false, error: 'לדייר אין מספר טלפון' });
+      await sendWaMsg(req.user.tenantId, tenant.phone, msg);
+    } else if (channel === 'email') {
+      if (!tenant.email) return res.json({ ok: false, error: 'לדייר אין כתובת מייל' });
+      await sendEmailResend(tenant.email, 'הודעה על חוב פתוח — ועד הבית', msg.replace(/\n/g, '<br>'));
+    } else if (channel !== 'letter') {
+      return res.json({ ok: false, error: 'ערוץ לא מוכר' });
+    }
+
+    // Audit trail on the tenant card (full history — date + channel + debt at the time).
+    const entry = { date: new Date().toISOString(), channel, amount: row.owed };
+    const tenants = (d.tenants || []).map(t => String(t.id) === String(tenantId)
+      ? { ...t, excessDebtAlerts: [...(Array.isArray(t.excessDebtAlerts) ? t.excessDebtAlerts : []), entry] }
+      : t);
+    saveTenantData(req.user.tenantId, { tenants });
+    res.json({ ok: true, sentAt: entry.date, channel, amount: row.owed });
+  } catch (e) {
+    console.error('[excess-debt/send]', e.message);
+    res.json({ ok: false, error: e.message });
+  }
+});
+
 // Send to single tenant
 app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
@@ -6333,8 +6645,8 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.13.35 – SaaS Server        ║');
-  console.log('║   http://localhost:' + PORT + '             ║');
+  console.log('║   VaadPro v2.14.0 – SaaS Server      ║');
+  console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
   const modeLabel = WA_MODE === 'server' ? '🚀 Server (Baileys on Railway)' : WA_MODE === 'cloud' ? '☁️  Cloud (WA Bridge)' : '💻 Local (legacy)';

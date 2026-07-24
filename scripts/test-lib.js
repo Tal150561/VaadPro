@@ -60,14 +60,23 @@ const SERVER_FNS = [
   // Stage 3 (v2.13.18) — partial-payment balance reminder
   'buildBalanceLine', 'autoSendShouldRemind',
   // v2.13.23 — year-boundary-safe Hebrew-month → monthKey
-  'hebMonthToMonthKey'
+  'hebMonthToMonthKey',
+  // v2.14.0 — חייבים חריגים (excessive debt)
+  'getExcessDebtThreshold', 'buildDebtDetail', 'buildExcessDebtRows',
+  'buildDebtDetailBlock', 'buildExcessDebtMessage'
 ];
 
 function loadServer() {
   const src = readSource('server.js');
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
   if (!months) throw new Error('test-lib: HEBREW_MONTHS not found in server.js');
-  const code = months[0] + '\n'
+  // v2.14.0 — module-level constants the excessive-debt helpers close over.
+  const exDefault = src.match(/const EXCESS_DEBT_DEFAULT = \d+;/);
+  const exTpl = src.match(/const EXCESS_DEBT_DEFAULT_TEMPLATE =[\s\S]*?';\n/);
+  if (!exDefault) throw new Error('test-lib: EXCESS_DEBT_DEFAULT not found in server.js');
+  if (!exTpl) throw new Error('test-lib: EXCESS_DEBT_DEFAULT_TEMPLATE not found in server.js');
+  const code = months[0] + '\n' + exDefault[0] + '\n' + exTpl[0] + '\n'
+    + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';
   return runInSandbox(code);

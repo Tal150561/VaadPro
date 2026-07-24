@@ -698,4 +698,109 @@ t.eq('empty string → null',
 t.eq('malformed ref monthKey → null (no silent wrong date)',
   S.hebMonthToMonthKey('יוני', 'garbage'), null);
 
+// ══════════════════════════════════════════════════════════════════
+// v2.14.0 — חייבים חריגים (excessive debt)
+// ══════════════════════════════════════════════════════════════════
+// ⚠️ The load-bearing assertion here is RECONCILIATION: the itemised
+// month-by-month lines shown to the tenant MUST sum to the `owed` figure the
+// tenant is being chased for. A letter whose lines do not add up to its own
+// total is worse than no letter. Two real gaps were caught this way during
+// development: the ACTIVE month (no sentLog row yet) and openingDebt (carried
+// forward, not month-attributable) were both in `owed` but absent from the list.
+const exBuild = (over) => Object.assign({
+  config: { amount: 230, manualMonth: '', excessDebtThreshold: 1000 },
+  tenants: [], sentLog: {}, paymentHistory: {}
+}, over);
+
+t.section('חוב חריג — threshold resolution');
+t.eq('unset → default 1000', S.getExcessDebtThreshold({}), 1000);
+t.eq('configured value wins', S.getExcessDebtThreshold({ excessDebtThreshold: 2500 }), 2500);
+t.eq('zero falls back to default', S.getExcessDebtThreshold({ excessDebtThreshold: 0 }), 1000);
+t.eq('negative falls back to default', S.getExcessDebtThreshold({ excessDebtThreshold: -5 }), 1000);
+t.eq('numeric string accepted', S.getExcessDebtThreshold({ excessDebtThreshold: '1500' }), 1500);
+
+const exD1 = exBuild({
+  tenants: [
+    { id: 1, name: 'לימור', openingDebt: 1380, extraAccounts: [] },
+    { id: 2, name: 'דנה',  openingDebt: 0,    extraAccounts: [] }
+  ],
+  paymentHistory: { '1': [
+    { month: '2026-04', paid: false, type: 'unpaid_rollover', amount: 230 },
+    { month: '2026-05', paid: false, type: 'unpaid_rollover', amount: 230 },
+    { month: '2026-06', paid: false, type: 'unpaid_rollover', amount: 230 }
+  ]}
+});
+const exR1 = S.buildExcessDebtRows(exD1);
+
+t.section('חוב חריג — filtering by threshold');
+t.eq('only the over-threshold tenant is listed', exR1.rows.length, 1);
+t.eq('listed tenant is לימור', exR1.rows[0].name, 'לימור');
+t.eq('לימור owed = 2300 (1380 opening + 4×230)', exR1.rows[0].owed, 2300);
+t.eq('דנה (230 < 1000) excluded', !!(!exR1.rows.some(r => r.name === 'דנה')), true);
+
+t.section('⭐ חוב חריג — itemised detail RECONCILES with the total');
+const exDet1 = S.buildDebtDetail(exD1, exD1.tenants[0], '2026-07');
+t.eq('months + openingDebt equal the owed figure',
+  Math.round((exDet1.months.reduce((s, m) => s + m.shortfall, 0) + exDet1.openingDebt) * 100) / 100,
+  exR1.rows[0].owed);
+t.eq('the ACTIVE month is itemised even with no sentLog/history row', !!(exDet1.months.some(m => m.monthKey === '2026-07' && m.shortfall === 230)), true);
+t.eq('openingDebt surfaced separately (not month-attributable)', exDet1.openingDebt, 1380);
+t.eq('openingDebt appears in the rendered block', !!(S.buildDebtDetailBlock(exDet1).includes('1380')), true);
+
+const exD2 = exBuild({
+  tenants: [{ id: 3, name: 'אור', openingDebt: 0,
+    extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, openingDebt: 900 }] }],
+  sentLog: { '3_יולי': 'bank_import_2026-07-05_100_payer_אור' },
+  paymentHistory: {
+    '3': [{ month: '2026-07', paid: true, type: 'bank', amount: 230, paidAmount: 100 }],
+    '3__acc__a1': []
+  }
+});
+const exR2 = S.buildExcessDebtRows(exD2).rows[0];
+
+t.section('חוב חריג — partial payment + extra accounts');
+t.eq('partial shortfall is 130, not the full 230', exR2.currentMonthDebt, 130);
+t.eq('extras = 50 current + 900 account debt', exR2.extrasTotal, 950);
+t.eq('owed = 130 + 950', exR2.owed, 1080);
+t.eq('the partial month is labelled partial', !!(exR2.months.some(m => m.status === 'partial' && m.shortfall === 130)), true);
+t.eq('detail reconciles with owed',
+  Math.round((exR2.months.reduce((s, m) => s + m.shortfall, 0)
+            + exR2.accounts.reduce((s, a) => s + a.total, 0)) * 100) / 100,
+  exR2.owed);
+const exBlk2 = S.buildDebtDetailBlock(exR2);
+t.eq('block states how much was actually paid', !!(exBlk2.includes('שולם 100 ₪ מתוך 230 ₪')), true);
+t.eq('block names the extra account', !!(exBlk2.includes('ביטוח')), true);
+t.eq("block shows the account's own prior debt", !!(exBlk2.includes('900')), true);
+
+t.section('חוב חריג — exclusions');
+const exD3 = exBuild({
+  tenants: [{ id: 4, name: 'שולם', openingDebt: 0, extraAccounts: [] }],
+  sentLog: { '4_יולי': 'bank_import_2026-07-05_230_payer_שולם' },
+  paymentHistory: { '4': [{ month: '2026-07', paid: true, type: 'bank', amount: 230, paidAmount: 230 }] }
+});
+t.eq('a fully-paid tenant is never listed', S.buildExcessDebtRows(exD3).rows.length, 0);
+
+const exD4 = exBuild({
+  tenants: [{ id: 5, name: 'תזכורת', openingDebt: 2000, extraAccounts: [] }],
+  paymentHistory: { '5': [{ month: '2026-06', paid: false, type: 'wa_sent', amount: 230 }] }
+});
+t.eq('a wa_sent row is NOT itemised as a charge', !!(!S.buildExcessDebtRows(exD4).rows[0].months.some(m => m.monthKey === '2026-06')), true);
+
+const exD5 = exBuild({
+  config: { amount: 230, manualMonth: '', excessDebtThreshold: 230 },
+  tenants: [{ id: 6, name: 'בדיוק', openingDebt: 0, extraAccounts: [] }]
+});
+t.eq('a debt exactly AT the threshold is included (>=)',
+  S.buildExcessDebtRows(exD5).rows.length, 1);
+
+t.section('חוב חריג — message composition');
+const exMsg = S.buildExcessDebtMessage(exD1, exD1.tenants[0], exR1.rows[0], null, 'tid');
+t.eq('{שם} replaced with the tenant name', !!(exMsg.includes('לימור')), true);
+t.eq('{סה"כ_חוב} replaced with the owed figure', !!(exMsg.includes('2300')), true);
+t.eq('{פירוט_חוב} replaced by the month list', !!(exMsg.includes('אפריל')), true);
+t.eq('no unreplaced placeholder remains', !!(!/\{[^}]*\}/.test(exMsg)), true);
+const exCustom = S.buildExcessDebtMessage(exD1, exD1.tenants[0], exR1.rows[0],
+  'חוב: {סה"כ_חוב}₪', 'tid');
+t.eq('a custom template overrides the default', exCustom, 'חוב: 2300₪');
+
 process.exit(t.done() ? 1 : 0);

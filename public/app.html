@@ -419,6 +419,7 @@ function vpLogout() {
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
     <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">ללא חוב 🔎</div></div>
     <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">חייבים 🔎</div></div>
+    <div class="stat-card" id="sExcessCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showExcessDebtList()"><div class="stat-num warn" id="sExcess" style="color:var(--danger);">0</div><div class="stat-label">חייבים חריגים 🔎</div><div id="sExcessHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
     <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
   </div>
 </div>
@@ -440,6 +441,33 @@ function vpLogout() {
     <div id="tenantStatusListBody"></div>
     <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
       <button class="btn btn-secondary btn-sm" onclick="closeModal('tenantStatusListModal')">סגור</button>
+    </div>
+  </div>
+</div>
+
+<!-- v2.14.0 — חייבים חריגים -->
+<div class="modal-bg" id="excessDebtModal" style="display:none;" onclick="if(event.target===this)closeModal('excessDebtModal')">
+  <div class="modal" style="max-width:760px;max-height:90vh;overflow-y:auto;">
+    <h2 style="margin-bottom:4px;">🚨 חייבים חריגים</h2>
+    <div id="excessDebtBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('excessDebtModal')">סגור</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="excessAlertModal" style="display:none;" onclick="if(event.target===this)closeModal('excessAlertModal')">
+  <div class="modal" style="max-width:640px;max-height:90vh;overflow-y:auto;">
+    <h2 id="excessAlertTitle" style="margin-bottom:4px;">📨 שליחת התראת חוב</h2>
+    <div id="excessAlertMeta" style="font-size:0.78rem;color:var(--text3);margin-bottom:10px;"></div>
+    <textarea id="excessAlertMsg" style="min-height:220px;unicode-bidi:plaintext;text-align:right;width:100%;"></textarea>
+    <div class="hint" style="margin-top:6px;">ניתן לערוך את ההודעה לפני השליחה. העריכה חלה על שליחה זו בלבד.</div>
+    <div id="excessAlertStatus" style="font-size:0.8rem;margin-top:10px;"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;flex-wrap:wrap;">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('excessAlertModal')">ביטול</button>
+      <button class="btn btn-secondary btn-sm" id="excessAlertLetterBtn" onclick="sendExcessAlert('letter')">🖨️ מכתב להדפסה</button>
+      <button class="btn btn-secondary btn-sm" id="excessAlertMailBtn" onclick="sendExcessAlert('email')">📧 שלח במייל</button>
+      <button class="btn btn-green btn-sm" id="excessAlertWaBtn" onclick="sendExcessAlert('wa')">📱 שלח בוואטסאפ</button>
     </div>
   </div>
 </div>
@@ -745,10 +773,11 @@ function vpLogout() {
 
 
     <div class="card">
-      <div class="card-header">📱 חיבור ווטסאפ
-        <button class="help-btn" onclick="showHelp('wa')">?</button>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secWa')">📱 חיבור ווטסאפ
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('wa')">?</button>
+        <span id="secWaIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
-      <div class="card-body">
+      <div class="card-body" id="secWaBody" style="display:none;">
 
         <div style="background:rgba(37,211,102,.06);border:1px solid rgba(37,211,102,.2);border-radius:10px;padding:20px 24px;margin-bottom:16px;">
           <div style="font-size:0.95rem;font-weight:700;color:var(--accent);margin-bottom:14px;">✅ ללא התקנה — הכל עובד מהדפדפן</div>
@@ -799,10 +828,11 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">⚙️ הגדרות תשלום ותזמון
-        <button class="help-btn" onclick="showHelp('settings')">?</button>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secPay')">⚙️ הגדרות תשלום ותזמון
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings')">?</button>
+        <span id="secPayIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
-      <div class="card-body">
+      <div class="card-body" id="secPayBody" style="display:none;">
         <div class="grid-3">
           <div><label>סכום חודשי (₪)</label><input type="number" id="cfgAmount" value="300" min="1" onchange="saveConfig()"></div>
           <div><label>יום בחודש לשליחה</label><input type="number" id="cfgDay" value="1" min="1" max="28" onchange="saveConfig()"></div>
@@ -816,6 +846,31 @@ function vpLogout() {
             <option>ינואר</option><option>פברואר</option><option>מרץ</option><option>אפריל</option><option>מאי</option><option>יוני</option><option>יולי</option><option>אוגוסט</option><option>ספטמבר</option><option>אוקטובר</option><option>נובמבר</option><option>דצמבר</option>
           </select>
           <div class="hint" id="monthHint" style="margin-top:5px;">ריק = חודש נוכחי אוטומטית</div>
+        </div>
+        <div class="divider"></div>
+        <!-- v2.14.0 — excessive-debt threshold + alert template -->
+        <div>
+          <label>סף חוב חריג (₪)</label>
+          <input type="number" id="cfgExcessDebt" value="1000" min="1" step="50" style="max-width:220px;" onchange="saveConfig()">
+          <div class="hint" style="margin-top:5px;">דייר שסך חובו (שוטף + קודם + חשבונות נוספים) שווה או גדול מסכום זה יופיע בכרטיס ”חייבים חריגים“.</div>
+        </div>
+        <div style="margin-top:14px;">
+          <label>תבנית הודעה לחוב חריג</label>
+          <textarea id="cfgExcessDebtTemplate" style="min-height:120px;unicode-bidi:plaintext;text-align:right;" placeholder="השאר ריק לשימוש בתבנית ברירת המחדל"></textarea>
+          <div class="var-tags" style="margin-top:6px;">
+            <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
+            <span class="var-tag" onclick="insertVar('{שם}','cfgExcessDebtTemplate')">{ שם }</span>
+            <span class="var-tag" onclick="insertVar('{חודש}','cfgExcessDebtTemplate')">{ חודש }</span>
+            <span class="var-tag" onclick="insertVar('{סה&quot;כ_חוב}','cfgExcessDebtTemplate')">{ סה״כ_חוב }</span>
+            <span class="var-tag" onclick="insertVar('{פירוט_חוב}','cfgExcessDebtTemplate')">{ פירוט_חוב }</span>
+            <span class="var-tag" onclick="insertVar('{חוב_קודם}','cfgExcessDebtTemplate')">{ חוב_קודם }</span>
+            <span class="var-tag" onclick="insertVar('{לינק_פורטל}','cfgExcessDebtTemplate')">{ לינק_פורטל }</span>
+          </div>
+          <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {פירוט_חוב} מציג את החוב לפי חודשים שלא שולמו, כולל חשבונות נוספים.</div>
+          <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <button class="btn btn-green" onclick="saveExcessDebtTemplate()" style="height:34px;padding:0 16px;font-size:0.83rem;">💾 שמור תבנית</button>
+            <span id="excessTemplateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
+          </div>
         </div>
         <div class="schedule-box" style="margin-top:16px;">📅 <span id="scheduleText">הגדר תזמון</span></div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
@@ -855,8 +910,10 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">✉️ תבנית הודעה</div>
-      <div class="card-body">
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secTpl')">✉️ תבנית הודעה
+        <span id="secTplIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secTplBody" style="display:none;">
         <textarea id="cfgTemplate" onInput="updatePreview()" style="min-height:110px;unicode-bidi:plaintext;text-align:right;"></textarea>
         <div class="var-tags">
           <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
@@ -885,8 +942,10 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">🔒 גיבוי ושחזור נתונים</div>
-      <div class="card-body">
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secBackup')">🔒 גיבוי ושחזור נתונים
+        <span id="secBackupIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secBackupBody" style="display:none;">
         <p style="font-size:0.83rem;color:var(--text2);margin-bottom:16px;">
           כל הנתונים (דיירים, תשלומים, היסטוריה) שמורים בקובץ <code style="background:var(--surface2);padding:2px 6px;border-radius:4px;">data.json</code> בתיקיית השרת.<br>
           מומלץ לגבות אותו מדי חודש כדי לא לאבד היסטוריית תשלומים.
@@ -905,8 +964,10 @@ function vpLogout() {
 
     <!-- v2.13.28 — repair stale frozen tariffs (zero-life interval bug) -->
     <div class="card">
-      <div class="card-header">🛠️ תיקון חובות שגויים מתעריף שבוטל</div>
-      <div class="card-body">
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secRepair')">🛠️ תיקון חובות שגויים מתעריף שבוטל
+        <span id="secRepairIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secRepairBody" style="display:none;">
         <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;line-height:1.7;">
           אם הגדרת לדייר תעריף אישי <strong>וביטלת אותו באותו חודש</strong>, ייתכן שנרשם לו חוב שגוי —
           המערכת שמרה את התעריף שבוטל כסכום שהדייר היה אמור לשלם.<br>
@@ -948,10 +1009,11 @@ function vpLogout() {
 
     <!-- ACCOUNT TEMPLATES CARD -->
     <div class="card" id="accountTemplatesCard">
-      <div class="card-header">💳 הגדרת חשבונות נוספים
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secAcc')">💳 הגדרת חשבונות נוספים
         <span style="font-size:0.75rem;color:var(--text3);margin-right:8px;">חשבונות שניתן לשייך לדיירים</span>
+        <span id="secAccIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
-      <div class="card-body">
+      <div class="card-body" id="secAccBody" style="display:none;">
         <div id="accountTemplatesList" style="margin-bottom:12px;"></div>
         <button class="btn btn-secondary btn-sm" onclick="addAccountTemplateRow()">➕ הוסף חשבון</button>
         <button class="btn btn-green btn-sm" onclick="saveAccountTemplates()" style="margin-right:8px;">💾 שמור תבניות</button>
@@ -1929,6 +1991,11 @@ function fillForm() {
   const mn=String(c.sendMinute!=null?c.sendMinute:0).padStart(2,'0');
   document.getElementById('cfgTime').value=h+':'+mn;
   if(c.template) document.getElementById('cfgTemplate').value=c.template;
+  // v2.14.0 — excessive-debt settings
+  const exEl=document.getElementById('cfgExcessDebt');
+  if(exEl) exEl.value=(c.excessDebtThreshold!=null?c.excessDebtThreshold:1000);
+  const exTpl=document.getElementById('cfgExcessDebtTemplate');
+  if(exTpl) exTpl.value=c.excessDebtTemplate||'';
   const sel=document.getElementById('cfgMonth');
   if(c.manualMonth){ for(let o of sel.options){if(o.text===c.manualMonth){o.selected=true;break;}} }
   else { sel.value=''; }
@@ -2060,6 +2127,9 @@ async function saveConfig() {
   const tv=document.getElementById('cfgTime').value||'09:00';
   const [h,m]=tv.split(':');
   const config={amount:parseInt(document.getElementById('cfgAmount').value)||300,sendDay:parseInt(document.getElementById('cfgDay').value)||1,sendHour:parseInt(h)||9,sendMinute:parseInt(m)||0,manualMonth:document.getElementById('cfgMonth').value||'',template:document.getElementById('cfgTemplate').value};
+  // v2.14.0 — excessive-debt threshold rides along in the same merged config.
+  const _exEl=document.getElementById('cfgExcessDebt');
+  if(_exEl){ const _ex=parseFloat(_exEl.value); if(isFinite(_ex)&&_ex>0) config.excessDebtThreshold=_ex; }
   data.config=Object.assign({},data.config,config);
   updateSchedule();updatePreview();
   clearTimeout(saveTimer);
@@ -2190,12 +2260,17 @@ function updatePreview() {
     .replace(/{יתרה}/g,'שילמת 150 ₪, נותר לתשלום: *80 ₪*');
 }
 
-function insertVar(v) {
-  const ta=document.getElementById('cfgTemplate');
+// v2.14.0 — targetId is OPTIONAL and defaults to 'cfgTemplate', so every existing
+// call site (the message-template chips) behaves EXACTLY as before. The preview is
+// only refreshed for the main template, which is the only one with a preview pane.
+function insertVar(v, targetId) {
+  const id = targetId || 'cfgTemplate';
+  const ta=document.getElementById(id);
+  if(!ta) return;
   const s=ta.selectionStart,e=ta.selectionEnd;
   ta.value=ta.value.substring(0,s)+v+ta.value.substring(e);
   ta.focus();ta.setSelectionRange(s+v.length,s+v.length);
-  updatePreview();
+  if(id==='cfgTemplate') updatePreview();
 }
 
 async function fixPaymentHistoryMonth() {
@@ -2231,6 +2306,24 @@ async function fixPaymentHistoryMonth() {
     if (d.ok) { toast(d.message, 'success'); await loadData(); render(); }
     else toast('שגיאה: ' + (d.error || ''), 'error');
   } catch(e) { toast('שגיאה', 'error'); }
+}
+
+// v2.14.0 — save the excessive-debt alert template. Sends the FULL merged config
+// (the server replaces the whole config object on save), same as saveConfig().
+async function saveExcessDebtTemplate() {
+  const el = document.getElementById('cfgExcessDebtTemplate');
+  const st = document.getElementById('excessTemplateSaveStatus');
+  if (!el) return;
+  data.config = Object.assign({}, data.config, { excessDebtTemplate: el.value });
+  try {
+    const r = await fetch(API + '/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: data.config }) });
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    if (st) { st.style.color = '#22c55e'; st.textContent = '✅ נשמר'; setTimeout(function(){ st.textContent=''; }, 2500); }
+    toast('💾 תבנית חוב חריג נשמרה', 'success');
+  } catch(e) {
+    if (st) { st.style.color = 'var(--danger)'; st.textContent = '❌ ' + e.message; }
+  }
 }
 
 async function saveTemplate() {
@@ -3130,6 +3223,11 @@ function render() {
   // loadAccountsStatus() can re-run it when the extra-accounts fetch resolves
   // AFTER render() has already painted the card.
   refreshCollectionCard();
+  // v2.14.0 — the "חייבים חריגים" card is fed by its own endpoint (it needs the
+  // per-month breakdown, which /api/data does not ship). Fire-and-forget: it must
+  // never block render(). Skipped in historical view — priorDebt/currentBalance
+  // are ACTIVE-month figures (same rule as the חייבים/ללא חוב cards above).
+  if (!histView) { refreshExcessDebtCard(); }
   document.getElementById('tbT').textContent=data.tenants.length;
   document.getElementById('tbP').textContent=pending;
   document.getElementById('tbP').className=pending>0?'tbadge':'tbadge green';
@@ -6667,6 +6765,250 @@ function buildTenantStatusRows() {
     });
   }
   return rows;
+}
+
+// v2.14.0 — generic collapse/expand for the settings cards. Default COLLAPSED
+// (the markup ships display:none), so a long settings tab opens as a short list
+// of headers. Mirrors the existing toggleOrgCard()/toggleResetWa() pattern.
+// ⚠️ Bound INLINE in the markup, next to the element (v2.13.30 rule) — a
+// DOMContentLoaded binding thousands of lines away is a silent failure.
+// ⚠️ The help "?" buttons inside these headers call event.stopPropagation()
+// so opening help does not also toggle the section.
+function toggleSection(key) {
+  const b = document.getElementById(key + 'Body');
+  const ic = document.getElementById(key + 'Icon');
+  if (!b) return;
+  const open = (b.style.display === 'none' || b.style.display === '');
+  b.style.display = open ? 'block' : 'none';
+  if (ic) ic.textContent = open ? '▼ כווץ' : '▶ הרחב';
+}
+
+// v2.14.0 — TOP-LEVEL HTML escaper for the excessive-debt module.
+// ⚠️ Deliberately a NEW top-level function: the existing `escHtml` is declared
+// INSIDE trendExportHTML(), and a function declaration does not hoist across
+// function boundaries — it is invisible here (the exact v2.13.26 `parseDate`
+// trap). Do not "de-duplicate" these two by deleting this one.
+function esc(s) {
+  return String(s == null ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ══════════════════════════════════════════════════════════════════
+// v2.14.0 — חייבים חריגים (excessive debt)
+// ══════════════════════════════════════════════════════════════════
+// ⚠️ CONSUMES ONLY. The list, the per-month breakdown and the alert text all
+// come from GET /api/excess-debt (server.js → buildExcessDebtRows), which uses
+// the SAME money primitives as the dashboard. Nothing is derived here — see the
+// v2.13.10 single-source rule and the v2.13.31/32 lesson about a second local
+// copy of a debt split.
+//
+// The card is refreshed by refreshExcessDebtCard(), which is called from
+// render() AND from loadAccountsStatus() — every fire-and-forget loader must
+// refresh every surface that consumes its data (v2.13.33 rule).
+var excessDebtRows = null;      // cached rows from the last fetch
+var excessDebtThreshold = 1000;
+var _excessAlertTarget = null;  // { id, name } currently open in the alert modal
+
+// Repaint the "חייבים חריגים" card. Never blocks; failures leave the card at 0.
+async function refreshExcessDebtCard() {
+  var el = document.getElementById('sExcess');
+  if (!el) return;
+  try {
+    var r = await fetch(API + '/excess-debt');
+    var d = await r.json();
+    if (!d.ok) return;
+    excessDebtRows = d.rows || [];
+    excessDebtThreshold = d.threshold || 1000;
+    el.textContent = excessDebtRows.length;
+    var hint = document.getElementById('sExcessHint');
+    if (hint) {
+      var sum = excessDebtRows.reduce(function(s, x){ return s + (x.owed || 0); }, 0);
+      hint.textContent = excessDebtRows.length
+        ? ('מעל ' + excessDebtThreshold.toLocaleString() + '₪ · ' + Math.round(sum).toLocaleString() + '₪')
+        : ('אין חוב מעל ' + excessDebtThreshold.toLocaleString() + '₪');
+    }
+  } catch (e) { console.warn('[excess-debt] refresh failed', e); }
+}
+
+function _exNis(n){ return (Math.round((n||0)*100)/100).toLocaleString() + '₪'; }
+
+// Render the list modal. Fetches fresh so the figures can never be stale.
+async function showExcessDebtList() {
+  var body = document.getElementById('excessDebtBody');
+  if (!body) return;
+  body.innerHTML = '<div style="padding:18px;text-align:center;color:var(--text3);">טוען…</div>';
+  if (typeof openModal === 'function') openModal('excessDebtModal');
+  else document.getElementById('excessDebtModal').style.display = 'flex';
+  try {
+    var r = await fetch(API + '/excess-debt');
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'שגיאה');
+    excessDebtRows = d.rows || [];
+    excessDebtThreshold = d.threshold || 1000;
+    body.innerHTML = buildExcessDebtHtml(excessDebtRows, excessDebtThreshold, d.month);
+  } catch (e) {
+    body.innerHTML = '<div style="padding:14px;color:var(--danger);font-size:0.85rem;">שגיאה בטעינת הנתונים: ' + (e.message||'') + '</div>';
+  }
+}
+
+// Pure presentation over the server rows (kept separate so it is testable).
+function buildExcessDebtHtml(rows, threshold, month) {
+  var h = '<div style="font-size:0.76rem;color:var(--text3);margin-bottom:4px;">חודש פעיל: ' + (month||'') + '</div>';
+  h += '<div style="font-size:0.75rem;color:var(--text2);background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:9px 11px;margin-bottom:14px;line-height:1.6;">'
+     + 'דיירים שסך חובם שווה או גדול מ-<strong>' + (threshold||0).toLocaleString() + '₪</strong>. '
+     + 'הסכום כולל דמי ועד לחודש השוטף, חוב מחודשים קודמים וחשבונות נוספים. '
+     + 'ניתן לשנות את הסף בהגדרות ← הגדרות תשלום ותזמון.</div>';
+
+  if (!rows.length) {
+    return h + '<div style="font-size:0.85rem;color:var(--text3);padding:14px 4px;text-align:center;">🎉 אין חייבים חריגים.</div>';
+  }
+
+  var sum = 0;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    sum += r.owed || 0;
+    h += '<div style="border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:12px;">';
+    h += '<div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px;">'
+       + '<div style="font-size:0.95rem;font-weight:700;">' + esc(r.name)
+       + (r.apartment ? ' <span style="font-size:0.72rem;color:var(--text3);font-weight:400;">דירה ' + esc(r.apartment) + '</span>' : '')
+       + '</div>'
+       + '<div style="font-weight:800;font-size:1.05rem;color:var(--danger);white-space:nowrap;">' + _exNis(r.owed) + '</div>'
+       + '</div>';
+
+    // month-by-month detail
+    var lines = [];
+    for (var m = 0; m < (r.months||[]).length; m++) {
+      var mo = r.months[m];
+      lines.push(mo.status === 'partial'
+        ? ('<span style="color:var(--warn);">' + esc(mo.hebMonth) + ': שילם ' + _exNis(mo.paidAmount) + ' מתוך ' + _exNis(mo.expected) + '</span> · נותר ' + _exNis(mo.shortfall))
+        : (esc(mo.hebMonth) + ': ' + _exNis(mo.shortfall)));
+    }
+    for (var a = 0; a < (r.accounts||[]).length; a++) {
+      var ac = r.accounts[a];
+      var sub = [];
+      for (var k = 0; k < (ac.months||[]).length; k++) sub.push(esc(ac.months[k].hebMonth) + ' ' + _exNis(ac.months[k].amount));
+      if (ac.openingDebt > 0) sub.push('חוב קודם ' + _exNis(ac.openingDebt));
+      lines.push('<strong>' + esc(ac.label) + '</strong>: ' + _exNis(ac.total)
+               + ' <span style="color:var(--text3);">(' + sub.join(' · ') + ')</span>');
+    }
+    if (lines.length) {
+      h += '<div style="font-size:0.74rem;color:var(--text2);margin-top:8px;line-height:1.9;">' + lines.join('<br>') + '</div>';
+    }
+
+    // previous alerts (full history — date + channel + debt at the time)
+    var al = r.alerts || [];
+    if (al.length) {
+      var last = al[al.length - 1];
+      h += '<div style="font-size:0.72rem;color:var(--text3);margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">'
+         + '📨 נשלחה התראה ' + al.length + ' פעמים · אחרונה: ' + _exFmtDate(last.date)
+         + ' (' + _exChannelName(last.channel) + ', ' + _exNis(last.amount) + ')'
+         + '<div style="margin-top:3px;opacity:0.85;">' + al.slice(0,-1).reverse().map(function(x){
+             return _exFmtDate(x.date) + ' · ' + _exChannelName(x.channel) + ' · ' + _exNis(x.amount);
+           }).join('<br>') + '</div></div>';
+    } else {
+      h += '<div style="font-size:0.72rem;color:var(--text3);margin-top:8px;padding-top:8px;border-top:1px dashed var(--border);">לא נשלחה התראה</div>';
+    }
+
+    h += '<div style="margin-top:10px;"><button class="btn btn-secondary btn-sm" onclick="openExcessAlert(\'' + esc(String(r.id)) + '\')">📨 שלח התראה</button></div>';
+    h += '</div>';
+  }
+
+  h += '<div style="display:flex;justify-content:space-between;align-items:baseline;margin-top:6px;padding:12px 4px;border-top:2px solid var(--border);">'
+     + '<div style="font-weight:700;font-size:1rem;">סה״כ (' + rows.length + ' דיירים)</div>'
+     + '<div style="font-weight:800;font-size:1.25rem;color:var(--accent);">' + _exNis(sum) + '</div></div>';
+  return h;
+}
+
+function _exFmtDate(iso) {
+  try { var d = new Date(iso); return d.toLocaleDateString('he-IL') + ' ' + d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'}); }
+  catch(e) { return String(iso||''); }
+}
+function _exChannelName(ch) {
+  return ch === 'wa' ? 'וואטסאפ' : ch === 'email' ? 'מייל' : ch === 'letter' ? 'מכתב' : String(ch||'');
+}
+
+// Open the alert composer with the server-rendered message.
+async function openExcessAlert(tenantId) {
+  var row = (excessDebtRows || []).find(function(r){ return String(r.id) === String(tenantId); });
+  if (!row) return;
+  _excessAlertTarget = { id: String(tenantId), name: row.name };
+  document.getElementById('excessAlertTitle').textContent = '📨 התראת חוב — ' + row.name;
+  document.getElementById('excessAlertMeta').textContent =
+    'סך חוב: ' + _exNis(row.owed)
+    + (row.phone ? ' · טלפון ' + row.phone : ' · אין טלפון')
+    + (row.email ? ' · ' + row.email : ' · אין מייל');
+  document.getElementById('excessAlertStatus').textContent = '';
+  var ta = document.getElementById('excessAlertMsg');
+  ta.value = 'טוען…';
+  document.getElementById('excessAlertWaBtn').disabled  = !row.phone;
+  document.getElementById('excessAlertMailBtn').disabled = !row.email;
+  if (typeof openModal === 'function') openModal('excessAlertModal');
+  else document.getElementById('excessAlertModal').style.display = 'flex';
+  try {
+    var r = await fetch(API + '/excess-debt/preview', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ tenantId: String(tenantId) })
+    });
+    var d = await r.json();
+    ta.value = d.ok ? d.message : ('שגיאה: ' + (d.error||''));
+  } catch(e) { ta.value = 'שגיאה בטעינת ההודעה: ' + e.message; }
+}
+
+// Send (or print). The server stamps the tenant's excessDebtAlerts[] audit trail.
+async function sendExcessAlert(channel) {
+  if (!_excessAlertTarget) return;
+  var msg = document.getElementById('excessAlertMsg').value || '';
+  var st  = document.getElementById('excessAlertStatus');
+  var btns = ['excessAlertWaBtn','excessAlertMailBtn','excessAlertLetterBtn'].map(function(i){ return document.getElementById(i); });
+  btns.forEach(function(b){ if(b) b.disabled = true; });
+  st.style.color = 'var(--text3)';
+  st.textContent = channel === 'letter' ? 'מכין מכתב…' : 'שולח…';
+  try {
+    if (channel === 'letter') openExcessLetter(_excessAlertTarget.name, msg);
+    var r = await fetch(API + '/excess-debt/send', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ tenantId: _excessAlertTarget.id, channel: channel, template: msg })
+    });
+    var d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'שגיאה');
+    st.style.color = '#22c55e';
+    st.textContent = '✅ נשלח ונרשם בכרטיס הדייר (' + _exFmtDate(d.sentAt) + ')';
+    toast('✅ ההתראה נשלחה', 'success');
+    await refreshExcessDebtCard();
+    setTimeout(function(){ closeModal('excessAlertModal'); showExcessDebtList(); }, 1200);
+  } catch(e) {
+    st.style.color = 'var(--danger)';
+    st.textContent = '❌ ' + e.message;
+    toast('שגיאה: ' + e.message, 'error');
+  } finally {
+    btns.forEach(function(b){ if(b) b.disabled = false; });
+  }
+}
+
+// Printable Hebrew RTL letter in a new window (no server dependency).
+function openExcessLetter(name, msg) {
+  var w = window.open('', '_blank');
+  if (!w) { toast('חסימת חלונות קופצים מונעת פתיחת המכתב', 'error'); return; }
+  var today = new Date().toLocaleDateString('he-IL');
+  w.document.write(
+    '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8">'
+    + '<title>מכתב התראה — ' + esc(name) + '</title><style>'
+    + 'body{font-family:Arial,"Segoe UI",sans-serif;direction:rtl;max-width:760px;margin:40px auto;padding:0 30px;line-height:1.9;color:#111;}'
+    + 'h1{font-size:20px;border-bottom:2px solid #333;padding-bottom:10px;}'
+    + '.date{text-align:left;font-size:13px;color:#555;margin-bottom:20px;}'
+    + '.body{white-space:pre-wrap;font-size:15px;}'
+    + '.sig{margin-top:50px;font-size:14px;color:#333;}'
+    + '@media print{body{margin:0;}.noprint{display:none;}}'
+    + 'button{margin-top:26px;padding:9px 20px;font-size:14px;cursor:pointer;}'
+    + '</style></head><body>'
+    + '<div class="date">' + today + '</div>'
+    + '<h1>הודעה על חוב פתוח</h1>'
+    + '<div class="body">' + esc(msg).replace(/\*/g,'') + '</div>'
+    + '<div class="sig">בכבוד רב,<br>ועד הבית</div>'
+    + '<button class="noprint" onclick="window.print()">🖨️ הדפס</button>'
+    + '</body></html>');
+  w.document.close();
 }
 
 function showTenantStatusList(bucket) {

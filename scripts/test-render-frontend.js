@@ -451,4 +451,92 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
     /buildTenantStatusRows\(\)[\s\S]{0,200}?bucket==='pending'/.test(app), true);
 }
 
+// ══════════════════════════════════════════════════════════════════
+// v2.14.0 — חייבים חריגים: the modal must ACTUALLY RENDER
+// ══════════════════════════════════════════════════════════════════
+// ⚠️ v2.13.30 lesson: grepping for a string proves the string is in the file,
+// NOT that the user can ever see it. These tests EXECUTE buildExcessDebtHtml
+// and toggleSection against a stub DOM and assert on what they produced.
+{
+  const app = readSource('public/app.html');
+  const fns = extractFunctions(app, ['esc', '_exNis', '_exFmtDate', '_exChannelName',
+    'buildExcessDebtHtml', 'toggleSection']);
+
+  const rows = [{
+    id: '1', name: 'לימור', apartment: '4', phone: '0501', email: '',
+    currentMonthDebt: 230, priorDebt: 2070, extrasTotal: 0, owed: 2300,
+    months: [
+      { monthKey: '2026-04', hebMonth: 'אפריל', expected: 230, paidAmount: 0, shortfall: 230, status: 'unpaid' },
+      { monthKey: '2026-07', hebMonth: 'יולי',  expected: 230, paidAmount: 100, shortfall: 130, status: 'partial' }
+    ],
+    accounts: [{ label: 'ביטוח', months: [{ monthKey: '2026-07', hebMonth: 'יולי', amount: 50 }], openingDebt: 900, total: 950 }],
+    alerts: [{ date: '2026-07-01T10:00:00.000Z', channel: 'wa', amount: 2100 }]
+  }];
+
+  const ctx = new Function(fns + '\n; return { buildExcessDebtHtml, toggleSection, esc };')();
+
+  t.section('חוב חריג — the list modal ACTUALLY renders');
+  t.noThrow('buildExcessDebtHtml does not throw', () => ctx.buildExcessDebtHtml(rows, 1000, 'יולי'));
+  const html = ctx.buildExcessDebtHtml(rows, 1000, 'יולי');
+  t.eq('tenant name rendered', html.includes('לימור'), true);
+  t.eq('total owed rendered', html.includes('2,300₪'), true);
+  t.eq('threshold explained to the user', html.includes('1,000₪'), true);
+  t.eq('active month shown', html.includes('יולי'), true);
+  t.eq('an unpaid month is itemised', html.includes('אפריל'), true);
+  t.eq('a partial month shows paid-of-expected', html.includes('שילם 100₪ מתוך 230₪'), true);
+  t.eq('extra account named', html.includes('ביטוח'), true);
+  t.eq("extra account's prior debt shown", html.includes('חוב קודם 900₪'), true);
+  t.eq('previous alert history shown', html.includes('נשלחה התראה'), true);
+  t.eq('alert channel is human-readable', html.includes('וואטסאפ'), true);
+  t.eq('send button wired per tenant', html.includes("openExcessAlert('1')"), true);
+
+  t.section('חוב חריג — empty and escaping');
+  const empty = ctx.buildExcessDebtHtml([], 1000, 'יולי');
+  t.eq('empty state is friendly, not blank', empty.includes('אין חייבים חריגים'), true);
+  t.eq('no send button when nobody qualifies', empty.includes('openExcessAlert'), false);
+  const xss = ctx.buildExcessDebtHtml([Object.assign({}, rows[0],
+    { name: '<img src=x onerror=alert(1)>', months: [], accounts: [], alerts: [] })], 1000, 'יולי');
+  t.eq('a tenant name is HTML-escaped', xss.includes('<img src=x'), false);
+  t.eq('escaped form present instead', xss.includes('&lt;img'), true);
+
+  t.section('חוב חריג — esc() is top-level (the v2.13.26 hoisting trap)');
+  t.eq('esc is reachable outside its defining function', typeof ctx.esc, 'function');
+  t.eq('esc escapes quotes', ctx.esc('a"b'), 'a&quot;b');
+
+  t.section('הגדרות — collapse/expand sections');
+  const els = {};
+  const el = id => (els[id] = els[id] || { id, textContent: '', innerHTML: '', style: { display: 'none' } });
+  const tog = new Function('document', extractFunctions(app, ['toggleSection']) + '\n; return toggleSection;')({ getElementById: el });
+  tog('secPay');
+  t.eq('collapsed section opens on click', el('secPayBody').style.display, 'block');
+  t.eq('icon flips to כווץ', el('secPayIcon').textContent, '▼ כווץ');
+  tog('secPay');
+  t.eq('a second click collapses it again', el('secPayBody').style.display, 'none');
+  t.eq('icon flips back to הרחב', el('secPayIcon').textContent, '▶ הרחב');
+  t.noThrow('a missing section id does not throw', () => tog('doesNotExist'));
+
+  t.section('חוב חריג / collapse — wiring in the markup');
+  t.eq('the card is bound INLINE (v2.13.30 rule)',
+    /id="sExcessCard"[^>]*onclick="showExcessDebtList\(\)"/.test(app), true);
+  t.eq('card sits between חייבים and סה״כ לגביה',
+    app.indexOf('id="sPendingCard"') < app.indexOf('id="sExcessCard"') &&
+    app.indexOf('id="sExcessCard"') < app.indexOf('id="sAmountCard"'), true);
+  t.eq('modal opens via openModal(), not a bare display',
+    /openModal\('excessDebtModal'\)/.test(app), true);
+  t.eq('threshold field exists in settings', /id="cfgExcessDebt"/.test(app), true);
+  t.eq('threshold is persisted by saveConfig',
+    /excessDebtThreshold\s*=\s*_ex/.test(app), true);
+  t.eq('alert template field exists', /id="cfgExcessDebtTemplate"/.test(app), true);
+  t.eq('fillForm populates the threshold', /exEl\.value=\(c\.excessDebtThreshold/.test(app), true);
+  for (const k of ['secWa','secPay','secTpl','secBackup','secRepair','secAcc']) {
+    t.eq(k + ' is collapsible and starts collapsed',
+      new RegExp('onclick="toggleSection\\(\'' + k + '\'\\)"').test(app) &&
+      new RegExp('id="' + k + 'Body" style="display:none;"').test(app), true);
+  }
+  t.eq('help buttons stop propagation so they do not toggle',
+    /event\.stopPropagation\(\);showHelp\('wa'\)/.test(app), true);
+  t.eq('the excess card is refreshed from render()',
+    /refreshExcessDebtCard\(\);/.test(app), true);
+}
+
 process.exit(t.done() ? 1 : 0);
