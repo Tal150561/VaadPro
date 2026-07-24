@@ -578,6 +578,74 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   const statsRow = (app.match(/<div class="stats-row">[\s\S]*?\n  <\/div>/) || [''])[0];
   t.eq('exactly 5 stat cards in the row',
     (statsRow.match(/<div class="stat-card"/g) || []).length, 5);
+
+  // ── v2.14.2 — list search / sort / collapse ────────────────────
+  t.section('v2.14.2 — \u05e8\u05e9\u05d9\u05de\u05ea \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd: search + collapse');
+  t.eq('a search box exists and is wired live', /id="tenantSearch"[^>]*oninput="onTenantSearch\(this\.value\)"/.test(app), true);
+  t.eq('typing in it does not toggle the card', /id="tenantSearch"[\s\S]{0,400}?onclick="event\.stopPropagation\(\)"/.test(app), true);
+  t.eq('the query lives at module level, NOT on `data`', /^let tenantSearchQuery = '';$/m.test(app), true);
+  t.eq('no data.tenantSearchQuery anywhere', /data\.tenantSearchQuery/.test(app), false);
+  t.eq('the list is collapsible', /onclick="toggleSection\('tenantsList'\)"/.test(app), true);
+  t.eq('and starts EXPANDED', /id="tenantsListBody" style="display:block;"/.test(app), true);
+  t.eq('the export button does not toggle the card',
+    /event\.stopPropagation\(\);exportTenantsExcel\(\)/.test(app), true);
+  const filt = (app.match(/const _visibleTenants = data\.tenants\.filter[\s\S]*?\}\);/) || [''])[0];
+  t.eq('filter exists', filt.length > 0, true);
+  for (const f of ['tenantDisplayName(t)', 't.keywords', 't.phone', 't.email', 'amountText', 'statusText']) {
+    t.eq('search covers ' + f, filt.includes(f), true);
+  }
+  t.eq('matching is case-insensitive', /\.toLowerCase\(\)\.includes\(tenantSearchQuery\)/.test(filt), true);
+  t.eq('an empty query keeps every tenant', /if \(!tenantSearchQuery\) return true;/.test(filt), true);
+
+  t.section('v2.14.2 — \u05e1\u05d8\u05d8\u05d5\u05e1 \u05ea\u05e9\u05dc\u05d5\u05de\u05d9\u05dd: sortable headers');
+  for (const k of ['debt', 'status', 'manual']) {
+    t.eq(k + ' header is clickable', new RegExp("_sortTh\\('" + k + "'").test(app), true);
+  }
+  t.eq('sort state is module-level', /^let paySortKey = '';/m.test(app), true);
+  t.eq('clicking the same key flips direction',
+    /if \(paySortKey === k\) paySortDir = -paySortDir;/.test(app), true);
+  t.eq('sorting works on a COPY, never mutating data.tenants',
+    /const _payRows = data\.tenants\.slice\(\);/.test(app), true);
+  t.eq('rows are rendered from the sorted copy', /_payRows\.forEach\(function\(t\)\{/.test(app), true);
+  const sortVal = (app.match(/function paySortValue\([\s\S]*?\n\}/) || [''])[0];
+  t.eq('debt sorts on the SERVER figure, not a local recompute',
+    /parseFloat\(t\.totalDebt\)/.test(sortVal), true);
+  t.eq('no money is recomputed while sorting',
+    /expected|shortfall\s*[-+*]/.test(sortVal), false);
+
+  t.section('v2.14.2 — \u05d4\u05d5\u05e1\u05e3 \u05d7\u05e9\u05d1\u05d5\u05df column + \u05e9\u05dc\u05d9\u05d7\u05d4 last');
+  t.eq('the new column header exists', /<th>\u05d4\u05d5\u05e1\u05e3 \u05d7\u05e9\u05d1\u05d5\u05df<\/th>/.test(app), true);
+  t.eq('\u05e9\u05dc\u05d9\u05d7\u05d4 is the LAST header (leftmost in RTL)',
+    /<th>\u05d4\u05d5\u05e1\u05e3 \u05d7\u05e9\u05d1\u05d5\u05df<\/th><th>\u05e9\u05dc\u05d9\u05d7\u05d4<\/th>/.test(app), true);
+  t.eq('every row carries a matching cell', /<td class="acc-mgr-cell"/.test(app), true);
+  t.eq('the injector targets that cell, not the send cell',
+    /row\.querySelector\('\.acc-mgr-cell'\)/.test(app), true);
+  t.eq('the payments card is collapsible', /onclick="toggleSection\('paymentsStatus'\)"/.test(app), true);
+  t.eq('and starts EXPANDED', /id="paymentsStatusBody" style="display:block;"/.test(app), true);
+  t.eq('the month selector does not toggle the card',
+    /id="viewMonthSelect" onclick="event\.stopPropagation\(\)"/.test(app), true);
+
+  t.section('v2.14.2 — collapsed-by-default sections');
+  for (const k of ['trendSaved', 'blRecipients', 'blHistory']) {
+    t.eq(k + ' is collapsible', new RegExp("onclick=\"toggleSection\\('" + k + "'\\)\"").test(app), true);
+    t.eq(k + ' starts COLLAPSED',
+      new RegExp('id="' + k + 'Body" style="display:none;"').test(app), true);
+    t.eq(k + ' is seeded collapsed in state', new RegExp('^\\s*' + k + ': true,?$', 'm').test(app), true);
+  }
+  t.eq('the two default-open sections are NOT seeded collapsed',
+    /tenantsList: true|paymentsStatus: true/.test(app), false);
+
+  t.section('v2.14.2 — one toggleSection only (no shadowing)');
+  t.eq('exactly ONE toggleSection declaration',
+    (app.match(/function toggleSection\(/g) || []).length, 1);
+  t.eq('it mirrors state so a poll repaint cannot undo a collapse',
+    /collapsedSections\[key\] = !open;/.test(app), true);
+  t.eq('the mirror is guarded for isolated unit tests',
+    /typeof collapsedSections !== 'undefined'/.test(app), true);
+  const applyFn = (app.match(/function applySectionState\([\s\S]*?\n\}/) || [''])[0];
+  t.eq('applySectionState reads the state map', /collapsedSections\[key\]/.test(applyFn), true);
+  t.eq('render() repaints the tenants list state',
+    /applySectionState\('tenantsList'\);/.test(app), true);
 }
 
 process.exit(t.done() ? 1 : 0);

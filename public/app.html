@@ -563,8 +563,13 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header" id="tenantsListHeader">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="exportTenantsExcel()">📤 ייצא לאקסל</button></div>
-      <div id="tenantsWrap"><div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div></div>
+      <div class="card-header" id="tenantsListHeader" style="cursor:pointer;user-select:none;" onclick="toggleSection('tenantsList')">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsExcel()">📤 ייצא לאקסל</button><span id="tenantsListIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
+      <div id="tenantsListBody" style="display:block;">
+        <div style="padding:10px 0 12px;">
+          <input type="text" id="tenantSearch" placeholder="🔎 חיפוש לפי שם, מילות חיפוש, טלפון, מייל, סכום או סטטוס..." oninput="onTenantSearch(this.value)" onclick="event.stopPropagation()" style="width:100%;height:34px;font-size:0.84rem;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
+        </div>
+        <div id="tenantsWrap"><div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div></div>
+      </div>
     </div>
 
   </div>
@@ -658,12 +663,14 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">💳 סטטוס תשלומים<div class="spacer"></div>
-        <select id="viewMonthSelect" style="font-size:0.82rem;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);margin-left:8px;"></select>
-        <button class="btn btn-secondary btn-sm" onclick="showPayersReport()" style="margin-left:8px;">📄 דו"ח משלמים</button>
-        <button class="btn btn-secondary btn-sm" onclick="exportAnnualPayments()">📊 ייצא מעקב שנתי לאקסל</button></div>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('paymentsStatus')">💳 סטטוס תשלומים<div class="spacer"></div>
+        <select id="viewMonthSelect" onclick="event.stopPropagation()" style="font-size:0.82rem;padding:4px 8px;border-radius:6px;border:1px solid var(--border);background:var(--surface);color:var(--text);margin-left:8px;"></select>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();showPayersReport()" style="margin-left:8px;">📄 דו"ח משלמים</button>
+        <button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportAnnualPayments()">📊 ייצא מעקב שנתי לאקסל</button><span id="paymentsStatusIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
+      <div id="paymentsStatusBody" style="display:block;">
       <div id="viewMonthBanner" style="display:none;padding:8px 12px;background:rgba(99,102,241,.1);border:1px solid rgba(99,102,241,.25);border-radius:8px;margin-bottom:10px;font-size:0.85rem;color:#818cf8;">👁️ מציג חודש היסטורי — לקריאה בלבד. פעולות נעולות. <a href="#" onclick="resetViewMonth();return false;" style="color:#818cf8;text-decoration:underline;">חזור לחודש הנוכחי</a></div>
       <div id="paymentsWrap"><div class="empty"><div class="empty-icon">💳</div><div>אין דיירים</div></div></div>
+      </div>
     </div>
 
   </div>
@@ -1035,9 +1042,11 @@ function vpLogout() {
   <div class="tab-panel" id="tab-trends">
 
     <div class="card">
-      <div class="card-header">📋 דוחות שמורים<div class="spacer"></div><span id="trendReportCount" style="font-size:0.8rem;color:var(--text2);"></span></div>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('trendSaved')">📋 דוחות שמורים<div class="spacer"></div><span id="trendReportCount" style="font-size:0.8rem;color:var(--text2);"></span><span id="trendSavedIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▶ הרחב</span></div>
+      <div id="trendSavedBody" style="display:none;">
       <div class="card-body">
         <div id="trendSavedList"><div class="empty"><div class="empty-icon">📊</div><div>עוד אין דוחות שמורים — שמור דוח מטאב "דוחות הוצאות"</div></div></div>
+      </div>
       </div>
     </div>
 
@@ -1134,7 +1143,8 @@ function vpLogout() {
         </div>
 
         <div>
-          <label style="margin-bottom:8px;">בחר נמענים</label>
+          <label style="margin-bottom:8px;cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;" onclick="toggleSection('blRecipients')">בחר נמענים<span id="blRecipientsIcon" style="font-size:0.8rem;color:var(--text3);font-weight:400;">▶ הרחב</span></label>
+          <div id="blRecipientsBody" style="display:none;">
           <div class="bulk-bar">
             <button class="btn btn-secondary btn-sm" onclick="blSelectAll(true)">✅ כל הדיירים</button>
             <button class="btn btn-secondary btn-sm" onclick="blSelectAll(false)">☐ נקה בחירה</button>
@@ -1142,6 +1152,7 @@ function vpLogout() {
           </div>
           <div class="tenant-select-grid" id="blTenantGrid">
             <div style="color:var(--text2);font-size:0.84rem;padding:8px;">טען דיירים מהטאב "דיירים" תחילה</div>
+          </div>
           </div>
         </div>
 
@@ -1177,9 +1188,11 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header">📋 היסטוריית הודעות<div class="spacer"></div><span id="blHistCount" style="font-size:0.8rem;color:var(--text2);"></span></div>
+      <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('blHistory')">📋 היסטוריית הודעות<div class="spacer"></div><span id="blHistCount" style="font-size:0.8rem;color:var(--text2);"></span><span id="blHistoryIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▶ הרחב</span></div>
+      <div id="blHistoryBody" style="display:none;">
       <div class="card-body">
         <div id="blHistory"><div class="empty"><div class="empty-icon">📣</div><div>עדיין לא נשלחו הודעות</div></div></div>
+      </div>
       </div>
     </div>
 
@@ -3193,6 +3206,81 @@ function refreshCollectionCard() {
   }
 }
 
+// ── v2.14.2 — UI state for list search / sort / collapse ──────────────
+// ⚠️ MUST be module-level, never properties on `data`: loadData() replaces the
+// whole `data` object on every 2.5s poll, which would silently wipe these
+// (SKILL: "Never store a guard/dirty flag on the data object", v2.13.20).
+let tenantSearchQuery = '';
+let paySortKey = '';          // '' | 'debt' | 'status' | 'manual'
+let paySortDir = 1;           // 1 = asc, -1 = desc
+// Defaults: tenants list + payments status start EXPANDED (absent = expanded);
+// saved reports, bulletin recipients and message history start COLLAPSED.
+const collapsedSections = {
+  trendSaved: true,
+  blRecipients: true,
+  blHistory: true
+};
+
+/**
+ * Paints the collapsed/expanded state of one collapsible section.
+ * ⚠️ Reuses the EXISTING top-level toggleSection(key) (settings tab, v2.13.30)
+ * — key + 'Body' / key + 'Icon'. Do NOT declare a second toggleSection: the
+ * later declaration would shadow it and silently break secWa/secPay/etc.
+ * Safe to call when the element is absent (returns silently).
+ * @param {string} key - section key, e.g. 'tenantsList'
+ * @returns {void}
+ */
+function applySectionState(key) {
+  const b = document.getElementById(key + 'Body');
+  const ic = document.getElementById(key + 'Icon');
+  if (!b) return;
+  const collapsed = !!collapsedSections[key];
+  b.style.display = collapsed ? 'none' : 'block';
+  if (ic) ic.textContent = collapsed ? '\u25b6 \u05d4\u05e8\u05d7\u05d1' : '\u25bc \u05db\u05d5\u05d5\u05e5';
+}
+
+/**
+ * Live-filter handler for the tenants list search box.
+ * Re-renders through render() so the table stays the single render path.
+ * @param {string} v
+ * @returns {void}
+ */
+function onTenantSearch(v) {
+  tenantSearchQuery = String(v || '').trim().toLowerCase();
+  render();
+}
+
+/**
+ * Click handler on a sortable payments header. Same key toggles direction.
+ * @param {string} k - 'debt' | 'status' | 'manual'
+ * @returns {void}
+ */
+function setPaySort(k) {
+  if (paySortKey === k) paySortDir = -paySortDir;
+  else { paySortKey = k; paySortDir = 1; }
+  render();
+}
+
+/**
+ * Sort rank for a tenant under the active payments sort key.
+ * @param {object} t - tenant (server-computed money fields only)
+ * @param {string} vm - the Hebrew month key currently viewed
+ * @returns {number}
+ */
+function paySortValue(t, vm) {
+  if (paySortKey === 'debt') return parseFloat(t.totalDebt) || 0;
+  const key = t.id + '_' + vm;
+  const lv = data.sentLog[key];
+  const bal = (t.monthBalances && t.monthBalances[vm]) || {};
+  if (paySortKey === 'manual') return String(lv || '').startsWith('manual_paid') ? 1 : 0;
+  // 'status': unpaid(0) < reminded(1) < partial(2) < paid(3)
+  if (!lv) return 0;
+  if (bal.status === 'partial') return 2;
+  const s = String(lv);
+  if (s.startsWith('manual_paid') || s.startsWith('bank_import')) return 3;
+  return 1;
+}
+
 function render() {
   if (isEditing) return; // אל תחדש את הטבלה בזמן עריכה
   // Save checked state before re-render
@@ -3254,7 +3342,20 @@ function render() {
   if(!data.tenants.length){ tw.innerHTML='<div class="empty"><div class="empty-icon">🏠</div><div>עדיין לא הוספת דיירים</div></div>'; }
   else {
     let h='<div class="table-wrap"><table><thead><tr><th>שם</th><th>מילות חיפוש</th><th>טלפון</th><th>מייל</th><th>סכום</th><th>סטטוס</th><th>פעולות</th></tr></thead><tbody>';
-    data.tenants.forEach(function(t){
+    // v2.14.2 — search across every displayed column. Status is matched on the
+    // same Hebrew label the badge shows, so what the user reads is searchable.
+    const _visibleTenants = data.tenants.filter(function(t){
+      if (!tenantSearchQuery) return true;
+      const k = t.id+'_'+em, l = data.sentLog[k];
+      const statusText = !l ? 'ממתין'
+        : (String(l).startsWith('manual_paid') ? 'שילם ידני'
+        : (String(l).startsWith('bank_import') ? 'שילם בנק' : 'נשלח'));
+      const amountText = t.customAmount ? String(t.customAmount) : 'ברירת מחדל';
+      return [tenantDisplayName(t), t.keywords, t.phone, t.email, amountText,
+              String(t.totalDebt||''), statusText]
+        .some(function(f){ return String(f||'').toLowerCase().includes(tenantSearchQuery); });
+    });
+    _visibleTenants.forEach(function(t){
       const key=t.id+'_'+em, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
       const isB=paid&&String(lv).startsWith('bank_import');
@@ -3289,8 +3390,10 @@ function render() {
       h+='</tr>';
     });
     h+='</tbody></table></div>';
-    tw.innerHTML=h;
+    tw.innerHTML = _visibleTenants.length ? h
+      : '<div class="empty"><div class="empty-icon">🔎</div><div>לא נמצאו דיירים תואמים לחיפוש</div></div>';
   }
+  applySectionState('tenantsList');
 
   // Payments tab
   const pw=document.getElementById('paymentsWrap');
@@ -3298,11 +3401,25 @@ function render() {
   else {
         // Debt per tenant - based only on actual paymentHistory records
     const ph = data.paymentHistory || {};
+    // v2.14.2 — sortable headers. Sorting is DISPLAY-only: it reorders the
+    // already-server-computed rows and never recomputes any money figure.
+    const _arrow = function(k){ return paySortKey===k ? (paySortDir===1?' ▲':' ▼') : ''; };
+    const _sortTh = function(k,label){
+      return '<th onclick="setPaySort(\''+k+'\')" style="cursor:pointer;user-select:none;" title="לחץ למיון">'+label+_arrow(k)+'</th>';
+    };
     let h='<div class="table-wrap"><table><thead><tr>' +
       '<th><input type="checkbox" id="paySelectAll" onchange="togglePaySelectAll(this)" title="בחר הכל"></th>' +
-      '<th>שם</th><th>חוב</th><th>סטטוס תשלום</th><th>סימון ידני</th><th>שליחה</th>' +
+      '<th>שם</th>' + _sortTh('debt','חוב') + _sortTh('status','סטטוס תשלום') + _sortTh('manual','סימון ידני') +
+      '<th>הוסף חשבון</th><th>שליחה</th>' +
       '</tr></thead><tbody>';
-    data.tenants.forEach(function(t){
+    const _payRows = data.tenants.slice();
+    if (paySortKey) {
+      _payRows.sort(function(a,b){
+        const d = paySortValue(a,vm) - paySortValue(b,vm);
+        return (d || 0) * paySortDir;
+      });
+    }
+    _payRows.forEach(function(t){
       const key=t.id+'_'+vm, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
       const isB=paid&&String(lv).startsWith('bank_import');
@@ -3388,6 +3505,9 @@ function render() {
       h+='<td>'+debtCell+'</td>';
       h+='<td>'+sb+'</td>';
       h+='<td>'+toggle+'</td>';
+      // v2.14.2 — dedicated "הוסף חשבון" column; injectExtraAccountsCells()
+      // fills it after render (cell index 5).
+      h+='<td class="acc-mgr-cell" style="white-space:nowrap;"></td>';
       if (histView) {
         h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td>';
       } else {
@@ -6797,6 +6917,14 @@ function toggleSection(key) {
   const open = (b.style.display === 'none' || b.style.display === '');
   b.style.display = open ? 'block' : 'none';
   if (ic) ic.textContent = open ? '▼ כווץ' : '▶ הרחב';
+  // ⚠️ v2.14.2 — mirror the new state into `collapsedSections`. The tenants list
+  // is repainted by render() on the 2.5s poll, and applySectionState() re-reads
+  // this map; without this line a collapsed list would snap back open on the
+  // next poll. Settings sections have no repaint path, so this is a harmless
+  // no-op for them.
+  // Guarded: this function is unit-tested in isolation (extractFunctions),
+  // where the outer `collapsedSections` binding does not exist.
+  if (typeof collapsedSections !== 'undefined') collapsedSections[key] = !open;
 }
 
 // v2.14.0 — TOP-LEVEL HTML escaper for the excessive-debt module.
@@ -7225,7 +7353,9 @@ function injectExtraAccountsCells() {
         debtCell.appendChild(wrap);
       }
     }
-    var actionCell = row.cells[5];
+    // v2.14.2 — the manage-accounts button has its own column ("הוסף חשבון",
+    // cell index 5) and no longer shares the שליחה cell.
+    var actionCell = row.querySelector('.acc-mgr-cell') || row.cells[5];
     if (actionCell && !actionCell.querySelector('.acc-mgr-btn')) {
       var btn = document.createElement('button');
       btn.className = 'btn btn-sm acc-mgr-btn';

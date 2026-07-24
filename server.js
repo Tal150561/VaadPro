@@ -6659,7 +6659,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.1 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.2 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
