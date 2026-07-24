@@ -25,12 +25,20 @@
   .conn-badge.qr-mode .conn-dot{background:var(--warn);}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
   .stats-outer{max-width:1100px;margin:0 auto;padding:18px 20px 0;}
-  .stats-row{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;}
-  @media(max-width:600px){.stats-row{grid-template-columns:1fr 1fr;}}
-  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:center;}
-  .stat-num{font-size:1.8rem;font-weight:900;color:var(--accent);line-height:1;}
+  /* v2.14.1 — 5 cards must fit on ONE row. The old repeat(4,1fr) wrapped the
+     5th card onto a second line once "חייבים חריגים" was added. Sizes are
+     clamped so the row shrinks with the viewport instead of wrapping. */
+  .stats-row{display:grid;grid-template-columns:repeat(5,1fr);gap:8px;}
+  @media(max-width:600px){.stats-row{grid-template-columns:repeat(5,1fr);gap:4px;}}
+  .stat-card{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 8px;text-align:center;min-width:0;display:flex;flex-direction:column;justify-content:flex-start;}
+  .stat-num{font-size:clamp(1rem,3.2vw,1.8rem);font-weight:900;color:var(--accent);line-height:1.1;}
   .stat-num.warn{color:var(--warn);}
-  .stat-label{font-size:0.72rem;color:var(--text2);margin-top:4px;}
+  .stat-label{font-size:clamp(0.56rem,1.5vw,0.72rem);color:var(--text2);margin-top:4px;line-height:1.25;overflow-wrap:break-word;hyphens:none;}
+  @media(max-width:600px){
+    .stat-card{padding:9px 3px;border-radius:8px;}
+    .stat-hint{display:none;}   /* hints are noise at phone width */
+    .stat-mag{display:none;}    /* the 🔎 costs the most width of any glyph */
+  }
   .tabs-outer{max-width:1100px;margin:0 auto;padding:18px 20px 0;}
   .tabs{display:flex;gap:3px;border-bottom:1px solid var(--border);}
   .tab-btn{padding:10px 20px;background:none;border:none;border-bottom:3px solid transparent;color:var(--text2);font-family:'Heebo',sans-serif;font-size:0.9rem;font-weight:600;cursor:pointer;transition:all .18s;border-radius:6px 6px 0 0;display:flex;align-items:center;gap:7px;}
@@ -417,10 +425,10 @@ function vpLogout() {
 <div class="stats-outer">
   <div class="stats-row">
     <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
-    <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">ללא חוב 🔎</div></div>
-    <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">חייבים 🔎</div></div>
-    <div class="stat-card" id="sExcessCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showExcessDebtList()"><div class="stat-num warn" id="sExcess" style="color:var(--danger);">0</div><div class="stat-label">חייבים חריגים 🔎</div><div id="sExcessHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
-    <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:1.3rem;">0₪</div><div class="stat-label">סה"כ לגביה 🔎</div><div id="sAmountHint" style="font-size:0.68rem;color:var(--text3);margin-top:3px;line-height:1.4;"></div></div>
+    <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">ללא חוב<span class="stat-mag"> 🔎</span></div></div>
+    <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">חייבים<span class="stat-mag"> 🔎</span></div></div>
+    <div class="stat-card" id="sExcessCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showExcessDebtList()"><div class="stat-num warn" id="sExcess" style="color:var(--danger);">0</div><div class="stat-label">חייבים חריגים<span class="stat-mag"> 🔎</span></div><div class="stat-hint" id="sExcessHint" style="font-size:0.62rem;color:var(--text3);margin-top:3px;line-height:1.35;"></div></div>
+    <div class="stat-card" id="sAmountCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showCollectionBreakdown()"><div class="stat-num" id="sAmount" style="font-size:clamp(0.8rem,2.4vw,1.3rem);">0₪</div><div class="stat-label">סה"כ לגביה<span class="stat-mag"> 🔎</span></div><div class="stat-hint" id="sAmountHint" style="font-size:0.62rem;color:var(--text3);margin-top:3px;line-height:1.35;"></div></div>
   </div>
 </div>
 
@@ -2136,7 +2144,15 @@ async function saveConfig() {
   saveTimer=setTimeout(async function(){
     // Send the FULL merged config (not just the changed keys): the server replaces
     // the whole config object on save, so orgType/labelOverrides must ride along.
-    try{ const r=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:data.config})}); const d=await r.json(); if(d.effectiveMonth) data.effectiveMonth=d.effectiveMonth; toast('💾 הגדרות נשמרו','success'); } catch(e){}
+    try{ const r=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:data.config})}); const d=await r.json(); if(d.effectiveMonth) data.effectiveMonth=d.effectiveMonth; toast('💾 הגדרות נשמרו','success');
+      // ⚠️ v2.14.1 — the "חייבים חריגים" card is computed SERVER-side from
+      // config.excessDebtThreshold, so changing the threshold must repaint it.
+      // Without this the modal (which fetches fresh) showed 8 while the card
+      // still read 1 — the same "surface A disagrees with surface B" signature
+      // as the v2.13.33 async race. Any setting that feeds a card must refresh
+      // that card in the SAME save path.
+      refreshExcessDebtCard();
+    } catch(e){}
   },800);
 }
 
@@ -6883,6 +6899,11 @@ function buildExcessDebtHtml(rows, threshold, month) {
       lines.push(mo.status === 'partial'
         ? ('<span style="color:var(--warn);">' + esc(mo.hebMonth) + ': שילם ' + _exNis(mo.paidAmount) + ' מתוך ' + _exNis(mo.expected) + '</span> · נותר ' + _exNis(mo.shortfall))
         : (esc(mo.hebMonth) + ': ' + _exNis(mo.shortfall)));
+    }
+    // v2.14.1 — carried-forward debt has no month, but MUST be shown or the
+    // itemisation will not add up to the total (Tal: לימור's ₪1380).
+    if ((r.openingDebt || 0) > 0) {
+      lines.push('<span style="color:var(--danger);">חוב התחלתי / פתוח: ' + _exNis(r.openingDebt) + '</span>');
     }
     for (var a = 0; a < (r.accounts||[]).length; a++) {
       var ac = r.accounts[a];

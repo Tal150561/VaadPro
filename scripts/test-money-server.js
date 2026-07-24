@@ -803,4 +803,49 @@ const exCustom = S.buildExcessDebtMessage(exD1, exD1.tenants[0], exR1.rows[0],
   'חוב: {סה"כ_חוב}₪', 'tid');
 t.eq('a custom template overrides the default', exCustom, 'חוב: 2300₪');
 
+t.section('v2.14.1 — openingDebt must ride on the ROW, not only in detail');
+// ⚠️ Tal reported לימור's carried-forward debt missing from the on-screen list.
+// buildDebtDetail computed it correctly all along, but buildExcessDebtRows did
+// not copy it onto the row — so it reached the letter (buildDebtDetailBlock)
+// and NOT the modal. The row-level RECONCILIATION below is what makes that
+// class of omission impossible to ship again.
+const exD6 = exBuild({
+  config: { amount: 230, manualMonth: '', excessDebtThreshold: 100 },
+  tenants: [{ id: 7, name: 'לימור', openingDebt: 1380, extraAccounts: [] }],
+  paymentHistory: { '7': [{ month: '2026-04', paid: false, type: 'unpaid_rollover', amount: 230 }] }
+});
+const exR6 = S.buildExcessDebtRows(exD6).rows[0];
+t.eq('the row exposes openingDebt', exR6.openingDebt, 1380);
+t.eq('⭐ ROW-level reconciliation: months + accounts + openingDebt === owed',
+  Math.round((exR6.months.reduce((s, m) => s + m.shortfall, 0)
+            + exR6.accounts.reduce((s, a) => s + a.total, 0)
+            + exR6.openingDebt) * 100) / 100,
+  exR6.owed);
+t.eq('a tenant with no carried debt reports 0, not undefined',
+  S.buildExcessDebtRows(exBuild({
+    config: { amount: 230, manualMonth: '', excessDebtThreshold: 100 },
+    tenants: [{ id: 8, name: 'נקי', openingDebt: 0, extraAccounts: [] }]
+  })).rows[0].openingDebt, 0);
+t.eq('the letter names it the same as the screen',
+  S.buildDebtDetailBlock(S.buildDebtDetail(exD6, exD6.tenants[0], '2026-07'))
+    .includes('חוב התחלתי / פתוח'), true);
+
+// ⚠️ REGRESSION (v2.14.1) — the LETTER route rebuilt a PARTIAL detail object
+// ({months, accounts} only), dropping openingDebt, so the message read
+// "סה״כ 1610 ₪" above lines totalling 230 ₪. The helper tests above passed
+// because they call buildDebtDetailBlock directly and never saw that literal.
+// This asserts the END-TO-END message, which is what the tenant receives.
+const exMsg6 = S.buildExcessDebtMessage(exD6, exD6.tenants[0], exR6, null, 'tid');
+t.eq('⭐ the composed MESSAGE itemises openingDebt (not just the helper)',
+  exMsg6.includes('חוב התחלתי / פתוח') && exMsg6.includes('1380'), true);
+{
+  // every ₪ figure in the body must add up to the stated total
+  const lineSum = (exMsg6.match(/\*(\d+(?:\.\d+)?) ₪\*/g) || [])
+    .map(s => parseFloat(s.replace(/[^\d.]/g, '')))
+    .slice(1)                       // [0] is the headline total itself
+    .reduce((a, b) => a + b, 0);
+  t.eq('⭐ MESSAGE reconciles: itemised lines sum to the stated total',
+    lineSum, exR6.owed);
+}
+
 process.exit(t.done() ? 1 : 0);

@@ -2296,6 +2296,12 @@ function buildExcessDebtRows(d) {
       currentMonthDebt, priorDebt,
       extrasTotal: detail.accountsTotal,
       owed,
+      // ⚠️ v2.14.1 — openingDebt MUST ride on the row, not only inside `detail`.
+      // It is carried-forward debt with no month attribution, so it appears in
+      // no month line, and was missing from BOTH the modal and the letter
+      // (the letter's caller rebuilt a partial detail object) — so לימור's
+      // ₪1380 sat in her total with nothing accounting for it.
+      openingDebt: detail.openingDebt,
       months: detail.months, accounts: detail.accounts,
       alerts: Array.isArray(tenant.excessDebtAlerts) ? tenant.excessDebtAlerts : []
     });
@@ -2318,7 +2324,7 @@ function buildDebtDetailBlock(detail) {
       : `• ${m.hebMonth}: *${m.shortfall} ₪*`);
   }
   if ((detail.openingDebt || 0) > 0) {
-    lines.push(`• חוב שהועבר מתקופה קודמת: *${detail.openingDebt} ₪*`);
+    lines.push(`• חוב התחלתי / פתוח: *${detail.openingDebt} ₪*`);
   }
   for (const a of (detail.accounts || [])) {
     lines.push(`• ${a.label}:`);
@@ -2343,7 +2349,15 @@ const EXCESS_DEBT_DEFAULT_TEMPLATE =
 function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
   const template = tmpl || (d.config || {}).excessDebtTemplate || EXCESS_DEBT_DEFAULT_TEMPLATE;
   const month = getEffectiveMonth(d.config || {});
-  const detailBlock = buildDebtDetailBlock({ months: row.months, accounts: row.accounts });
+  // ⚠️ v2.14.1 — pass openingDebt through. Rebuilding a PARTIAL object here
+  // ({months, accounts} only) silently dropped the carried-forward debt from the
+  // letter, so the message read "סה״כ 1610 ₪" above a list totalling 230 ₪.
+  // Caught by the live-server test, not by the helper tests — those exercised
+  // buildDebtDetailBlock directly and never saw this hand-built literal.
+  // Prefer spreading the row over enumerating fields.
+  const detailBlock = buildDebtDetailBlock({
+    months: row.months, accounts: row.accounts, openingDebt: row.openingDebt
+  });
   const portalUrl = (template.includes('{לינק_פורטל}') && tenantDataId)
     ? getOrCreatePortalUrl(tenantDataId, tenant.id, tenant.name)
     : '';
@@ -6645,7 +6659,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.0 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.1 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

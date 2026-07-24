@@ -537,6 +537,47 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
     /event\.stopPropagation\(\);showHelp\('wa'\)/.test(app), true);
   t.eq('the excess card is refreshed from render()',
     /refreshExcessDebtCard\(\);/.test(app), true);
+
+  // ── v2.14.1 fixes (all three reported by Tal) ──────────────────
+  t.section('v2.14.1 — the card must follow a threshold change');
+  const saveCfg = (app.match(/async function saveConfig\(\)[\s\S]*?\n\}/) || [''])[0];
+  t.eq('saveConfig exists', saveCfg.length > 0, true);
+  t.eq('THE BUG: saveConfig repaints the excess card after saving',
+    /refreshExcessDebtCard\(\)/.test(saveCfg), true);
+  t.eq('the repaint is INSIDE the debounced save (after the POST resolves)',
+    /body:\s*JSON\.stringify\(\{config:data\.config\}\)[\s\S]{0,700}?refreshExcessDebtCard\(\)/.test(saveCfg), true);
+
+  t.section('v2.14.1 — openingDebt is itemised on screen');
+  const rowsOD = [{ id: '9', name: 'לימור', apartment: '', phone: '', email: '',
+    currentMonthDebt: 230, priorDebt: 1610, extrasTotal: 0, owed: 1840,
+    openingDebt: 1380,
+    months: [{ monthKey: '2026-04', hebMonth: 'אפריל', expected: 230, paidAmount: 0, shortfall: 230, status: 'unpaid' },
+             { monthKey: '2026-07', hebMonth: 'יולי',  expected: 230, paidAmount: 0, shortfall: 230, status: 'unpaid' }],
+    accounts: [], alerts: [] }];
+  const htmlOD = ctx.buildExcessDebtHtml(rowsOD, 100, 'יולי');
+  t.eq('carried-forward debt is labelled for the user',
+    htmlOD.includes('חוב התחלתי / פתוח'), true);
+  t.eq('its amount is shown', htmlOD.includes('1,380₪'), true);
+  t.eq('a tenant with no openingDebt shows no such line',
+    ctx.buildExcessDebtHtml([Object.assign({}, rowsOD[0], { openingDebt: 0 })], 100, 'יולי')
+      .includes('חוב התחלתי'), false);
+
+  t.section('v2.14.1 — dashboard: five cards on ONE row');
+  t.eq('grid is 5 columns, not the stale 4',
+    /\.stats-row\{[^}]*grid-template-columns:repeat\(5,1fr\)/.test(app), true);
+  t.eq('no leftover repeat(4,1fr)', /grid-template-columns:repeat\(4,1fr\)/.test(app), false);
+  t.eq('mobile keeps 5 columns (does not fall back to 2)',
+    /@media\(max-width:600px\)\{\.stats-row\{grid-template-columns:repeat\(5,1fr\)/.test(app), true);
+  t.eq('the stat number scales with the viewport',
+    /\.stat-num\{font-size:clamp\(/.test(app), true);
+  t.eq('the stat label scales with the viewport',
+    /\.stat-label\{font-size:clamp\(/.test(app), true);
+  t.eq('cards can shrink (min-width:0)', /\.stat-card\{[^}]*min-width:0/.test(app), true);
+  t.eq('the 🔎 is hidden at phone width to save room',
+    /\.stat-mag\{display:none;\}/.test(app), true);
+  const statsRow = (app.match(/<div class="stats-row">[\s\S]*?\n  <\/div>/) || [''])[0];
+  t.eq('exactly 5 stat cards in the row',
+    (statsRow.match(/<div class="stat-card"/g) || []).length, 5);
 }
 
 process.exit(t.done() ? 1 : 0);
