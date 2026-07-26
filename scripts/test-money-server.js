@@ -898,6 +898,119 @@ t.section('Stage 4 — double-count guard (banked shortfall not re-added live)')
 }
 
 // ════════════════════════════════════════════════════════════════
+// bug #4 (v2.14.5) — creditBanked: phantom credit after month close
+// ════════════════════════════════════════════════════════════════
+// Symmetric with Stage 4's shortfallBanked. The overpay branch of
+// closeMonthUnpaid banks a surplus into (negative) openingDebt; it must now
+// stamp creditBanked:true so the live derivation (calcShortfallFromSentLog)
+// skips that month and does not count the same surplus twice. The crux the
+// v2.13.8 number-only guard could NOT solve: openingDebt can be EXACTLY 0
+// both post-close (a prior debt equal to the overpay consumed the surplus) and
+// pre-close (a fresh live overpayment, openingDebt untouched) — data-identical
+// except for the marker.
+t.section('bug #4 — closeMonthUnpaid stamps creditBanked on overpay');
+{
+  const NOW = new Date('2026-07-01T08:00:00.000Z'); // prev = June / יוני
+  const runClose = (tenant, sentLog) => {
+    const building = { config: { amount: 230 }, tenants: [tenant],
+      paymentHistory: { [tenant.id]: tenant._hist || [] }, sentLog: sentLog || {} };
+    const { run } = loadCloseMonth(building, NOW);
+    run();
+    return { tenant: building.tenants[0], building };
+  };
+
+  // (a) OVERPAY 300/230 → surplus 70 banked AND record stamped creditBanked:true.
+  {
+    const tn = { id: 'c1', name: 'x', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 300, type: 'bank' }] };
+    const { tenant, building } = runClose(tn, { 'c1_יוני': bank(300) });
+    t.eq('overpay 300/230 → openingDebt −70 (credit banked)', tenant.openingDebt, -70);
+    const rec = building.paymentHistory['c1'].find(r => r.month === '2026-06');
+    t.eq('overpay record stamped creditBanked:true', rec.creditBanked, true);
+    t.eq('overpay record kept paid:true', rec.paid, true);
+  }
+
+  // (b) THE CRUX — prior debt exactly equal to the overpay → openingDebt lands
+  // at EXACTLY 0 post-close. Number alone is ambiguous; the marker disambiguates.
+  {
+    const tn = { id: 'c2', name: 'x', customAmount: 230, openingDebt: 70,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 300, type: 'bank' }] };
+    const { tenant, building } = runClose(tn, { 'c2_יוני': bank(300) });
+    t.eq('prior debt 70 consumed by 70 surplus → openingDebt EXACTLY 0', tenant.openingDebt, 0);
+    const rec = building.paymentHistory['c2'].find(r => r.month === '2026-06');
+    t.eq('still stamped creditBanked even though openingDebt is 0', rec.creditBanked, true);
+  }
+
+  // (c) FULL / PARTIAL / no-record → NO creditBanked marker (only overpay stamps).
+  {
+    const full = { id: 'c3', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] };
+    const { building } = runClose(full, { 'c3_יוני': bank(230) });
+    const rec = building.paymentHistory['c3'].find(r => r.month === '2026-06');
+    t.eq('full payment → no creditBanked marker', !!rec.creditBanked, false);
+
+    const part = { id: 'c4', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 150, type: 'bank' }] };
+    const { building: b2 } = runClose(part, { 'c4_יוני': bank(150) });
+    const rec2 = b2.paymentHistory['c4'].find(r => r.month === '2026-06');
+    t.eq('partial → shortfallBanked, NOT creditBanked', !!rec2.creditBanked, false);
+    t.eq('partial → shortfallBanked still set', rec2.shortfallBanked, true);
+  }
+}
+
+t.section('bug #4 — no phantom credit after month close (marker skip)');
+{
+  const cfg = { amount: 230, manualMonth: 'יולי' }; // current month July → June is history
+  // June overpay 400/230 (surplus 170) already banked by closeMonthUnpaid.
+  const base = (tid, openingDebt, creditBanked) => ({
+    config: cfg,
+    sentLog: { [tid + '_יוני']: bank(400) },
+    tenants: [{ id: tid, name: 'x', customAmount: 230, openingDebt }],
+    paymentHistory: { [tid]: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 400, type: 'bank', creditBanked }] }
+  });
+
+  // POST-CLOSE, openingDebt −170 (legacy negative guard would also catch this).
+  const dNeg = base('p1', -170, true);
+  t.eq('credit-banked June skipped → live creditTotal 0 (marker suppresses it)',
+    S.calcShortfallFromSentLog(dNeg, 'p1', { year: 2026 }).creditTotal, 0);
+  // The surplus lives ONLY in the negative openingDebt now; getCreditBalance
+  // surfaces it from there (−openingDebt) → 170, not 170+170.
+  t.eq('getCreditBalance post-close = 170, NOT 340 (no double-count)',
+    S.getCreditBalance(dNeg, 'p1'), 170);
+
+  // THE CRUX POST-CLOSE: openingDebt EXACTLY 0 (prior debt 170 ate the surplus).
+  // The number guard (<0) can't see it; only the creditBanked marker suppresses
+  // the phantom. Correct credit here = 0 (surplus already spent paying the debt).
+  const dZero = base('p2', 0, true);
+  t.eq('CRUX: openingDebt 0 + creditBanked → NO phantom credit (0)',
+    S.getCreditBalance(dZero, 'p2'), 0);
+  t.eq('CRUX: openingDebt 0 + creditBanked → totalDebt 0',
+    S.calcTotalDebt(dZero, 'p2', '2026-07'), 0);
+
+  // CONTRAST — PRE-CLOSE: same openingDebt 0, same sentLog surplus, but NO marker
+  // yet (closeMonthUnpaid hasn't run). The live credit MUST still show (v2.13.8
+  // real-time credit). This is the case a naive `<=0` guard would have broken.
+  const dLive = base('p3', 0, false);
+  t.eq('pre-close live overpayment still credits 170 (real-time credit intact)',
+    S.getCreditBalance(dLive, 'p3'), 170);
+
+  // Interaction: a credit-banked June PLUS a live partial in July.
+  // June credit suppressed (banked); July partial 100 short counts live.
+  const dMix = {
+    config: cfg,
+    sentLog: { 'p4_יוני': bank(400), 'p4_יולי': bank(130) },
+    tenants: [{ id: 'p4', name: 'x', customAmount: 230, openingDebt: -170 }],
+    paymentHistory: { 'p4': [
+      { month: '2026-06', paid: true, amount: 230, paidAmount: 400, type: 'bank', creditBanked: true },
+      { month: '2026-07', paid: true, amount: 230, paidAmount: 130, type: 'bank' }
+    ] }
+  };
+  // banked June credit skipped; July shortfall 100 live. net credit = 170 − 100 = 70.
+  t.eq('banked June credit + live July shortfall → net credit 70',
+    S.getCreditBalance(dMix, 'p4'), 70);
+}
+
+// ════════════════════════════════════════════════════════════════
 // markUnpaid orphan cleanup (v2.13.14) — a cancelled payment must NOT
 // be resurrected by closeMonthUnpaid on the 1st of the month.
 // ════════════════════════════════════════════════════════════════

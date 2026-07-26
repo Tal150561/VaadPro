@@ -1130,12 +1130,23 @@ function calcMonthBalance(sentLogVal, expectedAmount) {
 // (openingDebt >= 0 -> nothing banked yet -> derived credit is the only source.)
 // This mirrors the "conservative on disk, aggressive on display" rule: we never
 // write here, we only decide which of the two already-existing sources to trust.
+// ⚠️ bug #4 (v2.14.5): the PRIMARY double-count guard now lives in
+// calcShortfallFromSentLog, which SKIPS any month whose paymentHistory record
+// carries `creditBanked:true` (stamped by closeMonthUnpaid's overpay branch,
+// symmetric with shortfallBanked). That marker — not this number — is what
+// distinguishes "surplus already banked" from a live pre-close overpayment,
+// because both states can share openingDebt===0 exactly (a prior debt equal to
+// the overpay consumes the surplus on close, landing at 0). The `openingDebt<0`
+// test below is kept as a secondary belt-and-braces for legacy records written
+// before creditBanked existed (no marker, but a negative openingDebt still
+// proves the surplus was banked). Do NOT change `<0` to `<=0` — openingDebt===0
+// is ambiguous and the marker resolves it, not the threshold.
 function getDerivedCredit(tenantData, tenantId, creditTotal) {
   if (!creditTotal) return 0;
   const openingDebt = parseFloat(
     (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
   );
-  if (openingDebt < 0) return 0; // already banked by closeMonthUnpaid — do not count twice
+  if (openingDebt < 0) return 0; // legacy belt-and-braces — see note above
   return creditTotal;
 }
 
@@ -1178,7 +1189,19 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
     }
     // v2.13.8: overpayment in a month is credit the moment it lands — do NOT
     // wait for closeMonthUnpaid to write a negative openingDebt on the 1st.
-    else if (bal.credit > 0) { creditTotal += bal.credit; months.push({ monthKey, hebMonth, credit: bal.credit }); }
+    else if (bal.credit > 0) {
+      // ⚠️ bug #4 double-count guard (v2.14.5) — symmetric with the shortfallBanked
+      // skip above and with getDerivedCredit. Once closeMonthUnpaid banks an
+      // overpayment surplus into openingDebt it stamps `creditBanked:true` on that
+      // month's paymentHistory record. sentLog still shows the overpaying
+      // bank_import, so this live derivation would otherwise add the SAME credit
+      // again (already in openingDebt) → doubled credit / phantom credit after
+      // month close. Skip a month whose credit is already banked. Un-banked
+      // overpayments (current month, pre-close) still count live, as before.
+      const rec = (history || []).find(r => r.month === monthKey && r.type !== 'wa_sent');
+      if (rec && rec.creditBanked) return;
+      creditTotal += bal.credit; months.push({ monthKey, hebMonth, credit: bal.credit });
+    }
   });
   return {
     total: Math.round(total * 100) / 100,
@@ -4141,6 +4164,13 @@ function closeMonthUnpaid() {
               tenant.openingDebt = Math.round(
                 ((parseFloat(tenant.openingDebt) || 0) - overpay) * 100
               ) / 100;
+              // ⭐ bug #4 (v2.14.5) — סמן שהעודף כבר נצבר לדיסק, סימטרי ל-
+              // shortfallBanked. הגזירה החיה (calcShortfallFromSentLog) תדלג על
+              // חודש עם creditBanked כדי לא לספור את אותו עודף פעם שנייה. בלי
+              // הסימון, מצב שלאחר-סגירה עם openingDebt=0 בדיוק (כשחוב קודם בלע
+              // את העודף) זהה-בנתונים למצב שלפני-סגירה עם עודף אמיתי → אי אפשר
+              // להבחין ביניהם לפי openingDebt בלבד. הסימון מבחין; המספר לא יכול.
+              existing.creditBanked = true;
               changed = true;
               console.log(`[closeMonthUnpaid] עודף תשלום לדייר ${tenant.name}: ${overpay} ₪ → openingDebt=${tenant.openingDebt}`);
             } else if (overpay < 0) {
@@ -6906,7 +6936,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.4 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.5 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
