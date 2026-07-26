@@ -371,6 +371,81 @@ t.section('Fix #0 — Agent import does not net openingDebt');
 }
 
 // ════════════════════════════════════════════════════════════════
+// RESET BUILDING PAYMENTS (v2.14.3) — clean slate for a new building
+// ════════════════════════════════════════════════════════════════
+// Wipes ALL bank-import-derived data (sentLog, paymentHistory, fingerprints,
+// lastBankSyncImport) + zeros openingDebt (main + extra accounts), while NEVER
+// touching tenant settings (name/phone/keywords/customAmount/personalTariffs/
+// extraAccounts definitions) or building config. Scoped to ONE building.
+{
+  const { loadResetPayments } = require('./test-lib');
+  const makeBuilding = () => ({
+    config: { amount: 217, whatsappTemplate: 'שלום {שם}' },
+    defaultTariffs: [{ rate: 217, startDate: '2000-01-01', endDate: null }],
+    tenants: [
+      { id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: 'אלתר', customAmount: 217, openingDebt: 217,
+        personalTariffs: [{ rate: 217, startDate: '2026-01-01', endDate: null }],
+        extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח', openingDebt: 30 }] },
+      { id: 'R', name: 'רוני מרחבי', phone: '0500000000', keywords: '', customAmount: 239, openingDebt: 0 }
+    ],
+    sentLog: { 'Z_יוני': 'bank_import_x_434_payer_צבי', 'R_יוני': 'bank_import_x_956_payer_רוני', 'Z__acc__a1_יוני': 'bank_import_x_50_payer_צבי' },
+    paymentHistory: { 'Z': [{ month: '2026-06', paid: true, amount: 217, paidAmount: 434 }], 'Z__acc__a1': [{ month: '2026-06', paid: true, amount: 50, paidAmount: 50 }] },
+    importedBankFingerprints: ['31/05|217|צבי אלתר', '29/06|217|צבי אלתר'],
+    lastBankSyncImport: { timestamp: 'x', matched: 9 }
+  });
+
+  t.section('Reset payments — dryRun previews without writing');
+  {
+    const b = makeBuilding();
+    const r = loadResetPayments(b, { dryRun: true });
+    t.eq('dryRun reported', r.result.dryRun, true);
+    t.eq('dryRun wrote NOTHING', r.saved.length, 0);
+    t.eq('dryRun took no backup', r.backupCalled, 0);
+    t.eq('counts sentLog main', r.result.summary.sentLogMain, 2);
+    t.eq('counts sentLog extra', r.result.summary.sentLogExtra, 1);
+    t.eq('counts paymentHistory main', r.result.summary.paymentHistoryRecordsMain, 1);
+    t.eq('counts paymentHistory extra', r.result.summary.paymentHistoryRecordsExtra, 1);
+    t.eq('counts tenants with openingDebt', r.result.summary.tenantsWithOpeningDebt, 1);
+    t.eq('counts extra accounts with openingDebt', r.result.summary.extraAccountsWithOpeningDebt, 1);
+    t.eq('counts fingerprints', r.result.summary.importedFingerprints, 2);
+    // dryRun must NOT mutate the building object.
+    t.eq('dryRun left sentLog intact', Object.keys(b.sentLog).length, 3);
+    t.eq('dryRun left openingDebt intact', b.tenants[0].openingDebt, 217);
+  }
+
+  t.section('Reset payments — real run wipes payment data, keeps settings');
+  {
+    const b = makeBuilding();
+    const r = loadResetPayments(b, { dryRun: false });
+    t.eq('took a backup FIRST', r.backupCalled, 1);
+    t.eq('wrote exactly once', r.saved.length, 1);
+    const patch = r.saved[0].patch;
+    // Deleted.
+    t.eq('sentLog emptied', Object.keys(patch.sentLog).length, 0);
+    t.eq('paymentHistory emptied', Object.keys(patch.paymentHistory).length, 0);
+    t.eq('fingerprints emptied', patch.importedBankFingerprints.length, 0);
+    t.eq('lastBankSyncImport cleared', patch.lastBankSyncImport, null);
+    // openingDebt zeroed — main + extra.
+    t.eq('tenant openingDebt zeroed', patch.tenants[0].openingDebt, 0);
+    t.eq('extra account openingDebt zeroed', patch.tenants[0].extraAccounts[0].openingDebt, 0);
+    // PRESERVED — settings untouched.
+    t.eq('tenant name kept', patch.tenants[0].name, 'צבי אלתר');
+    t.eq('tenant phone kept', patch.tenants[0].phone, '0528064806');
+    t.eq('tenant keywords kept', patch.tenants[0].keywords, 'אלתר');
+    t.eq('customAmount kept', patch.tenants[0].customAmount, 217);
+    t.eq('personalTariffs kept', patch.tenants[0].personalTariffs[0].rate, 217);
+    t.eq('extraAccount definition kept (label)', patch.tenants[0].extraAccounts[0].label, 'ביטוח');
+    t.eq('extraAccount amount kept', patch.tenants[0].extraAccounts[0].amount, 50);
+    t.eq('extraAccount matchKeywords kept', patch.tenants[0].extraAccounts[0].matchKeywords, 'ביטוח');
+    t.eq('second tenant kept', patch.tenants[1].name, 'רוני מרחבי');
+    // config is NOT in the patch (never sent → never touched).
+    t.eq('config not in patch (untouched)', patch.config, undefined);
+    t.eq('defaultTariffs not in patch (untouched)', patch.defaultTariffs, undefined);
+    t.eq('receipt returns backup filename', r.result.backupFile, 'backup-pre-restore-test.zip');
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
 // COLUMN A — fixed-amount tariff history (v2.13.16)
 // ════════════════════════════════════════════════════════════════
 // The phantom-debt fix: a retroactive import must freeze the tariff in effect

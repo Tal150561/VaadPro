@@ -1884,6 +1884,94 @@ app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
   res.json({ ok: true, dryRun, count: changes.length, changes, monthNow: mkNow });
 });
 
+// ── POST /api/reset-building-payments — clean slate for bank-import data ────
+// v2.14.3 — for a NEW building whose imported payment data is all wrong, wipe
+// EVERYTHING that came from a bank-file import and start fresh, WITHOUT touching
+// tenant settings or building config.
+//
+// SCOPE — this building ONLY. It reads/writes exactly req.user.tenantId; it has
+// no tenant-wide fan-out (unlike /api/fix-payment-history {mode:'all'}, which
+// hits every tenant and once wiped a whole building — see OPERATIONAL SAFETY).
+//
+// DELETES (all "results of import"):
+//   • sentLog            — every key, main + __acc__ (extra accounts)
+//   • paymentHistory     — every record, main + __acc__
+//   • importedBankFingerprints — so the dedup memory starts empty (re-import allowed)
+//   • lastBankSyncImport — the import receipt (display only)
+//   • openingDebt        — zeroed on every tenant AND every extra account
+//
+// NEVER TOUCHES (settings, not results): the tenants list, names, phones,
+// keywords, customAmount, personalTariffs, extraAccounts definitions, config,
+// defaultTariffs, templates, WhatsApp. openingDebt is zeroed because Tal's
+// decision is דרך ב' — clean slate + re-enter the genuine opening debts by hand
+// (the on-disk value is a mix of the original entry AND accrual from the bad
+// imports, and the two are not separable after closeMonthUnpaid has run).
+//
+// SAFETY: always takes a pre-reset backup first (createBackup('pre-restore')),
+// and supports {dryRun:true} to preview the exact counts before writing.
+app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
+  const dryRun = !!(req.body && req.body.dryRun);
+  const d = loadTenantData(req.user.tenantId);
+
+  // Count what WOULD be removed (for the dry-run preview + the real-run receipt).
+  const sentLog = d.sentLog || {};
+  const paymentHistory = d.paymentHistory || {};
+  const sentLogKeys = Object.keys(sentLog);
+  const sentLogMain  = sentLogKeys.filter(k => !k.includes('__acc__')).length;
+  const sentLogExtra = sentLogKeys.filter(k =>  k.includes('__acc__')).length;
+  let phRecordsMain = 0, phRecordsExtra = 0;
+  for (const [key, arr] of Object.entries(paymentHistory)) {
+    const n = Array.isArray(arr) ? arr.length : 0;
+    if (key.includes('__acc__')) phRecordsExtra += n; else phRecordsMain += n;
+  }
+  const tenants = d.tenants || [];
+  const tenantsWithOpeningDebt = tenants.filter(t => (parseFloat(t.openingDebt) || 0) !== 0).length;
+  let extraAccountsWithOpeningDebt = 0;
+  for (const t of tenants) {
+    for (const acc of (t.extraAccounts || [])) {
+      if ((parseFloat(acc.openingDebt) || 0) !== 0) extraAccountsWithOpeningDebt++;
+    }
+  }
+  const fingerprints = Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints.length : 0;
+
+  const summary = {
+    sentLogMain, sentLogExtra,
+    paymentHistoryRecordsMain: phRecordsMain, paymentHistoryRecordsExtra: phRecordsExtra,
+    tenantsWithOpeningDebt, extraAccountsWithOpeningDebt,
+    importedFingerprints: fingerprints,
+    hadLastBankSyncImport: !!d.lastBankSyncImport,
+    tenantsTotal: tenants.length
+  };
+
+  if (dryRun) {
+    console.log(`[reset-building-payments] tenant=${req.user.tenantId} DRY RUN`, summary);
+    return res.json({ ok: true, dryRun: true, summary });
+  }
+
+  // ── Real run — back up FIRST, then wipe. ──────────────────────────
+  const backupFile = createBackup('pre-restore');
+
+  // Zero openingDebt on tenants + extra accounts (settings otherwise untouched).
+  const cleanedTenants = tenants.map(t => {
+    const copy = Object.assign({}, t, { openingDebt: 0 });
+    if (Array.isArray(t.extraAccounts)) {
+      copy.extraAccounts = t.extraAccounts.map(acc => Object.assign({}, acc, { openingDebt: 0 }));
+    }
+    return copy;
+  });
+
+  saveTenantData(req.user.tenantId, {
+    sentLog: {},
+    paymentHistory: {},
+    importedBankFingerprints: [],
+    lastBankSyncImport: null,
+    tenants: cleanedTenants
+  });
+
+  console.log(`[reset-building-payments] tenant=${req.user.tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
+  res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
+});
+
 // Backup Layer 2 — manual / pre-restore snapshot trigger.
 // Called by the frontend (restoreData) BEFORE a manual restore overwrites data,
 // so an accidental restore from a wrong/old file is itself recoverable.

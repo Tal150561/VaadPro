@@ -159,7 +159,46 @@ function loadSentlogKeyDelete() {
   };
 }
 
-// Reproduces the GET /api/data enrichment. Kept here (not extracted) because it
+// ── Load the /api/reset-building-payments handler (v2.14.3) ───────
+// Clean-slate wipe of bank-import payment data. Extracts the REAL route body and
+// runs it against stubbed loadTenantData/saveTenantData/createBackup so the test
+// drives the actual delete/preserve logic, not a copy. saveTenantData captures
+// the patch so the test can assert exactly what was written. dryRun path is also
+// exercised (it returns before any write).
+function loadResetPayments(building, reqBody) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/reset-building-payments'");
+  if (start < 0) throw new Error('test-lib: /api/reset-building-payments route not found');
+  // Grab from the handler's opening `(req, res) => {` to its matching close.
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  // Walk braces to find the end of the arrow body.
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const saved = [];
+  let backupCalled = 0;
+  const captured = {};
+  const stubs = {
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
+    createBackup: () => { backupCalled++; return '/x/backup-pre-restore-test.zip'; },
+    path: { basename: (p) => String(p).split('/').pop() },
+    console,
+    req: { user: { tenantId: 'T1' }, body: reqBody || {} },
+    res: { json: (o) => { captured.result = o; } }
+  };
+  const code = 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const mod = runInSandbox(code, stubs);
+  mod.handler(stubs.req, stubs.res);
+  return { result: captured.result, saved, backupCalled, building };
+}
+
+
 // lives inline in a route handler. If you change the route, change this too —
 // the E2E test asserts the shape the frontend depends on.
 function enrichTenants(S, d) {
@@ -248,6 +287,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadSentlogKeyDelete, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadSentlogKeyDelete, loadResetPayments, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };

@@ -998,6 +998,27 @@ function vpLogout() {
       </div>
     </div>
 
+    <!-- v2.14.3 — clean slate: wipe all bank-import payment data (settings kept) -->
+    <div class="card" style="border:1px solid rgba(229,72,77,.35);background:rgba(229,72,77,.05);">
+      <div class="card-header" style="cursor:pointer;user-select:none;color:#e5484d;" onclick="toggleSection('secResetPayments')">🧹 התחלה נקייה — מחיקת כל התשלומים שנקלטו
+        <span id="secResetPaymentsIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secResetPaymentsBody" style="display:none;">
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;line-height:1.7;">
+          מוחק את <strong>כל התשלומים שנקלטו מייבוא קובץ בנק</strong> — סטטוסי תשלום, היסטוריית תשלומים,
+          וזיכרון הייבוא — כולל חשבונות נוספים, ומתחיל מדף חלק.<br>
+          <strong>לא נמחק:</strong> רשימת הדיירים, הטלפונים, מילות החיפוש, התשלום החודשי המותאם, והגדרות הבניין.<br>
+          ⚠️ <strong>גם ה"חוב התחלתי" (openingDebt) יאופס</strong> — לאחר המחיקה תזין מחדש את החובות ההתחלתיים האמיתיים בטאב דיירים.
+        </p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-secondary" onclick="resetBuildingPayments(true)">🔍 בדוק מה יימחק</button>
+          <button class="btn" style="background:#e5484d;color:#fff;" onclick="resetBuildingPayments(false)">🧹 מחק והתחל מחדש</button>
+        </div>
+        <div id="resetPaymentsResult" style="margin-top:12px;"></div>
+        <div class="hint" style="margin-top:10px;">💡 גיבוי אוטומטי נשמר לפני המחיקה. מומלץ ללחוץ קודם "בדוק מה יימחק".</div>
+      </div>
+    </div>
+
     <!-- כרטיס שיתוף וירלי -->
     <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
       <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
@@ -4913,6 +4934,48 @@ async function repairTariffs(dryRun) {
     h += '</div>';
     if (out) out.innerHTML = h;
     if (!dryRun) { await loadData(); render(); toast('🛠️ תוקנו ' + d.count + ' רשומות', 'success'); }
+  } catch(e) {
+    if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ שגיאת רשת: ' + e.message + '</span>';
+  }
+}
+
+// ── v2.14.3 — clean slate: wipe all bank-import payment data ──────
+// Calls POST /api/reset-building-payments. dryRun=true previews the counts,
+// false performs the wipe (server takes an automatic pre-reset backup first).
+// Deletes sentLog + paymentHistory + fingerprints + lastBankSyncImport and zeros
+// openingDebt (main + extra accounts). Never touches tenants/customAmount/config.
+async function resetBuildingPayments(dryRun) {
+  const out = document.getElementById('resetPaymentsResult');
+  if (!dryRun) {
+    if (!confirm('⚠️ למחוק את כל התשלומים שנקלטו ולהתחיל מחדש?\n\n• יימחקו: כל סטטוסי התשלום, היסטוריית התשלומים, וזיכרון הייבוא (כולל חשבונות נוספים)\n• יאופס: החוב ההתחלתי (openingDebt) של כל דייר\n• יישמרו: רשימת הדיירים, הטלפונים, התשלום החודשי המותאם, והגדרות הבניין\n\nגיבוי אוטומטי יישמר לפני המחיקה. הפעולה בלתי-הפיכה.\nלהמשיך?')) return;
+  }
+  if (out) out.innerHTML = '<span style="font-size:0.83rem;color:var(--text2);">⏳ ' + (dryRun ? 'בודק…' : 'מוחק…') + '</span>';
+  try {
+    const r = await fetch(API + '/reset-building-payments', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: !!dryRun })
+    });
+    const d = await r.json();
+    if (!d.ok) { if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ ' + (d.error || 'שגיאה') + '</span>'; return; }
+    const s = d.summary || {};
+    const phTotal = (s.paymentHistoryRecordsMain || 0) + (s.paymentHistoryRecordsExtra || 0);
+    const slTotal = (s.sentLogMain || 0) + (s.sentLogExtra || 0);
+    let h = '<div style="font-size:0.83rem;margin-bottom:8px;font-weight:600;">'
+          + (dryRun ? '🔍 מה יימחק:' : '✅ נמחק בהצלחה:')
+          + '</div><div style="display:grid;gap:5px;font-size:0.8rem;">';
+    const line = function(label, val){ return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">' + label + ': <strong>' + val + '</strong></div>'; };
+    h += line('סטטוסי תשלום (sentLog)', slTotal + ' (ראשי ' + (s.sentLogMain||0) + ' · נוספים ' + (s.sentLogExtra||0) + ')');
+    h += line('רשומות היסטוריה', phTotal + ' (ראשי ' + (s.paymentHistoryRecordsMain||0) + ' · נוספים ' + (s.paymentHistoryRecordsExtra||0) + ')');
+    h += line('דיירים עם חוב התחלתי שיאופס', (s.tenantsWithOpeningDebt||0) + ' מתוך ' + (s.tenantsTotal||0));
+    if (s.extraAccountsWithOpeningDebt) h += line('חשבונות נוספים עם חוב שיאופס', s.extraAccountsWithOpeningDebt);
+    h += line('זיכרון ייבוא (fingerprints)', s.importedFingerprints || 0);
+    h += '</div>';
+    if (!dryRun && d.backupFile) h += '<div class="hint" style="margin-top:8px;">💾 גיבוי נשמר: ' + d.backupFile + '</div>';
+    if (dryRun && (slTotal + phTotal) === 0 && !s.tenantsWithOpeningDebt) {
+      h = '<span style="color:var(--accent);font-size:0.85rem;">✅ אין נתוני תשלום למחיקה — הבניין כבר נקי.</span>';
+    }
+    if (out) out.innerHTML = h;
+    if (!dryRun) { await loadData(); render(); toast('🧹 התשלומים נמחקו — אפשר להתחיל מחדש', 'success'); }
   } catch(e) {
     if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ שגיאת רשת: ' + e.message + '</span>';
   }
