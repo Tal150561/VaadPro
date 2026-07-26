@@ -304,16 +304,21 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     const tenants = [{ id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: '', customAmount: 217, openingDebt: 0 }];
     const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
     t.eq('matched once, not twice', r.matched.length, 1);
-    const amt = parseFloat(String(r.newSentLog['Z_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    // v2.14.4 (#3): both rows are dated 31/05 → they route to מאי (their own month),
+    // NOT to the chosen יוני. Dedup still collapses the identical pair to a single 217.
+    const amt = parseFloat(String(r.newSentLog['Z_מאי']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
     t.eq('sentLog amount is 217 (single), NOT 434', amt, 217);
+    t.eq('routed to מאי (row date), not the chosen יוני', r.newSentLog['Z_יוני'], undefined);
     t.eq('a duplicate warning was surfaced', r.duplicateWarnings.length, 1);
     t.eq('warning names the tenant', r.duplicateWarnings[0].name, 'צבי אלתר');
     t.eq('one fingerprint consumed', r.newFingerprints.length, 1);
   }
 
-  t.section('Bank dedup — genuine two different dates still sum');
+  t.section('Bank dedup — genuine two different dates: split by month (v2.14.4 #3)');
   {
-    // Real two-month payment: May 31 + June 29, DIFFERENT dates → both count.
+    // Real two-month payment: May 31 + June 29, DIFFERENT dates → both count, but
+    // now each is recorded in ITS OWN month (May→מאי, June→יוני) instead of being
+    // summed into the chosen month. This is exactly the #3 multi-month-split fix.
     const rows = [
       ['שם', 'סכום', 'תאריך'],
       ['צבי אלתר', '217', '31/05/2026'],
@@ -321,8 +326,12 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     ];
     const tenants = [{ id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: '', customAmount: 217, openingDebt: 0 }];
     const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
-    const amt = parseFloat(String(r.newSentLog['Z_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
-    t.eq('two different-date payments sum to 434', amt, 434);
+    const may  = parseFloat(String(r.newSentLog['Z_מאי']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    const june = parseFloat(String(r.newSentLog['Z_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('May payment recorded in מאי (217)', may, 217);
+    t.eq('June payment recorded in יוני (217)', june, 217);
+    t.eq('NOT summed into one month', may === 217 && june === 217, true);
+    t.eq('matched row reports monthsSplit=2', r.matched[0].monthsSplit, 2);
     t.eq('no duplicate warning', r.duplicateWarnings.length, 0);
     t.eq('two fingerprints consumed', r.newFingerprints.length, 2);
   }
@@ -367,6 +376,136 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     const prior = new Set(r.newFingerprints);
     const r2 = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, prior);
     t.eq('extra account re-import matches nothing', r2.matched.filter(m => m.matchType === 'extra_account').length, 0);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// #3 — MULTI-MONTH IMPORT SPLIT (v2.14.4)
+// ════════════════════════════════════════════════════════════════
+// A bank file spanning >1 month, imported into one chosen month, used to sum
+// every payment into ONE bank_import for the chosen month (the extra months read
+// as a phantom overpayment credit). Fix: each payment is recorded in its OWN
+// month by the row's date. Single-month files are unchanged; rows with no date
+// fall back to the chosen month. Symmetric for the main account and extras.
+{
+  const { loadBankAnalyzer } = require('./test-lib');
+  const B = loadBankAnalyzer();
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+
+  t.section('#3 helpers — bankRowMonthKey parses every bank date format');
+  t.eq('DD/MM/YYYY', B.bankRowMonthKey('31/05/2026'), '2026-05');
+  t.eq('DD.MM.YYYY',  B.bankRowMonthKey('29.06.2026'), '2026-06');
+  t.eq('YYYY-MM-DD',  B.bankRowMonthKey('2026-04-10'), '2026-04');
+  t.eq('Excel serial (≈ 15/07/2026)', B.bankRowMonthKey('46218'), '2026-07');
+  t.eq('empty → null (caller falls back)', B.bankRowMonthKey(''), null);
+  t.eq('garbage → null', B.bankRowMonthKey('not-a-date'), null);
+
+  t.section('#3 helpers — groupMatchesByMonth buckets by month');
+  {
+    const g = B.groupMatchesByMonth([
+      { amount: 100, date: '05/04/2026', payerName: 'A' },
+      { amount: 200, date: '06/04/2026', payerName: 'A' },
+      { amount: 300, date: '07/05/2026', payerName: 'A' },
+    ], '2026-06');
+    t.eq('two distinct months', g.distinctMonths, 2);
+    t.eq('April bucket sums 100+200', g.buckets.get('2026-04').sum, 300);
+    t.eq('May bucket = 300', g.buckets.get('2026-05').sum, 300);
+    t.eq('no June bucket (nothing dated June)', g.buckets.has('2026-06'), false);
+  }
+  {
+    const g = B.groupMatchesByMonth([
+      { amount: 100, date: '', payerName: 'A' },          // no date → fallback
+      { amount: 50,  date: 'junk', payerName: 'A' },       // unparseable → fallback
+    ], '2026-06');
+    t.eq('undated rows land in the fallback month', g.buckets.get('2026-06').sum, 150);
+    t.eq('distinctMonths counts only DATED months (0 here)', g.distinctMonths, 0);
+  }
+
+  t.section('#3 — single-month file is UNCHANGED (one key, chosen month)');
+  {
+    // All rows dated June, chosen June → exactly the old behaviour: one יוני key.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['דנה כהן', '300', '03/06/2026'],
+      ['דנה כהן', '300', '20/06/2026'],
+    ];
+    const tenants = [{ id: 'D', name: 'דנה כהן', phone: '0501112222', keywords: '', customAmount: 300, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 300 }, new Set());
+    const keys = Object.keys(r.newSentLog).filter(k => k.startsWith('D_'));
+    t.eq('exactly one main sentLog key', keys.length, 1);
+    t.eq('it is יוני', keys[0], 'D_יוני');
+    const amt = parseFloat(String(r.newSentLog['D_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('summed within the same month (600)', amt, 600);
+    t.eq('monthsSplit = 1', r.matched[0].monthsSplit, 1);
+  }
+
+  t.section('#3 — three-month file splits into three months');
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['דנה כהן', '300', '10/04/2026'],
+      ['דנה כהן', '300', '10/05/2026'],
+      ['דנה כהן', '300', '10/06/2026'],
+    ];
+    const tenants = [{ id: 'D', name: 'דנה כהן', phone: '0501112222', keywords: '', customAmount: 300, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 300 }, new Set());
+    const amt = (heb) => parseFloat(String(r.newSentLog['D_' + heb]).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('אפריל = 300', amt('אפריל'), 300);
+    t.eq('מאי = 300',   amt('מאי'),   300);
+    t.eq('יוני = 300',  amt('יוני'),  300);
+    t.eq('three distinct month keys', Object.keys(r.newSentLog).filter(k => k.startsWith('D_')).length, 3);
+    t.eq('monthsSplit = 3', r.matched[0].monthsSplit, 3);
+    t.eq('reported total still 900', r.matched[0].amount, 900);
+  }
+
+  t.section('#3 — undated rows fall back to the chosen month');
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['דנה כהן', '300', '10/04/2026'],  // April
+      ['דנה כהן', '300', ''],            // no date → chosen (June)
+    ];
+    const tenants = [{ id: 'D', name: 'דנה כהן', phone: '0501112222', keywords: '', customAmount: 300, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 300 }, new Set());
+    t.eq('April row → אפריל', parseFloat(String(r.newSentLog['D_אפריל']).match(/_([\d.]+)_payer/)[1]), 300);
+    t.eq('undated row → chosen יוני', parseFloat(String(r.newSentLog['D_יוני']).match(/_([\d.]+)_payer/)[1]), 300);
+  }
+
+  t.section('#3 — year boundary: December file imported in January');
+  {
+    // Chosen month January 2026; a row dated 15/12/2025 must land in 2025-12 (דצמבר),
+    // not 2026-12. bankRowMonthKey reads the real year off the row date directly.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['דנה כהן', '300', '15/12/2025'],
+    ];
+    const tenants = [{ id: 'D', name: 'דנה כהן', phone: '0501112222', keywords: '', customAmount: 300, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-01', { amount: 300 }, new Set());
+    t.eq('recorded under דצמבר', !!r.newSentLog['D_דצמבר'], true);
+    t.eq('not under ינואר', r.newSentLog['D_ינואר'], undefined);
+  }
+
+  t.section('#3 — extra accounts split by month too (symmetric)');
+  {
+    // ביטוח collected across April + May, imported into June. Each month gets its
+    // own key AND its own paymentHistory record — the locked "main == extra" rule.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['ביטוח מבנה', '50', '05/04/2026'],
+      ['ביטוח מבנה', '50', '05/05/2026'],
+    ];
+    const tenants = [{
+      id: 'Z', name: 'לא-מזוהה', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }]
+    }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
+    t.eq('ביטוח אפריל key set', !!r.newSentLog['Z__acc__a1_אפריל'], true);
+    t.eq('ביטוח מאי key set',   !!r.newSentLog['Z__acc__a1_מאי'],   true);
+    t.eq('NOT collapsed into יוני', r.newSentLog['Z__acc__a1_יוני'], undefined);
+    const ph = r.newPaymentHistory['Z__acc__a1'] || [];
+    t.eq('two extra-account paymentHistory records', ph.length, 2);
+    t.eq('one for 2026-04', ph.some(x => x.month === '2026-04' && x.paidAmount === 50), true);
+    t.eq('one for 2026-05', ph.some(x => x.month === '2026-05' && x.paidAmount === 50), true);
   }
 }
 

@@ -6121,6 +6121,52 @@ function bankRowFingerprint(dateVal, amount, nameOrDesc) {
   return d + '|' + a + '|' + n;
 }
 
+// ── bankRowMonthKey (v2.14.4, #3 multi-month split) ────────────────
+// Parse a bank-file date cell to a 'YYYY-MM' key. Mirrors the client parseDate()
+// in app.html EXACTLY (Excel serial, DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD, then a
+// permissive fallback) so the manual and Agent paths group rows into the same
+// months. Returns null when the cell has no parseable date — the caller then
+// falls the row back to the chosen import month (safe, = pre-split behaviour).
+function bankRowMonthKey(dateVal) {
+  if (dateVal === '' || dateVal === null || dateVal === undefined) return null;
+  const s = String(dateVal).trim();
+  let d = null;
+  const n = parseFloat(s);
+  if (!isNaN(n) && n > 40000 && n < 60000) {
+    const dd = new Date((n - 25569) * 86400 * 1000);
+    if (!isNaN(dd.getTime())) d = dd;
+  }
+  if (!d && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s))   { const p = s.split('/'); d = new Date(p[2], p[1]-1, p[0]); }
+  if (!d && /^\d{1,2}\.\d{1,2}\.\d{4}/.test(s))    { const p = s.split('.'); d = new Date(p[2], p[1]-1, p[0]); }
+  if (!d && /^\d{4}-\d{2}-\d{2}/.test(s))          { d = new Date(s); }
+  if (!d) { const dd = new Date(dateVal); if (!isNaN(dd.getTime())) d = dd; }
+  if (!d || isNaN(d.getTime())) return null;
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+
+// ── groupMatchesByMonth (v2.14.4, #3 multi-month split) ────────────
+// Given a tenant's matched rows (each `{amount, date, ...}`), bucket them by the
+// month parsed from `date`. Rows with no parseable date fall into `fallbackMk`
+// (the chosen import month). Returns a Map monthKey→{sum, payerName, count} plus
+// `distinctMonths` (how many DISTINCT dated months appeared, for the split
+// confirm/warning). When every row lands in ONE month the result is a single
+// bucket → the write below is byte-identical to the old single-key behaviour.
+function groupMatchesByMonth(matches, fallbackMk) {
+  const buckets = new Map(); // monthKey -> { sum, payerName, count }
+  const datedMonths = new Set();
+  for (const m of matches) {
+    const parsed = bankRowMonthKey(m.date != null ? m.date : m.dateVal);
+    if (parsed) datedMonths.add(parsed);
+    const mk = parsed || fallbackMk;
+    let b = buckets.get(mk);
+    if (!b) { b = { sum: 0, payerName: m.payerName || '', count: 0 }; buckets.set(mk, b); }
+    b.sum = Math.round((b.sum + m.amount) * 100) / 100;
+    b.count += 1;
+    if (!b.payerName && m.payerName) b.payerName = m.payerName;
+  }
+  return { buckets, distinctMonths: datedMonths.size };
+}
+
 // ── analyzeBankRows (server-side port of client logic) ─────────────
 // `importedFingerprints` (optional Set) carries fingerprints already imported in
 // PRIOR runs; matched rows whose fingerprint is in it are skipped (cross-import
@@ -6128,6 +6174,13 @@ function bankRowFingerprint(dateVal, amount, nameOrDesc) {
 // also returns `newFingerprints` (the ones consumed this run) so the caller can
 // persist them. In-file duplicates (same fingerprint twice in THIS file) are
 // counted once and reported in `duplicateWarnings`.
+//
+// v2.14.4 (#3): a matched tenant's rows are now grouped by each row's OWN month
+// (from its date) via groupMatchesByMonth, and one sentLog key is written PER
+// month — so a multi-month file records each payment in its month instead of
+// summing them all into the chosen month (which read as a phantom overpayment
+// credit). Single-month files are unchanged. `em`/`monthKey` remain the FALLBACK
+// month for rows with no parseable date, and the reported `month` for the UI.
 function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints) {
   const iName   = parseInt(mapping.colName   ?? -1);
   const iAmount = parseInt(mapping.colAmount ?? -1);
@@ -6174,16 +6227,12 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   });
 
   const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
-  let em;
-  if (monthKey) {
-    const [, m] = monthKey.split('-');
-    em = MONTHS_HE[parseInt(m) - 1];
-  } else {
-    // getMonthKey returns YYYY-MM, convert to Hebrew month name
-    const mk = getMonthKey(config);
-    const [, mm] = mk.split('-');
-    em = MONTHS_HE[parseInt(mm) - 1];
-  }
+  // fallbackMk = the chosen import month as YYYY-MM (used for rows with no
+  // parseable date). em = its Hebrew name (also the reported `month` for the UI).
+  const fallbackMk = monthKey || getMonthKey(config);
+  const em = MONTHS_HE[parseInt(fallbackMk.split('-')[1]) - 1];
+  // Hebrew month name for any YYYY-MM key produced by the per-row grouping.
+  const hebOfMk = (mk) => MONTHS_HE[parseInt(String(mk).split('-')[1]) - 1];
 
   /**
    * Whitespace/punctuation-bounded keyword match used by bank-row analysis to
@@ -6254,12 +6303,11 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       seenRowIdx.add(m.rowIdx);
       consumedFingerprints.add(fp);
       newFingerprints.push(fp);
-      tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal });
+      tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal, date: m.dateVal });
     });
 
     if (tenantMatches.length > 0) {
       const totalAmount = tenantMatches.reduce((s, m) => s + m.amount, 0);
-      const payerName   = tenantMatches[0].payerName || '';
       // ── Fix #0 (v2.13.15): do NOT net the payment against openingDebt here. ──
       // Previously this called applyPaymentToDebt(tenant, totalAmount), which mutated
       // tenant.openingDebt at IMPORT time and was persisted to disk (saveTenantData ...
@@ -6273,8 +6321,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // counts + month, never debtReduced.
       // Always mark sentLog on bank match — even if payment only covered old debt.
       // Bug #7 fix: old guard `if (creditForMonth > 0)` caused AutoSend to fire on tenants who already paid.
-      newSentLog[tenant.id + '_' + em] = `bank_import_${new Date().toISOString()}_${totalAmount}_payer_${payerName}`;
-      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false });
+      //
+      // ── v2.14.4 (#3): write ONE sentLog key PER month, grouped by each row's date. ──
+      // A multi-month file records each payment in its own month instead of summing
+      // them into `em` (which read as a phantom overpayment). Single-month files
+      // produce exactly one bucket → byte-identical to the old single-key write.
+      // Rows with no parseable date fall back to `fallbackMk` (the chosen month).
+      const { buckets } = groupMatchesByMonth(tenantMatches, fallbackMk);
+      for (const [mk, b] of buckets) {
+        const hebMk = hebOfMk(mk);
+        newSentLog[tenant.id + '_' + hebMk] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
+      }
+      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false, monthsSplit: buckets.size });
     } else {
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
     }
@@ -6288,13 +6346,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         if (!acc.matchKeywords || !acc.matchKeywords.trim()) return;
         const accKw = acc.matchKeywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean);
         if (!accKw.length) return;
-        // בדוק אם כבר שולם החודש
-        const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
-        if (newSentLog[slKey] && (
-          String(newSentLog[slKey]).startsWith('manual_paid') ||
-          String(newSentLog[slKey]).startsWith('bank_import')
-        )) return; // כבר שולם
-        // חפש שורה מתאימה
+        // חפש שורות מתאימות (התאמה לחודש נעשית אחר כך ב-groupMatchesByMonth)
         const accMatches = [];
         mr.forEach(m => {
           if (usedRowIdxForMain.has(m.rowIdx)) return; // שורה שכבר שויכה לחשבון ראשי
@@ -6310,35 +6362,51 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           }
           consumedFingerprints.add(fp);
           newFingerprints.push(fp);
-          accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx });
+          accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx, date: m.dateVal });
         });
         if (accMatches.length > 0) {
-          const totalPaid = accMatches.reduce((s, m) => s + m.amount, 0);
-          const payerName = accMatches[0].payerName || '';
-          newSentLog[slKey] = `bank_import_${new Date().toISOString()}_${totalPaid}_payer_${payerName}`;
-          // עדכן paymentHistory לחשבון הנוסף
+          // ── v2.14.4 (#3): split extra-account payments by month too (symmetric). ──
+          // One sentLog key + one paymentHistory record PER month. The "already paid"
+          // guard is now checked per TARGET month (not only for `em`), so importing a
+          // second month's file does not skip a month already marked by an earlier import.
           const phKey = String(tenant.id) + '__acc__' + acc.id;
-          if (!newPaymentHistory[phKey]) newPaymentHistory[phKey] = [];
-          newPaymentHistory[phKey].push({
-            month: monthKey || getMonthKey(config),
-            paid: true,
-            amount: acc.amount || 0,
-            paidAmount: totalPaid,
-            date: new Date().toISOString().split('T')[0],
-            type: 'bank_import',
-            name: tenant.name,
-            payerName
-          });
+          const { buckets } = groupMatchesByMonth(accMatches, fallbackMk);
+          let anyWritten = false;
+          let reportedTotal = 0;
+          const reportedPayer = (accMatches[0] && accMatches[0].payerName) || '';
+          for (const [mk, b] of buckets) {
+            const hebMk = hebOfMk(mk);
+            const slKeyM = phKey + '_' + hebMk;
+            const prev = newSentLog[slKeyM];
+            if (prev && (String(prev).startsWith('manual_paid') || String(prev).startsWith('bank_import'))) continue; // כבר שולם לחודש הזה
+            newSentLog[slKeyM] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
+            if (!newPaymentHistory[phKey]) newPaymentHistory[phKey] = [];
+            newPaymentHistory[phKey].push({
+              month: mk,
+              paid: true,
+              amount: acc.amount || 0,
+              paidAmount: b.sum,
+              date: new Date().toISOString().split('T')[0],
+              type: 'bank_import',
+              name: tenant.name,
+              payerName: b.payerName
+            });
+            anyWritten = true;
+            reportedTotal += b.sum;
+          }
           // סמן שורות ששויכו כדי שלא ישויכו שוב
           accMatches.forEach(m => usedRowIdxForMain.add(m.rowIdx));
-          matched.push({
-            tenantId: tenant.id,
-            name: `${tenant.name} (${acc.label})`,
-            amount: totalPaid,
-            matchType: 'extra_account',
-            accountId: acc.id,
-            accountLabel: acc.label
-          });
+          if (anyWritten) {
+            matched.push({
+              tenantId: tenant.id,
+              name: `${tenant.name} (${acc.label})`,
+              amount: reportedTotal,
+              matchType: 'extra_account',
+              accountId: acc.id,
+              accountLabel: acc.label,
+              monthsSplit: buckets.size
+            });
+          }
         }
       });
     }
@@ -6838,7 +6906,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.3 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.4 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

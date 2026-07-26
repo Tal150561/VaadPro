@@ -3825,6 +3825,33 @@ function analyzeBankRows(rows,fileName){
     var nn = String(nameOrDesc||'').trim().toLowerCase().replace(/\s+/g,' ');
     return dd+'|'+aa+'|'+nn;
   }
+  // ── v2.14.4 (#3): parse a row date to YYYY-MM, mirrors server bankRowMonthKey ──
+  // Reuses parseDate() (the shared bank-date parser) so this path and the Agent
+  // path bucket rows into identical months. null ⇒ caller falls back to the
+  // chosen month (safe, = pre-split behaviour).
+  function bankRowMonthKey(dateVal){
+    var d = parseDate(dateVal);
+    if(!d || isNaN(d.getTime())) return null;
+    return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0');
+  }
+  // Bucket a tenant's matched rows by the month of each row's date; undated rows
+  // fall into fallbackMk. Returns {buckets: Map, distinctMonths}. One month ⇒ a
+  // single bucket ⇒ byte-identical to the old single-key write.
+  function groupMatchesByMonth(matches, fallbackMk){
+    var buckets = new Map(); var dated = new Set();
+    matches.forEach(function(m){
+      var parsed = bankRowMonthKey(m.date != null ? m.date : m.dateVal);
+      if(parsed) dated.add(parsed);
+      var mk = parsed || fallbackMk;
+      var b = buckets.get(mk);
+      if(!b){ b = {sum:0, payerName:m.payerName||'', count:0}; buckets.set(mk,b); }
+      b.sum = Math.round((b.sum + m.amount)*100)/100;
+      b.count += 1;
+      if(!b.payerName && m.payerName) b.payerName = m.payerName;
+    });
+    return { buckets: buckets, distinctMonths: dated.size };
+  }
+  var hebOfMk = function(mk){ return MONTH_NAMES_HE[parseInt(String(mk).split('-')[1])-1]; };
   var alreadyImportedFp = new Set(Array.isArray(data.importedBankFingerprints) ? data.importedBankFingerprints : []);
   var consumedFp = new Set();
   var newFp = [];
@@ -3938,19 +3965,56 @@ function analyzeBankRows(rows,fileName){
 
     if(tenantMatches.length>0){
       const totalAmount=tenantMatches.reduce(function(s,m){return s+m.amount;},0);
+      // v2.14.4 (#3): bucket this tenant's rows by month now; DEFER the sentLog
+      // write until after the global multi-month confirm below.
+      var grouped = groupMatchesByMonth(tenantMatches, selectedMonthKey);
       matched.push({
         tenant:tenant,
         amount:totalAmount,
         count:tenantMatches.length,
         matchType:tenantMatches[0].matchType,
-        payments:tenantMatches  // כל התשלומים עם תאריך וסכום
+        payments:tenantMatches,  // כל התשלומים עם תאריך וסכום
+        _buckets:grouped.buckets,
+        monthsSplit:grouped.buckets.size
       });
-      const k=tenant.id+'_'+em;
-      const payerName = tenantMatches[0].payerName || '';
-      data.sentLog[k]='bank_import_'+new Date().toISOString()+'_'+totalAmount+'_payer_'+payerName;
     } else {
       unmatched.push(tenant);
     }
+  });
+
+  // ── v2.14.4 (#3): multi-month split, with confirm before splitting ──────────
+  // If ANY matched tenant has rows from more than one month, ask once before
+  // writing. Decline → write everything into the chosen month (the old behaviour),
+  // so we never change how a file is recorded without the user's consent.
+  var splitTenants = matched.filter(function(m){ return m._buckets && m._buckets.size > 1; });
+  var doSplit = false;
+  if (splitTenants.length) {
+    var monthSet = new Set();
+    splitTenants.forEach(function(m){ m._buckets.forEach(function(_v,mk){ monthSet.add(mk); }); });
+    var monthsList = Array.from(monthSet).sort().map(function(mk){
+      return hebOfMk(mk) + ' ' + mk.split('-')[0];
+    }).join(', ');
+    doSplit = confirm(
+      'הקובץ מכיל תשלומים מ-' + monthSet.size + ' חודשים שונים (' + monthsList + ').\n\n' +
+      'לרשום כל תשלום בחודש שלו? (מומלץ)\n\n' +
+      'ביטול = לרשום הכל בחודש הנבחר בלבד.'
+    );
+  }
+
+  matched.forEach(function(m){
+    var payerName = (m.payments[0] && m.payments[0].payerName) || '';
+    if (doSplit && m._buckets) {
+      m._buckets.forEach(function(b, mk){
+        var hebMk = hebOfMk(mk);
+        data.sentLog[m.tenant.id + '_' + hebMk] =
+          'bank_import_' + new Date().toISOString() + '_' + b.sum + '_payer_' + (b.payerName || payerName);
+      });
+    } else {
+      // No split (single month, or user declined): one key in the chosen month.
+      data.sentLog[m.tenant.id + '_' + em] =
+        'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
+    }
+    delete m._buckets; // don't ship the Map to showBankResult
   });
 
   // Persist the union of prior + newly-consumed fingerprints (cross-import memory),

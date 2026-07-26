@@ -648,4 +648,53 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
     /applySectionState\('tenantsList'\);/.test(app), true);
 }
 
+t.section('app.html — #3 multi-month split (v2.14.4)');
+{
+  // EXECUTE the client-side split helpers (bankRowMonthKey + groupMatchesByMonth),
+  // lifted from inside analyzeBankRows by anchor, with parseDate + MONTH_NAMES_HE
+  // in scope. Not a grep test: a broken split here fails the suite.
+  const parseDateFn = (app.match(/function parseDate\(v\)\{[\s\S]*?\n\}/) || [''])[0];
+  const mkFn  = (app.match(/function bankRowMonthKey\(dateVal\)\{[\s\S]*?\n  \}/) || [''])[0];
+  const grpFn = (app.match(/function groupMatchesByMonth\(matches, fallbackMk\)\{[\s\S]*?\n  \}/) || [''])[0];
+  t.eq('bankRowMonthKey lifted from source', mkFn.length > 0, true);
+  t.eq('groupMatchesByMonth lifted from source', grpFn.length > 0, true);
+
+  const helpers = new Function(
+    "const MONTH_NAMES_HE=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];\n"
+    + parseDateFn + '\n' + mkFn + '\n' + grpFn
+    + '\n; return { bankRowMonthKey, groupMatchesByMonth };'
+  )();
+
+  t.eq('client parses DD/MM/YYYY → YYYY-MM', helpers.bankRowMonthKey('31/05/2026'), '2026-05');
+  t.eq('client empty date → null', helpers.bankRowMonthKey(''), null);
+
+  const g = helpers.groupMatchesByMonth([
+    { amount: 300, date: '10/04/2026', payerName: 'A' },
+    { amount: 300, date: '10/05/2026', payerName: 'A' },
+    { amount: 300, date: '10/06/2026', payerName: 'A' },
+  ], '2026-06');
+  t.eq('client splits into 3 months', g.buckets.size, 3);
+  t.eq('client April bucket = 300', g.buckets.get('2026-04').sum, 300);
+
+  const g2 = helpers.groupMatchesByMonth([
+    { amount: 300, date: '10/06/2026', payerName: 'A' },
+    { amount: 300, date: '25/06/2026', payerName: 'A' },
+  ], '2026-06');
+  t.eq('client single-month → one bucket', g2.buckets.size, 1);
+  t.eq('client single-month sums within month (600)', g2.buckets.get('2026-06').sum, 600);
+
+  const g3 = helpers.groupMatchesByMonth([
+    { amount: 300, date: '', payerName: 'A' },
+  ], '2026-06');
+  t.eq('client undated → fallback month', g3.buckets.get('2026-06').sum, 300);
+
+  // Guards on the write/confirm wiring (these can't be executed without DOM/confirm).
+  t.eq('split write is gated behind a confirm', /confirm\(\s*\n?\s*'הקובץ מכיל תשלומים מ-'/.test(app), true);
+  t.eq('declining the split writes into the chosen month (em)',
+    /data\.sentLog\[m\.tenant\.id \+ '_' \+ em\]/.test(app), true);
+  t.eq('accepting the split writes per-month keys',
+    /data\.sentLog\[m\.tenant\.id \+ '_' \+ hebMk\]/.test(app), true);
+  t.eq('the Map is not shipped to showBankResult', /delete m\._buckets;/.test(app), true);
+}
+
 process.exit(t.done() ? 1 : 0);
