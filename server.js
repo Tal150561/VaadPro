@@ -6011,8 +6011,36 @@ function applyPaymentToDebt(tenant, amount) {
   return { debtReduced: amount, creditForMonth: 0 };
 }
 
+// ── bankRowFingerprint — stable identity of a single bank transaction ──
+// A bank file has no unique transaction id, so a transaction is identified by
+// date + amount + name/description (Tal's decision). This is used for TWO kinds
+// of deduplication, and BOTH apply equally to the main account and to extra
+// (collection) accounts — the locked "whatever is true for the main account is
+// true for extra accounts" rule:
+//   • in-file dedup   — two identical rows in ONE file are counted once (with a
+//     warning surfaced, since a genuine same-day double-payment is possible).
+//   • cross-import dedup — a fingerprint already imported this run is skipped, so
+//     re-importing the same file (or overlapping month files) never double-counts.
+// Normalisation: trim, lowercase, collapse internal whitespace, strip a trailing
+// ".0"/",00" style decimal on the amount so "217" and "217.00" match. Returns a
+// short stable string. Date is used as-is (the file's own date text) — we do NOT
+// parse it, so two rows only collide when the file itself repeats the same date
+// string, which is exactly the duplicate case we want to catch.
+function bankRowFingerprint(dateVal, amount, nameOrDesc) {
+  const d = String(dateVal || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const a = String(Math.round((parseFloat(amount) || 0) * 100) / 100);
+  const n = String(nameOrDesc || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  return d + '|' + a + '|' + n;
+}
+
 // ── analyzeBankRows (server-side port of client logic) ─────────────
-function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config) {
+// `importedFingerprints` (optional Set) carries fingerprints already imported in
+// PRIOR runs; matched rows whose fingerprint is in it are skipped (cross-import
+// dedup). The function ADDS the fingerprints it consumes to that same Set, and
+// also returns `newFingerprints` (the ones consumed this run) so the caller can
+// persist them. In-file duplicates (same fingerprint twice in THIS file) are
+// counted once and reported in `duplicateWarnings`.
+function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints) {
   const iName   = parseInt(mapping.colName   ?? -1);
   const iAmount = parseInt(mapping.colAmount ?? -1);
   const iDate   = parseInt(mapping.colDate   ?? -1);
@@ -6092,6 +6120,23 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   // Deep-clone tenants so we can mutate openingDebt safely
   const updatedTenants = tenants.map(t => Object.assign({}, t));
 
+  // ── Dedup state (main + extra accounts share it) ──────────────────
+  // alreadyImported = fingerprints seen in PRIOR imports (cross-import dedup).
+  // consumedFingerprints = fingerprints this run actually attributed to a row, so
+  // (a) a duplicate row inside THIS file is not counted twice, and (b) the caller
+  // can persist them to block a future re-import. duplicateWarnings surfaces any
+  // in-file duplicate so a genuine same-day double-payment is never dropped silently.
+  // Duck-typed, not `instanceof Set` — a Set built in another realm (e.g. the test
+  // sandbox, or any future caller) fails instanceof but still works. Accept anything
+  // with .has/.add; otherwise seed from an array; otherwise empty.
+  const alreadyImported =
+    (importedFingerprints && typeof importedFingerprints.has === 'function' && typeof importedFingerprints.add === 'function')
+      ? importedFingerprints
+      : new Set(Array.isArray(importedFingerprints) ? importedFingerprints : []);
+  const consumedFingerprints = new Set();
+  const newFingerprints = [];
+  const duplicateWarnings = [];
+
   updatedTenants.forEach(tenant => {
     const kw = tenant.keywords
       ? tenant.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
@@ -6109,7 +6154,19 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (kw.length && kwMatches(kw, rt))                          type = 'keyword';
       if (!type && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';
       if (!type && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
-      if (type) { seenRowIdx.add(m.rowIdx); tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal }); }
+      if (!type) return;
+      // ── Fingerprint dedup (main account) ──────────────────────────
+      const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+      if (alreadyImported.has(fp)) { seenRowIdx.add(m.rowIdx); return; } // imported before → skip
+      if (consumedFingerprints.has(fp)) {                                 // duplicate in THIS file
+        seenRowIdx.add(m.rowIdx);
+        duplicateWarnings.push({ tenantId: tenant.id, name: tenant.name, amount: m.amount, date: m.dateVal, scope: 'main' });
+        return;
+      }
+      seenRowIdx.add(m.rowIdx);
+      consumedFingerprints.add(fp);
+      newFingerprints.push(fp);
+      tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal });
     });
 
     if (tenantMatches.length > 0) {
@@ -6154,9 +6211,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         mr.forEach(m => {
           if (usedRowIdxForMain.has(m.rowIdx)) return; // שורה שכבר שויכה לחשבון ראשי
           const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
-          if (kwMatches(accKw, rt)) {
-            accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx });
+          if (!kwMatches(accKw, rt)) return;
+          // ── Fingerprint dedup (extra account) — same rule as the main account ──
+          const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+          if (alreadyImported.has(fp)) { usedRowIdxForMain.add(m.rowIdx); return; } // imported before
+          if (consumedFingerprints.has(fp)) {                                        // duplicate in THIS file
+            usedRowIdxForMain.add(m.rowIdx);
+            duplicateWarnings.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal, scope: 'extra', accountId: acc.id });
+            return;
           }
+          consumedFingerprints.add(fp);
+          newFingerprints.push(fp);
+          accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx });
         });
         if (accMatches.length > 0) {
           const totalPaid = accMatches.reduce((s, m) => s + m.amount, 0);
@@ -6190,7 +6256,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     }
   }); // end updatedTenants.forEach
 
-  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em };
+  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -6229,8 +6295,13 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     const monthKey = req.body.monthKey || null;
 
-    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month } = analyzeBankRowsServer(
-      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config
+    // Cross-import dedup: fingerprints of transactions imported in prior runs.
+    // Re-importing the same file (or an overlapping month file) will skip any row
+    // whose fingerprint is already here, so nothing is counted twice.
+    const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
+
+    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings } = analyzeBankRowsServer(
+      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp
     );
 
     // רשום paymentHistory לדיירים רגילים שזוהו
@@ -6255,10 +6326,22 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     });
 
     // מיזוג paymentHistory של חשבונות נוספים עם הקיים
+    // ⚠️ Belt-and-suspenders against re-import compounding: fingerprint dedup above
+    // already prevents a re-imported transaction from producing a record here, but
+    // the old blind `.concat` would still duplicate a bank_import record for the same
+    // {month, paidAmount, date} if it ever slipped through. Skip a record that already
+    // exists for that account+month+paidAmount+date. Same rule as the main account,
+    // whose recordPayment REPLACES the month record rather than appending.
     const mergedPaymentHistory = tenantDataForHistory.paymentHistory;
     for (const [key, records] of Object.entries(newPaymentHistory)) {
       if (!mergedPaymentHistory[key]) mergedPaymentHistory[key] = [];
-      mergedPaymentHistory[key] = mergedPaymentHistory[key].concat(records);
+      for (const rec of records) {
+        const dup = mergedPaymentHistory[key].some(r =>
+          r.month === rec.month && r.type === rec.type &&
+          (parseFloat(r.paidAmount) || 0) === (parseFloat(rec.paidAmount) || 0) &&
+          r.date === rec.date);
+        if (!dup) mergedPaymentHistory[key].push(rec);
+      }
     }
 
     const importResult = {
@@ -6280,11 +6363,19 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // per-tenant personalTariffs seeding stays in-memory for this request's freeze and
     // re-seeds deterministically from customAmount on any later path; the freeze above
     // already used the seeded values, so history is correct either way.
-    const importSave = { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult };
+    // Persist the union of prior + newly-consumed fingerprints (cross-import dedup
+    // memory). Capped to the most recent 5000 so a long-lived building's list can't
+    // grow without bound; the oldest fingerprints falling off only means a very old
+    // transaction could be re-imported, which is harmless (the month is long closed).
+    const allFp = Array.from(importedFp);
+    for (const fp of (newFingerprints || [])) allFp.push(fp);
+    const cappedFp = allFp.length > 5000 ? allFp.slice(allFp.length - 5000) : allFp;
+
+    const importSave = { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult, importedBankFingerprints: cappedFp };
     if (seededImport && d.defaultTariffs) importSave.defaultTariffs = d.defaultTariffs;
     saveTenantData(req.user.tenantId, importSave);
 
-    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched });
+    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, duplicateWarnings: duplicateWarnings || [] });
   } catch (err) {
     console.error('[import-bank]', err);
     res.status(500).json({ ok: false, error: err.message });
@@ -6659,7 +6750,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.2 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.3 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

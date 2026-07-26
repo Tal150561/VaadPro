@@ -271,6 +271,106 @@ t.section('Fix #0 — Agent import does not net openingDebt');
 }
 
 // ════════════════════════════════════════════════════════════════
+// BANK-IMPORT DEDUP (v2.14.3) — the "צבי אלתר 434" bug
+// ════════════════════════════════════════════════════════════════
+// A bank file has no unique transaction id, so identity = date + amount + name
+// (Tal's decision). Two failures existed:
+//   • two IDENTICAL rows (same tenant+amount+date) in ONE file were both counted
+//     (seenRowIdx dedups only by row index), summing to double the real payment.
+//   • re-importing the same file (or overlapping month files) re-counted everything.
+// Both had to be fixed for the MAIN account AND for extra accounts (the locked
+// "whatever is true for the main account is true for extra accounts" rule).
+{
+  const { loadBankAnalyzer } = require('./test-lib');
+  const B = loadBankAnalyzer();
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+
+  t.section('Bank dedup — fingerprint helper');
+  t.eq('217 and 217.00 collide', B.bankRowFingerprint('31/05', 217, 'צבי אלתר'),
+                                  B.bankRowFingerprint('31/05', 217.00, 'צבי אלתר'));
+  t.eq('whitespace/case normalised', B.bankRowFingerprint(' 31/05 ', 217, ' Zvi '),
+                                     B.bankRowFingerprint('31/05', 217, 'zvi'));
+  t.eq('different date → different fp', B.bankRowFingerprint('31/05', 217, 'x') !== B.bankRowFingerprint('29/06', 217, 'x'), true);
+  t.eq('different amount → different fp', B.bankRowFingerprint('31/05', 217, 'x') !== B.bankRowFingerprint('31/05', 218, 'x'), true);
+
+  t.section('Bank dedup — in-file duplicate counted once (main account)');
+  {
+    // צבי אלתר appears TWICE with 217 on the SAME date — the exact reported bug.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['צבי אלתר', '217', '31/05/2026'],
+      ['צבי אלתר', '217', '31/05/2026'],  // identical duplicate
+    ];
+    const tenants = [{ id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: '', customAmount: 217, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
+    t.eq('matched once, not twice', r.matched.length, 1);
+    const amt = parseFloat(String(r.newSentLog['Z_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('sentLog amount is 217 (single), NOT 434', amt, 217);
+    t.eq('a duplicate warning was surfaced', r.duplicateWarnings.length, 1);
+    t.eq('warning names the tenant', r.duplicateWarnings[0].name, 'צבי אלתר');
+    t.eq('one fingerprint consumed', r.newFingerprints.length, 1);
+  }
+
+  t.section('Bank dedup — genuine two different dates still sum');
+  {
+    // Real two-month payment: May 31 + June 29, DIFFERENT dates → both count.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['צבי אלתר', '217', '31/05/2026'],
+      ['צבי אלתר', '217', '29/06/2026'],
+    ];
+    const tenants = [{ id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: '', customAmount: 217, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
+    const amt = parseFloat(String(r.newSentLog['Z_יוני']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('two different-date payments sum to 434', amt, 434);
+    t.eq('no duplicate warning', r.duplicateWarnings.length, 0);
+    t.eq('two fingerprints consumed', r.newFingerprints.length, 2);
+  }
+
+  t.section('Bank dedup — cross-import: re-import is skipped');
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['צבי אלתר', '217', '29/06/2026'],
+    ];
+    const tenants = [{ id: 'Z', name: 'צבי אלתר', phone: '0528064806', keywords: '', customAmount: 217, openingDebt: 0 }];
+    // First import: fingerprint consumed.
+    const r1 = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
+    t.eq('first import matches', r1.matched.length, 1);
+    t.eq('first import records the fingerprint', r1.newFingerprints.length, 1);
+    // Second import of the SAME row, with the prior fingerprint remembered.
+    const prior = new Set(r1.newFingerprints);
+    const r2 = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, prior);
+    t.eq('re-import matches NOTHING (already imported)', r2.matched.length, 0);
+    t.eq('re-import adds no new fingerprints', r2.newFingerprints.length, 0);
+  }
+
+  t.section('Bank dedup — extra accounts get the SAME treatment');
+  {
+    // A tenant with a ביטוח collection account, matched by keyword "ביטוח".
+    // Two identical ביטוח rows same date → counted once. Then re-import → skipped.
+    const rows = [
+      ['שם', 'סכום', 'תאריך'],
+      ['ביטוח מבנה', '50', '05/06/2026'],
+      ['ביטוח מבנה', '50', '05/06/2026'],  // duplicate
+    ];
+    const tenants = [{
+      id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }]
+    }];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, new Set());
+    const extra = r.matched.filter(m => m.matchType === 'extra_account');
+    t.eq('extra account matched once, not twice', extra.length, 1);
+    t.eq('extra account amount is 50 (single), NOT 100', extra[0].amount, 50);
+    t.eq('extra duplicate surfaced a warning', r.duplicateWarnings.some(w => w.scope === 'extra'), true);
+    // Re-import → extra account skipped too.
+    const prior = new Set(r.newFingerprints);
+    const r2 = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 217 }, prior);
+    t.eq('extra account re-import matches nothing', r2.matched.filter(m => m.matchType === 'extra_account').length, 0);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
 // COLUMN A — fixed-amount tariff history (v2.13.16)
 // ════════════════════════════════════════════════════════════════
 // The phantom-debt fix: a retroactive import must freeze the tariff in effect

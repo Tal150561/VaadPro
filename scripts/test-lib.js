@@ -91,8 +91,8 @@ function loadBankAnalyzer() {
   const src = readSource('server.js');
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'analyzeBankRowsServer'])
-    + 'module.exports={getMonthKey,applyPaymentToDebt,analyzeBankRowsServer};';
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'analyzeBankRowsServer'])
+    + 'module.exports={getMonthKey,applyPaymentToDebt,bankRowFingerprint,analyzeBankRowsServer};';
   return runInSandbox(code);
 }
 

@@ -3788,6 +3788,27 @@ function analyzeBankRows(rows,fileName){
   const matched=[],unmatched=[];
   let mismatchCancelled = false;
 
+  // ── Transaction dedup (main account) — mirrors the server-side logic ──────
+  // A bank file has no unique transaction id, so identity = date + amount + name
+  // (Tal's decision). Two layers:
+  //   • cross-import — a fingerprint imported in a PRIOR run is skipped, so
+  //     re-importing the same file (or an overlapping month file) never double-counts.
+  //   • in-file — a duplicate row inside THIS file is counted once, and surfaced as
+  //     a warning (a genuine same-day double-payment is possible, so never silent).
+  // The list is persisted through POST /api/data { importedBankFingerprints } — the
+  // server shallow-merges it like any other field. Same rule applies to extra
+  // accounts on the server import path (they don't exist in this manual path).
+  function bankRowFingerprint(dateVal, amount, nameOrDesc) {
+    var dd = String(dateVal||'').trim().toLowerCase().replace(/\s+/g,' ');
+    var aa = String(Math.round((parseFloat(amount)||0)*100)/100);
+    var nn = String(nameOrDesc||'').trim().toLowerCase().replace(/\s+/g,' ');
+    return dd+'|'+aa+'|'+nn;
+  }
+  var alreadyImportedFp = new Set(Array.isArray(data.importedBankFingerprints) ? data.importedBankFingerprints : []);
+  var consumedFp = new Set();
+  var newFp = [];
+  var dupWarnings = [];
+
   // ── v2.13.17: soft warning if the file's dates don't match the chosen month ──
   // Root-cause guard for the July/June mis-tag. We tally the month of every matched
   // row's date and, if the MAJORITY falls in a different month than the selected
@@ -3873,7 +3894,17 @@ function analyzeBankRows(rows,fileName){
       }
 
       if(type){
+        // ── Fingerprint dedup ──────────────────────────────────────
+        var fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+        if(alreadyImportedFp.has(fp)){ seenRowIdx.add(m.rowIdx); return; } // imported before → skip
+        if(consumedFp.has(fp)){                                             // duplicate in THIS file
+          seenRowIdx.add(m.rowIdx);
+          dupWarnings.push({ name: tenant.name, amount: m.amount, date: m.dateVal||'' });
+          return;
+        }
         seenRowIdx.add(m.rowIdx);
+        consumedFp.add(fp);
+        newFp.push(fp);
         tenantMatches.push({
           amount:m.amount,
           matchType:type,
@@ -3901,9 +3932,21 @@ function analyzeBankRows(rows,fileName){
     }
   });
 
-  const payload = { sentLog: data.sentLog };
+  // Persist the union of prior + newly-consumed fingerprints (cross-import memory),
+  // capped to the most recent 5000 so the list can't grow without bound.
+  var allFp = Array.from(alreadyImportedFp).concat(newFp);
+  if (allFp.length > 5000) allFp = allFp.slice(allFp.length - 5000);
+  data.importedBankFingerprints = allFp;
+
+  const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp };
   if (selectedMonthKey) payload.bankMonthOverride = selectedMonthKey;
   fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(function(){});
+
+  // Surface in-file duplicates so a genuine same-day double-payment is never dropped silently.
+  if (dupWarnings.length) {
+    var msg = dupWarnings.map(function(w){ return w.name + ' — ' + w.amount + '₪ (' + (w.date||'') + ')'; }).join('\n');
+    toast('⚠️ נמצאו ' + dupWarnings.length + ' תנועות כפולות שלא נספרו פעמיים:\n' + msg, 'warn');
+  }
   render();showBankResult(matched,unmatched,mr.length,ta,fileName,filterByAmount);resetDropZone();
 }
 
