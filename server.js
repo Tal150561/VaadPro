@@ -1757,8 +1757,18 @@ app.post('/api/data', authMiddleware, (req, res) => {
         if (!before) {
           // NEW tenant: open a personal interval only if the fee differs from the
           // building default (matches seed logic; keeps tenants-on-default clean).
+          // ⚠️ v2.14.9 — open the interval from 2000-01-01, NOT `today`. A newly
+          // created tenant's customAmount is their fee FROM THE START, not "as of
+          // the day the record was created". If it opened at `today`, importing a
+          // bank payment for a PAST month (May/June) would find no personal rate
+          // for that month, fall through to the building default, freeze the WRONG
+          // expected amount into paymentHistory, and month-close would then accrue
+          // a phantom shortfall (the "₪288 bug"). seedTariffsIfMissing already uses
+          // 2000-01-01 for exactly this reason; this create path must match it.
+          // (Existing-tenant fee CHANGES below still use `today` — a change applies
+          // forward only, preserving historical months. Different case, different rule.)
           if (newAmt != null && dfltRateNow != null && newAmt !== dfltRateNow) {
-            t.personalTariffs = closeAndOpenInterval([], newAmt, today);
+            t.personalTariffs = closeAndOpenInterval([], newAmt, '2000-01-01');
           }
         } else if (newAmt !== oldAmt) {
           if (newAmt == null) {

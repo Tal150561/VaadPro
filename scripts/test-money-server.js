@@ -1464,4 +1464,57 @@ t.section('v2.14.8 — extra-accounts double-run is a NO-OP');
     d2.tenants[0].extraAccounts[0].openingDebt, 120);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.9 — the "₪288 bug": new-tenant tariff must open retroactively
+// ════════════════════════════════════════════════════════════════
+// ROOT CAUSE (proven on Tal's real backup): when a tenant is CREATED via
+// POST /api/data with a customAmount ≠ the building default, the tenant-tariff
+// maintenance branch opened the personal interval at `today`. Importing a bank
+// payment for a PAST month then found no personal rate for that month, fell
+// through to the building default (288), froze the WRONG expected amount into
+// paymentHistory.amount, and month-close accrued a phantom shortfall — every
+// tenant collapsing to exactly openingDebt = config.amount (288).
+//
+// FIX (server.js ~1761): new-tenant interval opens at '2000-01-01' (matching
+// seedTariffsIfMissing), so the fee applies to historical months too. An
+// EXISTING tenant's fee CHANGE still opens at `today` (forward-only) — a
+// different, correct rule that this fix must NOT disturb.
+t.section('v2.14.9 — ₪288 bug: new-tenant tariff resolves for past months');
+{
+  const dflt = [{ rate: 288, startDate: '2000-01-01', endDate: null }];
+
+  // THE BUG: interval opened at "today" → a past month falls to the 288 default.
+  const buggy = S.closeAndOpenInterval([], 217, '2026-07-25');
+  const tBuggy = { personalTariffs: buggy };
+  t.eq('bug repro: today-dated interval → May resolves to WRONG 288',
+    S.resolveTariffRate(tBuggy, dflt, '2026-05', 217), 288);
+  t.eq('bug repro: today-dated interval → June resolves to WRONG 288',
+    S.resolveTariffRate(tBuggy, dflt, '2026-06', 217), 288);
+
+  // THE FIX: interval opened at 2000-01-01 → every month resolves to 217.
+  const fixed = S.closeAndOpenInterval([], 217, '2000-01-01');
+  const tFixed = { personalTariffs: fixed };
+  t.eq('fix: interval opens at 2000-01-01', fixed[0].startDate, '2000-01-01');
+  t.eq('fix: May resolves to correct 217',  S.resolveTariffRate(tFixed, dflt, '2026-05', 217), 217);
+  t.eq('fix: June resolves to correct 217', S.resolveTariffRate(tFixed, dflt, '2026-06', 217), 217);
+  t.eq('fix: July resolves to correct 217', S.resolveTariffRate(tFixed, dflt, '2026-07', 217), 217);
+}
+
+t.section('v2.14.9 — future fee CHANGE on an existing tenant still forward-only');
+{
+  const dflt = [{ rate: 288, startDate: '2000-01-01', endDate: null }];
+  // Tenant created today under the fix (retroactive 217), THEN 3 months later
+  // (2026-10-25) the fee changes 217 → 250. Past months must keep 217; Oct+ = 250.
+  let pt = S.closeAndOpenInterval([], 217, '2000-01-01');          // create (fixed path)
+  pt = S.closeAndOpenInterval(pt, 250, '2026-10-25');             // existing-tenant change (today path, unchanged)
+  const tn = { personalTariffs: pt };
+  t.eq('past month (June) keeps OLD 217',  S.resolveTariffRate(tn, dflt, '2026-06', 217), 217);
+  t.eq('month before change (Sep) keeps 217', S.resolveTariffRate(tn, dflt, '2026-09', 217), 217);
+  t.eq('change month (Oct) is NEW 250',     S.resolveTariffRate(tn, dflt, '2026-10', 250), 250);
+  t.eq('after change (Dec) is NEW 250',     S.resolveTariffRate(tn, dflt, '2026-12', 250), 250);
+  // The retroactive interval was closed at the change date — no overlap.
+  t.eq('retro interval closed at change date', pt[0].endDate, '2026-10-25');
+  t.eq('new interval open-ended', pt[1].endDate, null);
+}
+
 process.exit(t.done() ? 1 : 0);
