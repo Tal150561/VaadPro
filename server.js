@@ -901,14 +901,29 @@ const HEBREW_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי
 // Convert a Hebrew month name → 'YYYY-MM', inferring the year relative to a
 // reference monthKey (usually the current/import month). sentLog keys carry no
 // year, so we take it from `refMonthKey` — but correct for the year boundary:
-// if the key's month is LATER in the calendar than the reference month, it
+// if the key's month is FAR LATER in the calendar than the reference month, it
 // belongs to the PREVIOUS year (e.g. importing a דצמבר file while the reference
 // month is ינואר → the file is last December, not next December). This replaces
 // the old "approach A" (blind year-from-mk) which mis-yeared Dec-imported-in-Jan.
 // Returns null for a non-Hebrew-month key (e.g. legacy ISO key _2026-04) so the
 // caller skips it, identical to the old indexOf<0 behaviour.
-// NOTE: assumes the file is < 1 year old (true for every real import); a file
-// older than a year would still mis-year. That edge needs an explicit year
+//
+// ⚠️ v2.14.7 — the year-flip threshold is `> 6`, NOT `> 0`. The old `> 0` test
+// mis-yeared any FORWARD month relative to the reference, which broke the v2.14.4
+// multi-month bank-file split: a file whose selected/reference month is יוני but
+// that also contains יולי rows would file יולי under the PREVIOUS year (2025-07
+// instead of 2026-07 — Tal's reported bug, backup 2026-07-27). Distinguish the
+// two forward cases by GAP SIZE:
+//   • small forward step (≤ 6 months, e.g. יולי vs ref יוני) = same collection
+//     cycle, current year — a normal multi-month file spanning into next month.
+//   • large forward step (> 6 months, e.g. דצמבר vs ref ינואר = 11) = a genuine
+//     year wrap, previous year.
+// A real bank file is never ~10 months in the FUTURE, so `> 6` cleanly separates
+// "next-month row in a multi-month file" from "last-year Dec-in-Jan". Every prior
+// year-boundary test (Dec-in-Jan, Nov-in-Jan, Feb-in-Dec, same-month) is byte-
+// identical under this rule — only the ≤6-month forward gaps change.
+// NOTE: still assumes the file is < 1 year old (true for every real import); a
+// file older than a year would still mis-year. That edge needs an explicit year
 // picker in the UI — out of scope here.
 function hebMonthToMonthKey(hebMonth, refMonthKey) {
   const monthIdx = HEBREW_MONTHS.indexOf(hebMonth);
@@ -918,7 +933,9 @@ function hebMonthToMonthKey(hebMonth, refMonthKey) {
   let year = parseInt(parts[0], 10);
   const refMon = parseInt(parts[1], 10);
   if (!Number.isFinite(year) || !Number.isFinite(refMon)) return null;
-  if (monthNum > refMon) year -= 1; // key month is later than ref → previous year
+  // Only a LARGE forward gap (> 6 months) is a real year wrap → previous year.
+  // A small forward step (≤ 6) is a multi-month file's next-month row, same year.
+  if (monthNum - refMon > 6) year -= 1;
   return year + '-' + String(monthNum).padStart(2, '0');
 }
 
@@ -6936,7 +6953,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.6 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.7 – SaaS Server      ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

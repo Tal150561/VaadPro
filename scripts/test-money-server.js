@@ -1125,6 +1125,33 @@ t.eq('empty string → null',
 t.eq('malformed ref monthKey → null (no silent wrong date)',
   S.hebMonthToMonthKey('יוני', 'garbage'), null);
 
+// ── v2.14.7 — multi-month file FORWARD-STEP must NOT flip the year ─────────
+// Tal's reported bug (backup 2026-07-27): a bank file whose selected reference
+// month was יוני (2026-06) also contained יולי rows (v2.14.4 multi-month split).
+// The old `monthNum > refMon` test filed יולי under 2025-07 instead of 2026-07.
+// The fix is `monthNum - refMon > 6`: a SMALL forward step (≤6) is the same
+// collection cycle (current year); only a LARGE forward gap (>6) is a real
+// Dec-in-Jan year wrap. These lock the fix AND prove the wrap still works.
+t.section('hebMonthToMonthKey — multi-month forward step (v2.14.7)');
+t.eq('THE BUG: יולי in a יוני-referenced file → SAME year, not previous',
+  S.hebMonthToMonthKey('יולי', '2026-06'), '2026-07');
+t.eq('מאי in a יוני-referenced file → same year (backward step, unchanged)',
+  S.hebMonthToMonthKey('מאי', '2026-06'), '2026-05');
+t.eq('יוני in a יוני-referenced file → same month, same year',
+  S.hebMonthToMonthKey('יוני', '2026-06'), '2026-06');
+t.eq('אוגוסט (2 months forward) in a יוני file → same year',
+  S.hebMonthToMonthKey('אוגוסט', '2026-06'), '2026-08');
+t.eq('אוקטובר (4 months forward) in a יוני file → same year',
+  S.hebMonthToMonthKey('אוקטובר', '2026-06'), '2026-10');
+t.eq('boundary: exactly 6 months forward (דצמבר in a יוני file) = NOT flipped, same year',
+  S.hebMonthToMonthKey('דצמבר', '2026-06'), '2026-12'); // 12-6=6, and 6 > 6 is false → same year
+t.eq('נובמבר (5 forward) in a יוני file → same year',
+  S.hebMonthToMonthKey('נובמבר', '2026-06'), '2026-11');
+t.eq('WRAP STILL WORKS: 7 months forward flips (דצמבר in a מאי file → previous year)',
+  S.hebMonthToMonthKey('דצמבר', '2026-05'), '2025-12'); // 12-5=7, 7 > 6 → previous year
+t.eq('ינואר (6 back) in a יולי file → same year',
+  S.hebMonthToMonthKey('ינואר', '2026-07'), '2026-01');
+
 // ══════════════════════════════════════════════════════════════════
 // v2.14.0 — חייבים חריגים (excessive debt)
 // ══════════════════════════════════════════════════════════════════

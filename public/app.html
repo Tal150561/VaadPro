@@ -667,6 +667,11 @@ function vpLogout() {
             <div id="bankManualMonthWarn" style="display:none;margin-top:6px;font-size:0.78rem;color:#f0ad4e;line-height:1.5;"></div>
           </div>
           <button class="btn btn-accent" onclick="runBankAnalysis()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
+          <div style="margin-top:10px;padding:9px 11px;border-radius:8px;background:rgba(120,120,120,0.08);font-size:0.76rem;color:var(--text2);line-height:1.6;">
+            ℹ️ <strong>איך מתעדכן החוב לאחר ייבוא:</strong> הייבוא מעדכן <strong>מיד</strong> את סטטוס התשלום החודשי (שילם / חלקי / לא שילם).
+            <strong>החוב המצטבר</strong> (העמודה "חוב") מתעדכן <strong>אוטומטית ב-1 לכל חודש</strong>, כשהמערכת סוגרת את החודש הקודם וצוברת את מי שלא שילם.
+            לכן ייבוא קובץ בנק לא משנה מיד את מספר החוב — זה תקין ומכוון.
+          </div>
         </div>
 
         <div id="bankResult" style="display:none;margin-top:12px;"></div>
