@@ -453,6 +453,21 @@ function vpLogout() {
   </div>
 </div>
 
+<!-- v2.14.6 — תצוגה מקדימה לייבוא קובץ דיירים -->
+<div class="modal-bg" id="tenantImportModal" style="display:none;" onclick="if(event.target===this)closeModal('tenantImportModal')">
+  <div class="modal" style="max-width:820px;max-height:90vh;overflow-y:auto;">
+    <h2 style="margin-bottom:4px;">📂 ייבוא קובץ דיירים — תצוגה מקדימה</h2>
+    <p style="font-size:0.82rem;color:var(--text2);margin-bottom:12px;line-height:1.6;">
+      בדוק את השינויים לפני האישור. הייבוא <strong>מעדכן ומוסיף בלבד</strong> — דיירים שלא מופיעים בקובץ יישארו כמו שהם ולא יימחקו.
+    </p>
+    <div id="tenantImportBody"></div>
+    <div style="display:flex;gap:8px;margin-top:16px;justify-content:flex-end;">
+      <button class="btn btn-secondary btn-sm" onclick="closeModal('tenantImportModal')">ביטול</button>
+      <button class="btn btn-sm" id="tenantImportConfirmBtn" style="background:var(--accent);color:#fff;" onclick="confirmTenantImport()">✅ אשר וייבא</button>
+    </div>
+  </div>
+</div>
+
 <!-- v2.14.0 — חייבים חריגים -->
 <div class="modal-bg" id="excessDebtModal" style="display:none;" onclick="if(event.target===this)closeModal('excessDebtModal')">
   <div class="modal" style="max-width:760px;max-height:90vh;overflow-y:auto;">
@@ -563,7 +578,7 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header" id="tenantsListHeader" style="cursor:pointer;user-select:none;" onclick="toggleSection('tenantsList')">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsExcel()">📤 ייצא לאקסל</button><span id="tenantsListIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
+      <div class="card-header" id="tenantsListHeader" style="cursor:pointer;user-select:none;" onclick="toggleSection('tenantsList')">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsCSV()">📥 ייצא CSV</button><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsExcel()" style="margin-right:6px;">📤 ייצא אקסל</button><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();document.getElementById('tenantImportFile').click()" style="margin-right:6px;">📂 ייבא קובץ</button><input type="file" id="tenantImportFile" accept=".csv,.xlsx,.xls" style="display:none;" onchange="importTenantsFile(event)"><span id="tenantsListIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
       <div id="tenantsListBody" style="display:block;">
         <div style="padding:10px 0 12px;">
           <input type="text" id="tenantSearch" placeholder="🔎 חיפוש לפי שם, מילות חיפוש, טלפון, מייל, סכום או סטטוס..." oninput="onTenantSearch(this.value)" onclick="event.stopPropagation()" style="width:100%;height:34px;font-size:0.84rem;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
@@ -2483,19 +2498,314 @@ function extractApartmentNumber(keywords) {
   return '';
 }
 
+// ── ייבוא/ייצוא דיירים (v2.14.6) ───────────────────────────────────
+// Full, lossless tenant round-trip: export writes ALL tenant fields
+// (id, name, phone, email, keywords, customAmount, openingDebt, propertyLabel);
+// import matches by id → phone → new, previews a diff, and on confirm writes
+// ONLY tenant fields (NEVER paymentHistory / sentLog). openingDebt is the only
+// money value it sets, and only from an explicit CSV value.
+
+// Canonical column order + Hebrew headers used by both export formats.
+var TENANT_EXPORT_COLS = [
+  { key:'id',            he:'id' },
+  { key:'name',          he:'שם' },
+  { key:'phone',         he:'טלפון' },
+  { key:'email',         he:'מייל' },
+  { key:'keywords',      he:'מילות_חיפוש' },
+  { key:'customAmount',  he:'תשלום_חודשי' },
+  { key:'openingDebt',   he:'חוב_התחלתי' },
+  { key:'propertyLabel', he:'תווית_נכס' }
+];
+
+function tenantExportRows() {
+  var header = TENANT_EXPORT_COLS.map(function(c){ return c.he; });
+  var rows = [header];
+  data.tenants.forEach(function(t){
+    rows.push([
+      t.id,
+      t.name || '',
+      t.phone || '',
+      t.email || '',
+      t.keywords || '',
+      (t.customAmount === 0 || t.customAmount) ? t.customAmount : '',
+      (t.openingDebt === 0 || t.openingDebt) ? t.openingDebt : '',
+      t.propertyLabel || ''
+    ]);
+  });
+  return rows;
+}
+
+function exportTenantsCSV() {
+  if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
+  var rows = tenantExportRows();
+  // Build CSV; quote every field, double internal quotes (Excel-safe).
+  var csv = rows.map(function(r){
+    return r.map(function(cell){
+      var s = (cell === null || cell === undefined) ? '' : String(cell);
+      return '"' + s.replace(/"/g,'""') + '"';
+    }).join(',');
+  }).join('\r\n');
+  // UTF-8 BOM (\uFEFF) so Excel renders Hebrew correctly.
+  var blob = new Blob(['\uFEFF' + csv], { type:'text/csv;charset=utf-8;' });
+  var url  = URL.createObjectURL(blob);
+  var link = document.createElement('a');
+  link.href = url; link.download = 'דיירים-ועד-הבית.csv';
+  link.click();
+  URL.revokeObjectURL(url);
+  toast('📥 קובץ CSV יוצא!','success');
+}
+
 function exportTenantsExcel() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
-  const rows=[['דירה','שם','טלפון','מייל','מילות_חיפוש']];
-  data.tenants.forEach(function(t){
-    const apt = extractApartmentNumber(t.keywords||'');
-    rows.push([apt, t.name, t.phone, t.email||'', t.keywords||'']);
-  });
+  var rows = tenantExportRows();
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:8},{wch:22},{wch:16},{wch:28},{wch:30}];
+  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
   toast('📤 קובץ Excel יוצא!','success');
+}
+
+// ── PURE HELPERS (extracted + mutation-tested; no DOM, no I/O) ──────
+
+// Map a raw header cell to a canonical tenant field key. Accepts the Hebrew
+// export headers AND the raw English field names, so hand-made files work too.
+function tenantHeaderToKey(rawHeader) {
+  var h = String(rawHeader == null ? '' : rawHeader).trim().toLowerCase().replace(/\s+/g,'_');
+  var map = {
+    'id':'id',
+    'שם':'name', 'name':'name',
+    'טלפון':'phone', 'phone':'phone', 'נייד':'phone',
+    'מייל':'email', 'email':'email', 'אימייל':'email', 'דוא"ל':'email',
+    'מילות_חיפוש':'keywords', 'keywords':'keywords', 'מילים':'keywords',
+    'תשלום_חודשי':'customAmount', 'customamount':'customAmount', 'סכום':'customAmount', 'תשלום':'customAmount',
+    'חוב_התחלתי':'openingDebt', 'openingdebt':'openingDebt', 'חוב':'openingDebt',
+    'תווית_נכס':'propertyLabel', 'propertylabel':'propertyLabel', 'דירה':'propertyLabel', 'נכס':'propertyLabel'
+  };
+  return map[h] || null;
+}
+
+// Parse a strict non-negative number. Returns {ok, value} or {ok:false, error}.
+// Empty string → {ok:true, value:defaultVal}. Hebrew ₪, commas, spaces tolerated.
+function parseMoneyCell(raw, defaultVal) {
+  var s = String(raw == null ? '' : raw).trim();
+  if (s === '') return { ok:true, value: defaultVal };
+  s = s.replace(/[₪,\s]/g,'');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return { ok:false, error:'ערך לא מספרי' };
+  var n = parseFloat(s);
+  if (isNaN(n)) return { ok:false, error:'ערך לא מספרי' };
+  if (n < 0) return { ok:false, error:'ערך שלילי לא מותר' };
+  return { ok:true, value:n };
+}
+
+// Given the parsed header keys and one data row (array), build a field object.
+function rowToFields(headerKeys, row) {
+  var f = {};
+  for (var i = 0; i < headerKeys.length; i++) {
+    var k = headerKeys[i];
+    if (!k) continue;
+    var v = row[i];
+    f[k] = (v == null) ? '' : String(v).trim();
+  }
+  return f;
+}
+
+// The heart of the importer: given existing tenants + parsed rows, compute the
+// preview plan WITHOUT mutating anything. Returns { updates, creates, errors, warnings }.
+// Identity: id first, then phone (for id-less rows). Never deletes.
+function planTenantImport(existingTenants, headerKeys, dataRows) {
+  var plan = { updates:[], creates:[], errors:[], warnings:[] };
+  var byId = {}, byPhone = {};
+  (existingTenants || []).forEach(function(t){
+    byId[String(t.id)] = t;
+    if (t.phone) byPhone[String(t.phone).replace(/\D/g,'')] = t;
+  });
+  var seenPhones = {};
+
+  for (var r = 0; r < dataRows.length; r++) {
+    var rowNum = r + 2; // +1 for header, +1 for 1-based
+    var f = rowToFields(headerKeys, dataRows[r]);
+    // Skip completely blank rows.
+    if (!Object.keys(f).some(function(k){ return f[k] !== ''; })) continue;
+
+    var name  = (f.name  || '').trim();
+    var phone = (f.phone || '').trim();
+    if (!name)  { plan.errors.push({ row:rowNum, msg:'חסר שם' }); continue; }
+    if (!phone) { plan.errors.push({ row:rowNum, msg:'חסר טלפון' }); continue; }
+
+    var ca = parseMoneyCell(f.customAmount, null);
+    if (!ca.ok) { plan.errors.push({ row:rowNum, msg:'תשלום חודשי: ' + ca.error }); continue; }
+    var od = parseMoneyCell(f.openingDebt, 0);
+    if (!od.ok) { plan.errors.push({ row:rowNum, msg:'חוב התחלתי: ' + od.error }); continue; }
+
+    if (!(f.keywords || '').trim()) {
+      plan.warnings.push({ row:rowNum, msg:'"' + name + '" — אין מילות חיפוש (זיהוי בנק לא יעבוד עבורו)' });
+    }
+
+    // Resolve identity.
+    var match = null;
+    var idKey = (f.id || '').trim();
+    if (idKey && byId[idKey]) match = byId[idKey];
+    else if (phone && byPhone[phone.replace(/\D/g,'')]) match = byPhone[phone.replace(/\D/g,'')];
+
+    var normPhone = phone.replace(/\D/g,'');
+    if (seenPhones[normPhone]) {
+      plan.warnings.push({ row:rowNum, msg:'"' + name + '" — טלפון כפול בקובץ (' + phone + ')' });
+    }
+    seenPhones[normPhone] = true;
+
+    var newFields = {
+      name: name,
+      phone: phone,
+      email: (f.email || '').trim(),
+      keywords: (f.keywords || '').trim(),
+      customAmount: ca.value,
+      openingDebt: od.value,
+      propertyLabel: (f.propertyLabel || '').trim()
+    };
+
+    if (match) {
+      // Compute which money values change (for the warning line).
+      var moneyChanges = [];
+      var oldCa = (match.customAmount === 0 || match.customAmount) ? match.customAmount : null;
+      if (oldCa !== newFields.customAmount) {
+        moneyChanges.push('תשלום חודשי: ' + (oldCa==null?'ברירת מחדל':oldCa) + ' → ' + (newFields.customAmount==null?'ברירת מחדל':newFields.customAmount));
+      }
+      var oldOd = match.openingDebt || 0;
+      if (oldOd !== newFields.openingDebt) {
+        moneyChanges.push('חוב התחלתי: ' + oldOd + ' → ' + newFields.openingDebt);
+      }
+      plan.updates.push({ row:rowNum, id:match.id, name:name, fields:newFields, moneyChanges:moneyChanges });
+    } else {
+      plan.creates.push({ row:rowNum, name:name, fields:newFields });
+    }
+  }
+  return plan;
+}
+
+// ── UI: read the file, parse to rows, build the plan, show the preview ──
+var _pendingTenantImportPlan = null;
+
+function importTenantsFile(event) {
+  var file = event.target.files[0];
+  event.target.value = ''; // allow re-selecting the same file
+  if (!file) return;
+  var reader = new FileReader();
+  reader.onload = function(e) {
+    try {
+      var wb = XLSX.read(e.target.result, { type:'array' });
+      var ws = wb.Sheets[wb.SheetNames[0]];
+      var aoa = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+      if (!aoa.length) { toast('⚠️ הקובץ ריק','error'); return; }
+      var headerKeys = aoa[0].map(tenantHeaderToKey);
+      if (!headerKeys.some(function(k){ return k === 'name'; }) ||
+          !headerKeys.some(function(k){ return k === 'phone'; })) {
+        toast('⚠️ הקובץ חייב לכלול עמודות "שם" ו"טלפון"','error');
+        return;
+      }
+      var dataRows = aoa.slice(1);
+      var plan = planTenantImport(data.tenants, headerKeys, dataRows);
+      _pendingTenantImportPlan = plan;
+      renderTenantImportPreview(plan);
+      openModal('tenantImportModal');
+    } catch(err) {
+      toast('❌ שגיאה בקריאת הקובץ: ' + err.message,'error');
+    }
+  };
+  reader.onerror = function(){ toast('❌ שגיאה בקריאת הקובץ','error'); };
+  reader.readAsArrayBuffer(file);
+}
+
+function renderTenantImportPreview(plan) {
+  var esc = function(s){ return String(s==null?'':s).replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var h = '';
+  h += '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;font-size:0.85rem;">';
+  h += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;">🔄 עדכון: <strong>' + plan.updates.length + '</strong></div>';
+  h += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 14px;">➕ חדשים: <strong>' + plan.creates.length + '</strong></div>';
+  h += '<div style="background:var(--surface2);border:1px solid ' + (plan.errors.length?'var(--danger)':'var(--border)') + ';border-radius:8px;padding:8px 14px;">❌ שגיאות: <strong>' + plan.errors.length + '</strong></div>';
+  h += '</div>';
+
+  if (plan.errors.length) {
+    h += '<div style="background:rgba(229,72,77,.08);border:1px solid rgba(229,72,77,.35);border-radius:8px;padding:10px 12px;margin-bottom:12px;">';
+    h += '<div style="font-weight:600;color:var(--danger);margin-bottom:6px;font-size:0.85rem;">שורות עם שגיאה (יידלגו):</div>';
+    h += '<div style="font-size:0.8rem;display:grid;gap:3px;">';
+    plan.errors.forEach(function(er){ h += '<div>שורה ' + er.row + ': ' + esc(er.msg) + '</div>'; });
+    h += '</div></div>';
+  }
+
+  var moneyLines = plan.updates.filter(function(u){ return u.moneyChanges.length; });
+  if (moneyLines.length) {
+    h += '<div style="background:rgba(255,171,0,.08);border:1px solid rgba(255,171,0,.35);border-radius:8px;padding:10px 12px;margin-bottom:12px;">';
+    h += '<div style="font-weight:600;margin-bottom:6px;font-size:0.85rem;">⚠️ שינויים בערכי כסף:</div>';
+    h += '<div style="font-size:0.8rem;display:grid;gap:4px;">';
+    moneyLines.forEach(function(u){ h += '<div><strong>' + esc(u.name) + '</strong> — ' + esc(u.moneyChanges.join(' · ')) + '</div>'; });
+    h += '</div></div>';
+  }
+
+  if (plan.warnings.length) {
+    h += '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:10px 12px;margin-bottom:12px;">';
+    h += '<div style="font-weight:600;margin-bottom:6px;font-size:0.83rem;">הערות:</div>';
+    h += '<div style="font-size:0.79rem;color:var(--text2);display:grid;gap:3px;">';
+    plan.warnings.forEach(function(w){ h += '<div>שורה ' + w.row + ': ' + esc(w.msg) + '</div>'; });
+    h += '</div></div>';
+  }
+
+  if (plan.creates.length) {
+    h += '<div style="font-size:0.83rem;font-weight:600;margin:8px 0 6px;">דיירים חדשים:</div><div style="font-size:0.8rem;display:grid;gap:2px;margin-bottom:10px;">';
+    plan.creates.forEach(function(c){ h += '<div>➕ ' + esc(c.name) + ' (' + esc(c.fields.phone) + ')</div>'; });
+    h += '</div>';
+  }
+
+  var btn = document.getElementById('tenantImportConfirmBtn');
+  var total = plan.updates.length + plan.creates.length;
+  if (btn) {
+    btn.disabled = (total === 0);
+    btn.style.opacity = (total === 0) ? '0.5' : '1';
+    btn.textContent = total ? ('✅ אשר וייבא (' + total + ')') : 'אין מה לייבא';
+  }
+  document.getElementById('tenantImportBody').innerHTML = h;
+}
+
+async function confirmTenantImport() {
+  var plan = _pendingTenantImportPlan;
+  if (!plan) { closeModal('tenantImportModal'); return; }
+  // Apply updates by id.
+  var byId = {};
+  data.tenants.forEach(function(t){ byId[String(t.id)] = t; });
+  plan.updates.forEach(function(u){
+    var t = byId[String(u.id)];
+    if (!t) return;
+    t.name = u.fields.name;
+    t.phone = u.fields.phone;
+    t.email = u.fields.email;
+    t.keywords = u.fields.keywords;
+    t.customAmount = u.fields.customAmount;
+    t.openingDebt = u.fields.openingDebt;
+    t.propertyLabel = u.fields.propertyLabel;
+  });
+  // Create new tenants.
+  plan.creates.forEach(function(c){
+    data.tenants.push({
+      id: Date.now() + Math.floor(Math.random()*1000),
+      name: c.fields.name,
+      phone: c.fields.phone,
+      email: c.fields.email,
+      keywords: c.fields.keywords,
+      customAmount: c.fields.customAmount,
+      openingDebt: c.fields.openingDebt,
+      propertyLabel: c.fields.propertyLabel
+    });
+  });
+  closeModal('tenantImportModal');
+  _pendingTenantImportPlan = null;
+  try {
+    var saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(function(r){return r.json();}).catch(function(){return {ok:true};});
+    if (saveR && saveR.limitError) { toast('⚠️ ' + saveR.error, 'error'); await loadData(); render(); return; }
+    render();
+    toast('✅ יובאו ' + (plan.updates.length + plan.creates.length) + ' דיירים', 'success');
+  } catch(e) {
+    toast('❌ שגיאה בשמירה: ' + e.message, 'error');
+  }
 }
 
 function toggleStep(id) {

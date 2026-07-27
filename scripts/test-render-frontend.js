@@ -697,4 +697,93 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('the Map is not shipped to showBankResult', /delete m\._buckets;/.test(app), true);
 }
 
+t.section('app.html — tenant CSV import (v2.14.6)');
+{
+  // EXECUTE the pure import helpers lifted from app.html: tenantHeaderToKey,
+  // parseMoneyCell, rowToFields, planTenantImport. A broken plan fails here.
+  const hdrFn  = (app.match(/^function tenantHeaderToKey\(rawHeader\) \{[\s\S]*?^\}/m) || [''])[0];
+  const moneyFn = (app.match(/^function parseMoneyCell\(raw, defaultVal\) \{[\s\S]*?^\}/m) || [''])[0];
+  const rowFn  = (app.match(/^function rowToFields\(headerKeys, row\) \{[\s\S]*?^\}/m) || [''])[0];
+  const planFn = (app.match(/^function planTenantImport\(existingTenants, headerKeys, dataRows\) \{[\s\S]*?^\}/m) || [''])[0];
+  t.eq('tenantHeaderToKey lifted', hdrFn.length > 0, true);
+  t.eq('parseMoneyCell lifted', moneyFn.length > 0, true);
+  t.eq('rowToFields lifted', rowFn.length > 0, true);
+  t.eq('planTenantImport lifted', planFn.length > 0, true);
+
+  const H = new Function(
+    hdrFn + '\n' + moneyFn + '\n' + rowFn + '\n' + planFn
+    + '\n; return { tenantHeaderToKey, parseMoneyCell, rowToFields, planTenantImport };'
+  )();
+
+  // ── header mapping ──
+  t.eq('Hebrew header שם → name', H.tenantHeaderToKey('שם'), 'name');
+  t.eq('Hebrew header חוב_התחלתי → openingDebt', H.tenantHeaderToKey('חוב_התחלתי'), 'openingDebt');
+  t.eq('English header customAmount → customAmount', H.tenantHeaderToKey('customAmount'), 'customAmount');
+  t.eq('unknown header → null', H.tenantHeaderToKey('גיבריש'), null);
+
+  // ── money parsing ──
+  t.eq('empty money → default', H.parseMoneyCell('', 0).value, 0);
+  t.eq('empty customAmount → null default', H.parseMoneyCell('', null).value, null);
+  t.eq('numeric money parses', H.parseMoneyCell('288', 0).value, 288);
+  t.eq('₪ and commas tolerated', H.parseMoneyCell('₪1,250', 0).value, 1250);
+  t.eq('negative rejected', H.parseMoneyCell('-5', 0).ok, false);
+  t.eq('non-numeric rejected', H.parseMoneyCell('abc', 0).ok, false);
+  t.eq('zero openingDebt allowed', H.parseMoneyCell('0', 5).value, 0);
+
+  // ── planTenantImport: identity + insert/update + errors ──
+  const existing = [
+    { id: 101, name: 'לילך', phone: '0545745271', keywords: 'ליל', customAmount: 217, openingDebt: 0 },
+    { id: 102, name: 'דוד',  phone: '0501234567', keywords: 'דוד', customAmount: null, openingDebt: 50 }
+  ];
+  const keys = ['id','name','phone','email','keywords','customAmount','openingDebt','propertyLabel'];
+
+  // match by id → update; changed openingDebt is flagged
+  const p1 = H.planTenantImport(existing, keys,
+    [['101','לילך גילים','0545745271','','ליל, גילים','217','120','דירה 4']]);
+  t.eq('match by id → 1 update', p1.updates.length, 1);
+  t.eq('no creates', p1.creates.length, 0);
+  t.eq('openingDebt change flagged', p1.updates[0].moneyChanges.length, 1);
+
+  // match by phone when id absent → update, not create
+  const p2 = H.planTenantImport(existing, keys,
+    [['','דוד כהן','0501234567','','דוד','','50','']]);
+  t.eq('id-less row matches by phone → update', p2.updates.length, 1);
+  t.eq('phone match makes no new tenant', p2.creates.length, 0);
+
+  // new tenant (no id, unknown phone)
+  const p3 = H.planTenantImport(existing, keys,
+    [['','רוני','0509999999','','רוני','300','0','']]);
+  t.eq('unknown phone → create', p3.creates.length, 1);
+  t.eq('no accidental update', p3.updates.length, 0);
+
+  // missing name / phone → error rows, skipped
+  const p4 = H.planTenantImport(existing, keys,
+    [['','','0500000000','','','','',''], ['','שם בלי טלפון','','','','','','']]);
+  t.eq('missing name → error', p4.errors.length, 2);
+  t.eq('error rows are not created', p4.creates.length, 0);
+
+  // negative openingDebt → error, skipped (money-safety)
+  const p5 = H.planTenantImport(existing, keys,
+    [['','חדש','0508888888','','','','-99','']]);
+  t.eq('negative openingDebt → error', p5.errors.length, 1);
+  t.eq('bad-money row not created', p5.creates.length, 0);
+
+  // empty keywords → warning, but still imported (round-trip safety)
+  const p6 = H.planTenantImport(existing, keys,
+    [['','ללא מילים','0507777777','','','','0','']]);
+  t.eq('empty keywords warns', p6.warnings.length >= 1, true);
+  t.eq('empty keywords still creates', p6.creates.length, 1);
+
+  // blank rows are skipped entirely
+  const p7 = H.planTenantImport(existing, keys, [['','','','','','','','']]);
+  t.eq('fully blank row skipped', p7.updates.length + p7.creates.length + p7.errors.length, 0);
+
+  // MUTATION CHECK — importer must never touch payment data. Assert the write
+  // path (confirmTenantImport) references only tenant fields, never paymentHistory/sentLog.
+  const confirmBody = (app.match(/async function confirmTenantImport\(\) \{[\s\S]*?^\}/m) || [''])[0];
+  t.eq('confirm writes tenants only (no paymentHistory)', /paymentHistory/.test(confirmBody), false);
+  t.eq('confirm writes tenants only (no sentLog)', /sentLog/.test(confirmBody), false);
+  t.eq('confirm posts {tenants} to /api/data', /body:JSON\.stringify\(\{tenants:data\.tenants\}\)/.test(confirmBody), true);
+}
+
 process.exit(t.done() ? 1 : 0);
