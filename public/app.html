@@ -671,6 +671,10 @@ function vpLogout() {
             ℹ️ <strong>איך מתעדכן החוב לאחר ייבוא:</strong> הייבוא מעדכן <strong>מיד</strong> את סטטוס התשלום החודשי (שילם / חלקי / לא שילם).
             <strong>החוב המצטבר</strong> (העמודה "חוב") מתעדכן <strong>אוטומטית ב-1 לכל חודש</strong>, כשהמערכת סוגרת את החודש הקודם וצוברת את מי שלא שילם.
             לכן ייבוא קובץ בנק לא משנה מיד את מספר החוב — זה תקין ומכוון.
+            <div style="margin-top:8px;">
+              רוצה לסגור את החודש הקודם עכשיו במקום לחכות ל-1 לחודש?
+              <button class="btn btn-secondary btn-sm" onclick="closePreviousMonth()" style="margin-top:6px;">📅 סגור חודש קודם עכשיו</button>
+            </div>
           </div>
         </div>
 
@@ -3084,6 +3088,42 @@ function getEffectiveMonth() {
 // viewMonthOverride: null = חודש פעיל; אחרת שם חודש עברי לתצוגה בלבד
 let viewMonthOverride = null;
 const VP_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+// ── סגירת חודש קודם ידנית (v2.14.8) ─────────────────────────────
+// מפעיל את צבירת החוב של החודש הקודם על פי דרישה, במקום לחכות ל-cron של
+// ה-1 לחודש. השרת מוגן idempotency (closedMonths/closedMonthsExtra), כך
+// שלחיצה כפולה היא NO-OP בטוח — לא צוברת חוב פעמיים. ה-confirm מנקב את
+// שם החודש המדויק שייסגר.
+async function closePreviousMonth() {
+  const now = new Date();
+  const prev = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const hebName = VP_MONTHS[prev.getMonth()];
+  const yr = prev.getFullYear();
+  if (!confirm('לסגור את חודש ' + hebName + ' ' + yr + '?\n\n' +
+    'הפעולה תצבור את החוב של כל מי שלא שילם עבור אותו חודש (חשבון ראשי + חשבונות נוספים).\n' +
+    'זה קורה ממילא אוטומטית ב-1 לחודש. סגירה חוזרת של אותו חודש לא תצבור חוב פעמיים.')) return;
+  const token = localStorage.getItem('vp_token');
+  try {
+    const r = await fetch(API + '/close-previous-month', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token }
+    });
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || 'שגיאה בסגירת החודש', 'error'); return; }
+    if (d.alreadyClosed) {
+      toast('חודש ' + hebName + ' כבר נסגר קודם — לא בוצע שינוי', 'info');
+    } else {
+      const parts = [];
+      if (d.closed)      parts.push(d.closed + ' דיירים');
+      if (d.closedExtra) parts.push(d.closedExtra + ' חשבונות נוספים');
+      const who = parts.length ? (' (' + parts.join(', ') + ')') : '';
+      toast('חודש ' + hebName + ' נסגר' + who, 'success');
+    }
+    if (typeof loadData === 'function') await loadData();
+  } catch (e) {
+    toast('שגיאה בסגירת החודש: ' + e.message, 'error');
+  }
+}
 
 // החודש להצגה בטאב תשלומים (שם עברי) — override אם נבחר, אחרת החודש הפעיל
 function getViewMonth() {

@@ -1302,4 +1302,159 @@ t.eq('⭐ the composed MESSAGE itemises openingDebt (not just the helper)',
     lineSum, exR6.owed);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.8 — closeMonthUnpaid IDEMPOTENCY GUARD (closedMonths marker)
+// ════════════════════════════════════════════════════════════════
+// The old note claimed closeMonthUnpaid was idempotent so a manual button could
+// "call it AS-IS". That was FALSE — a second run on the SAME previous month
+// double-accrued. These tests prove: (1) a FIRST run accrues exactly once (the
+// existing behaviour), and (2) a SECOND run on the same month is a NO-OP for
+// ALL FIVE branches. loadCloseMonth returns the SAME building on every
+// loadTenantData() call, so calling run() twice simulates a double-click / a
+// cron firing twice after a Railway redeploy on the 1st.
+t.section('v2.14.8 — closeMonthUnpaid double-run is a NO-OP (all 5 branches)');
+{
+  const NOW = new Date('2026-07-01T08:00:00.000Z'); // prevKey 2026-06, prevHeb יוני
+  const cfg = { amount: 230 };
+
+  // Build a one-tenant building, run close TWICE, return openingDebt after each.
+  const runTwice = (tenant, sentLog) => {
+    const building = { config: cfg, tenants: [tenant], paymentHistory: { [tenant.id]: [] }, sentLog: sentLog || {} };
+    if (tenant._hist) building.paymentHistory[tenant.id] = tenant._hist;
+    const { run } = loadCloseMonth(building, NOW);
+    run();
+    const after1 = building.tenants[0].openingDebt;
+    run(); // ← the double-run that used to double-accrue
+    const after2 = building.tenants[0].openingDebt;
+    return { after1, after2, building };
+  };
+
+  // Branch 1 — unpaid, NO record (the "no paymentHistory record" path).
+  {
+    const tn = { id: 'u1', name: 'א', customAmount: 300, openingDebt: 0 };
+    const { after1, after2 } = runTwice(tn, {});
+    t.eq('unpaid-no-record: 1st run accrues 300', after1, 300);
+    t.eq('unpaid-no-record: 2nd run NO-OP (still 300, not 600)', after2, 300);
+  }
+
+  // Branch 2 — unpaid, WITH a paid:false record.
+  {
+    const tn = { id: 'u2', name: 'ב', customAmount: 300, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: false, amount: 300 }] };
+    const { after1, after2 } = runTwice(tn, {});
+    t.eq('unpaid-with-record: 1st run accrues 300', after1, 300);
+    t.eq('unpaid-with-record: 2nd run NO-OP (still 300, not 600)', after2, 300);
+  }
+
+  // Branch 3 — partial payment (shortfall accrual).
+  {
+    const tn = { id: 'p1', name: 'ג', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 150, type: 'bank' }] };
+    const { after1, after2 } = runTwice(tn, { 'p1_יוני': bank(150) });
+    t.eq('partial: 1st run accrues 80 shortfall', after1, 80);
+    t.eq('partial: 2nd run NO-OP (still 80, not 160)', after2, 80);
+  }
+
+  // Branch 4 — overpay (credit banked into negative openingDebt).
+  {
+    const tn = { id: 'o1', name: 'ד', customAmount: 230, openingDebt: 0,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 400, type: 'bank' }] };
+    const { after1, after2 } = runTwice(tn, { 'o1_יוני': bank(400) });
+    t.eq('overpay: 1st run banks −170 credit', after1, -170);
+    t.eq('overpay: 2nd run NO-OP (still −170, not −340)', after2, -170);
+  }
+
+  // Branch 5 — full payment (no accrual either way, but marker still set).
+  {
+    const tn = { id: 'f1', name: 'ה', customAmount: 230, openingDebt: 50,
+      _hist: [{ month: '2026-06', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] };
+    const { after1, after2, building } = runTwice(tn, { 'f1_יוני': bank(230) });
+    t.eq('full-pay: 1st run leaves openingDebt untouched (50)', after1, 50);
+    t.eq('full-pay: 2nd run NO-OP (still 50)', after2, 50);
+    t.eq('full-pay: month marked closed even with no accrual',
+      (building.closedMonths || []).includes('2026-06'), true);
+  }
+}
+
+// The marker is written to the SAVE patch (so it persists to disk, not just memory).
+t.section('v2.14.8 — closedMonths persisted in the save patch');
+{
+  const NOW = new Date('2026-07-01T08:00:00.000Z');
+  const building = { config: { amount: 300 }, tenants: [{ id: 'x', name: 'ז', customAmount: 300, openingDebt: 0 }],
+    paymentHistory: { x: [] }, sentLog: {} };
+  const { run, saved } = loadCloseMonth(building, NOW);
+  run();
+  const patch = saved.find(s => s.patch && s.patch.closedMonths);
+  t.eq('save patch includes closedMonths', !!patch, true);
+  t.eq('save patch closedMonths contains 2026-06',
+    !!patch && patch.patch.closedMonths.includes('2026-06'), true);
+}
+
+// MUTATION-VERIFY the guard: with the guard REMOVED, the double-run test above
+// WOULD fail (double accrual). We prove that here by extracting the helper,
+// stripping the guard line, and confirming the second run then doubles.
+t.section('v2.14.8 — mutation check: removing the guard re-breaks double-run');
+{
+  const { readSource, extractFunctions, runInSandbox } = require('./test-lib');
+  const src = readSource('server.js');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  let code = months + '\n'
+    + extractFunctions(src, ['closeMonthUnpaidForBuilding']);
+  // Strip BOTH the early-return NO-OP and the marker push → back to non-idempotent.
+  code = code.replace('if (d.closedMonths.includes(prevKey)) return { changed: false, closed: 0 };', '/* guard removed */');
+  code += '\nmodule.exports={closeMonthUnpaidForBuilding};';
+  const mod = runInSandbox(code, {});
+  const d = { config: { amount: 300 }, tenants: [{ id: 'm', name: 'ח', customAmount: 300, openingDebt: 0 }],
+    paymentHistory: { m: [] }, sentLog: {}, closedMonths: [] };
+  mod.closeMonthUnpaidForBuilding(d, '2026-06', 'יוני');
+  const a1 = d.tenants[0].openingDebt;
+  mod.closeMonthUnpaidForBuilding(d, '2026-06', 'יוני');
+  const a2 = d.tenants[0].openingDebt;
+  t.eq('mutation: guard-removed 1st run = 300', a1, 300);
+  t.eq('mutation: guard-removed 2nd run DOUBLES to 600 (proves guard is load-bearing)', a2, 600);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.8 — EXTRA ACCOUNTS idempotency (closedMonthsExtra marker)
+// ════════════════════════════════════════════════════════════════
+// Locked principle: what's true for the main account is true for extra accounts.
+// closeExtraAccountsForBuilding must ALSO be double-run safe, via its OWN
+// separate marker (closedMonthsExtra), so the two independent passes don't
+// collide.
+t.section('v2.14.8 — extra-accounts double-run is a NO-OP');
+{
+  const { readSource, extractFunctions, runInSandbox } = require('./test-lib');
+  const src = readSource('server.js');
+  const code = extractFunctions(src, ['closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid'])
+    + '\nmodule.exports={closeExtraAccountsForBuilding};';
+  const mod = runInSandbox(code, {});
+
+  // One tenant with one monthly extra account, no payment record → unpaid accrues.
+  const mkBuilding = () => ({
+    tenants: [{ id: 't1', name: 'דייר', extraAccounts: [
+      { id: 'a1', amount: 120, frequency: 'monthly', openingDebt: 0 }
+    ] }],
+    paymentHistory: {}
+  });
+
+  const d = mkBuilding();
+  const r1 = mod.closeExtraAccountsForBuilding(d, '2026-06');
+  const acc1 = d.tenants[0].extraAccounts[0].openingDebt;
+  const r2 = mod.closeExtraAccountsForBuilding(d, '2026-06');
+  const acc2 = d.tenants[0].extraAccounts[0].openingDebt;
+  t.eq('extra: 1st run accrues 120 to account openingDebt', acc1, 120);
+  t.eq('extra: 2nd run NO-OP (still 120, not 240)', acc2, 120);
+  t.eq('extra: 2nd run reports changed:false', r2.changed, false);
+  t.eq('extra: closedMonthsExtra marker set', (d.closedMonthsExtra || []).includes('2026-06'), true);
+
+  // The extra marker is INDEPENDENT of the main marker — closing extra must not
+  // be blocked by main already being closed, and vice-versa.
+  const d2 = mkBuilding();
+  d2.closedMonths = ['2026-06']; // main already closed…
+  const r = mod.closeExtraAccountsForBuilding(d2, '2026-06');
+  t.eq('extra: main closedMonths does NOT block extra close', r.closed, 1);
+  t.eq('extra: extra still accrues when only main was closed',
+    d2.tenants[0].extraAccounts[0].openingDebt, 120);
+}
+
 process.exit(t.done() ? 1 : 0);

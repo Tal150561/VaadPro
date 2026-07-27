@@ -4110,6 +4110,57 @@ app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
   res.json({ ok: true, sentWa, sentEmail, errors });
 });
 
+// ── Manual "close previous month now" (v2.14.8) ───────────────────
+// Lets a user trigger the previous-month debt accrual on demand instead of
+// waiting for the 1st-of-month cron. Scoped to the CALLER's building only
+// (req.user.tenantId) — unlike the cron, which sweeps every building. Closes
+// BOTH the main account (closeMonthUnpaidForBuilding) AND extra accounts
+// (closeExtraAccountsForBuilding), per the locked "main == extra" principle.
+// Both are idempotency-guarded (closedMonths / closedMonthsExtra), so a
+// double-click is a safe NO-OP — no double accrual. Does NOT accept a month
+// parameter: it always closes the PREVIOUS calendar month, same as the cron.
+app.post('/api/close-previous-month', authMiddleware, (req, res) => {
+  try {
+    const now = new Date();
+    const prevDate     = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const prevKey      = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+    const prevHebMonth = HEBREW_MONTHS[prevDate.getMonth()];
+
+    const d = loadTenantData(req.user.tenantId);
+    if (!d.tenants || !d.tenants.length) {
+      return res.json({ ok: true, month: prevKey, closed: 0, closedExtra: 0, alreadyClosed: false, note: 'אין דיירים' });
+    }
+
+    // Snapshot "already closed?" BEFORE the calls (the helpers push the marker).
+    const wasMainClosed  = Array.isArray(d.closedMonths)      && d.closedMonths.includes(prevKey);
+    const wasExtraClosed = Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(prevKey);
+
+    const main  = closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth);
+    const extra = closeExtraAccountsForBuilding(d, prevKey);
+
+    if (main.changed || extra.changed) {
+      saveTenantData(req.user.tenantId, {
+        tenants: d.tenants,
+        paymentHistory: d.paymentHistory,
+        closedMonths: d.closedMonths,
+        closedMonthsExtra: d.closedMonthsExtra
+      });
+    }
+
+    return res.json({
+      ok: true,
+      month: prevKey,
+      hebMonth: prevHebMonth,
+      closed: main.closed,
+      closedExtra: extra.closed,
+      alreadyClosed: wasMainClosed && wasExtraClosed
+    });
+  } catch (e) {
+    console.error('[close-previous-month]', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ====================================================================
 // SECTION 14 — MONTH CLOSE  (⚠️ DEBT ACCRUAL)
 // closeMonthUnpaid is the ONLY place unpaid balances accrue into
@@ -4119,24 +4170,28 @@ app.post('/api/maintenance/:id/alert', authMiddleware, async (req, res) => {
 // ── סגירת חודש — רישום דיירים שלא שילמו ───────────────────────
 // רץ ב-1 לחודש, כותב paid:false לכל דייר שאין לו רשומה לחודש הקודם.
 // לא נוגע ברשומות קיימות — רק מוסיף חסרות.
-function closeMonthUnpaid() {
-  const now = new Date();
-  // חודש קודם כ-YYYY-MM
-  const prevDate  = new Date(now.getFullYear(), now.getMonth() - 1, 1);
-  const prevKey   = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
-  const prevHebMonth = HEBREW_MONTHS[prevDate.getMonth()]; // שם עברי לחודש הקודם (למפתח sentLog)
+// ── Per-building month-close (extracted v2.14.8, Option A) ─────────
+// Extracted VERBATIM from closeMonthUnpaid's per-building loop body so the
+// accrual logic is reused, never copied. closeMonthUnpaid (global cron path)
+// AND the manual POST /api/close-previous-month endpoint both call this.
+// ⭐ IDEMPOTENCY GUARD (v2.14.8): a per-building d.closedMonths[] marker makes
+// re-running the SAME prevKey a NO-OP. closeMonthUnpaid was NOT idempotent —
+// a second run double-accrued (unpaid 300→600, partial shortfall, overpay
+// credit). It was safe only because the cron is gated to getDate()===1; a
+// manual button (or a Railway redeploy firing the cron twice on the 1st)
+// would double-accrue without this guard. shortfallBanked/creditBanked guard
+// the live DISPLAY derivation against a single close — they do NOT make the
+// accrual re-runnable. This marker does.
+// Returns { changed, closed }. Mutates d (tenants[].openingDebt, paymentHistory,
+// closedMonths) in place; the CALLER is responsible for saveTenantData.
+function closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth) {
+  if (!d.paymentHistory) d.paymentHistory = {};
+  if (!Array.isArray(d.closedMonths)) d.closedMonths = [];
+  // ⭐ Already closed this month for this building → NO-OP (prevents double-accrual).
+  if (d.closedMonths.includes(prevKey)) return { changed: false, closed: 0 };
 
-  const users = loadUsers();
-  let closed = 0;
-
-  for (const user of users) {
-    if (!user.tenantId) continue;
-    try {
-      const d = loadTenantData(user.tenantId);
-      if (!d.tenants || !d.tenants.length) continue;
-      if (!d.paymentHistory) d.paymentHistory = {};
-
-      let changed = false;
+  let changed = false;
+  let closed  = 0;
 
       for (const tenant of d.tenants) {
         const tid = String(tenant.id);
@@ -4219,8 +4274,38 @@ function closeMonthUnpaid() {
         }
       }
 
+  // ⭐ Mark this month closed for this building so a re-run is a NO-OP.
+  // Push regardless of `changed`: even an all-paid month is legitimately
+  // "closed", and marking it prevents a later re-run from accruing if data
+  // changes underneath (e.g. a paid record later deleted).
+  d.closedMonths.push(prevKey);
+  changed = true;
+
+  return { changed, closed };
+}
+
+function closeMonthUnpaid() {
+  const now = new Date();
+  // חודש קודם כ-YYYY-MM
+  const prevDate  = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey   = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+  const prevHebMonth = HEBREW_MONTHS[prevDate.getMonth()]; // שם עברי לחודש הקודם (למפתח sentLog)
+
+  const users = loadUsers();
+  let closed = 0;
+
+  for (const user of users) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.tenants || !d.tenants.length) continue;
+      if (!d.paymentHistory) d.paymentHistory = {};
+
+      const { changed, closed: n } = closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth);
+      closed += n;
+
       if (changed) {
-        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory });
+        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths });
       }
     } catch(e) {
       console.error(`[closeMonthUnpaid:${user.tenantId}]`, e.message);
@@ -6822,6 +6907,34 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
   return closed;
 }
 
+// ── Per-building extra-accounts month-close (v2.14.8, Option A) ────
+// Wraps the per-tenant closeExtraAccountsUnpaid loop for ONE building, with the
+// SAME idempotency contract as closeMonthUnpaidForBuilding. Uses a SEPARATE
+// marker d.closedMonthsExtra[] (NOT the main d.closedMonths) because the main
+// close and the extra-accounts close are two independent passes — sharing one
+// marker would make the second pass skip after the first. Per Tal's locked
+// principle "what's true for the main account is true for extra accounts too",
+// extra accounts get the same double-accrual protection.
+// Returns { changed, closed }. Mutates d in place; caller saves.
+function closeExtraAccountsForBuilding(d, prevKey) {
+  if (!d.paymentHistory) d.paymentHistory = {};
+  if (!Array.isArray(d.closedMonthsExtra)) d.closedMonthsExtra = [];
+  if (d.closedMonthsExtra.includes(prevKey)) return { changed: false, closed: 0 };
+
+  let changed = false;
+  let closed  = 0;
+  for (const tenant of (d.tenants || [])) {
+    const n = closeExtraAccountsUnpaid(d, tenant, prevKey);
+    if (n > 0) { changed = true; closed += n; }
+  }
+
+  // Mark closed regardless of `changed` so a re-run is a NO-OP even when this
+  // month had no extra-account debt to accrue.
+  d.closedMonthsExtra.push(prevKey);
+  changed = true;
+  return { changed, closed };
+}
+
 // ── Extra accounts monthly close ─────────────────────────────
 // Runs on the 1st alongside the original scheduleDailyCron.
 // Only touches extraAccounts[].openingDebt — never touches tenant.openingDebt.
@@ -6839,12 +6952,9 @@ async function runMaintenanceCronWithAccounts() {
       const d = loadTenantData(user.tenantId);
       if (!d.tenants || !d.tenants.length) continue;
       if (!d.paymentHistory) d.paymentHistory = {};
-      let changed = false;
-      for (const tenant of d.tenants) {
-        const n = closeExtraAccountsUnpaid(d, tenant, prevKey);
-        if (n > 0) { changed = true; totalClosed += n; }
-      }
-      if (changed) saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory });
+      const { changed, closed: n } = closeExtraAccountsForBuilding(d, prevKey);
+      totalClosed += n;
+      if (changed) saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra });
     } catch(e) {
       console.error(`[closeExtraAccounts:${user.tenantId}]`, e.message);
     }

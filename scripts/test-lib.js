@@ -109,8 +109,8 @@ function loadCloseMonth(building, nowDate) {
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
   if (!months) throw new Error('test-lib: HEBREW_MONTHS not found');
   const code = months[0] + '\n'
-    + extractFunctions(src, ['closeMonthUnpaid'])
-    + 'module.exports={closeMonthUnpaid};';
+    + extractFunctions(src, ['closeMonthUnpaidForBuilding', 'closeMonthUnpaid'])
+    + 'module.exports={closeMonthUnpaid, closeMonthUnpaidForBuilding};';
   // building is mutated in place by closeMonthUnpaid via the loadTenantData ref.
   const saved = [];
   const stubs = {
@@ -121,7 +121,7 @@ function loadCloseMonth(building, nowDate) {
     Date: nowDate ? class extends Date { constructor(...a){ super(...(a.length?a:[nowDate])); } } : Date
   };
   const mod = runInSandbox(code, stubs);
-  return { run: mod.closeMonthUnpaid, saved, building };
+  return { run: mod.closeMonthUnpaid, runForBuilding: mod.closeMonthUnpaidForBuilding, saved, building };
 }
 
 // ── Load the /api/sentlog-key DELETE-branch cleanup (v2.13.14) ─────
