@@ -530,7 +530,11 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     sentLog: { 'Z_יוני': 'bank_import_x_434_payer_צבי', 'R_יוני': 'bank_import_x_956_payer_רוני', 'Z__acc__a1_יוני': 'bank_import_x_50_payer_צבי' },
     paymentHistory: { 'Z': [{ month: '2026-06', paid: true, amount: 217, paidAmount: 434 }], 'Z__acc__a1': [{ month: '2026-06', paid: true, amount: 50, paidAmount: 50 }] },
     importedBankFingerprints: ['31/05|217|צבי אלתר', '29/06|217|צבי אלתר'],
-    lastBankSyncImport: { timestamp: 'x', matched: 9 }
+    lastBankSyncImport: { timestamp: 'x', matched: 9 },
+    // v2.14.8 — a previous manual/cron close left these markers. The reset MUST
+    // clear them, else a fresh close after re-import is a NO-OP → ₪0 fake debt.
+    closedMonths: ['2026-05', '2026-06'],
+    closedMonthsExtra: ['2026-05', '2026-06']
   });
 
   t.section('Reset payments — dryRun previews without writing');
@@ -564,6 +568,9 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     t.eq('paymentHistory emptied', Object.keys(patch.paymentHistory).length, 0);
     t.eq('fingerprints emptied', patch.importedBankFingerprints.length, 0);
     t.eq('lastBankSyncImport cleared', patch.lastBankSyncImport, null);
+    // v2.14.8 — close markers cleared so a fresh close accrues real debt.
+    t.eq('closedMonths cleared', patch.closedMonths.length, 0);
+    t.eq('closedMonthsExtra cleared', patch.closedMonthsExtra.length, 0);
     // openingDebt zeroed — main + extra.
     t.eq('tenant openingDebt zeroed', patch.tenants[0].openingDebt, 0);
     t.eq('extra account openingDebt zeroed', patch.tenants[0].extraAccounts[0].openingDebt, 0);

@@ -2005,6 +2005,12 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
     paymentHistory: {},
     importedBankFingerprints: [],
     lastBankSyncImport: null,
+    // v2.14.8 — a payment reset must also forget which months were "closed",
+    // otherwise a stale marker makes a fresh manual close a NO-OP (no accrual)
+    // and the building shows ₪0 debt where real debt is due. Reset = "no month
+    // has been closed yet", symmetric main + extra.
+    closedMonths: [],
+    closedMonthsExtra: [],
     tenants: cleanedTenants
   });
 
