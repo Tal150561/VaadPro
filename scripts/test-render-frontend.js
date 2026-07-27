@@ -779,11 +779,17 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('fully blank row skipped', p7.updates.length + p7.creates.length + p7.errors.length, 0);
 
   // MUTATION CHECK — importer must never touch payment data. Assert the write
-  // path (confirmTenantImport) references only tenant fields, never paymentHistory/sentLog.
-  const confirmBody = (app.match(/async function confirmTenantImport\(\) \{[\s\S]*?^\}/m) || [''])[0];
+  // path (confirmImport, merged v2.14.6) references only tenant fields, never paymentHistory/sentLog.
+  const confirmBody = (app.match(/async function confirmImport\(\) \{[\s\S]*?^\}/m) || [''])[0];
   t.eq('confirm writes tenants only (no paymentHistory)', /paymentHistory/.test(confirmBody), false);
   t.eq('confirm writes tenants only (no sentLog)', /sentLog/.test(confirmBody), false);
   t.eq('confirm posts {tenants} to /api/data', /body:JSON\.stringify\(\{tenants:data\.tenants\}\)/.test(confirmBody), true);
+
+  // MERGE (v2.14.6): exactly ONE tenant importer — no duplicate header button/modal.
+  t.eq('no leftover separate import modal', /tenantImportModal/.test(app), false);
+  t.eq('no leftover importTenantsFile fn', /function importTenantsFile/.test(app), false);
+  t.eq('processImportFile routes through planTenantImport', /function processImportFile[\s\S]*?planTenantImport\(data\.tenants/.test(app), true);
+  t.eq('merged reader uses SheetJS (not naive CSV split)', /function processImportFile[\s\S]*?XLSX\.read/.test(app), true);
 }
 
 process.exit(t.done() ? 1 : 0);
