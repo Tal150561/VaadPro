@@ -726,7 +726,7 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   // EXECUTE the pure import helpers lifted from app.html: tenantHeaderToKey,
   // parseMoneyCell, rowToFields, planTenantImport. A broken plan fails here.
   const hdrFn  = (app.match(/^function tenantHeaderToKey\(rawHeader\) \{[\s\S]*?^\}/m) || [''])[0];
-  const moneyFn = (app.match(/^function parseMoneyCell\(raw, defaultVal\) \{[\s\S]*?^\}/m) || [''])[0];
+  const moneyFn = (app.match(/^function parseMoneyCell\(raw, defaultVal, allowNegative\) \{[\s\S]*?^\}/m) || [''])[0];
   const rowFn  = (app.match(/^function rowToFields\(headerKeys, row\) \{[\s\S]*?^\}/m) || [''])[0];
   const planFn = (app.match(/^function planTenantImport\(existingTenants, headerKeys, dataRows\) \{[\s\S]*?^\}/m) || [''])[0];
   t.eq('tenantHeaderToKey lifted', hdrFn.length > 0, true);
@@ -750,7 +750,11 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('empty customAmount → null default', H.parseMoneyCell('', null).value, null);
   t.eq('numeric money parses', H.parseMoneyCell('288', 0).value, 288);
   t.eq('₪ and commas tolerated', H.parseMoneyCell('₪1,250', 0).value, 1250);
-  t.eq('negative rejected', H.parseMoneyCell('-5', 0).ok, false);
+  t.eq('negative rejected by default (fee)', H.parseMoneyCell('-5', 0).ok, false);
+  // v2.14.13 — openingDebt import allows credit (negative) when allowNegative=true
+  t.eq('negative ALLOWED with allowNegative (credit)', H.parseMoneyCell('-239', 0, true).ok, true);
+  t.eq('negative credit value parses', H.parseMoneyCell('-239', 0, true).value, -239);
+  t.eq('negative still rejected without the flag', H.parseMoneyCell('-239', 0, false).ok, false);
   t.eq('non-numeric rejected', H.parseMoneyCell('abc', 0).ok, false);
   t.eq('zero openingDebt allowed', H.parseMoneyCell('0', 5).value, 0);
 
@@ -786,11 +790,16 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('missing name → error', p4.errors.length, 2);
   t.eq('error rows are not created', p4.creates.length, 0);
 
-  // negative openingDebt → error, skipped (money-safety)
+  // v2.14.13 — negative openingDebt is now ACCEPTED (credit; a tenant who prepaid)
   const p5 = H.planTenantImport(existing, keys,
     [['','חדש','0508888888','','','','-99','']]);
-  t.eq('negative openingDebt → error', p5.errors.length, 1);
-  t.eq('bad-money row not created', p5.creates.length, 0);
+  t.eq('negative openingDebt no longer errors (credit allowed)', p5.errors.length, 0);
+  t.eq('credit row IS created', p5.creates.length, 1);
+  t.eq('credit value preserved as negative', p5.creates[0].fields.openingDebt, -99);
+  // a negative FEE (customAmount) is still rejected
+  const p5b = H.planTenantImport(existing, keys,
+    [['','שלילי','0507777777','','','-50','','']]);
+  t.eq('negative monthly fee still errors', p5b.errors.length, 1);
 
   // empty keywords → warning, but still imported (round-trip safety)
   const p6 = H.planTenantImport(existing, keys,

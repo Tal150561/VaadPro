@@ -2487,6 +2487,24 @@ async function saveEdit(id) {
   if(!/^0[0-9]{8,9}$/.test(p)){toast('⚠️ מספר טלפון לא תקין','error');return;}
   const plEl=document.getElementById('epl-'+id);
   const pl = plEl ? plEl.value.trim() : (t.propertyLabel||'');
+  // ⚠️ v2.14.13 — warn before manually overriding openingDebt if a month-close
+  // already banked debt/credit for this tenant. The close computes openingDebt
+  // (accrual + surplus offset); editing it by hand discards that computation and
+  // desynchronizes the number from the creditBanked/shortfallBanked markers —
+  // exactly what muddied רוני (a −239 credit hand-changed to +239 debt).
+  const _oldOd = parseFloat(t.openingDebt) || 0;
+  if (od !== _oldOd) {
+    const _hist = (data.paymentHistory || {})[String(id)] || [];
+    const _closed = _hist.some(function(r){ return r && (r.creditBanked || r.shortfallBanked); });
+    if (_closed && !confirm(
+        'שים לב: המערכת כבר חישבה את החוב של דייר זה בסגירת חודש ' +
+        '(קיזוז עודף / צבירת חוב).\n\n' +
+        'שינוי ידני של "חוב פתוח" ידרוס את החישוב האוטומטי ועלול לגרום ' +
+        'למספרים לא נכונים (למשל למחוק קרדיט ששולם מראש).\n\n' +
+        'להמשיך בכל זאת?')) {
+      isEditing = false; render(); return;
+    }
+  }
   t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
@@ -2593,14 +2611,17 @@ function tenantHeaderToKey(rawHeader) {
 
 // Parse a strict non-negative number. Returns {ok, value} or {ok:false, error}.
 // Empty string → {ok:true, value:defaultVal}. Hebrew ₪, commas, spaces tolerated.
-function parseMoneyCell(raw, defaultVal) {
+function parseMoneyCell(raw, defaultVal, allowNegative) {
   var s = String(raw == null ? '' : raw).trim();
   if (s === '') return { ok:true, value: defaultVal };
   s = s.replace(/[₪,\s]/g,'');
   if (!/^-?\d+(\.\d+)?$/.test(s)) return { ok:false, error:'ערך לא מספרי' };
   var n = parseFloat(s);
   if (isNaN(n)) return { ok:false, error:'ערך לא מספרי' };
-  if (n < 0) return { ok:false, error:'ערך שלילי לא מותר' };
+  // Credit (negative) is legitimate for openingDebt — a tenant who prepaid, e.g.
+  // paid the year ahead. Matches the manual add, whose label explicitly allows
+  // "יתרה שלילית לזכות הדייר". A monthly FEE (allowNegative falsy) stays ≥ 0.
+  if (n < 0 && !allowNegative) return { ok:false, error:'ערך שלילי לא מותר' };
   return { ok:true, value:n };
 }
 
@@ -2641,7 +2662,7 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
 
     var ca = parseMoneyCell(f.customAmount, null);
     if (!ca.ok) { plan.errors.push({ row:rowNum, msg:'תשלום חודשי: ' + ca.error }); continue; }
-    var od = parseMoneyCell(f.openingDebt, 0);
+    var od = parseMoneyCell(f.openingDebt, 0, true);  // allow credit (negative)
     if (!od.ok) { plan.errors.push({ row:rowNum, msg:'חוב התחלתי: ' + od.error }); continue; }
 
     if (!(f.keywords || '').trim()) {
