@@ -347,7 +347,8 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
 // time); they keep the real ₪230 tariff shape.
 {
   const app = readSource('public/app.html');
-  const fns = extractFunctions(app, ['buildTenantStatusRows', 'showTenantStatusList']);
+  const fns = 'const VP_MONTHS=["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];\n'
+    + extractFunctions(app, ['tenantOffsetNote', 'buildTenantStatusRows', 'showTenantStatusList']);
 
   // Real building, verbatim from /api/data
   const REAL = [
@@ -366,7 +367,7 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
     const els = {};
     const el = id => (els[id] = els[id] || { id, textContent:'', innerHTML:'', style:{}, value:'230' });
     const ctx = new Function('document','data','accountsStatus','getEffectiveMonth','openModal',
-      fns + '\n; return { buildTenantStatusRows, showTenantStatusList };'
+      fns + '\n; return { buildTenantStatusRows, showTenantStatusList, tenantOffsetNote };'
     )({ getElementById: el }, { tenants }, accountsStatus, () => 'יולי', () => {});
     return { ctx, el };
   };
@@ -434,6 +435,29 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   t.eq('pending modal shows the grand total', html.includes('3,910₪'), true);
   t.eq('pending modal states it matches the main card', html.includes('סה״כ לגביה'), true);
   t.eq('pending title set', el('tenantStatusListTitle').innerHTML.includes('חייבים'), true);
+
+  // v2.14.12 (option A) — tenantOffsetNote + inline note in the status list.
+  {
+    const yr = new Date().getFullYear();
+    const els2 = {};
+    const el2 = id => (els2[id] = els2[id] || { id, textContent:'', innerHTML:'', style:{}, value:'230' });
+    const data2 = {
+      tenants: [{ id: 1, name: 'רוני', priorDebt: 0, totalDebt: 0, creditBalance: 239,
+        currentBalance: { status: 'paid', paidAmount: 956, expected: 239, shortfall: 0, credit: 239 } }],
+      paymentHistory: { 1: [ { month: yr+'-06', paid: true,
+        debtOffset: { monthCharge: 239, surplus: 717, priorDebtPaid: 478, newCredit: 239 } } ] }
+    };
+    const ctx2 = new Function('document','data','accountsStatus','getEffectiveMonth','openModal',
+      fns + '\n; return { tenantOffsetNote, showTenantStatusList };'
+    )({ getElementById: el2 }, data2, {}, () => 'יולי', () => {});
+    const off = ctx2.tenantOffsetNote(1);
+    t.eq('tenantOffsetNote returns short + full', !!(off && off.short && off.full), true);
+    t.eq('short note names the month (יוני)', off.short.includes('יוני'), true);
+    t.eq('short note names prior-debt paydown', off.short.includes('478 ₪ לכיסוי חוב קודם'), true);
+    t.eq('no offset → null', ctx2.tenantOffsetNote(999), null);
+    ctx2.showTenantStatusList('paid');
+    t.eq('status list shows the inline offset note', el2('tenantStatusListBody').innerHTML.includes('קיזוז יוני'), true);
+  }
 
   ctx.showTenantStatusList('paid');
   const phtml = el('tenantStatusListBody').innerHTML;
@@ -841,6 +865,35 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   const exportBody = (app.match(/function exportAnnualPayments\(\)[\s\S]*?\n\}/) || [''])[0];
   t.eq('export loop no longer uses parseInt(cfg.amount) fallback per-cell',
     /const amount = parseInt\(cfg\.amount\)/.test(exportBody), false);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.12 — export: real-debt column + debt-offset note
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.12 — annualOffsetNote renders the split, real-debt column present');
+  const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const fns = extractFunctions(app, ['annualMonthKey', 'annualRecordFor', 'annualOffsetNote']);
+  const yr = new Date().getFullYear();
+  const data = {
+    tenants: [{ id: 'z1', name: 'רוני' }],
+    paymentHistory: { z1: [
+      { month: yr+'-06', paid: true, amount: 239, paidAmount: 956, type: 'bank',
+        debtOffset: { monthCharge: 239, surplus: 717, priorDebtPaid: 478, newCredit: 239 } }
+    ] }
+  };
+  const ctx = new Function('data','MONTHS_HE', fns + '; return { annualOffsetNote };')(data, MONTHS_HE);
+  const note = ctx.annualOffsetNote(data.tenants[0], 'יוני');
+  t.eq('note leads with month charge', note.indexOf('239 ₪ עבור החודש') === 0, true);
+  t.eq('note mentions prior-debt paydown', note.includes('478 ₪ לכיסוי חוב קודם'), true);
+  t.eq('note mentions leftover credit', note.includes('239 ₪ יתרת זכות'), true);
+  const data2 = { tenants:[{id:'x'}], paymentHistory:{ x:[{ month: yr+'-06', paid:true }] } };
+  const ctx2 = new Function('data','MONTHS_HE', fns + '; return { annualOffsetNote };')(data2, MONTHS_HE);
+  t.eq('no offset → empty note', ctx2.annualOffsetNote(data2.tenants[0], 'יוני'), '');
+
+  const exportBody = (app.match(/function exportAnnualPayments\(\)[\s\S]*?\n\}/) || [''])[0];
+  t.eq('export header includes real-debt column', app.includes("'חוב מצטבר אמיתי'"), true);
+  t.eq('export row reads openingDebt for real-debt', /parseFloat\(t\.openingDebt\)/.test(exportBody), true);
 }
 
 process.exit(t.done() ? 1 : 0);

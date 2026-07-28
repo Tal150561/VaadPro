@@ -1517,4 +1517,78 @@ t.section('v2.14.9 — future fee CHANGE on an existing tenant still forward-onl
   t.eq('new interval open-ended', pt[1].endDate, null);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.12 — debt-offset transparency note (additive, math unchanged)
+// ════════════════════════════════════════════════════════════════
+// When a month-close surplus offsets prior openingDebt, the record now carries
+// a debtOffset breakdown {monthCharge, surplus, priorDebtPaid, newCredit} so
+// the tenant view / WhatsApp / export can explain "X covered the month, Y
+// offset prior debt". This must NOT change the accrual math — only annotate.
+t.section('v2.14.12 — debtOffset note records the split without changing math');
+{
+  const NOW = new Date('2026-07-01T08:00:00.000Z'); // closes 2026-06
+  const mk = (opening, fee, paid) => {
+    const b = { config:{amount:fee}, tenants:[{id:'t1',name:'א',customAmount:fee,openingDebt:opening}],
+      paymentHistory:{ t1:[{month:'2026-06',paid:true,amount:fee,paidAmount:paid,type:'bank'}] }, sentLog:{} };
+    const { run } = loadCloseMonth(b, NOW); run();
+    return b;
+  };
+
+  // Surplus fully absorbed by prior debt (no leftover credit): opening 1000, fee 100, paid 800.
+  let b = mk(1000, 100, 800);
+  let rec = b.paymentHistory.t1.find(r => r.month === '2026-06');
+  t.eq('offset present', !!rec.debtOffset, true);
+  t.eq('monthCharge = 100', rec.debtOffset.monthCharge, 100);
+  t.eq('surplus = 700', rec.debtOffset.surplus, 700);
+  t.eq('priorDebtPaid = 700 (all surplus hit debt)', rec.debtOffset.priorDebtPaid, 700);
+  t.eq('newCredit = 0 (debt not fully cleared)', rec.debtOffset.newCredit, 0);
+  t.eq('openingDebt after = 300 (math intact)', b.tenants[0].openingDebt, 300);
+
+  // Surplus exceeds prior debt → leftover becomes credit: opening 478, fee 239, paid 956.
+  b = mk(478, 239, 956);
+  rec = b.paymentHistory.t1.find(r => r.month === '2026-06');
+  t.eq('surplus = 717', rec.debtOffset.surplus, 717);
+  t.eq('priorDebtPaid = 478 (capped at prior debt)', rec.debtOffset.priorDebtPaid, 478);
+  t.eq('newCredit = 239 (leftover surplus)', rec.debtOffset.newCredit, 239);
+  t.eq('openingDebt after = -239 (credit; math intact)', b.tenants[0].openingDebt, -239);
+
+  // No prior debt → whole surplus is credit: opening 0, fee 217, paid 434.
+  b = mk(0, 217, 434);
+  rec = b.paymentHistory.t1.find(r => r.month === '2026-06');
+  t.eq('no-debt: priorDebtPaid = 0', rec.debtOffset.priorDebtPaid, 0);
+  t.eq('no-debt: newCredit = 217', rec.debtOffset.newCredit, 217);
+
+  // Exact-fee payment → no surplus → NO debtOffset stamped.
+  b = mk(217, 217, 217);
+  rec = b.paymentHistory.t1.find(r => r.month === '2026-06');
+  t.eq('exact-fee payment: no debtOffset', rec.debtOffset === undefined, true);
+  t.eq('exact-fee: openingDebt unchanged (217)', b.tenants[0].openingDebt, 217);
+}
+
+t.section('v2.14.12 — buildOffsetBlock renders the {פירוט_קיזוז} placeholder');
+{
+  const yr = new Date().getFullYear();
+  // debt paid down + leftover credit
+  let d = { paymentHistory: { t1: [
+    { month: yr+'-06', debtOffset: { monthCharge: 239, surplus: 717, priorDebtPaid: 478, newCredit: 239 } }
+  ] } };
+  let block = S.buildOffsetBlock(d, { id: 't1' });
+  t.eq('block names the month charge', block.includes('*239 ₪* עבור דמי החודש'), true);
+  t.eq('block names the prior-debt paydown', block.includes('*478 ₪* קוזזו מחוב קודם'), true);
+  t.eq('block names the credit', block.includes('*239 ₪* נשמרו כיתרת זכות'), true);
+
+  // no debtOffset anywhere → empty (opt-in template shows nothing)
+  d = { paymentHistory: { t1: [ { month: yr+'-06', paid: true } ] } };
+  t.eq('no offset → empty block', S.buildOffsetBlock(d, { id: 't1' }), '');
+
+  // picks the MOST RECENT offset record
+  d = { paymentHistory: { t1: [
+    { month: yr+'-05', debtOffset: { monthCharge: 100, surplus: 50, priorDebtPaid: 50, newCredit: 0 } },
+    { month: yr+'-06', debtOffset: { monthCharge: 100, surplus: 30, priorDebtPaid: 0,  newCredit: 30 } }
+  ] } };
+  block = S.buildOffsetBlock(d, { id: 't1' });
+  t.eq('uses the latest month (June, credit 30)', block.includes('*30 ₪* נשמרו כיתרת זכות'), true);
+  t.eq('does not use the older May record', block.includes('קוזזו מחוב קודם'), false);
+}
+
 process.exit(t.done() ? 1 : 0);

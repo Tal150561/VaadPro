@@ -2238,6 +2238,29 @@ function buildBalanceLine(d, tenant, mk) {
   return 'שילמת ' + bal.paidAmount + ' ₪, נותר לתשלום: *' + bal.shortfall + ' ₪*';
 }
 
+// ── {פירוט_קיזוז} placeholder (v2.14.12) ──────────────────────────
+// Human-readable "your payment covered X for the month and Y went to prior
+// debt / credit". Reads the debtOffset that closeMonthUnpaid stamps on the
+// most recent paymentHistory record. Returns '' when no offset happened, so
+// an opt-in template that includes {פירוט_קיזוז} simply shows nothing for
+// tenants who didn't offset debt (no forced text, respects the WA boundary).
+// Shared by ALL send paths (send-one / send-all / cron) — never copied.
+function buildOffsetBlock(d, tenant) {
+  const history = (d.paymentHistory || {})[String(tenant.id)] || [];
+  // most recent record (by month key) that carries a debtOffset
+  let best = null;
+  for (const r of history) {
+    if (r && r.debtOffset && (!best || String(r.month) > String(best.month))) best = r;
+  }
+  if (!best) return '';
+  const o = best.debtOffset;
+  const parts = [];
+  if (o.priorDebtPaid > 0) parts.push('*' + o.priorDebtPaid + ' ₪* קוזזו מחוב קודם');
+  if (o.newCredit > 0)     parts.push('*' + o.newCredit + ' ₪* נשמרו כיתרת זכות');
+  if (!parts.length) return '';
+  return 'מתוך תשלומך: *' + o.monthCharge + ' ₪* עבור דמי החודש, ו' + parts.join(', ו') + '.';
+}
+
 // Should AutoSend still remind this tenant for the current month? A partial payer
 // must NOT be skipped (they still owe the balance); a full payer / already-reminded
 // tenant IS skipped. Delegates status to calcMonthBalance — the one source.
@@ -2610,6 +2633,7 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     .replace(/{סה"כ}/g, debt > 0 ? total : amount)
     .replace(/{חשבונות}/g, accountsBlock)
     .replace(/{יתרה}/g, balanceLine1)
+    .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
     .replace(/{לינק_פורטל}/g, portalUrl1);
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
@@ -2653,6 +2677,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlock)
       .replace(/{יתרה}/g, balanceLineSA)
+      .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
       .replace(/{לינק_פורטל}/g, portalUrlSA);
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
@@ -4249,9 +4274,21 @@ function closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth) {
             const overpay = Math.round((paidAmt - expectedPrev) * 100) / 100;
             if (overpay > 0) {
               // הפחת עודף מ-openingDebt (יכול להפוך שלילי = קרדיט)
+              const debtBefore = parseFloat(tenant.openingDebt) || 0;
               tenant.openingDebt = Math.round(
                 ((parseFloat(tenant.openingDebt) || 0) - overpay) * 100
               ) / 100;
+              // ⭐ v2.14.12 — transparency note: split the surplus into how much
+              // paid down PRIOR debt vs how much became forward credit. Additive
+              // record data only — does NOT change the accrual math above.
+              const priorDebtPaid = Math.round(Math.max(0, Math.min(overpay, debtBefore)) * 100) / 100;
+              const newCredit     = Math.round(Math.max(0, overpay - Math.max(0, debtBefore)) * 100) / 100;
+              existing.debtOffset = {
+                monthCharge: expectedPrev,    // כמה כיסה את דמי החודש
+                surplus: overpay,             // העודף מעבר לדמי החודש
+                priorDebtPaid: priorDebtPaid, // כמה מהעודף קיזז חוב קודם
+                newCredit: newCredit          // כמה מהעודף הפך ליתרת זכות
+              };
               // ⭐ bug #4 (v2.14.5) — סמן שהעודף כבר נצבר לדיסק, סימטרי ל-
               // shortfallBanked. הגזירה החיה (calcShortfallFromSentLog) תדלג על
               // חודש עם creditBanked כדי לא לספור את אותו עודף פעם שנייה. בלי
@@ -4484,6 +4521,7 @@ async function doAutoSend(user) {
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlockAuto)
       .replace(/{יתרה}/g, balanceLineAuto)
+      .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
       .replace(/{לינק_פורטל}/g, portalUrlAuto);
         try {
       await sendWaMsg(user.tenantId, tenant.phone, msg);
