@@ -792,4 +792,55 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('merged reader uses SheetJS (not naive CSV split)', /function processImportFile[\s\S]*?XLSX\.read/.test(app), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.10 — annual export shows per-tenant amounts, not config default
+// ════════════════════════════════════════════════════════════════
+// BUG: exportAnnualPayments used config.amount (288) for EVERY tenant and a
+// fragile regex on the sentLog string (which fails when the value ends in a
+// payer name, not a number), so every cell fell back to 288 — even for a
+// tenant whose real fee is 217 and who paid exactly 217. FIX: read
+// paymentHistory (the debt engine's source of truth) for expected + paid,
+// falling back to the tenant's OWN customAmount, never config.amount.
+{
+  t.section('v2.14.10 — annual export uses paymentHistory, not the 288 default');
+  const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const PAY_STATUS = {
+    PAID_BANK:{label:'שולם (בנק)',code:'B'}, PAID_MANUAL:{label:'שולם (ידני)',code:'M'},
+    PAID_PARTIAL:{label:'שולם חלקית',code:'P'}, EXEMPT:{label:'פטור',code:'E'}, UNPAID:{label:'לא שולם',code:''}
+  };
+  const fns = extractFunctions(app, ['getPayStatusForMonth', 'annualMonthKey', 'annualRecordFor', 'annualExpected', 'annualPaid']);
+
+  // צבי: fee 217, paid 217 in May+June (bank), sentLog value ENDS IN A PAYER NAME
+  // (the exact shape from Tal's real backup that broke the old regex).
+  const yr = new Date().getFullYear();
+  const data = {
+    config: { amount: 288 },
+    tenants: [{ id: 'z1', name: 'צבי', customAmount: 217 }],
+    sentLog: {
+      'z1_מאי':  'bank_import_2026-07-28T06:42:19.842Z_217_payer_המבצע: דר אלתר צבי',
+      'z1_יוני': 'bank_import_2026-07-28T06:42:19.842Z_217_payer_המבצע: דר אלתר צבי'
+    },
+    paymentHistory: { z1: [
+      { month: yr+'-05', paid: true, amount: 217, paidAmount: 217, type: 'bank' },
+      { month: yr+'-06', paid: true, amount: 217, paidAmount: 217, type: 'bank' }
+    ] }
+  };
+  const ctx = new Function('data','MONTHS_HE','PAY_STATUS',
+    fns + '\n; return { annualExpected, annualPaid, getPayStatusForMonth };'
+  )(data, MONTHS_HE, PAY_STATUS);
+  const zvi = data.tenants[0];
+
+  t.eq('expected(May) = 217 not 288', ctx.annualExpected(zvi, 'מאי'), 217);
+  t.eq('expected(June) = 217 not 288', ctx.annualExpected(zvi, 'יוני'), 217);
+  t.eq('paid(May) = 217 (payer-name suffix no longer breaks it)', ctx.annualPaid(zvi, 'מאי'), 217);
+  t.eq('paid(June) = 217', ctx.annualPaid(zvi, 'יוני'), 217);
+  // A month with NO record and NO payment falls back to the tenant's OWN fee, not 288.
+  t.eq('expected(July, no record) = customAmount 217 not config 288', ctx.annualExpected(zvi, 'יולי'), 217);
+  t.eq('paid(July, nothing paid) = empty', ctx.annualPaid(zvi, 'יולי'), '');
+  // MUTATION: the export loop must not reintroduce the flat config.amount.
+  const exportBody = (app.match(/function exportAnnualPayments\(\)[\s\S]*?\n\}/) || [''])[0];
+  t.eq('export loop no longer uses parseInt(cfg.amount) fallback per-cell',
+    /const amount = parseInt\(cfg\.amount\)/.test(exportBody), false);
+}
+
 process.exit(t.done() ? 1 : 0);

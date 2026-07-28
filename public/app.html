@@ -5375,11 +5375,50 @@ function getPaidAmountForMonth(tenantId, monthName, defaultAmount) {
   return '';
 }
 
+// ── Annual-export amount resolution (v2.14.10) ────────────────────
+// The yearly tracking export must show each tenant's REAL numbers, not the
+// building default. paymentHistory is the source of truth the debt engine
+// uses: record.amount = the frozen EXPECTED charge for that month, and
+// record.paidAmount = what the tenant actually transferred. The old export
+// used config.amount (288) for everyone and a fragile regex on the sentLog
+// string (which fails when the value ends in a payer name, not a number),
+// so every cell fell back to 288. These helpers read paymentHistory first,
+// falling back to the tenant's OWN customAmount (never config.amount).
+function annualMonthKey(monthName) {
+  const idx = MONTHS_HE.indexOf(monthName);
+  if (idx < 0) return null;
+  return (new Date().getFullYear()) + '-' + String(idx + 1).padStart(2, '0');
+}
+function annualRecordFor(tenantId, monthName) {
+  const mk = annualMonthKey(monthName);
+  const hist = (data.paymentHistory || {})[String(tenantId)] || [];
+  return hist.find(function(r) { return r && r.month === mk && r.type !== 'wa_sent'; }) || null;
+}
+// Expected charge for this tenant-month: frozen record.amount if present,
+// else the tenant's customAmount, else the building default as a last resort.
+function annualExpected(tenant, monthName) {
+  const rec = annualRecordFor(tenant.id, monthName);
+  if (rec && rec.amount != null && !isNaN(parseFloat(rec.amount))) return parseFloat(rec.amount);
+  if (tenant.customAmount != null && tenant.customAmount !== '' && !isNaN(parseFloat(tenant.customAmount)))
+    return parseFloat(tenant.customAmount);
+  return parseInt((data.config || {}).amount) || 300;
+}
+// Amount actually paid for this tenant-month: frozen record.paidAmount if
+// present, else parse the sentLog trailing number, else '' (nothing paid).
+function annualPaid(tenant, monthName) {
+  const rec = annualRecordFor(tenant.id, monthName);
+  if (rec && rec.paidAmount != null && !isNaN(parseFloat(rec.paidAmount))) return parseFloat(rec.paidAmount);
+  const key = tenant.id + '_' + monthName;
+  const val = String((data.sentLog || {})[key] || '');
+  const m = val.match(/_(\d+(\.\d+)?)$/);
+  if (m) return parseFloat(m[1]);
+  return '';
+}
+
 function exportAnnualPayments() {
   if (!data.tenants || !data.tenants.length) { toast('⚠️ אין דיירים', 'error'); return; }
 
   const cfg    = data.config || {};
-  const amount = parseInt(cfg.amount) || 300;
   const year   = new Date().getFullYear();
 
   // Determine which months have any data
@@ -5412,21 +5451,22 @@ function exportAnnualPayments() {
     let totalMissing = 0;
 
     activeMonths.forEach(function(m) {
-      const status = getPayStatusForMonth(t.id, m);
-      const paid   = getPaidAmountForMonth(t.id, m, amount);
+      const status   = getPayStatusForMonth(t.id, m);
+      const expected = annualExpected(t, m);   // per-tenant, from paymentHistory
+      const paid     = annualPaid(t, m);        // per-tenant, from paymentHistory
       row.push(status.label);
       row.push(paid !== '' ? paid : '');
 
       if (status === PAY_STATUS.UNPAID) {
-        totalMissing += amount;
+        totalMissing += expected;
       } else if (status === PAY_STATUS.EXEMPT) {
         // exempt – no charge
       } else if (status === PAY_STATUS.PAID_PARTIAL) {
         const p = typeof paid === 'number' ? paid : 0;
         totalPaid    += p;
-        totalMissing += Math.max(0, amount - p);
+        totalMissing += Math.max(0, expected - p);
       } else {
-        totalPaid += typeof paid === 'number' ? paid : amount;
+        totalPaid += typeof paid === 'number' ? paid : expected;
       }
     });
 
