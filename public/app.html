@@ -3120,6 +3120,7 @@ async function closePreviousMonth() {
       toast('חודש ' + hebName + ' נסגר' + who, 'success');
     }
     if (typeof loadData === 'function') await loadData();
+    if (typeof render === 'function') render();   // ⭐ v2.14.11 — refresh the visible table (loadData alone doesn't re-render)
   } catch (e) {
     toast('שגיאה בסגירת החודש: ' + e.message, 'error');
   }
