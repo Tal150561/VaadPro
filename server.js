@@ -2028,6 +2028,35 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
   res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
 });
 
+// ── POST /api/clear-import-fingerprints ───────────────────────────────────────
+// SURGICAL companion to /api/reset-building-payments. Clears ONLY the bank-import
+// dedup memory (importedBankFingerprints) for THIS building. Nothing else is
+// touched — sentLog, paymentHistory, openingDebt, closedMonths, tenants all stay.
+//
+// WHY THIS EXISTS: a bad/cancelled import (e.g. the ינואר mis-tag, pre-v2.14.16
+// when detection auto-saved fingerprints) leaves fingerprints behind that block a
+// correct re-import of the same file — every row is skipped as "already imported".
+// This lets the admin forget just that dedup memory and re-import cleanly, WITHOUT
+// the nuclear reset that also zeroes debts. Post-v2.14.16 the two-step import no
+// longer creates fingerprints until the admin confirms, so this is mainly for
+// cleaning up files imported by older versions.
+//
+// SCOPE: this building only (req.user.tenantId). Backs up first; supports dryRun.
+app.post('/api/clear-import-fingerprints', authMiddleware, (req, res) => {
+  const dryRun = !!(req.body && req.body.dryRun);
+  const d = loadTenantData(req.user.tenantId);
+  const count = Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints.length : 0;
+
+  if (dryRun) {
+    console.log(`[clear-import-fingerprints] tenant=${req.user.tenantId} DRY RUN — ${count} fingerprints`);
+    return res.json({ ok: true, dryRun: true, fingerprints: count });
+  }
+  const backupFile = createBackup('pre-clear-fingerprints');
+  saveTenantData(req.user.tenantId, { importedBankFingerprints: [] });
+  console.log(`[clear-import-fingerprints] tenant=${req.user.tenantId} DONE — cleared ${count}. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`);
+  res.json({ ok: true, dryRun: false, cleared: count, backupFile: backupFile ? path.basename(backupFile) : null });
+});
+
 // Backup Layer 2 — manual / pre-restore snapshot trigger.
 // Called by the frontend (restoreData) BEFORE a manual restore overwrites data,
 // so an accidental restore from a wrong/old file is itself recoverable.

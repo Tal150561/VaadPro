@@ -3920,10 +3920,24 @@ function showMappingPanel(rows, fileName){
 
 function renderBankPreview(rows, headers){
   const preview = rows.slice(1,4);
+  // Show Excel serial dates (40000–60000) as readable dd/mm/yyyy in the preview,
+  // instead of the raw number like 46229. Display-only — does not change parsing.
+  function prettyCell(c){
+    const n = (typeof c === 'number') ? c : parseFloat(String(c).trim());
+    if(!isNaN(n) && String(c).trim() !== '' && /^\d+(\.\d+)?$/.test(String(c).trim()) && n > 40000 && n < 60000){
+      const d = new Date((n - 25569) * 86400 * 1000);
+      if(!isNaN(d.getTime())){
+        const dd = String(d.getUTCDate()).padStart(2,'0');
+        const mm = String(d.getUTCMonth()+1).padStart(2,'0');
+        return dd + '/' + mm + '/' + d.getUTCFullYear();
+      }
+    }
+    return c;
+  }
   let t='<table style="border-collapse:collapse;width:100%">';
   t+='<tr>'+headers.map(function(h){ return '<th style="border:1px solid var(--border);padding:3px 6px;background:var(--surface);font-size:0.72rem;white-space:nowrap">'+h+'</th>'; }).join('')+'</tr>';
   preview.forEach(function(row){
-    t+='<tr>'+row.map(function(c){ return '<td style="border:1px solid var(--border);padding:3px 6px;font-size:0.72rem;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis">'+c+'</td>'; }).join('')+'</tr>';
+    t+='<tr>'+row.map(function(c){ return '<td style="border:1px solid var(--border);padding:3px 6px;font-size:0.72rem;white-space:nowrap;max-width:120px;overflow:hidden;text-overflow:ellipsis">'+prettyCell(c)+'</td>'; }).join('')+'</tr>';
   });
   t+='</table>';
   document.getElementById('bankPreview').innerHTML=t;
@@ -4145,6 +4159,11 @@ function analyzeBankRows(rows,fileName){
   var consumedFp = new Set();
   var newFp = [];
   var dupWarnings = [];
+  // v2.14.16: rows skipped because an IDENTICAL transaction (date+amount+name)
+  // was already imported in a PRIOR run. Previously silent — which made a
+  // re-imported file look like "12 tenants unmatched". Now counted and surfaced
+  // so the admin sees "9 already imported, 3 new" instead of a confusing zero.
+  var alreadyImportedSkips = [];
 
   // ── v2.13.17: soft warning if the file's dates don't match the chosen month ──
   // Root-cause guard for the July/June mis-tag. We tally the month of every matched
@@ -4198,6 +4217,7 @@ function analyzeBankRows(rows,fileName){
     // מעקב אחר שורות שכבר נספרו לדייר זה
     const seenRowIdx=new Set();
     const tenantMatches=[];
+    var tenantHadPriorImport=false; // v2.14.16: this tenant's row(s) matched but were imported before
 
     // כל פסיק = ביטוי OR נפרד — כל ביטוי חייב להתאים ברצף מלא עם גבולות מילה
     function kwMatches(kw, rt) {
@@ -4233,7 +4253,12 @@ function analyzeBankRows(rows,fileName){
       if(type){
         // ── Fingerprint dedup ──────────────────────────────────────
         var fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-        if(alreadyImportedFp.has(fp)){ seenRowIdx.add(m.rowIdx); return; } // imported before → skip
+        if(alreadyImportedFp.has(fp)){                                      // imported in a prior run → skip, but surface it
+          seenRowIdx.add(m.rowIdx);
+          tenantHadPriorImport=true;
+          alreadyImportedSkips.push({ name: tenant.name, amount: m.amount, date: m.dateVal||'' });
+          return;
+        }
         if(consumedFp.has(fp)){                                             // duplicate in THIS file
           seenRowIdx.add(m.rowIdx);
           dupWarnings.push({ name: tenant.name, amount: m.amount, date: m.dateVal||'' });
@@ -4266,25 +4291,70 @@ function analyzeBankRows(rows,fileName){
         _buckets:grouped.buckets,
         monthsSplit:grouped.buckets.size
       });
-    } else {
+    } else if(!tenantHadPriorImport){
+      // Only genuinely unrecognized tenants go here. A tenant whose sole rows were
+      // already imported in a prior run is shown in the "כבר יובאו" section, not
+      // as "לא שילם" — they were counted last time.
       unmatched.push(tenant);
     }
   });
 
-  // ── v2.14.4 (#3): multi-month split, with confirm before splitting ──────────
-  // If ANY matched tenant has rows from more than one month, ask once before
-  // writing. Decline → write everything into the chosen month (the old behaviour),
-  // so we never change how a file is recorded without the user's consent.
+  // ── v2.14.16: TWO-STEP IMPORT (manual UI only) ──────────────────────────────
+  // "זהה משלמים" now only DETECTS and PREVIEWS. Nothing is written to sentLog and
+  // NO fingerprints are saved until the admin clicks "✅ אשר ורשום". This is the
+  // fix for: a bad/ינואר import used to auto-save fingerprints, so even after the
+  // user backed out, those fingerprints blocked a correct re-import.
+  //   ⚠️ This split is UI-ONLY. The BankSync AGENT uses POST /api/import-bank →
+  //   analyzeBankRowsServer (server.js), a headless flow with no human to confirm;
+  //   it still commits in one request. This function does NOT touch that path.
+  //
+  // Compute the multi-month split decision at PREVIEW time so we can show it, but
+  // DEFER the actual confirm() + sentLog write to commitBankImport().
   var splitTenants = matched.filter(function(m){ return m._buckets && m._buckets.size > 1; });
-  var doSplit = false;
+  var splitMonths = null;
   if (splitTenants.length) {
     var monthSet = new Set();
     splitTenants.forEach(function(m){ m._buckets.forEach(function(_v,mk){ monthSet.add(mk); }); });
-    var monthsList = Array.from(monthSet).sort().map(function(mk){
-      return hebOfMk(mk) + ' ' + mk.split('-')[0];
-    }).join(', ');
+    splitMonths = Array.from(monthSet).sort();
+  }
+
+  // Stash everything the commit step needs. No side effects yet.
+  window._pendingBankImport = {
+    matched: matched,
+    unmatched: unmatched,
+    alreadyImportedSkips: alreadyImportedSkips,
+    dupWarnings: dupWarnings,
+    newFp: newFp,
+    priorFp: Array.from(alreadyImportedFp),
+    em: em,
+    selectedMonthKey: selectedMonthKey,
+    hebOfMk: hebOfMk,
+    splitMonths: splitMonths,
+    total: mr.length,
+    ta: ta,
+    fileName: fileName,
+    filterByAmount: filterByAmount
+  };
+
+  showBankResult(matched, unmatched, mr.length, ta, fileName, filterByAmount, alreadyImportedSkips, /*previewMode=*/true, splitMonths);
+}
+
+// ── v2.14.16: commit step for the manual (UI) bank import ──────────────────────
+// Called only when the admin clicks "✅ אשר ורשום" in the preview. This is where
+// sentLog is written, fingerprints are persisted, and POST /api/data fires. If the
+// admin never clicks it (result looked wrong), NOTHING is saved — no fingerprints,
+// no phantom "already imported" rows blocking the next attempt.
+function commitBankImport(){
+  var P = window._pendingBankImport;
+  if(!P){ toast('אין ייבוא ממתין לאישור','error'); return; }
+  var matched = P.matched, hebOfMk = P.hebOfMk, em = P.em;
+
+  // Multi-month split confirm — deferred here from detection time.
+  var doSplit = false;
+  if (P.splitMonths && P.splitMonths.length) {
+    var monthsList = P.splitMonths.map(function(mk){ return hebOfMk(mk) + ' ' + mk.split('-')[0]; }).join(', ');
     doSplit = confirm(
-      'הקובץ מכיל תשלומים מ-' + monthSet.size + ' חודשים שונים (' + monthsList + ').\n\n' +
+      'הקובץ מכיל תשלומים מ-' + P.splitMonths.length + ' חודשים שונים (' + monthsList + ').\n\n' +
       'לרשום כל תשלום בחודש שלו? (מומלץ)\n\n' +
       'ביטול = לרשום הכל בחודש הנבחר בלבד.'
     );
@@ -4299,36 +4369,60 @@ function analyzeBankRows(rows,fileName){
           'bank_import_' + new Date().toISOString() + '_' + b.sum + '_payer_' + (b.payerName || payerName);
       });
     } else {
-      // No split (single month, or user declined): one key in the chosen month.
       data.sentLog[m.tenant.id + '_' + em] =
         'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
     }
-    delete m._buckets; // don't ship the Map to showBankResult
+    delete m._buckets;
   });
 
-  // Persist the union of prior + newly-consumed fingerprints (cross-import memory),
-  // capped to the most recent 5000 so the list can't grow without bound.
-  var allFp = Array.from(alreadyImportedFp).concat(newFp);
+  // Persist prior + newly-consumed fingerprints (capped at 5000). ONLY now.
+  var allFp = P.priorFp.concat(P.newFp);
   if (allFp.length > 5000) allFp = allFp.slice(allFp.length - 5000);
   data.importedBankFingerprints = allFp;
 
   const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp };
-  if (selectedMonthKey) payload.bankMonthOverride = selectedMonthKey;
+  if (P.selectedMonthKey) payload.bankMonthOverride = P.selectedMonthKey;
   fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(function(){});
 
-  // Surface in-file duplicates so a genuine same-day double-payment is never dropped silently.
-  if (dupWarnings.length) {
-    var msg = dupWarnings.map(function(w){ return w.name + ' — ' + w.amount + '₪ (' + (w.date||'') + ')'; }).join('\n');
-    toast('⚠️ נמצאו ' + dupWarnings.length + ' תנועות כפולות שלא נספרו פעמיים:\n' + msg, 'warn');
+  if (P.dupWarnings.length) {
+    var msg = P.dupWarnings.map(function(w){ return w.name + ' — ' + w.amount + '₪ (' + (w.date||'') + ')'; }).join('\n');
+    toast('⚠️ נמצאו ' + P.dupWarnings.length + ' תנועות כפולות שלא נספרו פעמיים:\n' + msg, 'warn');
   }
-  render();showBankResult(matched,unmatched,mr.length,ta,fileName,filterByAmount);resetDropZone();
+  if (P.alreadyImportedSkips.length) {
+    var newCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
+    toast('ℹ️ ' + P.alreadyImportedSkips.length + ' תנועות כבר יובאו בעבר (זהות תאריך+שם+סכום) ולא נספרו שוב.' +
+          (newCount ? '\n✅ ' + newCount + ' תנועות חדשות נקלטו.' : '\n(אין תנועות חדשות בקובץ זה.)'), 'info');
+  }
+
+  var mCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
+  toast('✅ נרשמו ' + mCount + ' תשלומים ל-' + matched.length + ' דיירים','success');
+
+  window._pendingBankImport = null;
+  render();
+  showBankResult(matched, P.unmatched, P.total, P.ta, P.fileName, P.filterByAmount, P.alreadyImportedSkips, /*previewMode=*/false, null);
+  resetDropZone();
 }
 
-function showBankResult(matched,unmatched,total,ta,fn,filterByAmount){
+function cancelBankImport(){
+  // Discard the pending import — nothing was ever written, so this is a pure UI reset.
+  window._pendingBankImport = null;
+  document.getElementById('bankResult').style.display='none';
+  toast('הייבוא בוטל — לא נשמר דבר (אין טביעות אצבע)','info');
+}
+
+// Legacy tail retained (dead) intentionally removed — commit lives in commitBankImport.
+function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImportedSkips,previewMode,splitMonths){
   const rd=document.getElementById('bankResult');
+  alreadyImportedSkips = alreadyImportedSkips || [];
   let h='<div class="match-result">';
+  if(previewMode){
+    h+='<div style="background:rgba(227,179,65,.12);border:1px solid rgba(227,179,65,.35);border-radius:8px;padding:8px 10px;margin-bottom:10px;font-size:0.82rem;color:var(--warn);font-weight:600;">👁️ תצוגה מקדימה — עדיין לא נשמר דבר. בדוק ואשר למטה כדי לרשום.</div>';
+  }
   const amountDesc = filterByAmount ? ta+'₪ (±'+(parseFloat(document.getElementById('bankTolerance').value)||5)+')' : 'כל הסכומים';
-  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות | חיפוש: '+amountDesc+'</div>';
+  var newTxCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
+  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות | חיפוש: '+amountDesc
+    + (alreadyImportedSkips.length ? ' | <span style="color:var(--accent);">'+newTxCount+' חדשות</span> · <span style="color:var(--text2);">'+alreadyImportedSkips.length+' כבר יובאו</span>' : '')
+    + '</div>';
   if(matched.length){
     h+='<div style="color:var(--accent);font-weight:700;margin-bottom:6px;">✅ זוהו כמשלמים ('+matched.length+'):</div>';
     matched.forEach(function(m){
@@ -4342,12 +4436,40 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount){
         +'</div>';
     });
   }
+  // v2.14.16: a re-imported row (same date+amount+name as a prior run) is NOT
+  // "unmatched" — it was recognized and counted last time. Show it in its own
+  // neutral section so "9 old + 3 new" reads correctly, instead of dumping those
+  // tenants into "לא זוהו / לא שילם".
+  if(alreadyImportedSkips.length){
+    var byName={};
+    alreadyImportedSkips.forEach(function(s){ byName[s.name]=(byName[s.name]||0)+1; });
+    h+='<div style="color:var(--text2);font-weight:700;margin:10px 0 6px;">↩️ כבר יובאו בעבר ('+alreadyImportedSkips.length+' תנועות · לא נספרו שוב):</div>';
+    Object.keys(byName).forEach(function(nm){
+      h+='<div class="match-row"><span>👤 '+nm+'</span><span style="color:var(--text2);">'+(byName[nm]>1?'×'+byName[nm]+' ':'')+'כבר נקלט</span></div>';
+    });
+  }
   if(unmatched.length){
     h+='<div style="color:var(--warn);font-weight:700;margin:10px 0 6px;">⏳ לא זוהו ('+unmatched.length+'):</div>';
     unmatched.forEach(function(t){h+='<div class="match-row"><span>👤 '+t.name+'</span><span style="color:var(--warn);">לא שילם</span></div>';});
   }
   h+='</div>';
-  if(matched.length>0){
+  if(previewMode && splitMonths && splitMonths.length>1){
+    var _hebNames=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    var _lbl=splitMonths.map(function(mk){return _hebNames[parseInt(mk.split('-')[1])-1]+' '+mk.split('-')[0];}).join(', ');
+    h+='<div style="margin-top:8px;font-size:0.78rem;color:var(--warn);">📅 הקובץ מכיל תשלומים מ-'+splitMonths.length+' חודשים ('+_lbl+'). בעת האישור תישאל אם לפצל לחודשים.</div>';
+  }
+  if(previewMode){
+    // Nothing is written yet — the admin must explicitly confirm to save.
+    h+='<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">';
+    if(matched.length>0){
+      h+='<button class="btn btn-green" onclick="commitBankImport()">✅ אשר ורשום ('+newTxCount+' תשלומים)</button>';
+    }
+    h+='<button class="btn btn-secondary" onclick="cancelBankImport()">✖️ בטל</button>';
+    h+='</div>';
+    if(matched.length===0){
+      h+='<div style="margin-top:8px;font-size:0.78rem;color:var(--text2);">אין תנועות חדשות לרישום'+(alreadyImportedSkips.length?' (כל השורות כבר יובאו בעבר).':'.')+'</div>';
+    }
+  } else if(matched.length>0){
     h+='<div style="margin-top:10px;display:flex;gap:8px;">';
     h+='<button class="btn btn-secondary btn-sm" onclick="exportBankReport()">📊 ייצא דו"ח תקופה לאקסל</button>';
     h+='</div>';

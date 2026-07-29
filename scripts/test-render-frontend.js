@@ -719,6 +719,22 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('accepting the split writes per-month keys',
     /data\.sentLog\[m\.tenant\.id \+ '_' \+ hebMk\]/.test(app), true);
   t.eq('the Map is not shipped to showBankResult', /delete m\._buckets;/.test(app), true);
+
+  // v2.14.16 — TWO-STEP manual import: detect/preview must NOT commit.
+  var detect = (app.match(/function analyzeBankRows[\s\S]*?\n}\n\n\/\/ ── v2\.14\.16: commit step/) || [''])[0];
+  var commit = (app.match(/function commitBankImport\(\)\{[\s\S]*?\n}\n\nfunction cancelBankImport/) || [''])[0];
+  t.eq('analyzeBankRows stashes _pendingBankImport', /_pendingBankImport\s*=\s*\{/.test(detect), true);
+  t.eq('analyzeBankRows previews (previewMode=true)', /showBankResult\([^)]*previewMode=\*\/true/.test(detect) || /\/\*previewMode=\*\/true/.test(detect), true);
+  t.eq('analyzeBankRows does NOT POST /data itself', /fetch\(API\+'\/data'/.test(detect), false);
+  t.eq('analyzeBankRows does NOT persist fingerprints itself', /data\.importedBankFingerprints\s*=/.test(detect), false);
+  t.eq('analyzeBankRows does NOT write sentLog itself', /data\.sentLog\[m\.tenant\.id/.test(detect), false);
+  t.eq('commitBankImport POSTs /data', /fetch\(API\+'\/data'/.test(commit), true);
+  t.eq('commitBankImport persists fingerprints', /data\.importedBankFingerprints\s*=\s*allFp/.test(commit), true);
+  t.eq('commitBankImport writes sentLog', /data\.sentLog\[m\.tenant\.id/.test(commit), true);
+  t.eq('commitBankImport clears the pending import', /_pendingBankImport\s*=\s*null/.test(commit), true);
+  t.eq('cancelBankImport saves nothing', /function cancelBankImport\(\)\{[\s\S]*?_pendingBankImport\s*=\s*null/.test(app), true);
+  t.eq('preview wires אשר ורשום → commit', /onclick="commitBankImport\(\)"/.test(app), true);
+  t.eq('preview wires בטל → cancel', /onclick="cancelBankImport\(\)"/.test(app), true);
 }
 
 t.section('app.html — tenant CSV import (v2.14.6)');
