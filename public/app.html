@@ -2908,7 +2908,10 @@ async function confirmImport() {
   try{
     const saveR=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(function(r){return r.json();}).catch(function(){return {ok:true};});
     if(saveR&&saveR.limitError){toast('\u26a0\ufe0f '+saveR.error,'error');await loadData();render();return;}
-    render(); toast('\u2705 \u05d9\u05d5\u05d1\u05d0\u05d5 '+n+' \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd!','success');
+    // v2.14.14 — reload from server BEFORE render so server-computed fields
+    // (monthBalances / totalDebt / creditBalance) refresh. render() alone shows
+    // stale local tenant data → user had to press F5 to see the update.
+    await loadData(); render(); toast('\u2705 \u05d9\u05d5\u05d1\u05d0\u05d5 '+n+' \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd!','success');
   }catch(e){toast('\u274c \u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05de\u05d9\u05e8\u05d4: '+e.message,'error');}
 }
 
