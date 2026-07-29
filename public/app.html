@@ -633,7 +633,7 @@ function vpLogout() {
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
             <strong style="font-size:0.9rem;">🗂️ מיפוי עמודות</strong>
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-secondary btn-sm" onclick="saveBankMapping()" style="font-size:0.75rem;">💾 שמור מבנה לעתיד</button>
+              <button class="btn btn-secondary btn-sm" onclick="saveBankMapping()" style="font-size:0.75rem;" title="נשמר לבניין זה בלבד — לכל בניין מבנה קובץ בנק משלו">💾 שמור מבנה לבניין זה</button>
               <button class="btn btn-primary btn-sm" onclick="saveMappingAsDefault()" style="font-size:0.75rem;" title="Save mapping and generate API key for BankSync Agent">🔗 BankSync</button>
             </div>
           </div>
@@ -3929,6 +3929,26 @@ function renderBankPreview(rows, headers){
   document.getElementById('bankPreview').innerHTML=t;
 }
 
+// ── Bank mapping is PER-BUILDING (v2.14.16) ──────────────────────
+// CRITICAL: each building gets its own bank-file structure (different bank,
+// different columns). localStorage is per-browser, so a single global
+// 'vp_bank_mapping' key was shared across every building opened in the same
+// browser — loading building A's mapping for building B, which pointed colDate
+// at a numeric non-date column and mis-tagged every row to January. We now
+// namespace the key by the building's tenantId (decoded from the JWT). Legacy
+// global key is migrated on first save.
+function bankMappingKey(){
+  var tid = '';
+  try {
+    var tok = localStorage.getItem('vp_token');
+    if (tok) {
+      var payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
+      tid = payload && payload.tenantId ? String(payload.tenantId) : '';
+    }
+  } catch(e){ tid = ''; }
+  return tid ? 'vp_bank_mapping__' + tid : 'vp_bank_mapping';
+}
+
 function saveBankMapping(){
   const mapping={
     colName: document.getElementById('colName').value,
@@ -3938,12 +3958,23 @@ function saveBankMapping(){
     bankAmount: document.getElementById('bankAmount').value,
     bankTolerance: document.getElementById('bankTolerance').value
   };
-  try{ localStorage.setItem('vp_bank_mapping', JSON.stringify(mapping)); toast('✅ מבנה נשמר','success'); }
+  try{ localStorage.setItem(bankMappingKey(), JSON.stringify(mapping)); toast('✅ מבנה נשמר לבניין זה','success'); }
   catch(e){ toast('שגיאה בשמירה','error'); }
 }
 
 function loadBankMapping(){
-  try{ const s=localStorage.getItem('vp_bank_mapping'); return s?JSON.parse(s):null; }
+  try{
+    const k = bankMappingKey();
+    let s = localStorage.getItem(k);
+    // One-time migration: if this building has no per-building mapping yet but a
+    // legacy global one exists, adopt it for THIS building only (do not delete the
+    // global — another building may still be relying on it until it re-saves).
+    if(!s && k !== 'vp_bank_mapping'){
+      const legacy = localStorage.getItem('vp_bank_mapping');
+      if(legacy){ localStorage.setItem(k, legacy); s = legacy; }
+    }
+    return s?JSON.parse(s):null;
+  }
   catch(e){ return null; }
 }
 
@@ -3981,6 +4012,12 @@ function parseDate(v){
   if(/^\d{4}-\d{2}-\d{2}/.test(s)){
     return new Date(s);
   }
+  // ⚠️ Guard: a bare number that ISN'T an Excel serial (handled above) is NOT a
+  // date — it's an אסמכתא / סכום / קוד בנק. Never hand it to `new Date()`, which
+  // parses "6819" as YEAR 6819 (→ January) and "230" as year 0230. That was the
+  // root cause of bank rows being tagged to ינואר when the date column was mapped
+  // to a numeric non-date column (or a stale saved mapping pointed there).
+  if(/^[\d.]+$/.test(s)) return null;
   const d = new Date(v);
   return isNaN(d.getTime()) ? null : d;
 }

@@ -6325,6 +6325,10 @@ function bankRowMonthKey(dateVal) {
   if (!d && /^\d{1,2}\/\d{1,2}\/\d{4}$/.test(s))   { const p = s.split('/'); d = new Date(p[2], p[1]-1, p[0]); }
   if (!d && /^\d{1,2}\.\d{1,2}\.\d{4}/.test(s))    { const p = s.split('.'); d = new Date(p[2], p[1]-1, p[0]); }
   if (!d && /^\d{4}-\d{2}-\d{2}/.test(s))          { d = new Date(s); }
+  // ⚠️ Guard (mirrors client parseDate): a bare number that isn't an Excel serial
+  // is an אסמכתא / סכום / קוד בנק, NOT a date. `new Date("6819")` = year 6819 →
+  // January. Never fall through to Date() for numeric strings.
+  if (!d && /^[\d.]+$/.test(s)) return null;
   if (!d) { const dd = new Date(dateVal); if (!isNaN(dd.getTime())) d = dd; }
   if (!d || isNaN(d.getTime())) return null;
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');

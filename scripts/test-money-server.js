@@ -400,6 +400,21 @@ t.section('Fix #0 — Agent import does not net openingDebt');
   t.eq('empty → null (caller falls back)', B.bankRowMonthKey(''), null);
   t.eq('garbage → null', B.bankRowMonthKey('not-a-date'), null);
 
+  t.section('v2.14.16 — numeric non-date values must NOT parse to January');
+  // Root cause of the "everything tagged ינואר" bug: a bare number that is NOT an
+  // Excel serial (asmachta / amount / bank code) fell through to new Date("6819"),
+  // which JS reads as YEAR 6819 → month January. Must now be null so the caller
+  // falls back to the chosen import month.
+  t.eq('4-digit asmachta 6819 → null (not 6819-01)', B.bankRowMonthKey('6819'), null);
+  t.eq('asmachta 3156 → null',                        B.bankRowMonthKey('3156'), null);
+  t.eq('amount 230 → null (not 0230-01)',             B.bankRowMonthKey('230'),  null);
+  t.eq('bank code 10 → null',                         B.bankRowMonthKey('10'),   null);
+  t.eq('long asmachta 767735 → null',                 B.bankRowMonthKey('767735'), null);
+  t.eq('20-digit ref → null',        B.bankRowMonthKey('26072609234169250010'), null);
+  // Real dates still work (regression guard for the fix).
+  t.eq('real serial still July',     B.bankRowMonthKey('46229'), '2026-07');
+  t.eq('real DD/MM/YYYY still works', B.bankRowMonthKey('26/07/2026'), '2026-07');
+
   t.section('#3 helpers — groupMatchesByMonth buckets by month');
   {
     const g = B.groupMatchesByMonth([
@@ -469,6 +484,24 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-06', { amount: 300 }, new Set());
     t.eq('April row → אפריל', parseFloat(String(r.newSentLog['D_אפריל']).match(/_([\d.]+)_payer/)[1]), 300);
     t.eq('undated row → chosen יוני', parseFloat(String(r.newSentLog['D_יוני']).match(/_([\d.]+)_payer/)[1]), 300);
+  }
+
+  t.section('v2.14.16 — agent path: numeric non-date column falls back, NOT January');
+  {
+    // Twin of the manual-path bug: if colDate points at a numeric non-date column
+    // (asmachta / a stale per-building mapping), the row date is a bare number. It
+    // must fall back to the chosen import month, never ינואר (new Date("6819")=yr 6819).
+    const badMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, bankAmount: '300', bankTolerance: '5' };
+    const rows = [
+      ['שם', 'סכום', 'אסמכתא'],
+      ['דנה כהן', '300', '6819'],
+      ['דנה כהן', '300', '3156'],
+    ];
+    const tenants = [{ id: 'D', name: 'דנה כהן', phone: '0501112222', keywords: '', customAmount: 300, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, badMapping, tenants, {}, '2026-07', { amount: 300 }, new Set());
+    t.eq('no ינואר key was written', r.newSentLog['D_ינואר'], undefined);
+    t.eq('both rows fell back to chosen יולי', parseFloat(String(r.newSentLog['D_יולי']).match(/bank_import_[^_]+_([\d.]+)_/)[1]), 600);
+    t.eq('single (chosen) month bucket', Object.keys(r.newSentLog).filter(k => k.startsWith('D_')).length, 1);
   }
 
   t.section('#3 — year boundary: December file imported in January');
