@@ -315,7 +315,7 @@ function vpLogout() {
 <div id="waBanner" style="display:none;background:rgba(239,68,68,.12);border-bottom:1px solid rgba(239,68,68,.25);padding:8px 16px;text-align:center;font-size:13px;color:var(--text2);direction:rtl;">
   <span id="waBannerMsg">⚠️ WhatsApp מנותק</span>
   &nbsp;
-  <button onclick="handleConnClick()" style="background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.4);border-radius:6px;padding:3px 10px;font-size:12px;color:inherit;cursor:pointer;">חיבור מחדש</button>
+  <button id="waBannerReconnectBtn" onclick="bannerReconnect()" style="background:rgba(239,68,68,.2);border:1px solid rgba(239,68,68,.4);border-radius:6px;padding:3px 10px;font-size:12px;color:inherit;cursor:pointer;">חיבור מחדש</button>
   &nbsp;
   <button onclick="document.getElementById('waBanner').style.display='none'" style="background:none;border:none;font-size:15px;cursor:pointer;color:var(--text3);">✕</button>
 </div>
@@ -2067,7 +2067,7 @@ function fillForm() {
   updateSchedule(); updatePreview();
 }
 
-let _waDisconnectedSince = null, _checkTimeoutId = null, _lastQrTime = null;
+let _waDisconnectedSince = null, _checkTimeoutId = null, _lastQrTime = null, _waResetPending = false;
 
 function pollStatus() { checkStatus(); statusInterval=setInterval(checkStatus,2500); }
 
@@ -2094,6 +2094,7 @@ async function checkStatus() {
     if(s.status==='ready'){
       closeQR();
       _waDisconnectedSince = null;
+      _waResetPending = false;
       showWaBanner(false);
       // ⚠️ _dataLoadedOnce is a STANDALONE flag — NOT data._loaded. loadData() does
       // `data = await r.json()` which REPLACES the whole data object, wiping any
@@ -2105,17 +2106,24 @@ async function checkStatus() {
       if(!_dataLoadedOnce){ _dataLoadedOnce=true; await loadData(); fillForm(); render(); }
     }
     // ניהול banner ניתוק
+    _waResetPending = !!s.resetPending;
     if(s.status==='disconnected' || s.status==='logged_out') {
       if (!_waDisconnectedSince) _waDisconnectedSince = Date.now();
-      const minsSince = (Date.now() - _waDisconnectedSince) / 60000;
-      if (minsSince >= 5) {
-        const msg = s.status==='logged_out'
-          ? '⚠️ WhatsApp נותק מהמכשיר — יש לסרוק ברקוד חדש'
-          : '⚠️ WhatsApp מנותק זמנית — לחץ לחיבור מחדש';
-        showWaBanner(true, msg);
+      // reset יזום (שדרוג מנוע WhatsApp) → הצג מיד, בלי המתנה של 5 דקות
+      if (_waResetPending) {
+        showWaBanner(true, '🔄 עדכנו את מנוע ה-WhatsApp — יש להתחבר מחדש: לחץ "חיבור מחדש" וסרוק ברקוד');
+      } else {
+        const minsSince = (Date.now() - _waDisconnectedSince) / 60000;
+        if (minsSince >= 5) {
+          const msg = s.status==='logged_out'
+            ? '⚠️ WhatsApp נותק מהמכשיר — יש לסרוק ברקוד חדש'
+            : '⚠️ WhatsApp מנותק זמנית — לחץ לחיבור מחדש';
+          showWaBanner(true, msg);
+        }
       }
     } else if (s.status !== 'disconnected' && s.status !== 'logged_out') {
       _waDisconnectedSince = null;
+      _waResetPending = false;
     }
   } catch(e){
     if (_checkTimeoutId) { clearTimeout(_checkTimeoutId); _checkTimeoutId = null; }
@@ -2168,6 +2176,36 @@ function handleConnClick() {
     .catch(function(){
       document.getElementById('qrContainer').innerHTML='<div class="qr-loading">❌ שגיאת חיבור</div>';
     });
+}
+
+// כפתור "חיבור מחדש" בבאנר. אם יש reset יזום (שדרוג מנוע WA) — מבצע reset מלא
+// (מוחק session בשרת ומאלץ QR חדש) ואז פותח מודל QR וממתין לברקוד הטרי.
+// אחרת — התנהגות רגילה (פתיחת מודל QR בלבד).
+async function bannerReconnect() {
+  const btn = document.getElementById('waBannerReconnectBtn');
+  if (!_waResetPending) { handleConnClick(); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ מאפס...'; }
+  document.getElementById('qrModal').classList.add('show');
+  document.getElementById('qrContainer').innerHTML='<div class="qr-loading">⏳ מאפס חיבור...</div>';
+  try {
+    const r = await fetch(API+'/wa/reset-auth', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({})});
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'שגיאה');
+    // השרת מוחק session ואז מאתחל מחדש אחרי ~9ש' → המתן ל-QR הטרי
+    document.getElementById('qrContainer').innerHTML='<div class="qr-loading">⏳ מפעיל ווטסאפ מחדש...</div>';
+    let attempts = 0;
+    const poll = setInterval(function(){
+      attempts++;
+      fetch(API+'/status').then(function(res){ return res.json(); }).then(function(st){
+        if(st.qrDataUrl){ clearInterval(poll); showQR(st.qrDataUrl); if(btn){btn.disabled=false;btn.textContent='חיבור מחדש';} }
+        else if(st.status==='ready'){ clearInterval(poll); closeQR(); if(btn){btn.disabled=false;btn.textContent='חיבור מחדש';} }
+        else if(attempts >= 30){ clearInterval(poll); document.getElementById('qrContainer').innerHTML='<div class="qr-loading">❌ לא הצליח – נסה שוב</div>'; if(btn){btn.disabled=false;btn.textContent='חיבור מחדש';} }
+      }).catch(function(){ clearInterval(poll); if(btn){btn.disabled=false;btn.textContent='חיבור מחדש';} });
+    }, 1000);
+  } catch(e) {
+    document.getElementById('qrContainer').innerHTML='<div class="qr-loading">❌ שגיאה: '+e.message+'</div>';
+    if(btn){btn.disabled=false;btn.textContent='חיבור מחדש';}
+  }
 }
 
 function showQR(url) {

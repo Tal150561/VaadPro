@@ -122,4 +122,43 @@ t.eq('priorDebt subtracts an unpaid current-month history row',
 t.eq('GET /api/data attaches monthBalances', /monthBalances,/.test(server), true);
 t.eq('portal route attaches amountDue', /amountDue:\s*amountDue/.test(server), true);
 
+// ── v2.14.17 — WA reset (Baileys 6.7.24 upgrade) server wiring ────
+t.section('v2.14.17 — WA reset server wiring (server.js)');
+
+// Baileys upgraded away from the stale 6.5.0 that caused the decrypt failures
+t.eq('main dependency pinned to 6.7.24',
+  /"@whiskeysockets\/baileys":\s*"6\.7\.24"/.test(readSource('package.json')), true);
+t.eq('no leftover 6.5.0 pin anywhere in server.js', server.includes('baileys\\": \\"6.5.0'), false);
+
+// resetBuildingWa helper: wipes the on-disk session + deferred re-clean + flag
+const rbw = (server.match(/function resetBuildingWa\(tenantId\)[\s\S]*?\n\}/) || [''])[0];
+t.eq('resetBuildingWa exists', rbw.length > 0, true);
+t.eq('server-mode only', rbw.includes("if (WA_MODE !== 'server') return false;"), true);
+t.eq('deletes the session dir', /fs\.rmSync\(sessionDir, \{ recursive: true, force: true \}\)/.test(rbw), true);
+t.eq('deferred re-clean (creds.update is async)', rbw.includes('setTimeout(() =>') && rbw.includes('8000'), true);
+t.eq('sets resetPending flag', rbw.includes('wa.resetPending = true;'), true);
+
+// resetPending cleared on successful reconnect
+t.eq('resetPending cleared on connection open',
+  /connection === 'open'[\s\S]*?wa\.resetPending = false;/.test(server), true);
+
+// /api/status exposes the flag
+t.eq('status exposes resetPending', /resetPending:\s*!!wa\.resetPending/.test(server), true);
+
+// reset-auth now actually resets in server mode (was Bridge-only before)
+const ra = (server.match(/app\.post\('\/api\/wa\/reset-auth'[\s\S]*?\n\}\);/) || [''])[0];
+t.eq('reset-auth handles server mode', ra.includes("if (WA_MODE === 'server')") && ra.includes('resetBuildingWa(tenantId)'), true);
+t.eq('reset-auth re-inits for fresh QR', /setTimeout\(\(\) => initWa\(tenantId\), 9000\)/.test(ra), true);
+t.eq('reset-auth still queues Bridge for cloud mode', ra.includes("bridgeCmds[tenantId].push('reset-auth')"), true);
+
+// super-admin bulk endpoints
+t.eq('GET wa-buildings (super admin)',
+  /app\.get\('\/api\/admin\/wa-buildings', superAdminMiddleware/.test(server), true);
+t.eq('POST reset-building-wa (super admin)',
+  /app\.post\('\/api\/admin\/reset-building-wa', superAdminMiddleware/.test(server), true);
+const rbwa = (server.match(/app\.post\('\/api\/admin\/reset-building-wa'[\s\S]*?\n\}\);/) || [''])[0];
+t.eq('bulk supports all + single tenant', rbwa.includes('if (all)') && rbwa.includes('validIds.has(tenantId)'), true);
+t.eq('bulk calls resetBuildingWa per target', rbwa.includes('resetBuildingWa(tid)'), true);
+t.eq('bulk re-inits each for fresh QR', /setTimeout\(\(\) => initWa\(tid\), 9000\)/.test(rbwa), true);
+
 process.exit(t.done() ? 1 : 0);

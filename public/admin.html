@@ -559,6 +559,7 @@
       </div>
       <div style="display:flex;gap:10px;margin-bottom:16px;align-items:center;flex-wrap:wrap">
         <button class="btn btn-ghost" onclick="checkOrphanSessions()">🧹 בדוק sessions יתומים</button>
+        <button class="btn btn-ghost" onclick="resetBuildingWa()">🔄 אפס חיבור WhatsApp (שדרוג)</button>
         <span id="orphanStatus" style="font-size:13px;color:var(--text3)"></span>
       </div>
       <div class="table-wrap" style="margin-bottom:16px;padding:16px;">
@@ -2186,6 +2187,56 @@ async function checkOrphanSessions() {
     } else {
       statusEl.textContent = '';
       toast(data2.error || 'שגיאה בניקוי', 'err');
+    }
+  } catch(e) {
+    statusEl.textContent = '';
+    toast('שגיאה: ' + e.message, 'err');
+  }
+}
+
+// ── אפס חיבור WhatsApp לבניין פעיל / כל הבניינים (אחרי שדרוג Baileys) ──
+// שונה מניקוי sessions יתומים: זה מנתק בניינים *פעילים* (עם משתמש) ומאלץ QR חדש.
+async function resetBuildingWa() {
+  const statusEl = document.getElementById('orphanStatus');
+  statusEl.textContent = 'טוען בניינים...';
+  try {
+    const res = await fetch('/api/admin/wa-buildings', { headers: adminHeaders() });
+    const data = await res.json();
+    if (!data.ok) { statusEl.textContent = ''; toast(data.error || 'שגיאה', 'err'); return; }
+    if (data.mode !== 'server') {
+      statusEl.textContent = '';
+      toast('reset זמין רק ב-server mode (המצב הנוכחי: ' + data.mode + ')', 'err');
+      return;
+    }
+    const lines = data.buildings.map(b =>
+      `• ${b.email}  [${b.status}]${b.phone ? ' — ' + b.phone : ''}`
+    ).join('\n');
+    statusEl.textContent = `${data.count} בניינים רשומים`;
+    const choice = prompt(
+      `אפס חיבור WhatsApp — מוחק את ה-session ומאלץ סריקת QR חדשה.\n` +
+      `⚠️ זה מנתק את הבניין עד שהמנהל יסרוק מחדש!\n\n` +
+      `בניינים:\n${lines}\n\n` +
+      `הקלד "all" לאיפוס כל הבניינים, או הדבק tenantId ספציפי:`
+    );
+    if (!choice) { statusEl.textContent = ''; return; }
+    const body = choice.trim().toLowerCase() === 'all'
+      ? { all: true }
+      : { tenantId: choice.trim() };
+    const confirmMsg = body.all
+      ? `לאפס את חיבור ה-WhatsApp של כל ${data.count} הבניינים?\nכולם יצטרכו לסרוק QR מחדש.`
+      : `לאפס את חיבור ה-WhatsApp של הבניין ${body.tenantId}?`;
+    if (!confirm(confirmMsg)) { statusEl.textContent = ''; return; }
+    statusEl.textContent = 'מאפס...';
+    const res2 = await fetch('/api/admin/reset-building-wa', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify(body)
+    });
+    const data2 = await res2.json();
+    if (data2.ok) {
+      statusEl.textContent = `✓ אופסו ${data2.count} בניינים — ממתין לסריקת QR`;
+      toast(`אופסו ${data2.count} בניינים ✓ — יש להודיע למנהלים לסרוק QR מחדש`, 'ok');
+    } else {
+      statusEl.textContent = '';
+      toast(data2.error || 'שגיאה באיפוס', 'err');
     }
   } catch(e) {
     statusEl.textContent = '';

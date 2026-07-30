@@ -58,7 +58,7 @@ const PORT = process.env.PORT || 3002;
 
 // ── קבצי Bridge מוטמעים ─────────────────────────────────────────
 const BRIDGE_JS_CONTENT = "/**\n * VaadPro Bridge \u2013 \u05d2\u05e8\u05e1\u05ea \u05dc\u05e7\u05d5\u05d7\n * \u05d0\u05dc \u05ea\u05e2\u05e8\u05d5\u05da \u05e7\u05d5\u05d1\u05e5 \u05d6\u05d4\n */\n\nconst { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');\nconst { Boom } = require('@hapi/boom');\nconst qrcode = require('qrcode');\nconst https  = require('https');\nconst http   = require('http');\nconst fs     = require('fs');\nconst path   = require('path');\n\n// \u2500\u2500 \u05e7\u05e8\u05d0 \u05d4\u05d2\u05d3\u05e8\u05d5\u05ea \u05de\u05e7\u05d5\u05d1\u05e5 config.json \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nconst CONFIG_FILE = path.join(__dirname, 'config.json');\nif (!fs.existsSync(CONFIG_FILE)) {\n  console.error('\u274c \u05e7\u05d5\u05d1\u05e5 config.json \u05dc\u05d0 \u05e0\u05de\u05e6\u05d0!');\n  console.error('   \u05e6\u05d5\u05e8 \u05e7\u05d5\u05d1\u05e5 config.json \u05e2\u05dd \u05d4\u05e4\u05e8\u05d8\u05d9\u05dd \u05e9\u05e7\u05d9\u05d1\u05dc\u05ea \u05d1-\u05d0\u05d9\u05de\u05d9\u05d9\u05dc.');\n  process.exit(1);\n}\nconst config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));\nconst { cloudUrl, bridgeSecret, tenantId } = config;\nif (!cloudUrl || !bridgeSecret || !tenantId) {\n  console.error('\u274c config.json \u05d7\u05e1\u05e8\u05d9\u05dd \u05e4\u05e8\u05d8\u05d9\u05dd. \u05d5\u05d3\u05d0 \u05e9\u05d9\u05e9 cloudUrl, bridgeSecret, tenantId.');\n  process.exit(1);\n}\n\n// Suppress internal crypto noise from Baileys\nconst _stderrWrite = process.stderr.write.bind(process.stderr);\nprocess.stderr.write = (chunk, ...args) => {\n  const m = chunk.toString();\n  if (m.includes('Bad MAC') || m.includes('Failed to decrypt') || m.includes('Session error')) return true;\n  return _stderrWrite(chunk, ...args);\n};\n\nconst AUTH_DIR      = './wa-auth';\nconst POLL_INTERVAL = 5000;\nconst HEALTH_INTERVAL = 60000;\n\n// \u2500\u2500 HTTP \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nfunction apiCall(method, urlPath, body) {\n  return new Promise((resolve, reject) => {\n    const url = new URL(cloudUrl + urlPath);\n    const isHttps = url.protocol === 'https:';\n    const lib  = isHttps ? https : http;\n    const data = body ? JSON.stringify(body) : null;\n    const opts = {\n      hostname: url.hostname,\n      port: url.port || (isHttps ? 443 : 80),\n      path: url.pathname + (url.search || ''),\n      method,\n      headers: {\n        'Content-Type': 'application/json',\n        'x-bridge-secret': bridgeSecret,\n        ...(data ? { 'Content-Length': Buffer.byteLength(data) } : {})\n      },\n      timeout: 10000\n    };\n    const req = lib.request(opts, (res) => {\n      let raw = '';\n      res.on('data', d => raw += d);\n      res.on('end', () => { try { resolve(JSON.parse(raw)); } catch(e) { resolve({ ok: false }); } });\n    });\n    req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });\n    req.on('error', reject);\n    if (data) req.write(data);\n    req.end();\n  });\n}\n\nasync function pushStatus(status, qrDataUrl, phone) {\n  try {\n    await apiCall('POST', '/api/bridge/status', { tenantId, status, qrDataUrl, phone });\n    if (status === 'ready') console.log(`\u2705 WhatsApp connected! (${phone})`);\n    else if (status === 'qr') console.log('\ud83d\udcf1 Waiting for QR scan in the app...');\n    else console.log(`\u2139\ufe0f  Status: ${status}`);\n  } catch(e) { /* \u05d1\u05e9\u05e7\u05d8 */ }\n}\n\n// \u2500\u2500 Polling \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nlet isPolling = false, pollTimer = null, sock = null, waReady = false;\n\nfunction startPolling() {\n  if (pollTimer) return;\n  pollTimer = setInterval(pollAndSend, POLL_INTERVAL);\n}\n\nfunction stopPolling() {\n  if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }\n}\n\nasync function pollAndSend() {\n  if (isPolling || !waReady || !sock) return;\n  isPolling = true;\n  try {\n    const res = await apiCall('GET', `/api/bridge/queue/${tenantId}`, null);\n    if (res.cmds && res.cmds.includes(\"reset-auth\")) {\n      console.log(\"🔄 reset-auth received — clearing WA session...\");\n      waReady = false; stopPolling();\n      if (sock) { try { await sock.logout(); } catch(e) {} }\n      fs.rmSync(AUTH_DIR, { recursive: true, force: true });\n      console.log(\"✅ wa-auth cleared — restarting...\");\n      setTimeout(initWA, 1000);\n      return;\n    }\n    if (!res.pending || !res.pending.length) return;\n    for (const msg of res.pending) {\n      let ok = false, error = '';\n      try {\n        const jid = msg.phone.replace(/\\D/g, '') + '@s.whatsapp.net';\n        await sock.sendMessage(jid, { text: msg.message });\n        ok = true;\n        console.log(`\ud83d\udce4 Message sent to ${msg.phone}`);\n      } catch(e) { error = e.message; console.error(`\u274c Send error:`, error); }\n      await apiCall('POST', '/api/bridge/ack', { tenantId, msgId: msg.msgId, ok, error });\n    }\n  } catch(e) { /* \u05d1\u05e9\u05e7\u05d8 */ }\n  finally { isPolling = false; }\n}\n\nsetInterval(async () => {\n  if (!waReady) return;\n  try { await pushStatus('ready', null, sock?.user?.id?.split(':')[0] || null); } catch(e) {}\n}, HEALTH_INTERVAL);\n\n// \u2500\u2500 Baileys \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nasync function initWA() {\n  const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);\n  const { version } = await fetchLatestBaileysVersion();\n\n  sock = makeWASocket({\n    version,\n    auth: state,\n    printQRInTerminal: false,\n    logger: {\n      level: 'silent',\n      trace(){}, debug(){}, info(){}, warn(){}, error(){}, fatal(){}, child(){ return this; }\n    },\n    browser: ['VaadPro', 'Chrome', '1.0'],\n    connectTimeoutMs: 30000,\n    keepAliveIntervalMs: 30000,\n  });\n\n  sock.ev.on('connection.update', async (update) => {\n    const { connection, lastDisconnect, qr } = update;\n\n    if (qr) {\n      waReady = false; stopPolling();\n      const qrDataUrl = await qrcode.toDataURL(qr);\n      await pushStatus('qr', qrDataUrl, null);\n      console.log('');\n      console.log('\ud83d\udc46 Open VaadPro in browser -> Click Connect WhatsApp -> Scan QR');\n      console.log('');\n    }\n\n    if (connection === 'open') {\n      waReady = true;\n      const phone = sock.user?.id?.split(':')[0] || null;\n      await pushStatus('ready', null, phone);\n      startPolling();\n    }\n\n    if (connection === 'close') {\n      waReady = false; stopPolling();\n      const statusCode = (lastDisconnect?.error instanceof Boom)\n        ? lastDisconnect.error.output.statusCode : 0;\n\n      await pushStatus('disconnected', null, null);\n\n      if (statusCode === DisconnectReason.loggedOut) {\n        console.log('\u26a0\ufe0f  Logged out - clearing auth and restarting...');\n        fs.rmSync(AUTH_DIR, { recursive: true, force: true });\n        setTimeout(initWA, 3000);\n      } else {\n        console.log('\ud83d\udd04 Reconnecting...');\n        setTimeout(initWA, 5000);\n      }\n    }\n  });\n\n  sock.ev.on('creds.update', saveCreds);\n}\n\n// \u2500\u2500 Start \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\nconsole.log('');\nconsole.log('\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557');\nconsole.log('\u2551   VaadPro Bridge                     \u2551');\nconsole.log('\u255a\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255d');\nconsole.log('');\nconsole.log('Connecting to VaadPro server...');\ninitWA().catch(console.error);\n";
-const BRIDGE_PKG_CONTENT = "{\n  \"name\": \"vaadpro-bridge\",\n  \"version\": \"1.0.0\",\n  \"description\": \"VaadPro Bridge \u2013 \u05d7\u05d9\u05d1\u05d5\u05e8 \u05d5\u05d5\u05d8\u05e1\u05d0\u05e4\",\n  \"main\": \"bridge.js\",\n  \"type\": \"commonjs\",\n  \"scripts\": {\n    \"start\": \"node bridge.js\"\n  },\n  \"dependencies\": {\n    \"@whiskeysockets/baileys\": \"6.5.0\",\n    \"@hapi/boom\": \"^10.0.1\",\n    \"qrcode\": \"^1.5.3\"\n  }\n}\n";
+const BRIDGE_PKG_CONTENT = "{\n  \"name\": \"vaadpro-bridge\",\n  \"version\": \"1.0.0\",\n  \"description\": \"VaadPro Bridge \u2013 \u05d7\u05d9\u05d1\u05d5\u05e8 \u05d5\u05d5\u05d8\u05e1\u05d0\u05e4\",\n  \"main\": \"bridge.js\",\n  \"type\": \"commonjs\",\n  \"scripts\": {\n    \"start\": \"node bridge.js\"\n  },\n  \"dependencies\": {\n    \"@whiskeysockets/baileys\": \"6.7.24\",\n    \"@hapi/boom\": \"^10.0.1\",\n    \"qrcode\": \"^1.5.3\"\n  }\n}\n";
 const BRIDGE_INSTALL_BAT = '@echo off\ntitle VaadPro Bridge - Install\necho.\necho  VaadPro Bridge - Installation\necho  ==============================\necho.\necho  Installing... please wait (~2 min)\necho.\nnpm install\nif %errorlevel% neq 0 (\n    echo  ERROR: Installation failed.\n    pause\n    exit /b 1\n)\necho.\necho  Done! Now double-click start.bat to run.\necho.\npause\n';
 const BRIDGE_START_BAT = '@echo off\ntitle VaadPro Bridge\ncolor 0A\necho.\necho  VaadPro Bridge - Running\necho  Do NOT close this window!\necho.\nnode bridge.js\necho.\necho  Bridge stopped.\npause\ngoto :eof\n';
 const BRIDGE_INSTALL_SH = '#!/bin/bash\necho \necho VaadPro Bridge - Installation\necho ==============================\necho \necho Installing... please wait\necho \nnpm install\necho \necho Done! Run: ./start.sh\necho \n';
@@ -642,6 +642,45 @@ async function restartWa(tenantId, reason) {
 }
 
 /**
+ * FULL server-mode WA reset for ONE building — the "scenario B" clean wipe used
+ * after the Baileys library upgrade (v2.14.17). Unlike restartWa (which only
+ * re-inits the socket keeping the same creds), this DELETES the on-disk session
+ * so the next connect forces a fresh QR scan and brand-new Signal-protocol keys
+ * — the actual cure for the "Waiting for this message" decrypt failures that a
+ * stale creds set produced.
+ *
+ * Reuses the exact deferred-cleanup pattern from delete-customer: logout()/end()
+ * is async and can rewrite creds.json AFTER the rmSync, so a second rmSync is
+ * scheduled 8s later. Sets `wa.resetPending` so /api/status can tell the UI to
+ * show the reconnect banner IMMEDIATELY (bypassing the normal 5-minute delay);
+ * the flag is cleared on the next successful `connection === 'open'`.
+ * @param {string} tenantId
+ * @returns {boolean} true if a server-mode reset ran (false for non-server modes)
+ */
+function resetBuildingWa(tenantId) {
+  if (WA_MODE !== 'server') return false;
+  const wa = getWa(tenantId);
+  const sessionDir = path.join(WA_SESSIONS_DIR, tenantId);
+  stopQrWatch(wa);
+  if (wa.client) {
+    try { wa.client.logout(); } catch(e) { try { wa.client.end(undefined); } catch(e2) {} }
+  }
+  wa.client = null;
+  wa.status = 'disconnected';
+  wa.phone  = null;
+  wa.qrData = null;
+  wa.qrCount = 0;
+  wa.resetPending = true; // UI: show reconnect banner immediately
+  try { if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true }); } catch(e) {}
+  // logout() is async and may rewrite creds AFTER the rmSync above — re-clean.
+  setTimeout(() => {
+    try { if (fs.existsSync(sessionDir)) fs.rmSync(sessionDir, { recursive: true, force: true }); } catch(e) {}
+  }, 8000);
+  console.log(`[wa/reset] server-mode session wiped for ${tenantId} — awaiting fresh QR`);
+  return true;
+}
+
+/**
  * Start a Baileys socket for one building and wire its event handlers
  * (QR → store for the UI, open → mark ready, close → decide restart vs stop).
  * Auth state lives at /app/data/wa_sessions/{tenantId}/ so a scanned session
@@ -703,6 +742,7 @@ async function initWa(tenantId) {
         wa.qrData = null;
         stopQrWatch(wa);
         wa.qrCount = 0;
+        wa.resetPending = false; // reconnected after a reset — clear the banner flag
         wa.phone  = sock.user?.id?.split(':')[0] || null;
         console.log(`[WA:${tenantId}] connected — ${wa.phone}`);
         // עדכן firstConnectedAt / lastConnectedAt — מוציא מ"ממתינים להתקנה" באדמין
@@ -854,16 +894,30 @@ app.get('/api/bridge/queue/:tenantId', (req, res) => {
   res.json({ pending, cmds });
 });
 
-// Reset WhatsApp auth — sends reset-auth command to Bridge
+// Reset WhatsApp auth — clears the session so a fresh QR must be scanned.
+// server mode: wipe the on-disk session HERE (resetBuildingWa) then re-init to
+//   produce a new QR. This is the live Railway path (v2.14.17 upgrade cure).
+// cloud mode: queue a reset-auth command for the external Bridge to execute.
 app.post('/api/wa/reset-auth', authMiddleware, (req, res) => {
   const { tenantId } = req.user;
+  const wa = getWa(tenantId);
+
+  if (WA_MODE === 'server') {
+    resetBuildingWa(tenantId);
+    // Re-init after the deferred creds cleanup settles so the new socket starts
+    // from a truly empty session and emits a fresh QR.
+    setTimeout(() => initWa(tenantId), 9000);
+    console.log(`[wa/reset-auth] server-mode reset for ${tenantId}`);
+    return res.json({ ok: true });
+  }
+
+  // cloud / local — queue for the Bridge (unchanged behaviour)
   if (!bridgeCmds[tenantId]) bridgeCmds[tenantId] = [];
   bridgeCmds[tenantId].push('reset-auth');
-  const wa = getWa(tenantId);
   wa.status = 'disconnected';
   wa.phone  = null;
   wa.qrData = null;
-  console.log(`[wa/reset-auth] reset-auth queued for ${tenantId}`);
+  console.log(`[wa/reset-auth] reset-auth queued for Bridge ${tenantId}`);
   res.json({ ok: true });
 });
 
@@ -1561,6 +1615,7 @@ app.get('/api/status', authMiddleware, (req, res) => {
     status:          outStatus,
     qrDataUrl:       wa.status === 'qr_expired' ? null : wa.qrData,
     phoneConnected:  wa.phone,
+    resetPending:    !!wa.resetPending, // true after a reset → UI shows banner immediately
     effectiveMonth:  getEffectiveMonth(d.config),
     currentAutoMonth: getEffectiveMonth(d.config)
   });
@@ -3828,6 +3883,54 @@ app.post('/api/admin/orphan-sessions/clean', superAdminMiddleware, (req, res) =>
     console.log(`[orphan-clean] removed orphan session ${tid}`);
   });
   res.json({ ok: true, cleaned, count: cleaned.length });
+});
+
+// ── Admin: אפס חיבור WhatsApp לבניין/כל הבניינים (שדרוג Baileys) ────
+// GET  = רשימת הבניינים הרשומים + סטטוס ה-WA שלהם (preview לפני reset).
+// POST = מבצע reset אמיתי (מוחק session, מאלץ QR חדש). body: { tenantId } לבניין
+//        בודד, או { all:true } לכל הבניינים הרשומים. server mode בלבד.
+// שונה מ-orphan-sessions/clean: זה מאפס בניינים *פעילים* (עם משתמש), לא יתומים.
+app.get('/api/admin/wa-buildings', superAdminMiddleware, (req, res) => {
+  const users = loadUsers();
+  const buildings = users.map(u => {
+    const wa = waClients[u.tenantId];
+    return {
+      tenantId: u.tenantId,
+      email:    u.email,
+      status:   wa ? wa.status : 'disconnected',
+      phone:    wa ? wa.phone : null
+    };
+  });
+  res.json({ ok: true, mode: WA_MODE, count: buildings.length, buildings });
+});
+
+app.post('/api/admin/reset-building-wa', superAdminMiddleware, (req, res) => {
+  if (WA_MODE !== 'server') {
+    return res.json({ ok: false, error: 'reset זמין רק ב-server mode' });
+  }
+  const { tenantId, all } = req.body || {};
+  const users = loadUsers();
+  const validIds = new Set(users.map(u => u.tenantId));
+
+  let targets = [];
+  if (all) {
+    targets = users.map(u => u.tenantId);
+  } else if (tenantId && validIds.has(tenantId)) {
+    targets = [tenantId];
+  } else {
+    return res.json({ ok: false, error: 'ציין tenantId תקין או all:true' });
+  }
+
+  const reset = [];
+  targets.forEach(tid => {
+    if (resetBuildingWa(tid)) {
+      // Re-init after deferred creds cleanup so a fresh QR is produced.
+      setTimeout(() => initWa(tid), 9000);
+      reset.push(tid);
+    }
+  });
+  console.log(`[admin/reset-building-wa] reset ${reset.length} building(s): ${reset.join(', ')}`);
+  res.json({ ok: true, reset, count: reset.length });
 });
 
 // ── Admin: הגדרות גיבוי (שכבה 2) — Super Admin בלבד ───────────────

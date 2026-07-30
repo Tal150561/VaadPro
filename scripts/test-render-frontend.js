@@ -921,4 +921,58 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('export row reads openingDebt for real-debt', /parseFloat\(t\.openingDebt\)/.test(exportBody), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.17 — WA reset (Baileys upgrade): banner shows immediately on
+// resetPending, and the banner button runs the full reset flow.
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.17 — WA reset wiring (app.html)');
+  const app = readSource('public/app.html');
+
+  // module-level flag declared alongside the other WA flags
+  t.eq('_waResetPending declared', /let _waDisconnectedSince[^;]*_waResetPending = false;/.test(app), true);
+
+  // status handler reads the server flag and shows the banner immediately (no 5-min gate)
+  t.eq('reads s.resetPending', app.includes('_waResetPending = !!s.resetPending;'), true);
+  t.eq('immediate banner on reset (bypasses 5-min delay)',
+    /if \(_waResetPending\) \{\s*showWaBanner\(true/.test(app), true);
+  t.eq('reset banner mentions engine upgrade', app.includes('עדכנו את מנוע ה-WhatsApp'), true);
+
+  // flag cleared on ready
+  const readyBlock = (app.match(/if\(s\.status==='ready'\)\{[\s\S]*?showWaBanner\(false\);/) || [''])[0];
+  t.eq('resetPending cleared on ready', readyBlock.includes('_waResetPending = false;'), true);
+
+  // banner button points at bannerReconnect (NOT plain handleConnClick)
+  t.eq('banner button calls bannerReconnect', app.includes('onclick="bannerReconnect()"'), true);
+
+  // bannerReconnect exists and runs the full reset (calls reset-auth) when pending
+  const brBody = (app.match(/async function bannerReconnect\(\)[\s\S]*?\n\}/) || [''])[0];
+  t.eq('bannerReconnect exists', brBody.length > 0, true);
+  t.eq('bannerReconnect posts reset-auth when pending', brBody.includes("/wa/reset-auth"), true);
+  t.eq('bannerReconnect falls back to handleConnClick when not pending',
+    /if \(!_waResetPending\) \{ handleConnClick\(\); return; \}/.test(brBody), true);
+  t.eq('bannerReconnect polls /status for fresh QR', brBody.includes("/status") && brBody.includes('qrDataUrl'), true);
+
+  // MUTATION guard: the old wiring (banner → handleConnClick only) must be gone
+  t.eq('banner no longer wired directly to handleConnClick',
+    app.includes('id="waBannerReconnectBtn" onclick="handleConnClick()"'), false);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.17 — admin.html: bulk WA reset button + handler
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.17 — admin WA reset wiring (admin.html)');
+  const admin = readSource('public/admin.html');
+
+  t.eq('reset button present', admin.includes('onclick="resetBuildingWa()"'), true);
+  const rb = (admin.match(/async function resetBuildingWa\(\)[\s\S]*?\n\}/) || [''])[0];
+  t.eq('handler exists', rb.length > 0, true);
+  t.eq('lists buildings first', rb.includes('/api/admin/wa-buildings'), true);
+  t.eq('posts to reset endpoint', rb.includes('/api/admin/reset-building-wa'), true);
+  t.eq('supports all + single', rb.includes('{ all: true }') && rb.includes('{ tenantId:'), true);
+  t.eq('guards against non-server mode', rb.includes("data.mode !== 'server'"), true);
+  t.eq('double-confirms (prompt + confirm)', rb.includes('prompt(') && rb.includes('confirm('), true);
+}
+
 process.exit(t.done() ? 1 : 0);
