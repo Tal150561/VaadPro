@@ -161,4 +161,31 @@ t.eq('bulk supports all + single tenant', rbwa.includes('if (all)') && rbwa.incl
 t.eq('bulk calls resetBuildingWa per target', rbwa.includes('resetBuildingWa(tid)'), true);
 t.eq('bulk re-inits each for fresh QR', /setTimeout\(\(\) => initWa\(tid\), 9000\)/.test(rbwa), true);
 
+// ── v2.14.18 — {שורת_חוב_קודם} placeholder wiring ────────────────
+t.section('v2.14.18 — prior-debt-line placeholder wiring (server.js)');
+
+// The helper exists and is defined once (single source of truth)
+t.eq('buildPriorDebtLine defined exactly once',
+  (server.match(/function buildPriorDebtLine\(/g) || []).length, 1);
+
+// All send paths + the excess-debt builder call the helper (4 call sites)
+t.eq('4 send paths call buildPriorDebtLine',
+  (server.match(/\{שורת_חוב_קודם\}\/g, buildPriorDebtLine\(/g) || []).length, 4);
+
+// ORDERING GUARD (the subtle bit): in every path, {שורת_חוב_קודם} must be
+// replaced BEFORE {חוב_קודם}, else the /{חוב_קודם}/g regex corrupts the
+// whole-line placeholder mid-substitution. Assert the .replace for the new
+// placeholder textually precedes the bare one in each of the 4 blocks.
+{
+  const blocks = server.match(/\{שורת_חוב_קודם\}[\s\S]{0,120}?\{חוב_קודם\}/g) || [];
+  t.eq('whole-line placeholder replaced before the bare one (all 4)', blocks.length, 4);
+}
+
+// The bare {חוב_קודם} now yields 0 (not '') when there is no debt, so a
+// hand-written "…{חוב_קודם}…" no longer leaves an empty gap.
+t.eq('bare {חוב_קודם} falls back to 0 not empty string',
+  (server.match(/\{חוב_קודם\}\/g, [^)]*\? [^:]*: 0\)/g) || []).length >= 3, true);
+t.eq('no send path still uses the empty-string fallback',
+  /\{חוב_קודם\}\/g, [^)]*\? [^:]*: ''\)/.test(server), false);
+
 process.exit(t.done() ? 1 : 0);

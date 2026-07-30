@@ -2322,6 +2322,22 @@ function buildBalanceLine(d, tenant, mk) {
   return 'שילמת ' + bal.paidAmount + ' ₪, נותר לתשלום: *' + bal.shortfall + ' ₪*';
 }
 
+// ── {שורת_חוב_קודם} placeholder (v2.14.18) ────────────────────────
+// A WHOLE prior-debt LINE ("חוב קודם: *478 ₪*"), or '' when there is no
+// prior debt. Unlike the bare {חוב_קודם} (the NUMBER only), this carries its
+// own label, so the line disappears entirely when debt===0 — no orphaned
+// "חוב קודם:" heading left dangling for tenants who owe nothing. Same
+// appear-only-when-relevant contract as {יתרה} / {פירוט_קיזוז}. Takes the
+// already-computed main-account debt (calcTotalDebt) — no new debt source,
+// no money math here. Shared by ALL send paths (send-one/send-all/cron) —
+// never copied. NOTE: prior debt on EXTRA accounts is already shown per
+// account inside {חשבונות}; this line is the MAIN-account carry-over only.
+function buildPriorDebtLine(debt) {
+  const n = Number(debt) || 0;
+  if (n <= 0) return '';
+  return 'חוב קודם: *' + n + ' ₪*';
+}
+
 // ── {פירוט_קיזוז} placeholder (v2.14.12) ──────────────────────────
 // Human-readable "your payment covered X for the month and Y went to prior
 // debt / credit". Reads the debtOffset that closeMonthUnpaid stamps on the
@@ -2618,7 +2634,8 @@ function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
     .replace(/{סה"כ_חוב}/g, row.owed)
     .replace(/{סה״כ_חוב}/g, row.owed)
     .replace(/{פירוט_חוב}/g, detailBlock)
-    .replace(/{חוב_קודם}/g, row.priorDebt > 0 ? row.priorDebt : '')
+    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(row.priorDebt))
+    .replace(/{חוב_קודם}/g, row.priorDebt > 0 ? row.priorDebt : 0)
     .replace(/{לינק_פורטל}/g, portalUrl);
 }
 
@@ -2713,7 +2730,8 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
     .replace(/{סכום}/g, amount)
-    .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
+    .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
     .replace(/{סה"כ}/g, debt > 0 ? total : amount)
     .replace(/{חשבונות}/g, accountsBlock)
     .replace(/{יתרה}/g, balanceLine1)
@@ -2757,7 +2775,8 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
-      .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
+      .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlock)
       .replace(/{יתרה}/g, balanceLineSA)
@@ -4649,7 +4668,8 @@ async function doAutoSend(user) {
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
-      .replace(/{חוב_קודם}/g, debt > 0 ? debt : '')
+      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
+      .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlockAuto)
       .replace(/{יתרה}/g, balanceLineAuto)

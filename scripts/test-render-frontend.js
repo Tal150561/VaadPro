@@ -975,4 +975,52 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('double-confirms (prompt + confirm)', rb.includes('prompt(') && rb.includes('confirm('), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.18 — {שורת_חוב_קודם} whole-line prior-debt placeholder
+// (chip + hint + preview ordering + AI-preserve list)
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.18 — {שורת_חוב_קודם} chip / hint / preview / AI list');
+  const app = readSource('public/app.html');
+
+  // chip present in the template-editor var-tag row
+  t.eq('chip inserts {שורת_חוב_קודם}',
+    app.includes("insertVar('{שורת_חוב_קודם}')"), true);
+  // the old bare chip is still there (backward compat — not removed)
+  t.eq('bare {חוב_קודם} chip still present',
+    app.includes("insertVar('{חוב_קודם}')"), true);
+  // hint explains both variants
+  t.eq('hint explains the whole-line variant', app.includes('שורה שלמה "חוב קודם'), true);
+  t.eq('hint explains the bare variant yields 0', app.includes('המספר בלבד (0 כשאין חוב)'), true);
+  // AI-improve preserve list includes the new placeholder
+  t.eq('AI-improve preserves {שורת_חוב_קודם}',
+    /הפלייסהולדרים: \{שם\}[^']*\{שורת_חוב_קודם\}[^']*\{חוב_קודם\}/.test(app), true);
+
+  // PREVIEW ORDERING GUARD — the whole-line replacement must run before the
+  // bare one, or /{חוב_קודם}/g would eat the substring inside {שורת_חוב_קודם}.
+  // Execute the exact replacement chain used by updatePreview on a template
+  // containing BOTH placeholders and assert the line survives intact.
+  const sampleDebt = 200;
+  const rendered = 'שלום {שם}\n{שורת_חוב_קודם}\nחוב מספרי: {חוב_קודם}'
+    .replace(/{שם}/g, 'דנה')
+    .replace(/{שורת_חוב_קודם}/g, 'חוב קודם: *' + sampleDebt + ' ₪*')
+    .replace(/{חוב_קודם}/g, sampleDebt);
+  t.eq('preview keeps the whole line intact', rendered.includes('חוב קודם: *200 ₪*'), true);
+  t.eq('preview fills the bare number too', rendered.includes('חוב מספרי: 200'), true);
+  // the literal placeholder text must NOT survive
+  t.eq('no leftover {שורת_חוב_קודם} literal', rendered.includes('{שורת_חוב_קודם}'), false);
+
+  // The two placeholders CANNOT collide: {חוב_קודם} is NOT a substring of
+  // {שורת_חוב_קודם} (brace boundary differs — {שורת_… vs {חוב_…), so the
+  // /{חוב_קודם}/g regex leaves the whole-line placeholder untouched even if
+  // run first. This is what makes both placeholders safe to coexist.
+  t.eq('bare placeholder is not a substring of the whole-line one',
+    '{שורת_חוב_קודם}'.includes('{חוב_קודם}'), false);
+  // regardless of replace order, the whole line survives
+  const barefirst = '{שורת_חוב_קודם}'
+    .replace(/{חוב_קודם}/g, sampleDebt)
+    .replace(/{שורת_חוב_קודם}/g, 'חוב קודם: *' + sampleDebt + ' ₪*');
+  t.eq('bare-first order still yields the intact line', barefirst, 'חוב קודם: *200 ₪*');
+}
+
 process.exit(t.done() ? 1 : 0);

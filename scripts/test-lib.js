@@ -59,6 +59,8 @@ const SERVER_FNS = [
   'closeAndOpenInterval', 'seedTariffsIfMissing',
   // Stage 3 (v2.13.18) — partial-payment balance reminder
   'buildBalanceLine', 'buildOffsetBlock', 'autoSendShouldRemind',
+  // v2.14.18 — {שורת_חוב_קודם} whole-line prior-debt placeholder
+  'buildPriorDebtLine',
   // v2.13.23 — year-boundary-safe Hebrew-month → monthKey
   'hebMonthToMonthKey',
   // v2.14.0 — חייבים חריגים (excessive debt)
