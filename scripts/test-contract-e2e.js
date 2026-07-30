@@ -188,4 +188,21 @@ t.eq('bare {חוב_קודם} falls back to 0 not empty string',
 t.eq('no send path still uses the empty-string fallback',
   /\{חוב_קודם\}\/g, [^)]*\? [^:]*: ''\)/.test(server), false);
 
+// ── v2.14.19 — {שורת_זכות} / {יתרת_זכות} credit placeholder wiring ──
+t.section('v2.14.19 — credit placeholder wiring (server.js)');
+
+t.eq('buildCreditLine defined exactly once',
+  (server.match(/function buildCreditLine\(/g) || []).length, 1);
+// All 4 send/excess paths call the whole-line credit helper
+t.eq('4 paths call buildCreditLine',
+  (server.match(/\{שורת_זכות\}\/g, buildCreditLine\(/g) || []).length, 4);
+// All 4 paths wire the bare {יתרת_זכות} with a 0 fallback (never '')
+t.eq('4 paths wire bare {יתרת_זכות} with 0 fallback',
+  (server.match(/\{יתרת_זכות\}\/g, \w+ > 0 \? \w+ : 0\)/g) || []).length, 4);
+t.eq('no path uses empty-string fallback for credit',
+  /\{יתרת_זכות\}\/g, [^)]*: ''\)/.test(server), false);
+// credit is sourced from getCreditBalance in each send path (the single source)
+t.eq('credit sourced from getCreditBalance',
+  (server.match(/getCreditBalance\(d, tenant\.id\)/g) || []).length >= 4, true);
+
 process.exit(t.done() ? 1 : 0);

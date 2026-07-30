@@ -958,13 +958,15 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{סכום}')">{ סכום }</span>
           <span class="var-tag" onclick="insertVar('{חוב_קודם}')">{ חוב_קודם }</span>
           <span class="var-tag" onclick="insertVar('{שורת_חוב_קודם}')">{ שורת_חוב_קודם }</span>
+          <span class="var-tag" onclick="insertVar('{שורת_זכות}')">{ שורת_זכות }</span>
+          <span class="var-tag" onclick="insertVar('{יתרת_זכות}')">{ יתרת_זכות }</span>
           <span class="var-tag" onclick="insertVar('{סה&quot;כ}')">{ סה״כ }</span>
           <span class="var-tag" onclick="insertVar('{חשבונות}')">{ חשבונות }</span>
           <span class="var-tag" onclick="insertVar('{יתרה}')">{ יתרה }</span>
           <span class="var-tag" onclick="insertVar('{פירוט_קיזוז}')">{ פירוט_קיזוז }</span>
           <span class="var-tag" onclick="insertVar('{לינק_פורטל}')">{ לינק_פורטל }</span>
         </div>
-        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שורת_חוב_קודם} = שורה שלמה "חוב קודם: X ₪" שמופיעה רק כשיש חוב (מומלץ) &nbsp;|&nbsp; {חוב_קודם} = המספר בלבד (0 כשאין חוב) &nbsp;|&nbsp; {סה״כ} מציג את הסכום כולל החוב &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {יתרה} יופיע רק אם הדייר שילם חלקית החודש &nbsp;|&nbsp; {פירוט_קיזוז} יופיע רק אם תשלום של הדייר קיזז חוב קודם (למשל "239 ₪ עבור החודש, 478 ₪ קוזזו מחוב קודם") &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
+        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שורת_חוב_קודם} = שורה שלמה "חוב קודם: X ₪" שמופיעה רק כשיש חוב (מומלץ) &nbsp;|&nbsp; {שורת_זכות} = שורה שלמה "יתרת זכות: X ₪" שמופיעה רק כשלדייר יש קרדיט (מומלץ) &nbsp;|&nbsp; {חוב_קודם}/{יתרת_זכות} = המספר בלבד (0 כשאין) &nbsp;|&nbsp; {סה״כ} מציג את הסכום כולל החוב &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {יתרה} יופיע רק אם הדייר שילם חלקית החודש &nbsp;|&nbsp; {פירוט_קיזוז} יופיע רק אם תשלום של הדייר קיזז חוב קודם (למשל "239 ₪ עבור החודש, 478 ₪ קוזזו מחוב קודם") &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
@@ -2361,6 +2363,7 @@ function updatePreview() {
   const month=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
   const amount=document.getElementById('cfgAmount').value||300;
   const sampleDebt=200, sampleTotal=parseInt(amount)+sampleDebt;
+  const sampleCredit=120;
   const el=document.getElementById('msgPreview');
   // שלב 1: דוגמת בלוק חשבונות עם שורת חוב נצבר (תצוגה בלבד — הלוגיקה האמיתית בשרת)
   const sampleAccounts = '\n• ביטוח מבנה: *240 ₪* + חוב קודם 180 ₪ = *420 ₪*\n• שיפוץ לובי: *300 ₪*';
@@ -2368,6 +2371,8 @@ function updatePreview() {
     .replace(/{שם}/g,name).replace(/{חודש}/g,month).replace(/{סכום}/g,amount)
     .replace(/{שורת_חוב_קודם}/g,'חוב קודם: *'+sampleDebt+' ₪*')
     .replace(/{חוב_קודם}/g,sampleDebt).replace(/{סה"כ}/g,sampleTotal)
+    .replace(/{שורת_זכות}/g,'יתרת זכות: *'+sampleCredit+' ₪*')
+    .replace(/{יתרת_זכות}/g,sampleCredit)
     .replace(/{חשבונות}/g,sampleAccounts)
     .replace(/{יתרה}/g,'שילמת 150 ₪, נותר לתשלום: *80 ₪*')
     .replace(/{פירוט_קיזוז}/g,'מתוך תשלומך: *239 ₪* עבור דמי החודש, ו*478 ₪* קוזזו מחוב קודם.');
@@ -8121,7 +8126,7 @@ async function aiImprove(textareaId, instructionId, statusId, context) {
   if (statusEl) statusEl.textContent = '';
 
   const placeholderNote = context === 'settings'
-    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {שורת_חוב_קודם} {חוב_קודם} {סה"כ} {חשבונות} {יתרה} {לינק_פורטל}'
+    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {שורת_חוב_קודם} {חוב_קודם} {שורת_זכות} {יתרת_זכות} {סה"כ} {חשבונות} {יתרה} {לינק_פורטל}'
     : 'שמור על כל הפלייסהולדרים בפורמט {משתנה}. הפלייסהולדרים: {שם} {תאריך}';
 
   const systemPrompt = 'אתה עוזר למנהלי ועד בית לשפר הודעות WhatsApp בעברית. כללים: כתוב בעברית טבעית ומכובדת. ' + placeholderNote + '. החזר רק את ההודעה המשופרת בלבד, ללא הסברים וללא מרכאות.';

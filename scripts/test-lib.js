@@ -61,6 +61,8 @@ const SERVER_FNS = [
   'buildBalanceLine', 'buildOffsetBlock', 'autoSendShouldRemind',
   // v2.14.18 — {שורת_חוב_קודם} whole-line prior-debt placeholder
   'buildPriorDebtLine',
+  // v2.14.19 — {שורת_זכות} whole-line credit placeholder
+  'buildCreditLine',
   // v2.13.23 — year-boundary-safe Hebrew-month → monthKey
   'hebMonthToMonthKey',
   // v2.14.0 — חייבים חריגים (excessive debt)

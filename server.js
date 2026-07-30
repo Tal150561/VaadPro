@@ -2338,6 +2338,20 @@ function buildPriorDebtLine(debt) {
   return 'חוב קודם: *' + n + ' ₪*';
 }
 
+// ── {שורת_זכות} placeholder (v2.14.19) ────────────────────────────
+// A WHOLE credit LINE ("יתרת זכות: *X ₪*"), or '' when there is no credit.
+// SYMMETRIC with buildPriorDebtLine: a tenant is either in debt or in credit,
+// never both (getCreditBalance returns 0 when there is debt, calcTotalDebt
+// returns 0 when there is credit), so a template may safely include BOTH the
+// debt line and the credit line — only the relevant one renders. Takes the
+// already-computed getCreditBalance result (always ≥ 0, rounded) — no money
+// math here, no new source. Shared by ALL send paths — never copied.
+function buildCreditLine(credit) {
+  const n = Number(credit) || 0;
+  if (n <= 0) return '';
+  return 'יתרת זכות: *' + n + ' ₪*';
+}
+
 // ── {פירוט_קיזוז} placeholder (v2.14.12) ──────────────────────────
 // Human-readable "your payment covered X for the month and Y went to prior
 // debt / credit". Reads the debtOffset that closeMonthUnpaid stamps on the
@@ -2628,6 +2642,10 @@ function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
   const portalUrl = (template.includes('{לינק_פורטל}') && tenantDataId)
     ? getOrCreatePortalUrl(tenantDataId, tenant.id, tenant.name)
     : '';
+  // Credit placeholders: a tenant ON the חריגים list has debt, so credit is 0
+  // here — but wire them anyway so a stray {שורת_זכות}/{יתרת_זכות} in the letter
+  // template renders empty/0 rather than leaking the literal placeholder text.
+  const exCredit = getCreditBalance(d, tenant.id);
   return template
     .replace(/{שם}/g, tenant.name || '')
     .replace(/{חודש}/g, month)
@@ -2636,6 +2654,8 @@ function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
     .replace(/{פירוט_חוב}/g, detailBlock)
     .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(row.priorDebt))
     .replace(/{חוב_קודם}/g, row.priorDebt > 0 ? row.priorDebt : 0)
+    .replace(/{שורת_זכות}/g, buildCreditLine(exCredit))
+    .replace(/{יתרת_זכות}/g, exCredit > 0 ? exCredit : 0)
     .replace(/{לינק_פורטל}/g, portalUrl);
 }
 
@@ -2726,12 +2746,15 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
     : '';
   const balanceLine1 = buildBalanceLine(d, tenant, mk);
+  const credit1 = getCreditBalance(d, tenant.id);
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
     .replace(/{סכום}/g, amount)
     .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
     .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+    .replace(/{שורת_זכות}/g, buildCreditLine(credit1))
+    .replace(/{יתרת_זכות}/g, credit1 > 0 ? credit1 : 0)
     .replace(/{סה"כ}/g, debt > 0 ? total : amount)
     .replace(/{חשבונות}/g, accountsBlock)
     .replace(/{יתרה}/g, balanceLine1)
@@ -2771,12 +2794,15 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
       : '';
     const balanceLineSA = buildBalanceLine(d, tenant, mk);
+    const creditSA = getCreditBalance(d, tenant.id);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
       .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+      .replace(/{שורת_זכות}/g, buildCreditLine(creditSA))
+      .replace(/{יתרת_זכות}/g, creditSA > 0 ? creditSA : 0)
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlock)
       .replace(/{יתרה}/g, balanceLineSA)
@@ -4664,12 +4690,15 @@ async function doAutoSend(user) {
     // extra accounts block (helper יחיד — מקור אמת אחד)
     const { block: accountsBlockAuto } = buildAccountsBlock(d, tenant, month);
     const balanceLineAuto = buildBalanceLine(d, tenant, mk);
+    const creditAuto = getCreditBalance(d, tenant.id);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, amount)
       .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
       .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+      .replace(/{שורת_זכות}/g, buildCreditLine(creditAuto))
+      .replace(/{יתרת_זכות}/g, creditAuto > 0 ? creditAuto : 0)
       .replace(/{סה"כ}/g, debt > 0 ? total : amount)
       .replace(/{חשבונות}/g, accountsBlockAuto)
       .replace(/{יתרה}/g, balanceLineAuto)

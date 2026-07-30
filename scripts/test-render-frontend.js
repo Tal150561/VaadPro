@@ -991,7 +991,7 @@ t.section('app.html — tenant CSV import (v2.14.6)');
     app.includes("insertVar('{חוב_קודם}')"), true);
   // hint explains both variants
   t.eq('hint explains the whole-line variant', app.includes('שורה שלמה "חוב קודם'), true);
-  t.eq('hint explains the bare variant yields 0', app.includes('המספר בלבד (0 כשאין חוב)'), true);
+  t.eq('hint explains the bare variant yields 0', app.includes('המספר בלבד (0 כשאין)'), true);
   // AI-improve preserve list includes the new placeholder
   t.eq('AI-improve preserves {שורת_חוב_קודם}',
     /הפלייסהולדרים: \{שם\}[^']*\{שורת_חוב_קודם\}[^']*\{חוב_קודם\}/.test(app), true);
@@ -1021,6 +1021,40 @@ t.section('app.html — tenant CSV import (v2.14.6)');
     .replace(/{חוב_קודם}/g, sampleDebt)
     .replace(/{שורת_חוב_קודם}/g, 'חוב קודם: *' + sampleDebt + ' ₪*');
   t.eq('bare-first order still yields the intact line', barefirst, 'חוב קודם: *200 ₪*');
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.19 — {שורת_זכות} / {יתרת_זכות} credit placeholders
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.19 — credit placeholders: chip / hint / preview / collision');
+  const app = readSource('public/app.html');
+
+  t.eq('chip inserts {שורת_זכות}', app.includes("insertVar('{שורת_זכות}')"), true);
+  t.eq('chip inserts {יתרת_זכות}', app.includes("insertVar('{יתרת_זכות}')"), true);
+  t.eq('hint explains the whole-line credit variant', app.includes('שורה שלמה "יתרת זכות'), true);
+  t.eq('AI-improve preserves credit placeholders',
+    /\{שורת_זכות\}[^']*\{יתרת_זכות\}/.test(app), true);
+
+  // COLLISION SAFETY — the critical one: {יתרה} (existing) must NOT be a
+  // substring of {יתרת_זכות}, or /{יתרה}/g would corrupt the credit placeholder.
+  t.eq('{יתרה} is NOT a substring of {יתרת_זכות}',
+    '{יתרת_זכות}'.includes('{יתרה}'), false);
+  t.eq('{יתרת_זכות} is NOT a substring of {שורת_זכות}',
+    '{שורת_זכות}'.includes('{יתרת_זכות}'), false);
+
+  // Execute the preview substitution order used by updatePreview and prove the
+  // credit line survives even though {יתרה} is replaced in the same chain.
+  const sampleCredit = 120;
+  const rendered = '{שורת_זכות}\nמס: {יתרת_זכות}\n{יתרה}'
+    .replace(/{שורת_זכות}/g, 'יתרת זכות: *' + sampleCredit + ' ₪*')
+    .replace(/{יתרת_זכות}/g, sampleCredit)
+    .replace(/{יתרה}/g, 'שילמת 150 ₪, נותר לתשלום: *80 ₪*');
+  t.eq('credit whole-line survives', rendered.includes('יתרת זכות: *120 ₪*'), true);
+  t.eq('bare credit number filled', rendered.includes('מס: 120'), true);
+  t.eq('{יתרה} still resolves independently', rendered.includes('נותר לתשלום'), true);
+  t.eq('no leftover {שורת_זכות} literal', rendered.includes('{שורת_זכות}'), false);
+  t.eq('no leftover {יתרת_זכות} literal', rendered.includes('{יתרת_זכות}'), false);
 }
 
 process.exit(t.done() ? 1 : 0);

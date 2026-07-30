@@ -1624,4 +1624,56 @@ t.section('v2.14.12 — buildOffsetBlock renders the {פירוט_קיזוז} pla
   t.eq('does not use the older May record', block.includes('קוזזו מחוב קודם'), false);
 }
 
+t.section('v2.14.18 — buildPriorDebtLine renders the {שורת_חוב_קודם} placeholder');
+{
+  // debt > 0 → whole labelled line, with the ₪ and bold markers
+  t.eq('positive debt → labelled line', S.buildPriorDebtLine(478), 'חוב קודם: *478 ₪*');
+  // zero debt → EMPTY (no orphaned "חוב קודם:" heading) — the whole point
+  t.eq('zero debt → empty (no dangling heading)', S.buildPriorDebtLine(0), '');
+  // negative (credit) → empty, never a negative "prior debt"
+  t.eq('credit (negative) → empty', S.buildPriorDebtLine(-239), '');
+  // non-numeric / undefined → empty, not "NaN"
+  t.eq('undefined → empty', S.buildPriorDebtLine(undefined), '');
+  t.eq('null → empty', S.buildPriorDebtLine(null), '');
+  // string number (defensive) → coerced
+  t.eq('numeric string → coerced to line', S.buildPriorDebtLine('120'), 'חוב קודם: *120 ₪*');
+  // contrast with the bare {חוב_קודם}: this line carries its own label so it
+  // NEVER leaves a heading behind, whereas the bare placeholder now yields 0.
+  t.eq('line is self-contained (starts with the label)', S.buildPriorDebtLine(50).startsWith('חוב קודם:'), true);
+}
+
+t.section('v2.14.19 — buildCreditLine renders the {שורת_זכות} placeholder');
+{
+  // credit > 0 → whole labelled line
+  t.eq('positive credit → labelled line', S.buildCreditLine(120), 'יתרת זכות: *120 ₪*');
+  // zero credit → EMPTY (no orphaned "יתרת זכות:" heading)
+  t.eq('zero credit → empty', S.buildCreditLine(0), '');
+  // negative (defensive — getCreditBalance never returns <0, but guard anyway)
+  t.eq('negative → empty', S.buildCreditLine(-50), '');
+  t.eq('undefined → empty', S.buildCreditLine(undefined), '');
+  t.eq('null → empty', S.buildCreditLine(null), '');
+  t.eq('numeric string → coerced', S.buildCreditLine('90'), 'יתרת זכות: *90 ₪*');
+  t.eq('line is self-contained', S.buildCreditLine(50).startsWith('יתרת זכות:'), true);
+}
+
+t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never render together)');
+{
+  // A tenant in DEBT: calcTotalDebt > 0, getCreditBalance === 0.
+  // openingDebt 300 (arrears), no payments.
+  const dDebt = { config: { amount: 230 }, sentLog: {}, paymentHistory: {},
+    tenants: [{ id: 'd1', name: 'חייב', openingDebt: 300, customAmount: 230 }] };
+  const debt = S.calcTotalDebt(dDebt, 'd1', '2026-05');
+  const creditWhenDebt = S.getCreditBalance(dDebt, 'd1');
+  t.eq('debtor: debt line present', S.buildPriorDebtLine(debt).length > 0, true);
+  t.eq('debtor: credit line EMPTY', S.buildCreditLine(creditWhenDebt), '');
+
+  // A tenant in CREDIT: negative openingDebt (prepaid), no unpaid history.
+  const dCredit = { config: { amount: 230 }, sentLog: {}, paymentHistory: {},
+    tenants: [{ id: 'c1', name: 'זכאי', openingDebt: -120, customAmount: 230 }] };
+  const debt2 = S.calcTotalDebt(dCredit, 'c1', '2026-05');
+  const credit2 = S.getCreditBalance(dCredit, 'c1');
+  t.eq('creditor: credit line present', S.buildCreditLine(credit2), 'יתרת זכות: *120 ₪*');
+  t.eq('creditor: debt line EMPTY', S.buildPriorDebtLine(debt2), '');
+}
+
 process.exit(t.done() ? 1 : 0);
