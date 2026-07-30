@@ -1,0 +1,6 @@
+# Force Node 20 for the Railway (Nixpacks) build.
+# Baileys 6.7.24 runs a `preinstall` (engine-requirements.js) that HARD-FAILS on
+# Node < 20. The engines field in package.json alone was not honored by the
+# builder (it kept selecting Node 18.20.8), so we pin the major version here too.
+[variables]
+NIXPACKS_NODE_VERSION = "20"
