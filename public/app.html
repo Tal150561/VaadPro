@@ -8840,8 +8840,16 @@ async function loadBankSyncStatus() {
     document.getElementById('bankSyncTime').textContent =
       new Date(r.timestamp).toLocaleString('he-IL', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
     const matchedColor = r.matched > 0 ? 'var(--accent,#25d366)' : 'var(--text-muted)';
+    // v2.14.20: a re-run over an already-imported file reports 0 matched. Show the
+    // "already imported" count so that reads as "nothing new to import" rather than a
+    // scary "0 זוהו / N לא זוהו". Segment appears only when there were prior-import skips.
+    const alreadyImported = r.alreadyImported || 0;
+    const alreadySeg = alreadyImported > 0
+      ? `<span style="color:var(--text-muted)" title="עסקאות שכבר יובאו בריצה קודמת — לא נספרות שוב">↩️ ${alreadyImported} כבר יובאו</span> &nbsp;`
+      : '';
     document.getElementById('bankSyncSummary').innerHTML =
       `<span style="color:${matchedColor}">✅ ${r.matched} זוהו</span> &nbsp;` +
+      alreadySeg +
       `<span style="color:var(--danger,#e33)">❌ ${r.unmatched} לא זוהו</span> &nbsp;` +
       `<span style="color:var(--text-muted)">(${r.month})</span>` +
       `<button onclick="loadBankSyncStatus()" style="margin-right:10px;background:none;border:none;cursor:pointer;font-size:0.78rem;color:var(--text-muted);">🔄 רענן</button>`;

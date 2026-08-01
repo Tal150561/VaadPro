@@ -6644,6 +6644,14 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   const consumedFingerprints = new Set();
   const newFingerprints = [];
   const duplicateWarnings = [];
+  // v2.14.20 (agent-path display-only): rows skipped because an IDENTICAL transaction
+  // (date+amount+name) was already imported in a PRIOR run. Previously silent on this
+  // path — which made a re-imported file report "0 matched, N unmatched" and look
+  // broken (the confusing zero Tal hit on 2026-08-01). Now counted and returned so the
+  // banner/agent can say "0 new, N already imported" instead. Mirrors the manual path's
+  // v2.14.16 `alreadyImportedSkips`. No money math — a skipped row was already recorded
+  // in its original import; this only reclassifies it out of "unmatched" for reporting.
+  const alreadyImportedSkips = [];
 
   updatedTenants.forEach(tenant => {
     const kw = tenant.keywords
@@ -6653,6 +6661,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     const nameParts = tenant.name.trim().toLowerCase().split(/\s+/).filter(p => p.length > 1);
     const seenRowIdx = new Set();
     const tenantMatches = [];
+    // v2.14.20: true when this tenant's ONLY matching rows were already imported in a
+    // prior run — so they belong in "already imported", not "unmatched" (mirrors the
+    // manual path's `tenantHadPriorImport`).
+    let tenantHadPriorImport = false;
 
     mr.forEach(m => {
       if (seenRowIdx.has(m.rowIdx)) return;
@@ -6665,7 +6677,12 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (!type) return;
       // ── Fingerprint dedup (main account) ──────────────────────────
       const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-      if (alreadyImported.has(fp)) { seenRowIdx.add(m.rowIdx); return; } // imported before → skip
+      if (alreadyImported.has(fp)) {                                     // imported before → skip, but surface it
+        seenRowIdx.add(m.rowIdx);
+        tenantHadPriorImport = true;
+        alreadyImportedSkips.push({ tenantId: tenant.id, name: tenant.name, amount: m.amount, date: m.dateVal || '', scope: 'main' });
+        return;
+      }
       if (consumedFingerprints.has(fp)) {                                 // duplicate in THIS file
         seenRowIdx.add(m.rowIdx);
         duplicateWarnings.push({ tenantId: tenant.id, name: tenant.name, amount: m.amount, date: m.dateVal, scope: 'main' });
@@ -6704,7 +6721,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         newSentLog[tenant.id + '_' + hebMk] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
       }
       matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false, monthsSplit: buckets.size });
-    } else {
+    } else if (!tenantHadPriorImport) {
+      // Only genuinely unrecognized tenants go here. A tenant whose sole rows were
+      // already imported in a prior run is reported in `alreadyImportedSkips`, not
+      // as "לא שילם" — they were counted in their original import (v2.14.20).
       unmatched.push({ tenantId: tenant.id, name: tenant.name });
     }
 
@@ -6725,7 +6745,11 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           if (!kwMatches(accKw, rt)) return;
           // ── Fingerprint dedup (extra account) — same rule as the main account ──
           const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-          if (alreadyImported.has(fp)) { usedRowIdxForMain.add(m.rowIdx); return; } // imported before
+          if (alreadyImported.has(fp)) {                                             // imported before → skip, but surface it
+            usedRowIdxForMain.add(m.rowIdx);
+            alreadyImportedSkips.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal || '', scope: 'extra', accountId: acc.id });
+            return;
+          }
           if (consumedFingerprints.has(fp)) {                                        // duplicate in THIS file
             usedRowIdxForMain.add(m.rowIdx);
             duplicateWarnings.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal, scope: 'extra', accountId: acc.id });
@@ -6783,7 +6807,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     }
   }); // end updatedTenants.forEach
 
-  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings };
+  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings, alreadyImportedSkips };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -6827,7 +6851,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // whose fingerprint is already here, so nothing is counted twice.
     const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
 
-    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings } = analyzeBankRowsServer(
+    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp
     );
 
@@ -6878,6 +6902,10 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       unmatched: unmatched.length,
       matchedTenants: matched,
       unmatchedTenants: unmatched,
+      // v2.14.20: rows skipped as already-imported in a prior run. Surfaced so the
+      // banner can show "N already imported" instead of counting them as unmatched.
+      alreadyImported: (alreadyImportedSkips || []).length,
+      alreadyImportedTenants: alreadyImportedSkips || [],
     };
     // Fix #0 (v2.13.15): tenants are NO LONGER written from this route. Since the
     // openingDebt netting was removed above, updatedTenants is an unmodified clone —
@@ -6902,7 +6930,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     if (seededImport && d.defaultTariffs) importSave.defaultTariffs = d.defaultTariffs;
     saveTenantData(req.user.tenantId, importSave);
 
-    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, duplicateWarnings: duplicateWarnings || [] });
+    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [] });
   } catch (err) {
     console.error('[import-bank]', err);
     res.status(500).json({ ok: false, error: err.message });
