@@ -2031,11 +2031,12 @@ async function loadData() {
     if (data.blMessages) blMessages = data.blMessages;
     if (data.reports) savedReports = data.reports;
     if (data.rptLayouts) {
-      // מיזוג עם מה שיש ב-localStorage
+      // מיזוג עם ה-bag של הבניין הנוכחי בלבד (per-building key). data.rptLayouts
+      // כבר מגיע מקובץ הבניין הנוכחי בשרת, כך שאין דליפה בין בניינים.
       let local = {};
-      try { local = JSON.parse(localStorage.getItem('rptLayouts')||'{}'); } catch(e){}
+      try { local = JSON.parse(localStorage.getItem(rptLayoutsStoreKey())||'{}'); } catch(e){}
       const merged = Object.assign({}, local, data.rptLayouts);
-      try { localStorage.setItem('rptLayouts', JSON.stringify(merged)); } catch(e){}
+      try { localStorage.setItem(rptLayoutsStoreKey(), JSON.stringify(merged)); } catch(e){}
     }
     // שמור גיבוי אוטומטי מקומי בכל טעינה מוצלחת
     try { sessionStorage.setItem('vaad_data_backup', JSON.stringify(data)); } catch(e){}
@@ -3996,15 +3997,22 @@ function renderBankPreview(rows, headers){
 // at a numeric non-date column and mis-tagged every row to January. We now
 // namespace the key by the building's tenantId (decoded from the JWT). Legacy
 // global key is migrated on first save.
-function bankMappingKey(){
-  var tid = '';
+// Decode the current building's tenantId from the JWT (client-side, best-effort).
+// Shared by every per-building localStorage key so no two buildings opened in the
+// same browser collide. Returns '' if the token is missing/unparseable.
+function currentTenantId(){
   try {
     var tok = localStorage.getItem('vp_token');
     if (tok) {
       var payload = JSON.parse(atob(tok.split('.')[1].replace(/-/g,'+').replace(/_/g,'/')));
-      tid = payload && payload.tenantId ? String(payload.tenantId) : '';
+      return payload && payload.tenantId ? String(payload.tenantId) : '';
     }
-  } catch(e){ tid = ''; }
+  } catch(e){}
+  return '';
+}
+
+function bankMappingKey(){
+  var tid = currentTenantId();
   return tid ? 'vp_bank_mapping__' + tid : 'vp_bank_mapping';
 }
 
@@ -4651,6 +4659,15 @@ function rptLoadFile(file) {
 }
 
 // ── שמירת מבנה עמודות ──────────────────────────────────────────
+// v2.14.21: מבנה קובץ ההוצאות נשמר PER-BUILDING (בדיוק כמו מיפוי הבנק ב-v2.14.16).
+// localStorage הוא per-browser, ולכן מפתח גלובלי אחד ('rptLayouts') שיתף את המבנה
+// בין כל הבניינים שנפתחו באותו דפדפן. גרוע מכך: rptLayoutKey ממופתח לפי כותרות
+// העמודות בלבד — שני בניינים שמייבאים קובץ הוצאות מאותו בנק (כותרות זהות) קיבלו
+// זה את המבנה של זה. עכשיו ה-bag ב-localStorage ממופתח לפי tenantId.
+function rptLayoutsStoreKey() {
+  var tid = currentTenantId();
+  return tid ? 'rptLayouts__' + tid : 'rptLayouts';
+}
 function rptLayoutKey() {
   // מפתח ייחודי לפי כותרות העמודות – לא תלוי בשם הקובץ
   return 'rptLayout_' + rptHeaders.map(function(h){ return h.label; }).join('|');
@@ -4666,10 +4683,10 @@ function rptSaveLayout() {
   };
   // שמור את כל הפריסות הקיימות + הנוכחית
   let layouts = {};
-  try { layouts = JSON.parse(localStorage.getItem('rptLayouts') || '{}'); } catch(e) {}
+  try { layouts = JSON.parse(localStorage.getItem(rptLayoutsStoreKey()) || '{}'); } catch(e) {}
   const key = rptLayoutKey();
   layouts[key] = layout;
-  try { localStorage.setItem('rptLayouts', JSON.stringify(layouts)); } catch(e) {}
+  try { localStorage.setItem(rptLayoutsStoreKey(), JSON.stringify(layouts)); } catch(e) {}
   // גם שמור בdata עבור שרת
   data.rptLayouts = layouts;
   try {
@@ -4687,7 +4704,7 @@ function rptSaveLayout() {
 function rptLoadLayout() {
   // נסה לטעון מbrowser storage קודם, אחרי מהשרת
   let layouts = {};
-  try { layouts = JSON.parse(localStorage.getItem('rptLayouts') || '{}'); } catch(e) {}
+  try { layouts = JSON.parse(localStorage.getItem(rptLayoutsStoreKey()) || '{}'); } catch(e) {}
   if (data.rptLayouts) Object.assign(layouts, data.rptLayouts);
 
   const key = rptLayoutKey();
