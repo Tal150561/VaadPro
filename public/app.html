@@ -4638,7 +4638,13 @@ function rptLoadFile(file) {
         rptRows = lines.map(function(l){ return l.split(',').map(function(c){ return c.replace(/"/g,'').trim(); }); }).filter(function(r){ return r.some(function(c){ return c; }); });
       } else {
         const wb = XLSX.read(new Uint8Array(e.target.result), {type:'array'});
-        rptRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, defval:''});
+        // v2.14.22: raw:false — cell values come back as FORMATTED strings.
+        // Without it, date cells arrive as Excel serial numbers (e.g. 46204) that
+        // rptAnalyze's date-format regexes don't match; the fallback new Date("46204")
+        // then parses as year 46204, the range filter rejects every row as "after",
+        // and the user sees "לא זוהו תנועות". (The bank path avoids this via parseDate()'s
+        // serial handling; the expense path has no serial handling, so read strings.)
+        rptRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header:1, raw:false, defval:''});
       }
       if (rptRows.length < 2) { toast('⚠️ הקובץ ריק', 'error'); rptResetDZ(); return; }
       rptHeaders = rptRows[0].map(function(h,i){ return {idx:i, label: h ? String(h) : 'עמודה '+(i+1)}; });
