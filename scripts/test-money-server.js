@@ -1676,4 +1676,73 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   t.eq('creditor: debt line EMPTY', S.buildPriorDebtLine(debt2), '');
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.23 — apt-note→apartment matching (AGENT path, analyzeBankRowsServer)
+// Runs the REAL server analyzer end-to-end. Priority-0: a bank note naming an
+// apartment routes the row to the tenant whose aptNumber matches, BEFORE the
+// ambiguous full-name check. Guard: a note naming a DIFFERENT apt cannot fall
+// to name/phone. Main account only — extra accounts untouched (§5).
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.23 — apt-note match (agent path, real analyzeBankRowsServer)');
+  const { analyzeBankRowsServer } = require('./test-lib').loadBankAnalyzer();
+
+  // Mapping mirrors the real Otsar file: name col 2, amount col 6, note col 10.
+  const mapping = { colName:2, colAmount:6, colDate:-1, colNote:10, bankAmount:'', bankTolerance:5 };
+  const hdr = ['h','h','שם','h','h','h','סכום','h','h','h','הערות'];
+  const rowNote = (name, amt, note) => { const r=['','',name,'','','',String(amt),'','','','']; r[10]=note; return r; };
+  const run = (rows, tenants) =>
+    analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-07', { amount: 450 }, new Set());
+
+  // Case A — the REAL RTL row from the July file: "6 וועד בית דירה".
+  {
+    const res = run([hdr, rowNote('וזנה ירין', 450, '6 וועד בית דירה')],
+      [{ id:'T1', name:'וזנה ירין', phone:'0500000001', keywords:'', aptNumber:'6' }]);
+    t.eq('A: real RTL note matches by apt', res.matched.length, 1);
+    t.eq('A: match type is apt', res.matched[0] && res.matched[0].matchType, 'apt');
+  }
+
+  // Case C — two same-named owners (apt 6 / apt 7); note says "דירה 7" → T7 wins.
+  {
+    const res = run([hdr, rowNote('משה כהן', 450, 'דירה 7')], [
+      { id:'T6', name:'משה כהן', phone:'0500000006', keywords:'', aptNumber:'6' },
+      { id:'T7', name:'משה כהן', phone:'0500000007', keywords:'', aptNumber:'7' }
+    ]);
+    t.eq('C: exactly one match', res.matched.length, 1);
+    t.eq('C: routed to the apt-7 owner (not first-iterated apt-6)',
+      res.matched[0] && res.matched[0].tenantId, 'T7');
+    t.eq('C: apt-6 owner correctly excluded',
+      res.unmatched.some(u => u.tenantId === 'T6'), true);
+  }
+
+  // Case D — REGRESSION: no aptNumber anywhere → name-match, unchanged behavior.
+  {
+    const res = run([hdr, rowNote('משה כהן', 450, 'דירה 7')],
+      [{ id:'T7', name:'משה כהן', phone:'0500000007', keywords:'' }]);
+    t.eq('D: no aptNumber → falls to name-match', res.matched[0] && res.matched[0].matchType, 'name');
+  }
+
+  // Case E — REGRESSION: note has NO apartment → keyword still works as before.
+  {
+    const res = run([hdr, rowNote('כהן ביטוח', 450, 'ועד בית יולי')],
+      [{ id:'T8', name:'משה כהן', phone:'0500000008', keywords:'כהן ביטוח', aptNumber:'8' }]);
+    t.eq('E: note without apt → keyword match unaffected',
+      res.matched[0] && res.matched[0].matchType, 'keyword');
+  }
+
+  // Case F — REGRESSION (the wrong-apt case Tal flagged): a single tenant with
+  // aptNumber=6 whose note MISTYPES "דירה 7" — but NO tenant owns apt 7. The
+  // guard must NOT block; the tenant is still found by keyword/name. This is the
+  // difference between "note names another owner's apt" (block) and "note names
+  // an apt nobody owns" (payer typo → don't block).
+  {
+    const res = run([hdr, rowNote('משה כהן', 450, 'דירה 7')],
+      [{ id:'T9', name:'משה כהן', phone:'0521234567', keywords:'כהן מ', aptNumber:'6' }]);
+    t.eq('F: wrong apt nobody owns → still matched (not blocked)', res.matched.length, 1);
+    t.eq('F: falls back to name/keyword, not apt',
+      res.matched[0] && res.matched[0].matchType !== 'apt', true);
+    t.eq('F: not left unmatched', res.unmatched.length, 0);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

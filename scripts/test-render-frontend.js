@@ -1057,4 +1057,59 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('no leftover {יתרת_זכות} literal', rendered.includes('{יתרת_זכות}'), false);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.23 — apt-note→apartment matching (manual path, analyzeBankRows)
+// Mutation-verified: extracts the REAL extractAptNumbersFromNote from
+// app.html and runs it; asserts the priority-0 block + guard exist.
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.23 — apt-note extractor (manual path, from live source)');
+  const app = readSource('public/app.html');
+
+  // Pull the nested extractAptNumbersFromNote out of app.html by anchor and run
+  // the REAL body — if it is renamed/removed/mutated, this throws or fails.
+  const m = app.match(/function extractAptNumbersFromNote\(note\)\s*\{[\s\S]*?\n    \}/);
+  if (!m) {
+    console.error('  ❌ extractAptNumbersFromNote NOT FOUND in app.html — feature removed?');
+    t.eq('extractAptNumbersFromNote present', false, true);
+  } else {
+    const extractApt = new Function('note', m[0].replace(/^function extractAptNumbersFromNote\(note\)\s*\{/, '') .replace(/\}$/, '') + '');
+    // Real RTL string from the Otsar July file (וזנה ירין row).
+    t.eq('RTL "6 וועד בית דירה" → ["6"]',
+      JSON.stringify(extractApt('6 וועד בית דירה')), '["6"]');
+    t.eq('"דירה 3" → ["3"]', JSON.stringify(extractApt('דירה 3')), '["3"]');
+    t.eq('"ועד בית דירה 12" → ["12"]', JSON.stringify(extractApt('ועד בית דירה 12')), '["12"]');
+    t.eq('no "דירה" → []', JSON.stringify(extractApt('ועד בית יולי')), '[]');
+    // requireDira gate lock: a stray small number with NO "דירה" must NOT leak
+    // (this is what stops "תשלום 3 חודשים" being read as apartment 3).
+    t.eq('digit but no "דירה" → [] (gate lock)', JSON.stringify(extractApt('תשלום 3 חודשים')), '[]');
+    t.eq('empty note → []', JSON.stringify(extractApt('')), '[]');
+    // reference number (6 digits) filtered — has no "דירה" AND >3 digits
+    t.eq('long ref "534684 דירה" → []', JSON.stringify(extractApt('534684 דירה')), '[]');
+    // year filtered — 4 digits, and no bare apt
+    t.eq('year "ועד בית דירה 2026" → []', JSON.stringify(extractApt('ועד בית דירה 2026')), '[]');
+  }
+
+  t.section('v2.14.23 — priority-0 block + name-guard present in analyzeBankRows');
+  // The priority-0 assignment and the note-blocks-name guard must both exist.
+  t.eq("aptNumber derived per tenant", /const aptNum=\(tenant\.aptNumber!=null\)/.test(app), true);
+  t.eq("priority-0 sets type='apt'", app.includes("type='apt'"), true);
+  t.eq('note-guard variable present', app.includes('noteBlocksThisTenant'), true);
+  t.eq('refined guard: building apt set precomputed', app.includes('aptNumbersInBuilding'), true);
+  t.eq('refined guard: blocks only on another owner\'s apt', app.includes('noteNamesOthersApt'), true);
+  t.eq('keyword check gated by guard', /!noteBlocksThisTenant && kw\.length/.test(app), true);
+  t.eq('phone check gated by guard', /!noteBlocksThisTenant && ps &&/.test(app), true);
+  t.eq('name check gated by guard', /!noteBlocksThisTenant && nameParts\.length/.test(app), true);
+
+  t.section('v2.14.23 — aptNumber plumbing (form / edit / CSV)');
+  t.eq('add-tenant form has #inAptNumber', app.includes('id="inAptNumber"'), true);
+  t.eq('addTenant writes aptNumber', /aptNumber:aptNumber\|\|''/.test(app), true);
+  t.eq('inline edit has #eapt- input', app.includes("id=\"eapt-'+id+'\""), true);
+  t.eq('saveEdit persists aptNumber', /t\.aptNumber=apt\|\|''/.test(app), true);
+  t.eq('CSV export column מספר_דירה', app.includes("he:'מספר_דירה'"), true);
+  t.eq('CSV header maps מספר_דירה→aptNumber', app.includes("'מספר_דירה':'aptNumber'"), true);
+  t.eq('import fields include aptNumber', /aptNumber: \(f\.aptNumber \|\| ''\)\.replace/.test(app), true);
+  t.eq('apt match-type icon 🏠', app.includes("matchType==='apt'?'🏠'"), true);
+}
+
 process.exit(t.done() ? 1 : 0);

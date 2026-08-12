@@ -515,6 +515,7 @@ function vpLogout() {
           <div><label>טלפון</label><input type="tel" id="inPhone" placeholder="0501234567" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>מילות חיפוש לבנק <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inKeywords" placeholder="כהן י, העברה 052" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div><label>מספר דירה <span style="opacity:.5;">(אופציונלי — לזיהוי לפי הערת בנק. בעל־בית שמשלם לכמה דירות)</span></label><input type="number" id="inAptNumber" placeholder="לדוגמה: 6" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>סכום אישי ₪ <span style="opacity:.5;">(אופציונלי — ברירת מחדל מהגדרות)</span></label><input type="number" id="inCustomAmount" placeholder="ריק = ברירת מחדל" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>יתרת פתיחה ₪ <span style="opacity:.5;">(אופציונלי — חוב קודם, או ערך שלילי = יתרת זכות לדייר. מתעדכן אוטומטית בסגירת חודש)</span></label><input type="number" id="inOpeningDebt" placeholder="0" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
@@ -2479,8 +2480,9 @@ async function addTenant() {
   const od=document.getElementById('inOpeningDebt').value.trim();
   const openingDebt = od ? parseFloat(od) : 0;
   const propertyLabel=document.getElementById('inPropertyLabel').value.trim();
-  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||''});
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';
+  const aptNumber=(document.getElementById('inAptNumber').value||'').replace(/\D/g,'');
+  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||''});
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
   if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');
@@ -2508,7 +2510,7 @@ function startEdit(id) {
   isEditing = true;
   const cells=row.querySelectorAll('td');
   cells[0].innerHTML='<input id="epl-'+id+'" value="'+(t.propertyLabel||'').replace(/"/g,'&quot;')+'" style="width:100%;margin-bottom:4px;font-size:0.79rem;" placeholder="תווית נכס (אופציונלי)"><input id="en-'+id+'" value="'+t.name+'" style="width:100%;" placeholder="שם איש קשר">';
-  cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מילות חיפוש">';
+  cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;margin-bottom:4px;" placeholder="מילות חיפוש"><input id="eapt-'+id+'" type="number" value="'+(t.aptNumber||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מספר דירה (לזיהוי הערה)" min="1">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
   cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span>';
@@ -2535,6 +2537,8 @@ async function saveEdit(id) {
   if(!/^0[0-9]{8,9}$/.test(p)){toast('⚠️ מספר טלפון לא תקין','error');return;}
   const plEl=document.getElementById('epl-'+id);
   const pl = plEl ? plEl.value.trim() : (t.propertyLabel||'');
+  const aptEl=document.getElementById('eapt-'+id);
+  const apt = aptEl ? (aptEl.value||'').replace(/\D/g,'') : (t.aptNumber||'');
   // ⚠️ v2.14.13 — warn before manually overriding openingDebt if a month-close
   // already banked debt/credit for this tenant. The close computes openingDebt
   // (accrual + surplus offset); editing it by hand discards that computation and
@@ -2553,7 +2557,7 @@ async function saveEdit(id) {
       isEditing = false; render(); return;
     }
   }
-  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';
+  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -2586,7 +2590,8 @@ var TENANT_EXPORT_COLS = [
   { key:'keywords',      he:'מילות_חיפוש' },
   { key:'customAmount',  he:'תשלום_חודשי' },
   { key:'openingDebt',   he:'חוב_התחלתי' },
-  { key:'propertyLabel', he:'תווית_נכס' }
+  { key:'propertyLabel', he:'תווית_נכס' },
+  { key:'aptNumber',     he:'מספר_דירה' }
 ];
 
 function tenantExportRows() {
@@ -2601,7 +2606,8 @@ function tenantExportRows() {
       t.keywords || '',
       (t.customAmount === 0 || t.customAmount) ? t.customAmount : '',
       (t.openingDebt === 0 || t.openingDebt) ? t.openingDebt : '',
-      t.propertyLabel || ''
+      t.propertyLabel || '',
+      t.aptNumber || ''
     ]);
   });
   return rows;
@@ -2631,7 +2637,7 @@ function exportTenantsExcel() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
   var rows = tenantExportRows();
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14}];
+  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14},{wch:12}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
@@ -2652,7 +2658,8 @@ function tenantHeaderToKey(rawHeader) {
     'מילות_חיפוש':'keywords', 'keywords':'keywords', 'מילים':'keywords',
     'תשלום_חודשי':'customAmount', 'customamount':'customAmount', 'סכום':'customAmount', 'תשלום':'customAmount',
     'חוב_התחלתי':'openingDebt', 'openingdebt':'openingDebt', 'חוב':'openingDebt',
-    'תווית_נכס':'propertyLabel', 'propertylabel':'propertyLabel', 'דירה':'propertyLabel', 'נכס':'propertyLabel'
+    'תווית_נכס':'propertyLabel', 'propertylabel':'propertyLabel', 'דירה':'propertyLabel', 'נכס':'propertyLabel',
+    'מספר_דירה':'aptNumber', 'דירה_מספר':'aptNumber', 'aptnumber':'aptNumber', 'apt':'aptNumber'
   };
   return map[h] || null;
 }
@@ -2736,7 +2743,8 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
       keywords: (f.keywords || '').trim(),
       customAmount: ca.value,
       openingDebt: od.value,
-      propertyLabel: (f.propertyLabel || '').trim()
+      propertyLabel: (f.propertyLabel || '').trim(),
+      aptNumber: (f.aptNumber || '').replace(/\D/g,'')
     };
 
     if (match) {
@@ -2941,13 +2949,15 @@ async function confirmImport() {
     t.name=u.fields.name; t.phone=u.fields.phone; t.email=u.fields.email;
     t.keywords=u.fields.keywords; t.customAmount=u.fields.customAmount;
     t.openingDebt=u.fields.openingDebt; t.propertyLabel=u.fields.propertyLabel;
+    t.aptNumber=u.fields.aptNumber||'';
   });
   plan.creates.forEach(function(c){
     data.tenants.push({
       id:Date.now()+Math.floor(Math.random()*1000),
       name:c.fields.name, phone:c.fields.phone, email:c.fields.email,
       keywords:c.fields.keywords, customAmount:c.fields.customAmount,
-      openingDebt:c.fields.openingDebt, propertyLabel:c.fields.propertyLabel
+      openingDebt:c.fields.openingDebt, propertyLabel:c.fields.propertyLabel,
+      aptNumber:c.fields.aptNumber||''
     });
   });
   const n=plan.updates.length+plan.creates.length;
@@ -4258,6 +4268,15 @@ function analyzeBankRows(rows,fileName){
     return;
   }
 
+  // v2.14.23: מספרי הדירות שמשויכים בפועל לדיירים בבניין. ה-note-guard חוסם
+  // keyword/טלפון/שם רק כשההערה מציינת דירה של דייר אחר קיים (עמימות אמיתית).
+  // הערה עם מספר דירה שאף אחד לא מחזיק (טעות של המשלם) לא חוסמת זיהוי רגיל.
+  const aptNumbersInBuilding = new Set(
+    data.tenants
+      .map(function(t){ return (t.aptNumber!=null)?String(t.aptNumber).replace(/\D/g,''):''; })
+      .filter(Boolean)
+  );
+
   data.tenants.forEach(function(tenant){
     const kw=tenant.keywords
       ? tenant.keywords.split(',').map(function(k){return k.trim().toLowerCase();}).filter(Boolean)
@@ -4266,6 +4285,8 @@ function analyzeBankRows(rows,fileName){
     // שם מלא לחיפוש – דורש לפחות 2 מילים (שם + שם משפחה)
     const fullName=tenant.name.trim().toLowerCase();
     const nameParts=fullName.split(/\s+/).filter(function(p){return p.length>1;});
+    // v2.14.23: מספר דירה לזיהוי-הערה (חשבון ראשי בלבד). מנורמל למחרוזת מספרית.
+    const aptNum=(tenant.aptNumber!=null)?String(tenant.aptNumber).replace(/\D/g,''):'';
 
     // מעקב אחר שורות שכבר נספרו לדייר זה
     const seenRowIdx=new Set();
@@ -4284,6 +4305,21 @@ function analyzeBankRows(rows,fileName){
       });
     }
 
+    // ── apt-note→apartment extraction (v2.14.23) ──────────────────────
+    // ⚠️ DUPLICATED verbatim from server.js analyzeBankRowsServer (no shared
+    // client/server module in this repo — same as kwMatches/bankRowFingerprint).
+    // Keep both copies in sync. RTL-safe: does NOT require the digit adjacent to
+    // "דירה" (Otsar writes "6 וועד בית דירה"). requireDira=true filters out
+    // reference numbers (6 digits), years (4 digits), and stray counts.
+    function extractAptNumbersFromNote(note) {
+      if (!note) return [];
+      const s = String(note);
+      if (!/דיר[הת]/.test(s)) return [];
+      const nums = s.match(/(?:^|[^\d])(\d{1,3})(?![\d])/g);
+      if (!nums) return [];
+      return nums.map(function(x){ return x.replace(/\D/g,''); }).filter(Boolean);
+    }
+
     mr.forEach(function(m){
       if(seenRowIdx.has(m.rowIdx)) return;
       // אם יש עמודת שם ממופה — חפש רק בה. אחרת חפש בכל השורה
@@ -4292,14 +4328,28 @@ function analyzeBankRows(rows,fileName){
       const rtFull = m.row.join(' ').toLowerCase();
       let type=null;
 
-      if(kw.length && kwMatches(kw, rt)) type='keyword';
+      // עדיפות 0 (v2.14.23): זיהוי לפי הערת→דירה. רק אם לדייר יש aptNumber
+      // וההערה מציינת אותה דירה. מנצח name-match כדי לפתור שני שמות זהים לפני
+      // שמגיעים לבדיקת השם העמומה. היברידי/מאמת: aptNumber של הדייר חייב
+      // להימצא במספרים שחולצו — לעולם לא מנחש דירה.
+      const noteApts=extractAptNumbersFromNote(m.noteVal||'');
+      if(aptNum && noteApts.indexOf(aptNum)>=0) type='apt';
+      // הגנה (v2.14.23, מעודכן): חוסם keyword/טלפון/שם רק כשההערה מציינת דירה
+      // של דייר אחר קיים — העמימות האמיתית (שני שמות זהים, ההערה מצביעה על
+      // הדירה של האחר). הערה עם מספר דירה שאף אחד לא מחזיק (טעות המשלם) לא
+      // חוסמת — הדייר עדיין מזוהה לפי מילות חיפוש/שם. דיירים בלי aptNumber
+      // ובניינים שלא משתמשים בפיצ'ר — ללא שינוי (regression מלא).
+      const noteNamesOthersApt = noteApts.some(function(n){ return n!==aptNum && aptNumbersInBuilding.has(n); });
+      const noteBlocksThisTenant = noteNamesOthersApt && (!aptNum || noteApts.indexOf(aptNum)<0);
+
+      if(!type && !noteBlocksThisTenant && kw.length && kwMatches(kw, rt)) type='keyword';
 
       // עדיפות 2: טלפון
-      if(!type && ps && rtFull.replace(/\D/g,'').includes(ps)){
+      if(!type && !noteBlocksThisTenant && ps && rtFull.replace(/\D/g,'').includes(ps)){
         type='phone';
       }
       // עדיפות 3: שם מלא (שם + שם משפחה יחד)
-      if(!type && nameParts.length>=2 && nameParts.every(function(p){return rt.includes(p);})){
+      if(!type && !noteBlocksThisTenant && nameParts.length>=2 && nameParts.every(function(p){return rt.includes(p);})){
         type='name';
       }
 
@@ -4479,7 +4529,7 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
   if(matched.length){
     h+='<div style="color:var(--accent);font-weight:700;margin-bottom:6px;">✅ זוהו כמשלמים ('+matched.length+'):</div>';
     matched.forEach(function(m){
-      const icon=m.matchType==='keyword'?'🔍':m.matchType==='phone'?'📱':'👤';
+      const icon=m.matchType==='apt'?'🏠':m.matchType==='keyword'?'🔍':m.matchType==='phone'?'📱':'👤';
       const multiInfo=m.count>1
         ? ' <span style="background:rgba(227,179,65,.15);color:var(--warn);border-radius:4px;padding:1px 7px;font-size:0.78rem;">×'+m.count+' תשלומים</span>'
         : '';

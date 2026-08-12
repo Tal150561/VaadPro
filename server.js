@@ -6593,6 +6593,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         row, amount: matchAmount, rowIdx,
         nameVal: iName >= 0 ? String(row[iName] || '') : row.join(' '),
         dateVal: iDate >= 0 ? String(row[iDate] || '') : '',
+        noteVal: iNote >= 0 ? String(row[iNote] || '') : '',
       });
     }
   });
@@ -6620,6 +6621,26 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       const esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       return new RegExp('(?:^|[\\s,/(-])' + esc + '(?=[\\s,/)-]|$)').test(rt);
     });
+  }
+
+  // ── apt-note→apartment extraction (v2.14.23) ──────────────────────
+  // Pull candidate apartment numbers (1–3 standalone digits) out of a bank
+  // note. RTL-safe: does NOT require the digit to sit next to the word "דירה"
+  // (Otsar writes "6 וועד בית דירה" — 6 at the start, דירה at the end). Only
+  // returns numbers when the note actually mentions דירה/דירת (requireDira),
+  // which for free filters out reference numbers (534684 → 6 digits) and years
+  // (2026 → 4 digits) and stray counts ("תשלום 3 חודשים" has no "דירה").
+  // Returns an array of numeric STRINGS (e.g. ["6"]). Empty if no apt hint.
+  // ⚠️ DUPLICATED verbatim in app.html analyzeBankRows (no shared client/server
+  // module in this repo — same pattern as kwMatches/bankRowFingerprint). Keep
+  // the two copies in sync; a change here must be mirrored there.
+  function extractAptNumbersFromNote(note) {
+    if (!note) return [];
+    const s = String(note);
+    if (!/דיר[הת]/.test(s)) return [];               // requireDira=true (locked 4.1)
+    const nums = s.match(/(?:^|[^\d])(\d{1,3})(?![\d])/g); // 1–3 standalone digits
+    if (!nums) return [];
+    return nums.map(x => x.replace(/\D/g, '')).filter(Boolean);
   }
 
   const matched = [], unmatched = [];
@@ -6653,12 +6674,26 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   // in its original import; this only reclassifies it out of "unmatched" for reporting.
   const alreadyImportedSkips = [];
 
+  // v2.14.23: apartment numbers actually assigned to tenants in THIS building.
+  // The note-guard uses it so a note only blocks the weaker keyword/phone/name
+  // checks when it names an apartment that belongs to a DIFFERENT tenant (real
+  // ambiguity). A note naming an apartment nobody owns — e.g. the payer typed
+  // the wrong number — must NOT suppress a tenant's own keyword/name match.
+  const aptNumbersInBuilding = new Set(
+    updatedTenants
+      .map(t => (t.aptNumber != null ? String(t.aptNumber).replace(/\D/g, '') : ''))
+      .filter(Boolean)
+  );
+
   updatedTenants.forEach(tenant => {
     const kw = tenant.keywords
       ? tenant.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
       : [];
     const ps = tenant.phone.replace(/\D/g, '').slice(-7);
     const nameParts = tenant.name.trim().toLowerCase().split(/\s+/).filter(p => p.length > 1);
+    // v2.14.23: apartment number for note-based disambiguation (main account
+    // only; extra accounts out of scope). Normalized to a numeric string.
+    const aptNum = tenant.aptNumber != null ? String(tenant.aptNumber).replace(/\D/g, '') : '';
     const seenRowIdx = new Set();
     const tenantMatches = [];
     // v2.14.20: true when this tenant's ONLY matching rows were already imported in a
@@ -6671,9 +6706,27 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
       const rtFull = m.row.join(' ').toLowerCase();
       let type = null;
-      if (kw.length && kwMatches(kw, rt))                          type = 'keyword';
-      if (!type && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';
-      if (!type && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
+      // ── Priority 0 (v2.14.23): apt-note match. Only when this tenant has an
+      // aptNumber AND the row's note names that apartment. Wins over name-match
+      // so two same-named owners are disambiguated by the note before we ever
+      // fall through to the ambiguous full-name check. Hybrid/verifying: the
+      // tenant's own aptNumber must appear among the note's extracted numbers —
+      // it never guesses an apartment. ──
+      const noteApts = extractAptNumbersFromNote(m.noteVal);
+      if (aptNum && noteApts.includes(aptNum))                      type = 'apt';
+      // Guard (v2.14.23, refined): block the weaker keyword/phone/name checks for
+      // THIS tenant only when the note names an apartment that belongs to a
+      // DIFFERENT existing tenant. That is the real ambiguity — two same-named
+      // owners, note names the OTHER one's apartment → don't let it fall to a
+      // name-match on this one. A note naming an apartment nobody owns (payer
+      // typo) does NOT block: the tenant is still found by keyword/name as before.
+      // Tenants with no aptNumber, and buildings not using the feature, are
+      // entirely unaffected → full regression.
+      const noteNamesOthersApt = noteApts.some(n => n !== aptNum && aptNumbersInBuilding.has(n));
+      const noteBlocksThisTenant = noteNamesOthersApt && (!aptNum || !noteApts.includes(aptNum));
+      if (!type && !noteBlocksThisTenant && kw.length && kwMatches(kw, rt))                  type = 'keyword';
+      if (!type && !noteBlocksThisTenant && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';
+      if (!type && !noteBlocksThisTenant && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
       if (!type) return;
       // ── Fingerprint dedup (main account) ──────────────────────────
       const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
