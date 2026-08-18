@@ -1242,6 +1242,12 @@ t.eq('openingDebt surfaced separately (not month-attributable)', exDet1.openingD
 t.eq('openingDebt appears in the rendered block', !!(S.buildDebtDetailBlock(exDet1).includes('1380')), true);
 
 const exD2 = exBuild({
+  // manualMonth pins July as the ACTIVE month so it lines up with the fixture's
+  // July sentLog + paymentHistory. Without this the report runs on the real
+  // current month (August) and — correctly — also charges the empty active
+  // month, so owed would be 130+230+950. The scenario under test is a PARTIAL
+  // payment in the active month, so the active month IS July.
+  config: { amount: 230, manualMonth: 'יולי', excessDebtThreshold: 1000 },
   tenants: [{ id: 3, name: 'אור', openingDebt: 0,
     extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, openingDebt: 900 }] }],
   sentLog: { '3_יולי': 'bank_import_2026-07-05_100_payer_אור' },
