@@ -4333,13 +4333,44 @@ function analyzeBankRows(rows,fileName){
       // שמגיעים לבדיקת השם העמומה. היברידי/מאמת: aptNumber של הדייר חייב
       // להימצא במספרים שחולצו — לעולם לא מנחש דירה.
       const noteApts=extractAptNumbersFromNote(m.noteVal||'');
-      if(aptNum && noteApts.indexOf(aptNum)>=0) type='apt';
+      // v2.14.24 (BUGFIX): apt-note זיהוי הוא TIE-BREAKER בלבד — לא מזהה עצמאי.
+      // הבאג: הערה "8 וועד דירה" (וזנה התכוון לחודש 8/אוגוסט) חולצה כדירה 8,
+      // וגיל (דירה 8) קיבל את השורה של וזנה → ×2/460. השורש: apt-match התאים
+      // שורה לדייר לפי מספר בלבד, בלי שהשם/מילות-החיפוש בשורה יתאימו לו כלל —
+      // כך מספר מטעה בהערה (חודש/סכום/אסמכתא) גנב שורה של דייר לא-קשור.
+      // התיקון: מספר הדירה מכריע רק בין מועמדים שכבר תואמים בשם/מילות-חיפוש;
+      // הוא לעולם לא מוסיף מועמד חדש. (תואם למטרת ה-SKILL: "aptNumber מכריע
+      // שני שמות זהים".)
+      const nameBasisMatch =
+        (kw.length && kwMatches(kw, rt)) ||
+        (ps && rtFull.replace(/\D/g,'').includes(ps)) ||
+        (nameParts.length>=2 && nameParts.every(function(p){return rt.includes(p);}));
+      if(aptNum && noteApts.indexOf(aptNum)>=0 && nameBasisMatch) type='apt';
       // הגנה (v2.14.23, מעודכן): חוסם keyword/טלפון/שם רק כשההערה מציינת דירה
       // של דייר אחר קיים — העמימות האמיתית (שני שמות זהים, ההערה מצביעה על
       // הדירה של האחר). הערה עם מספר דירה שאף אחד לא מחזיק (טעות המשלם) לא
       // חוסמת — הדייר עדיין מזוהה לפי מילות חיפוש/שם. דיירים בלי aptNumber
       // ובניינים שלא משתמשים בפיצ'ר — ללא שינוי (regression מלא).
-      const noteNamesOthersApt = noteApts.some(function(n){ return n!==aptNum && aptNumbersInBuilding.has(n); });
+      // v2.14.24: block ONLY when the note names another EXISTING tenant's apt
+      // AND that other tenant also matches THIS row by name/keyword (genuine
+      // same-name ambiguity). A number that merely equals some apt but where no
+      // name-matching owner claims the row (payer wrote a month/amount, e.g.
+      // Vazana's "8 וועד דירה" = August) must NOT block this tenant's own match.
+      function rowNameMatchesTenant(t2){
+        var kw2 = t2.keywords ? String(t2.keywords).split(',').map(function(k){return k.trim().toLowerCase();}).filter(Boolean) : [];
+        var ps2 = (t2.phone||'').replace(/\D/g,'').slice(-7);
+        var np2 = (t2.name||'').trim().toLowerCase().split(/\s+/).filter(function(p){return p.length>1;});
+        return (kw2.length && kwMatches(kw2, rt)) ||
+               (ps2 && rtFull.replace(/\D/g,'').includes(ps2)) ||
+               (np2.length>=2 && np2.every(function(p){return rt.includes(p);}));
+      }
+      const noteNamesOthersApt = noteApts.some(function(n){
+        return n!==aptNum && data.tenants.some(function(o){
+          return o.id!==tenant.id &&
+            String(o.aptNumber!=null?o.aptNumber:'').replace(/\D/g,'')===n &&
+            rowNameMatchesTenant(o);
+        });
+      });
       const noteBlocksThisTenant = noteNamesOthersApt && (!aptNum || noteApts.indexOf(aptNum)<0);
 
       if(!type && !noteBlocksThisTenant && kw.length && kwMatches(kw, rt)) type='keyword';

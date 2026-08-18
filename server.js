@@ -6713,7 +6713,21 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // tenant's own aptNumber must appear among the note's extracted numbers —
       // it never guesses an apartment. ──
       const noteApts = extractAptNumbersFromNote(m.noteVal);
-      if (aptNum && noteApts.includes(aptNum))                      type = 'apt';
+      // v2.14.24 (BUGFIX): apt-note match is a TIE-BREAKER only — never a
+      // standalone matcher. Bug: a note "8 וועד דירה" (payer meant month 8 /
+      // August) extracted apartment 8, and Gil (apt 8) was handed a DIFFERENT
+      // tenant's row → ×2/460. Root cause: apt-match attributed a row to a tenant
+      // by number alone, with no requirement that the row's name/keywords match
+      // that tenant — so a misleading number in the note (month/amount/reference)
+      // stole an unrelated tenant's row. Fix: the apartment number only
+      // disambiguates among candidates that ALREADY match by name/keyword; it
+      // never adds a new candidate. (Matches the SKILL goal: "aptNumber
+      // disambiguates two identical names".)
+      const nameBasisMatch =
+        (kw.length && kwMatches(kw, rt)) ||
+        (ps && rtFull.replace(/\D/g,'').includes(ps)) ||
+        (nameParts.length >= 2 && nameParts.every(p => rt.includes(p)));
+      if (aptNum && noteApts.includes(aptNum) && nameBasisMatch)     type = 'apt';
       // Guard (v2.14.23, refined): block the weaker keyword/phone/name checks for
       // THIS tenant only when the note names an apartment that belongs to a
       // DIFFERENT existing tenant. That is the real ambiguity — two same-named
@@ -6722,7 +6736,25 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // typo) does NOT block: the tenant is still found by keyword/name as before.
       // Tenants with no aptNumber, and buildings not using the feature, are
       // entirely unaffected → full regression.
-      const noteNamesOthersApt = noteApts.some(n => n !== aptNum && aptNumbersInBuilding.has(n));
+      // v2.14.24: the guard now blocks ONLY when the note names another EXISTING
+      // tenant's apartment AND that other tenant also matches THIS row by name/
+      // keyword — i.e. a genuine same-name ambiguity where the note points at the
+      // OTHER owner. A note whose number happens to equal some apt but where no
+      // name-matching owner claims the row (payer wrote a month/amount, e.g.
+      // Vazana's "8 וועד דירה" = August) must NOT block this tenant's own match.
+      const rowNameMatchesTenant = t2 => {
+        const kw2 = t2.keywords ? t2.keywords.split(',').map(k=>k.trim().toLowerCase()).filter(Boolean) : [];
+        const ps2 = t2.phone.replace(/\D/g,'').slice(-7);
+        const np2 = t2.name.trim().toLowerCase().split(/\s+/).filter(p=>p.length>1);
+        return (kw2.length && kwMatches(kw2, rt)) ||
+               (ps2 && rtFull.replace(/\D/g,'').includes(ps2)) ||
+               (np2.length >= 2 && np2.every(p => rt.includes(p)));
+      };
+      const noteNamesOthersApt = noteApts.some(n =>
+        n !== aptNum &&
+        updatedTenants.some(o => o.id !== tenant.id &&
+          String(o.aptNumber != null ? o.aptNumber : '').replace(/\D/g,'') === n &&
+          rowNameMatchesTenant(o)));
       const noteBlocksThisTenant = noteNamesOthersApt && (!aptNum || !noteApts.includes(aptNum));
       if (!type && !noteBlocksThisTenant && kw.length && kwMatches(kw, rt))                  type = 'keyword';
       if (!type && !noteBlocksThisTenant && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';

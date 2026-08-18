@@ -1743,6 +1743,35 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
       res.matched[0] && res.matched[0].matchType !== 'apt', true);
     t.eq('F: not left unmatched', res.unmatched.length, 0);
   }
+
+  // ── v2.14.24 REGRESSION (real Otsar file, 2026-08) ────────────────
+  // Bug reported by Tal: Vazana paid 230 with note "8 וועד דירה" — he meant
+  // MONTH 8 (August), not apartment 8. The extractor pulled apartment "8", and
+  // Gil (aptNumber 8) was handed Vazana's row on TOP of his own → ×2 / 460.
+  // Fix: apt-note is a TIE-BREAKER only — it may route a row to a tenant ONLY
+  // when that tenant also matches the row by keyword/phone/name. A misleading
+  // number in someone else's note can no longer steal an unrelated row.
+  {
+    // Two real rows, both 230. Gil's own row (name "זמיר נורית וזמיר") and
+    // Vazana's row (name "וזנה ירין", note "8 וועד דירה").
+    const rows = [
+      hdr,
+      rowNote('זמיר נורית וזמיר', 230, ' '),
+      rowNote('וזנה ירין',        230, '8 וועד דירה')
+    ];
+    const tenants = [
+      { id:'GIL',  name:'גיל זמיר',  phone:'054313223', keywords:'זמיר, נורית, וזמיר, גיל', aptNumber:'8' },
+      { id:'VAZ',  name:'ירין וזנה', phone:'0500000009', keywords:'וזנה, ירין',            aptNumber:'' }
+    ];
+    const res = analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    const gil = res.matched.find(m => m.tenantId === 'GIL');
+    const vaz = res.matched.find(m => m.tenantId === 'VAZ');
+    t.eq('G: Gil total is 230, not 460 (no stolen row)', gil && gil.amount, 230);
+    t.eq('G: Gil NOT matched by apt (name/keyword basis)', gil && gil.matchType !== 'apt', true);
+    t.eq('G: Vazana matched on her own row (guard did not block)', vaz && vaz.amount, 230);
+    t.eq('G: exactly two tenants matched', res.matched.length, 2);
+    t.eq('G: nobody left unmatched', res.unmatched.length, 0);
+  }
 }
 
 process.exit(t.done() ? 1 : 0);
