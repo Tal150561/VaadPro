@@ -3683,7 +3683,7 @@ async function sendTrialEmail(user, type) {
 
 כדי להמשיך ליהנות מהשירות ולא לאבד גישה — צור איתנו קשר לחידוש המנוי.
 
-אימייל: support@vaadpro.co.il
+אימייל: vaadpro15@gmail.com
 
 תודה שאתה משתמש ב-VaadPro!
 צוות VaadPro`
@@ -3693,7 +3693,7 @@ async function sendTrialEmail(user, type) {
 
 כדי להמשיך לשלוח תזכורות תשלום לדיירים — צור איתנו קשר לחידוש המנוי.
 
-אימייל: support@vaadpro.co.il
+אימייל: vaadpro15@gmail.com
 טלפון: צור קשר דרך הווטסאפ
 
 צוות VaadPro`;
