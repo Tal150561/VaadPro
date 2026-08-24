@@ -603,6 +603,84 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   t.eq('exactly 5 stat cards in the row',
     (statsRow.match(/<div class="stat-card"/g) || []).length, 5);
 
+  // ── v2.14.27 — warning-letter (מכתב התראה) builder ──────────────
+  // The printed debt letter for "חייבים חריגים". EXECUTES buildExcessLetterHtml
+  // over a real excess-debt row and asserts the document it produced: dynamic
+  // recipient, an itemised debt table (opening balance + each month + extra
+  // accounts), the row's own total, a dynamic doc number, and BOTH signature
+  // blocks (manager + lawyer). See v2.13.30: a grep proves the string exists,
+  // not that the letter renders it.
+  {
+    const lfns = extractFunctions(app, ['esc', 'getBuildingInfo', 'buildExcessLetterHtml']);
+    const L = new Function('window', 'data',
+      lfns + '\n; return { buildExcessLetterHtml };')(
+        { __vpBuilding: { buildingName: 'ועד הבית — מבצע דני 11', address: 'מבצע דני 11, ראש העין',
+                          email: 'vaadpro15@gmail.com', managerName: 'תומר שר שלום' } },
+        { config: { vaadPhone: '050-2146510' } });
+
+    const letterRow = {
+      id: '7', name: 'לימור', apartment: 'ב/3', phone: '054-9876543', email: 'limor@example.com',
+      currentMonthDebt: 230, priorDebt: 920, extrasTotal: 950, owed: 3710, openingDebt: 1610,
+      months: [
+        { monthKey: '2026-04', hebMonth: 'אפריל', expected: 230, paidAmount: 0,   shortfall: 230, status: 'unpaid'  },
+        { monthKey: '2026-07', hebMonth: 'יולי',  expected: 230, paidAmount: 100, shortfall: 130, status: 'partial' }
+      ],
+      accounts: [{ label: 'ביטוח', months: [{ monthKey: '2026-07', hebMonth: 'יולי', amount: 50 }], openingDebt: 900, total: 950 }],
+      alerts: []
+    };
+
+    t.section('v2.14.27 — מכתב התראה actually renders from the row');
+    t.noThrow('buildExcessLetterHtml does not throw',
+      () => L.buildExcessLetterHtml(letterRow, { docNo: 'VP-2026-0007', today: '24.8.2026', dueDate: '07.9.2026' }));
+    const doc = L.buildExcessLetterHtml(letterRow, { docNo: 'VP-2026-0007', today: '24.8.2026', dueDate: '07.9.2026' });
+
+    t.eq('recipient name is dynamic', doc.includes('לכבוד: לימור'), true);
+    t.eq('apartment shown', doc.includes('דירה: ב/3'), true);
+    t.eq('recipient phone shown', doc.includes('054-9876543'), true);
+    t.eq('building name from account info', doc.includes('ועד הבית — מבצע דני 11'), true);
+    t.eq('committee phone from config', doc.includes('050-2146510'), true);
+    t.eq('opening balance is its own table row', doc.includes('יתרת פתיחה / חוב התחלתי'), true);
+    t.eq('opening balance amount shown', doc.includes('1,610'), true);
+    t.eq('an unpaid month is itemised', doc.includes('אפריל 2026'), true);
+    t.eq('a partial month shows paid-of-expected', doc.includes('שולם 100 ₪ מתוך 230 ₪'), true);
+    t.eq('extra-account month line present', doc.includes('ביטוח — יולי 2026'), true);
+    t.eq("extra account's own opening balance line present", doc.includes('ביטוח — יתרת פתיחה'), true);
+    t.eq("total is the row's owed, not a recompute", doc.includes('3,710'), true);
+    t.eq('due date rendered', doc.includes('07.9.2026'), true);
+    t.eq('document number is present (dynamic)', doc.includes('VP-2026-0007'), true);
+    t.eq('manager signature block present', doc.includes('חתימת מנהל הועד'), true);
+    t.eq('manager name pre-filled', doc.includes('תומר שר שלום'), true);
+    t.eq('lawyer signature block present', doc.includes('חתימה וחותמת עו"ד'), true);
+    t.eq('legal warning box present', doc.includes('הודעת אזהרה'), true);
+    t.eq('RTL document', /<html[^>]*dir="rtl"/.test(doc), true);
+
+    t.section('v2.14.27 — מכתב התראה escaping + graceful fallbacks');
+    const xssDoc = L.buildExcessLetterHtml(
+      Object.assign({}, letterRow, { name: '<img src=x onerror=alert(1)>', months: [], accounts: [] }),
+      { docNo: 'VP-2026-0008' });
+    t.eq('recipient name is HTML-escaped', xssDoc.includes('<img src=x'), false);
+    t.eq('escaped form present instead', xssDoc.includes('&lt;img'), true);
+
+    // a tenant with NO opening balance shows no opening-balance row
+    const noOpen = L.buildExcessLetterHtml(
+      Object.assign({}, letterRow, { openingDebt: 0, accounts: [] }), { docNo: 'VP-2026-0009' });
+    t.eq('no opening-balance row when openingDebt is 0', noOpen.includes('יתרת פתיחה / חוב התחלתי'), false);
+
+    // missing building fields degrade to a sane default, never a blank label
+    const bare = new Function('window', 'data',
+      lfns + '\n; return { buildExcessLetterHtml };')({ __vpBuilding: {} }, { config: {} });
+    const bareDoc = bare.buildExcessLetterHtml(letterRow, { docNo: 'VP-2026-0010' });
+    t.eq('falls back to a default building name', bareDoc.includes('ועד הבית'), true);
+    t.noThrow('no missing-field crash', () => bare.buildExcessLetterHtml(letterRow, {}));
+
+    t.section('v2.14.27 — doc-number sequence + letter wiring');
+    t.eq('nextLetterDocNo is defined', /function nextLetterDocNo\(\)/.test(app), true);
+    t.eq('doc number is namespaced per building+year', /vp_letter_seq__/.test(app), true);
+    t.eq('the letter path calls nextLetterDocNo', /buildExcessLetterHtml\(row, \{ docNo: nextLetterDocNo\(\) \}\)/.test(app), true);
+    t.eq('building info is cached at auth time', /window\.__vpBuilding = Object\.assign/.test(app), true);
+    t.eq('getBuildingInfo reads the cache', /function getBuildingInfo\(\)/.test(app), true);
+  }
+
   // ── v2.14.2 — list search / sort / collapse ────────────────────
   t.section('v2.14.2 — \u05e8\u05e9\u05d9\u05de\u05ea \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd: search + collapse');
   t.eq('a search box exists and is wired live', /id="tenantSearch"[^>]*oninput="onTenantSearch\(this\.value\)"/.test(app), true);

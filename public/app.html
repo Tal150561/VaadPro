@@ -7940,28 +7940,202 @@ async function sendExcessAlert(channel) {
   }
 }
 
-// Printable Hebrew RTL letter in a new window (no server dependency).
+// Resolve the building/manager identity for the printed letter. Reads the
+// cached JWT/account info (window.__vpBuilding, filled at auth time) with
+// data.config as a secondary source. Every field is optional — the letter
+// degrades gracefully when a field is missing rather than printing a blank
+// label.
+function getBuildingInfo() {
+  var b = (typeof window !== 'undefined' && window.__vpBuilding) ? window.__vpBuilding : {};
+  var c = (typeof data !== 'undefined' && data && data.config) ? data.config : {};
+  return {
+    buildingName: b.buildingName || c.buildingName || 'ועד הבית',
+    address:      b.address || c.address || '',
+    vaadPhone:    c.vaadPhone || b.phone || '',
+    email:        b.email || c.email || '',
+    managerName:  c.managerName || b.managerName || ''
+  };
+}
+
+// Sequential per-letter document number: VP-YYYY-NNNN. The counter is
+// namespaced per building (per tenantDataId when known) so each customer has
+// its own running sequence, and it advances on every generated letter.
+function nextLetterDocNo() {
+  var year = new Date().getFullYear();
+  var bldg = (typeof window !== 'undefined' && window.__vpBuilding && window.__vpBuilding.buildingName) || 'x';
+  var key  = 'vp_letter_seq__' + bldg + '__' + year;
+  var n = 0;
+  try { n = parseInt(localStorage.getItem(key) || '0', 10) || 0; } catch(e) { n = 0; }
+  n += 1;
+  try { localStorage.setItem(key, String(n)); } catch(e) {}
+  return 'VP-' + year + '-' + String(n).padStart(4, '0');
+}
+
+// Build the full Hebrew-RTL warning-letter HTML for one excess-debt row.
+// Pure function (no DOM, no window side-effects beyond what's passed in) so it
+// is unit-testable: given a row + building info + docNo it returns the exact
+// document string. `row` is an excess-debt row (id,name,apartment,phone,email,
+// months[],openingDebt,accounts[],owed). `opts` = {building, docNo, today,
+// dueDate}. Amounts and the total come straight from the row — no money math
+// happens here.
+function buildExcessLetterHtml(row, opts) {
+  opts = opts || {};
+  var b = opts.building || getBuildingInfo();
+  var nis = function(n){ return (Math.round((parseFloat(n)||0)*100)/100).toLocaleString('he-IL') + ' ₪'; };
+
+  // Debt rows for the table, in the same order the modal shows them:
+  // opening balance first (carried, no month), then each unpaid/partial month,
+  // then extra-account lines.
+  var lines = [];
+  if ((parseFloat(row.openingDebt) || 0) > 0) {
+    lines.push({ label: 'יתרת פתיחה / חוב התחלתי', amount: row.openingDebt,
+                 status: 'לא שולם', note: 'חוב קודם ללא שיוך חודשי' });
+  }
+  (row.months || []).forEach(function(m){
+    var yr = String(m.monthKey || '').split('-')[0] || '';
+    var note = (m.status === 'partial')
+      ? ('שולם ' + nis(m.paidAmount) + ' מתוך ' + nis(m.expected))
+      : '—';
+    lines.push({ label: (m.hebMonth || '') + (yr ? ' ' + yr : ''),
+                 amount: m.shortfall, status: 'לא שולם', note: note });
+  });
+  (row.accounts || []).forEach(function(a){
+    (a.months || []).forEach(function(m){
+      var yr = String(m.monthKey || '').split('-')[0] || '';
+      lines.push({ label: (a.label || 'חשבון נוסף') + ' — ' + (m.hebMonth || '') + (yr ? ' ' + yr : ''),
+                   amount: m.amount, status: 'לא שולם', note: '—' });
+    });
+    if ((parseFloat(a.openingDebt) || 0) > 0) {
+      lines.push({ label: (a.label || 'חשבון נוסף') + ' — יתרת פתיחה',
+                   amount: a.openingDebt, status: 'לא שולם', note: 'חוב קודם בחשבון' });
+    }
+  });
+
+  var rowsHtml = lines.map(function(l){
+    return '<tr><td>' + esc(l.label) + '</td><td>' + esc(nis(l.amount))
+         + '</td><td class="st-unpaid">' + esc(l.status) + '</td><td>' + esc(l.note) + '</td></tr>';
+  }).join('');
+
+  var total   = (typeof row.owed === 'number') ? row.owed
+              : lines.reduce(function(s,l){ return s + (parseFloat(l.amount)||0); }, 0);
+  var today   = opts.today   || new Date().toLocaleDateString('he-IL');
+  var dueDate = opts.dueDate || (function(){
+    var d = new Date(); d.setDate(d.getDate() + 14); return d.toLocaleDateString('he-IL');
+  })();
+  var docNo   = opts.docNo || '';
+
+  var meta = [];
+  if (b.address)   meta.push(esc(b.address));
+  var contact = [];
+  if (b.vaadPhone) contact.push('טלפון ועד: ' + esc(b.vaadPhone));
+  if (b.email)     contact.push('דוא"ל: ' + esc(b.email));
+
+  var recipientMeta = [];
+  if (row.apartment) recipientMeta.push('דירה: ' + esc(row.apartment));
+  if (row.phone)     recipientMeta.push('טלפון: ' + esc(row.phone));
+  if (row.email)     recipientMeta.push('דוא"ל: ' + esc(row.email));
+
+  return ''
+    + '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8">'
+    + '<title>מכתב התראה — ' + esc(row.name || '') + '</title><style>'
+    + '@page{size:A4;margin:1.3cm 1.4cm;}'
+    + '*{box-sizing:border-box;}'
+    + 'body{font-family:"Segoe UI",Arial,sans-serif;direction:rtl;color:#1f2937;font-size:13px;line-height:1.7;max-width:780px;margin:24px auto;padding:0 24px;}'
+    + '.hdr{border-bottom:3px solid #1e3a8a;padding-bottom:12px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:flex-start;}'
+    + '.hdr .bn{font-size:16px;font-weight:800;color:#1e3a8a;margin-bottom:4px;}'
+    + '.hdr .sub{font-size:12px;color:#374151;}'
+    + '.brand{font-size:20px;font-weight:800;color:#1e3a8a;}'
+    + '.docmeta{text-align:left;font-size:12px;color:#6b7280;margin-bottom:14px;}'
+    + '.titlebar{background:#fef3c7;border:1px solid #f59e0b;border-radius:6px;padding:10px 14px;font-size:16px;font-weight:800;color:#92400e;margin-bottom:16px;text-align:center;}'
+    + '.rcpt{background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;padding:10px 14px;margin-bottom:16px;}'
+    + '.rcpt .nm{font-weight:800;font-size:14px;}'
+    + '.rcpt .rm{font-size:12px;color:#374151;margin-top:3px;}'
+    + 'table{width:100%;border-collapse:collapse;margin:14px 0;font-size:12px;}'
+    + 'th{background:#1e3a8a;color:#fff;padding:8px 10px;text-align:right;font-weight:700;}'
+    + 'td{padding:8px 10px;border-bottom:1px solid #e5e7eb;text-align:right;}'
+    + 'tr:nth-child(even) td{background:#f9fafb;}'
+    + '.st-unpaid{color:#b91c1c;font-weight:700;}'
+    + '.total td{background:#fef3c7 !important;font-weight:800;color:#92400e;border-top:2px solid #f59e0b;}'
+    + '.warn{background:#fef2f2;border:1px solid #ef4444;border-radius:6px;padding:11px 14px;margin:16px 0;}'
+    + '.warn .wt{font-weight:800;color:#b91c1c;margin-bottom:5px;font-size:13px;}'
+    + '.sign{margin-top:20px;}.sign .rb{font-weight:800;}'
+    + '.sigs{display:flex;justify-content:space-between;gap:40px;margin-top:22px;}'
+    + '.sigcol{flex:1;text-align:center;}'
+    + '.sigline{border-bottom:1.5px solid #374151;height:34px;margin-bottom:6px;}'
+    + '.siglabel{font-weight:800;font-size:12px;color:#1e3a8a;}'
+    + '.signame{font-size:11px;color:#374151;margin-top:3px;}'
+    + '.foot{margin-top:16px;border-top:1px solid #e5e7eb;padding-top:7px;font-size:9px;color:#9ca3af;text-align:center;}'
+    + '@media print{body{margin:0;}.noprint{display:none;}}'
+    + '.noprint{margin-top:22px;padding:9px 20px;font-size:14px;cursor:pointer;}'
+    + '</style></head><body>'
+    + '<div class="hdr"><div><div class="bn">' + esc(b.buildingName || 'ועד הבית') + '</div>'
+    +   (meta.length ? '<div class="sub">' + meta.join(' · ') + '</div>' : '')
+    +   (contact.length ? '<div class="sub">' + contact.join(' | ') + '</div>' : '')
+    + '</div><div class="brand">VaadPro</div></div>'
+    + '<div class="docmeta">תאריך: ' + esc(today) + (docNo ? ' &nbsp;|&nbsp; מסמך מס\': ' + esc(docNo) : '') + '</div>'
+    + '<div class="titlebar">⚠ מכתב התראה — חוב פתוח</div>'
+    + '<div class="rcpt"><div class="nm">לכבוד: ' + esc(row.name || '') + '</div>'
+    +   (recipientMeta.length ? '<div class="rm">' + recipientMeta.join(' | ') + '</div>' : '')
+    + '</div>'
+    + '<p>שלום רב,</p>'
+    + '<p>הננו פונים אליך בעניין יתרת חוב פתוחה לועד הבית של הבניין בכתובת הנ"ל. לאחר בדיקה במערכת הניהול שלנו, עולה כי נכון לתאריך המכתב, קיים חוב שטרם שולם, כמפורט בטבלה להלן.</p>'
+    + '<p>אנו מבקשים ממך לסדר את התשלום בהקדם האפשרי ולא יאוחר מ־14 יום מתאריך מכתב זה.</p>'
+    + '<table><thead><tr><th>פירוט</th><th>סכום לתשלום</th><th>סטטוס</th><th>הערות</th></tr></thead><tbody>'
+    +   rowsHtml
+    +   '<tr class="total"><td>סה"כ לתשלום</td><td>' + esc(nis(total)) + '</td>'
+    +     '<td colspan="2">⚠ יש לשלם עד: ' + esc(dueDate) + '</td></tr>'
+    + '</tbody></table>'
+    + '<div class="warn"><div class="wt">⚠ הודעת אזהרה</div>'
+    +   'אם לא יתקבל התשלום במועד הנקוב, ועד הבית יהיה רשאי לנקוט בהליכים משפטיים לגביית החוב, לרבות פנייה לבית משפט לתביעות קטנות או לעורך דין. כל עלויות הגבייה ישולמו על ידי החייב.'
+    + '</div>'
+    + '<div class="sign"><div class="rb">בכבוד רב,</div>' + esc(b.buildingName || 'ועד הבית')
+    +   (b.address ? '<br>' + esc(b.address) : '') + '</div>'
+    + '<div class="sigs">'
+    +   '<div class="sigcol"><div class="sigline"></div><div class="siglabel">חתימת מנהל הועד</div>'
+    +     '<div class="signame">' + (b.managerName ? esc(b.managerName) : 'שם: ______________________') + '</div></div>'
+    +   '<div class="sigcol"><div class="sigline"></div><div class="siglabel">חתימה וחותמת עו"ד</div>'
+    +     '<div class="signame">שם: ______________________</div></div>'
+    + '</div>'
+    + '<div class="foot">מסמך זה הופק באמצעות מערכת VaadPro | vaadpro.org | מסמך זה מהווה התראה רשמית בהתאם לחוק | הופק ב: ' + esc(today) + '</div>'
+    + '<button class="noprint" onclick="window.print()">🖨️ הדפס</button>'
+    + '</body></html>';
+}
+
+// Printable Hebrew RTL warning letter in a new window (no server dependency).
+// Uses the excess-debt row for the itemised debt table when available; falls
+// back to the free-text message only if the row can't be resolved.
 function openExcessLetter(name, msg) {
   var w = window.open('', '_blank');
   if (!w) { toast('חסימת חלונות קופצים מונעת פתיחת המכתב', 'error'); return; }
-  var today = new Date().toLocaleDateString('he-IL');
-  w.document.write(
-    '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8">'
-    + '<title>מכתב התראה — ' + esc(name) + '</title><style>'
-    + 'body{font-family:Arial,"Segoe UI",sans-serif;direction:rtl;max-width:760px;margin:40px auto;padding:0 30px;line-height:1.9;color:#111;}'
-    + 'h1{font-size:20px;border-bottom:2px solid #333;padding-bottom:10px;}'
-    + '.date{text-align:left;font-size:13px;color:#555;margin-bottom:20px;}'
-    + '.body{white-space:pre-wrap;font-size:15px;}'
-    + '.sig{margin-top:50px;font-size:14px;color:#333;}'
-    + '@media print{body{margin:0;}.noprint{display:none;}}'
-    + 'button{margin-top:26px;padding:9px 20px;font-size:14px;cursor:pointer;}'
-    + '</style></head><body>'
-    + '<div class="date">' + today + '</div>'
-    + '<h1>הודעה על חוב פתוח</h1>'
-    + '<div class="body">' + esc(msg).replace(/\*/g,'') + '</div>'
-    + '<div class="sig">בכבוד רב,<br>ועד הבית</div>'
-    + '<button class="noprint" onclick="window.print()">🖨️ הדפס</button>'
-    + '</body></html>');
+  var row = null;
+  if (_excessAlertTarget && Array.isArray(excessDebtRows)) {
+    row = excessDebtRows.find(function(r){ return String(r.id) === String(_excessAlertTarget.id); });
+  }
+  var html;
+  if (row) {
+    html = buildExcessLetterHtml(row, { docNo: nextLetterDocNo() });
+  } else {
+    // Fallback: no structured row (e.g. called out of context) — keep the
+    // old plain-text letter so nothing breaks.
+    var today = new Date().toLocaleDateString('he-IL');
+    html = '<!DOCTYPE html><html dir="rtl" lang="he"><head><meta charset="utf-8">'
+      + '<title>מכתב התראה — ' + esc(name) + '</title><style>'
+      + 'body{font-family:Arial,"Segoe UI",sans-serif;direction:rtl;max-width:760px;margin:40px auto;padding:0 30px;line-height:1.9;color:#111;}'
+      + 'h1{font-size:20px;border-bottom:2px solid #333;padding-bottom:10px;}'
+      + '.date{text-align:left;font-size:13px;color:#555;margin-bottom:20px;}'
+      + '.body{white-space:pre-wrap;font-size:15px;}'
+      + '.sig{margin-top:50px;font-size:14px;color:#333;}'
+      + '@media print{body{margin:0;}.noprint{display:none;}}'
+      + 'button{margin-top:26px;padding:9px 20px;font-size:14px;cursor:pointer;}'
+      + '</style></head><body>'
+      + '<div class="date">' + today + '</div>'
+      + '<h1>הודעה על חוב פתוח</h1>'
+      + '<div class="body">' + esc(msg || '').replace(/\*/g,'') + '</div>'
+      + '<div class="sig">בכבוד רב,<br>ועד הבית</div>'
+      + '<button class="noprint" onclick="window.print()">🖨️ הדפס</button>'
+      + '</body></html>';
+  }
+  w.document.write(html);
   w.document.close();
 }
 
@@ -8282,6 +8456,15 @@ async function aiImprove(textareaId, instructionId, statusId, context) {
   const payload = decodeJwt(token);
   if (!payload) { vpLogout(); return; }
 
+  // Cache the building/manager identity for surfaces that print letters
+  // (warning-letter PDF, etc.). Fields the JWT carries directly; `address`
+  // is filled in below from /api/auth/me. Read via getBuildingInfo().
+  window.__vpBuilding = Object.assign(window.__vpBuilding || {}, {
+    buildingName: payload.buildingName || '',
+    email:        payload.email || '',
+    managerName:  payload.fullName || ''
+  });
+
   // מלא את סרגל ה-auth
   const bEl = document.getElementById('authBarBuilding');
   const eEl = document.getElementById('authBarEmail');
@@ -8293,6 +8476,11 @@ async function aiImprove(textareaId, instructionId, statusId, context) {
   // בדוק תוקף מנוי מהשרת
   fetch('/api/auth/me').then(function(r){ return r.json(); }).then(function(d){
     if (!d || d.error) return;
+    // enrich the cached building info with the account address
+    window.__vpBuilding = Object.assign(window.__vpBuilding || {}, {
+      address: d.address || '',
+      email:   d.email || window.__vpBuilding.email || ''
+    });
     const planEl = document.getElementById('authBarPlan');
     if (!planEl) return;
     if (d.plan === 'trial' && d.trialEnd) {
