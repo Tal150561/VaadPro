@@ -1190,4 +1190,39 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('apt match-type icon 🏠', app.includes("matchType==='apt'?'🏠'"), true);
 }
 
+// ── v2.14.28 (A): client bankRowFingerprint — אסמכתא as optional 4th key ──
+// EXECUTES the REAL client-side helper from app.html (not a copy) and asserts it
+// mirrors the server: absent ref → 3-part key (back-compat), present distinct
+// ref → distinct fp (חנה's two genuine payments both count), same ref → collide
+// (re-import dedup preserved). Guards the manual UI import path specifically.
+{
+  t.section('v2.14.28 — client bankRowFingerprint mirrors server (אסמכתא)');
+  // bankRowFingerprint lives INSIDE a script block (indented), so the column-0
+  // extractFunctions can't grab it — pull it with a tolerant local regex instead.
+  const fpMatch = app.match(/function bankRowFingerprint\s*\([\s\S]*?\n  \}/);
+  if (!fpMatch) { throw new Error('client bankRowFingerprint not found in app.html'); }
+  const fp = new Function(fpMatch[0] + '\n; return bankRowFingerprint;')();
+  t.eq('no ref → 3-part key', fp('19/08', 230, 'שחם חנה'), fp('19/08', 230, 'שחם חנה', ''));
+  t.eq('null ref → 3-part key', fp('19/08', 230, 'שחם חנה'), fp('19/08', 230, 'שחם חנה', null));
+  t.eq('undefined ref → 3-part key', fp('19/08', 230, 'שחם חנה'), fp('19/08', 230, 'שחם חנה', undefined));
+  t.eq('different ref → different fp (2 genuine payments)',
+       fp('19/08', 230, 'שחם חנה', '589592') !== fp('19/08', 230, 'שחם חנה', '589593'), true);
+  t.eq('same ref → same fp (re-import deduped)',
+       fp('19/08', 230, 'שחם חנה', '589592'), fp('19/08', 230, 'שחם חנה', '589592'));
+  t.eq('ref whitespace/case normalised', fp('19/08', 230, 'x', ' 589592 '), fp('19/08', 230, 'x', '589592'));
+  // Exact match with the server key string, so both paths dedup identically.
+  t.eq('client key format matches server (with ref)', fp('19/08', 230, 'שחם חנה', '589592'), '19/08|230|שחם חנה|589592');
+  t.eq('client key format matches server (no ref)', fp('19/08', 230, 'שחם חנה'), '19/08|230|שחם חנה');
+
+  t.section('v2.14.28 — colRef plumbed through app.html (UI + mapping)');
+  t.eq('colRef select present in mapping grid', app.includes('id="colRef"'), true);
+  t.eq('אסמכתא label present', app.includes('עמודת אסמכתא'), true);
+  t.eq('colRef in select-population loop', /\['colName','colAmount','colDate','colNote','colRef'\]/.test(app), true);
+  t.eq('iRef read from colRef', app.includes("document.getElementById('colRef')"), true);
+  t.eq('refVal added to mr rows', app.includes('refVal:refVal'), true);
+  t.eq('fingerprint call passes m.refVal', app.includes('m.nameVal || m.row.join(\' \'), m.refVal'), true);
+  t.eq('saveBankMapping persists colRef', /colRef: \(document\.getElementById\('colRef'\)/.test(app), true);
+  t.eq('auto-detect routes אסמכתא to colRef', /\(אסמכתא\|reference\|ref\)/.test(app), true);
+}
+
 process.exit(t.done() ? 1 : 0);

@@ -647,6 +647,8 @@ function vpLogout() {
               <select id="colDate" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
             <div><label style="font-size:0.8rem;">עמודת הערות (אופציונלי)</label>
               <select id="colNote" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
+            <div><label style="font-size:0.8rem;">עמודת אסמכתא (אופציונלי)</label>
+              <select id="colRef" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
           </div>
           <!-- Preview rows -->
           <div style="font-size:0.75rem;color:var(--text2);margin-bottom:8px;">תצוגה מקדימה (3 שורות ראשונות):</div>
@@ -3901,15 +3903,16 @@ function showMappingPanel(rows, fileName){
   const noneOpt = '<option value="-1">-- לא רלוונטי --</option>';
   const opts = headers.map(function(h,i){ return '<option value="'+i+'">'+h+'</option>'; }).join('');
 
-  ['colName','colAmount','colDate','colNote'].forEach(function(id){
-    document.getElementById(id).innerHTML = noneOpt + opts;
+  ['colName','colAmount','colDate','colNote','colRef'].forEach(function(id){
+    var el=document.getElementById(id); if(el) el.innerHTML = noneOpt + opts;
   });
 
   // טען מיפוי שמור אם קיים
   const saved = loadBankMapping();
   if(saved){
-    ['colName','colAmount','colDate','colNote'].forEach(function(id){
-      if(saved[id]!==undefined) document.getElementById(id).value=saved[id];
+    ['colName','colAmount','colDate','colNote','colRef'].forEach(function(id){
+      var el=document.getElementById(id);
+      if(el && saved[id]!==undefined) el.value=saved[id];
     });
     if(saved.bankAmount) document.getElementById('bankAmount').value=saved.bankAmount;
     if(saved.bankTolerance) document.getElementById('bankTolerance').value=saved.bankTolerance;
@@ -3920,7 +3923,9 @@ function showMappingPanel(rows, fileName){
       if(/(תיאור|שם|מוטב|זיכוי|חיוב.*שם|פרטים|beneficiary|description|name)/i.test(hl)) document.getElementById('colName').value=i;
       else if(/(סכום|amount|credit|debit|זיכוי|חיוב)/i.test(hl) && /(sum|סכום|amount)/i.test(hl)) document.getElementById('colAmount').value=i;
       else if(/(תאריך|date|value)/i.test(hl)) document.getElementById('colDate').value=i;
-      else if(/(הערה|note|ref|אסמכתא)/i.test(hl)) document.getElementById('colNote').value=i;
+      // v2.14.28: אסמכתא/reference is its OWN column now — detect it before the note
+      else if(/(אסמכתא|reference|ref)/i.test(hl)){ var re=document.getElementById('colRef'); if(re) re.value=i; }
+      else if(/(הערה|note|הערות)/i.test(hl)) document.getElementById('colNote').value=i;
     });
     // fallback — try to detect by content
     if(document.getElementById('colAmount').value==='-1'){
@@ -4032,6 +4037,7 @@ function saveBankMapping(){
     colAmount: document.getElementById('colAmount').value,
     colDate: document.getElementById('colDate').value,
     colNote: document.getElementById('colNote').value,
+    colRef: (document.getElementById('colRef')||{}).value ?? '-1',
     bankAmount: document.getElementById('bankAmount').value,
     bankTolerance: document.getElementById('bankTolerance').value
   };
@@ -4112,6 +4118,8 @@ function analyzeBankRows(rows,fileName){
   const iAmount = parseInt(document.getElementById('colAmount').value);
   const iDate   = parseInt(document.getElementById('colDate').value);
   const iNote   = parseInt(document.getElementById('colNote').value);
+  const iRefEl  = document.getElementById('colRef');
+  const iRef    = iRefEl ? parseInt(iRefEl.value) : -1; // v2.14.28: אסמכתא (optional)
 
   const dataRows = rows.slice(1); // דלג על כותרות
 
@@ -4146,7 +4154,8 @@ function analyzeBankRows(rows,fileName){
       const nameVal = iName>=0 ? String(row[iName]||'') : row.join(' ');
       const dateVal = iDate>=0 ? String(row[iDate]||'') : '';
       const noteVal = iNote>=0 ? String(row[iNote]||'') : '';
-      mr.push({row:row,amount:matchAmount,rowIdx:rowIdx,nameVal:nameVal,dateVal:dateVal,noteVal:noteVal});
+      const refVal  = iRef>=0 ? String(row[iRef]||'') : ''; // v2.14.28
+      mr.push({row:row,amount:matchAmount,rowIdx:rowIdx,nameVal:nameVal,dateVal:dateVal,noteVal:noteVal,refVal:refVal});
     }
   });
 
@@ -4185,11 +4194,17 @@ function analyzeBankRows(rows,fileName){
   // The list is persisted through POST /api/data { importedBankFingerprints } — the
   // server shallow-merges it like any other field. Same rule applies to extra
   // accounts on the server import path (they don't exist in this manual path).
-  function bankRowFingerprint(dateVal, amount, nameOrDesc) {
+  // v2.14.28 (A): OPTIONAL 4th component = bank אסמכתא (reference no.). When a ref
+  // is present, two genuine same-day/same-amount/same-payer rows (e.g. שחם חנה,
+  // אסמכתא 589592 vs 589593) get DISTINCT fingerprints so both are counted.
+  // When absent, byte-identical to the old 3-part key — existing files and stored
+  // fingerprints are unaffected. Must mirror server bankRowFingerprint exactly.
+  function bankRowFingerprint(dateVal, amount, nameOrDesc, ref) {
     var dd = String(dateVal||'').trim().toLowerCase().replace(/\s+/g,' ');
     var aa = String(Math.round((parseFloat(amount)||0)*100)/100);
     var nn = String(nameOrDesc||'').trim().toLowerCase().replace(/\s+/g,' ');
-    return dd+'|'+aa+'|'+nn;
+    var rr = String(ref==null?'':ref).trim().toLowerCase().replace(/\s+/g,' ');
+    return rr ? (dd+'|'+aa+'|'+nn+'|'+rr) : (dd+'|'+aa+'|'+nn);
   }
   // ── v2.14.4 (#3): parse a row date to YYYY-MM, mirrors server bankRowMonthKey ──
   // Reuses parseDate() (the shared bank-date parser) so this path and the Agent
@@ -4386,7 +4401,7 @@ function analyzeBankRows(rows,fileName){
 
       if(type){
         // ── Fingerprint dedup ──────────────────────────────────────
-        var fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+        var fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
         if(alreadyImportedFp.has(fp)){                                      // imported in a prior run → skip, but surface it
           seenRowIdx.add(m.rowIdx);
           tenantHadPriorImport=true;
@@ -9155,6 +9170,7 @@ async function saveMappingAsDefault() {
     colAmount:     document.getElementById('colAmount').value,
     colDate:       document.getElementById('colDate').value,
     colNote:       document.getElementById('colNote').value,
+    colRef:        (document.getElementById('colRef')||{}).value ?? '-1',
     bankAmount:    document.getElementById('bankAmount').value,
     bankTolerance: document.getElementById('bankTolerance').value,
   };

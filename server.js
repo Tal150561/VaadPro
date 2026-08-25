@@ -6481,11 +6481,23 @@ function applyPaymentToDebt(tenant, amount) {
 // short stable string. Date is used as-is (the file's own date text) — we do NOT
 // parse it, so two rows only collide when the file itself repeats the same date
 // string, which is exactly the duplicate case we want to catch.
-function bankRowFingerprint(dateVal, amount, nameOrDesc) {
+// v2.14.28 (A): OPTIONAL 4th component `ref` — the bank אסמכתא (reference no.).
+// The reference number is the one field a bank guarantees is UNIQUE per
+// transaction. Without it, two GENUINE same-day payments of the same amount by
+// the same payer (e.g. שחם חנה paying twice on 19/8, אסמכתא 589592 vs 589593)
+// collapse to one fingerprint and the second is silently swallowed as a
+// duplicate. When a ref is present we append it, so those two rows get DISTINCT
+// fingerprints and both are counted. When it is ABSENT (''/-1 mapping, or a
+// file with no reference column) the fingerprint is byte-identical to the old
+// 3-part key — so every existing file, test, and stored fingerprint is
+// unaffected. Cross-import dedup still holds: re-importing the SAME file carries
+// the SAME ref, so the fingerprint matches and the row is skipped.
+function bankRowFingerprint(dateVal, amount, nameOrDesc, ref) {
   const d = String(dateVal || '').trim().toLowerCase().replace(/\s+/g, ' ');
   const a = String(Math.round((parseFloat(amount) || 0) * 100) / 100);
   const n = String(nameOrDesc || '').trim().toLowerCase().replace(/\s+/g, ' ');
-  return d + '|' + a + '|' + n;
+  const r = String(ref == null ? '' : ref).trim().toLowerCase().replace(/\s+/g, ' ');
+  return r ? (d + '|' + a + '|' + n + '|' + r) : (d + '|' + a + '|' + n);
 }
 
 // ── bankRowMonthKey (v2.14.4, #3 multi-month split) ────────────────
@@ -6557,6 +6569,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   const iAmount = parseInt(mapping.colAmount ?? -1);
   const iDate   = parseInt(mapping.colDate   ?? -1);
   const iNote   = parseInt(mapping.colNote   ?? -1);
+  const iRef    = parseInt(mapping.colRef    ?? -1); // v2.14.28: bank אסמכתא column (optional)
   const ta      = mapping.bankAmount ? parseFloat(mapping.bankAmount) : null;
   const tol     = parseFloat(mapping.bankTolerance ?? 5);
   const filterByAmount = ta !== null && !isNaN(ta) && ta > 0;
@@ -6594,6 +6607,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         nameVal: iName >= 0 ? String(row[iName] || '') : row.join(' '),
         dateVal: iDate >= 0 ? String(row[iDate] || '') : '',
         noteVal: iNote >= 0 ? String(row[iNote] || '') : '',
+        refVal:  iRef  >= 0 ? String(row[iRef]  || '') : '', // v2.14.28
       });
     }
   });
@@ -6761,7 +6775,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (!type && !noteBlocksThisTenant && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
       if (!type) return;
       // ── Fingerprint dedup (main account) ──────────────────────────
-      const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+      const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
       if (alreadyImported.has(fp)) {                                     // imported before → skip, but surface it
         seenRowIdx.add(m.rowIdx);
         tenantHadPriorImport = true;
@@ -6829,7 +6843,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
           if (!kwMatches(accKw, rt)) return;
           // ── Fingerprint dedup (extra account) — same rule as the main account ──
-          const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+          const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
           if (alreadyImported.has(fp)) {                                             // imported before → skip, but surface it
             usedRowIdxForMain.add(m.rowIdx);
             alreadyImportedSkips.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal || '', scope: 'extra', accountId: acc.id });
@@ -6909,12 +6923,12 @@ app.get('/api/bank-mapping', authMiddleware, (req, res) => {
 
 // ── POST /api/bank-mapping ─────────────────────────────────────────
 app.post('/api/bank-mapping', authMiddleware, (req, res) => {
-  const { colName, colAmount, colDate, colNote, bankAmount, bankTolerance } = req.body;
+  const { colName, colAmount, colDate, colNote, colRef, bankAmount, bankTolerance } = req.body;
   const d = loadTenantData(req.user.tenantId);
   if (!d.config.bankSyncApiKey) {
     d.config.bankSyncApiKey = uuidv4();
   }
-  const mapping = { colName, colAmount, colDate, colNote, bankAmount, bankTolerance };
+  const mapping = { colName, colAmount, colDate, colNote, colRef, bankAmount, bankTolerance };
   saveTenantData(req.user.tenantId, { bankMapping: mapping, config: d.config });
   res.json({ ok: true, mapping, apiKey: d.config.bankSyncApiKey });
 });

@@ -293,6 +293,71 @@ t.section('Fix #0 — Agent import does not net openingDebt');
   t.eq('different date → different fp', B.bankRowFingerprint('31/05', 217, 'x') !== B.bankRowFingerprint('29/06', 217, 'x'), true);
   t.eq('different amount → different fp', B.bankRowFingerprint('31/05', 217, 'x') !== B.bankRowFingerprint('31/05', 218, 'x'), true);
 
+  // ── v2.14.28 (A): אסמכתא (reference) as optional 4th fingerprint component ──
+  t.section('Bank dedup — v2.14.28: אסמכתא distinguishes same-day/same-amount rows');
+  // Absent ref ⇒ byte-identical to the old 3-part key (back-compat / existing files).
+  t.eq('no ref → identical to 3-part key', B.bankRowFingerprint('19/08', 230, 'שחם חנה'),
+                                            B.bankRowFingerprint('19/08', 230, 'שחם חנה', ''));
+  t.eq('null ref → identical to 3-part key', B.bankRowFingerprint('19/08', 230, 'שחם חנה'),
+                                             B.bankRowFingerprint('19/08', 230, 'שחם חנה', null));
+  t.eq('undefined ref → identical to 3-part key', B.bankRowFingerprint('19/08', 230, 'שחם חנה'),
+                                                  B.bankRowFingerprint('19/08', 230, 'שחם חנה', undefined));
+  // The reported bug: TWO genuine payments, identical date+amount+name, DIFFERENT אסמכתא.
+  t.eq('different ref → DIFFERENT fp (two genuine payments)',
+       B.bankRowFingerprint('19/08', 230, 'שחם חנה', '589592') !== B.bankRowFingerprint('19/08', 230, 'שחם חנה', '589593'), true);
+  // SAME ref (re-import of the same file) still collides → cross-import dedup preserved.
+  t.eq('same ref → same fp (re-import still deduped)',
+       B.bankRowFingerprint('19/08', 230, 'שחם חנה', '589592'), B.bankRowFingerprint('19/08', 230, 'שחם חנה', '589592'));
+  t.eq('ref whitespace/case normalised', B.bankRowFingerprint('19/08', 230, 'x', ' 589592 '),
+                                          B.bankRowFingerprint('19/08', 230, 'x', '589592'));
+  // Exact key format — guards against "always append ref" breaking stored (3-part)
+  // fingerprints, and keeps the server byte-identical to the client key string.
+  t.eq('no-ref key is exactly 3-part', B.bankRowFingerprint('19/08', 230, 'שחם חנה'), '19/08|230|שחם חנה');
+  t.eq('with-ref key is exactly 4-part', B.bankRowFingerprint('19/08', 230, 'שחם חנה', '589592'), '19/08|230|שחם חנה|589592');
+
+  t.section('Bank dedup — v2.14.28: real חנה case — 2 genuine payments both counted (main)');
+  {
+    // The exact uploaded file: שחם חנה, 19/8, 230, twice, אסמכתא 589592 vs 589593.
+    // colRef mapped → distinct fingerprints → BOTH counted, NO duplicate warning.
+    const refMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'אסמכתא'],
+      ['שחם חנה', '230', '19/08/2026', '589592'],
+      ['שחם חנה', '230', '19/08/2026', '589593'],
+    ];
+    const tenants = [{ id: 'H', name: 'שחם חנה', phone: '0500000000', keywords: '', customAmount: 230, openingDebt: 0 }];
+    const r = B.analyzeBankRowsServer(rows, refMapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    const amt = parseFloat(String(r.newSentLog['H_אוגוסט']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('BOTH payments counted → 460 (not 230)', amt, 460);
+    t.eq('NO duplicate warning (genuine, distinct אסמכתא)', r.duplicateWarnings.length, 0);
+    t.eq('two fingerprints consumed', r.newFingerprints.length, 2);
+
+    // Contrast: WITHOUT the ref column (colRef:-1) the two rows still collapse to
+    // one — proving the fix is what distinguishes them, and that legacy behaviour
+    // is unchanged when no אסמכתא column is mapped.
+    const noRefMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+    const r2 = B.analyzeBankRowsServer(rows, noRefMapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    const amt2 = parseFloat(String(r2.newSentLog['H_אוגוסט']).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+    t.eq('without ref column → still collapses to 230 (legacy)', amt2, 230);
+    t.eq('without ref column → duplicate warning surfaced', r2.duplicateWarnings.length, 1);
+  }
+
+  t.section('Bank dedup — v2.14.28: same אסמכתא re-import still deduped (cross-import)');
+  {
+    const refMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'אסמכתא'],
+      ['שחם חנה', '230', '19/08/2026', '589592'],
+    ];
+    const tenants = [{ id: 'H', name: 'שחם חנה', phone: '0500000000', keywords: '', customAmount: 230, openingDebt: 0 }];
+    const r1 = B.analyzeBankRowsServer(rows, refMapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    t.eq('first import records one fingerprint', r1.newFingerprints.length, 1);
+    const prior = new Set(r1.newFingerprints);
+    const r2 = B.analyzeBankRowsServer(rows, refMapping, tenants, {}, '2026-08', { amount: 230 }, prior);
+    t.eq('re-import of SAME file+ref adds no new fingerprints', r2.newFingerprints.length, 0);
+    t.eq('re-import is skipped, not double-counted', (r2.alreadyImportedSkips||[]).length, 1);
+  }
+
   t.section('Bank dedup — in-file duplicate counted once (main account)');
   {
     // צבי אלתר appears TWICE with 217 on the SAME date — the exact reported bug.
