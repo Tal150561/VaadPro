@@ -4401,8 +4401,15 @@ function analyzeBankRows(rows,fileName){
 
       if(type){
         // ── Fingerprint dedup ──────────────────────────────────────
-        var fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
-        if(alreadyImportedFp.has(fp)){                                      // imported in a prior run → skip, but surface it
+        // v2.14.29: `fp` is the canonical 4-part key (with ref) that we STORE and
+        // use for in-file dedup. `fpLegacy` is the old 3-part key (no ref). The
+        // CROSS-IMPORT check tests BOTH: a file previously imported WITHOUT the
+        // אסמכתא column mapped was stored as fpLegacy, so mapping the ref column
+        // later must NOT make those rows look new. In-file dedup stays on `fp`
+        // alone, so חנה's two genuine rows (distinct ref) are not collapsed.
+        var fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+        var fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+        if(alreadyImportedFp.has(fp) || alreadyImportedFp.has(fpLegacy)){   // imported in a prior run (either key) → skip, but surface it
           seenRowIdx.add(m.rowIdx);
           tenantHadPriorImport=true;
           alreadyImportedSkips.push({ name: tenant.name, amount: m.amount, date: m.dateVal||'' });

@@ -6775,8 +6775,12 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (!type && !noteBlocksThisTenant && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
       if (!type) return;
       // ── Fingerprint dedup (main account) ──────────────────────────
-      const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
-      if (alreadyImported.has(fp)) {                                     // imported before → skip, but surface it
+      // v2.14.29: cross-import checks BOTH the 4-part key (with ref) and the
+      // legacy 3-part key, so a file imported before the אסמכתא column was mapped
+      // still de-dupes. In-file + storage stay on the 4-part key.
+      const fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+      const fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+      if (alreadyImported.has(fp) || alreadyImported.has(fpLegacy)) {    // imported before (either key) → skip, but surface it
         seenRowIdx.add(m.rowIdx);
         tenantHadPriorImport = true;
         alreadyImportedSkips.push({ tenantId: tenant.id, name: tenant.name, amount: m.amount, date: m.dateVal || '', scope: 'main' });
@@ -6843,8 +6847,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
           if (!kwMatches(accKw, rt)) return;
           // ── Fingerprint dedup (extra account) — same rule as the main account ──
-          const fp = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
-          if (alreadyImported.has(fp)) {                                             // imported before → skip, but surface it
+          // v2.14.29: cross-import checks both 4-part and legacy 3-part keys.
+          const fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+          const fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+          if (alreadyImported.has(fp) || alreadyImported.has(fpLegacy)) {            // imported before (either key) → skip, but surface it
             usedRowIdxForMain.add(m.rowIdx);
             alreadyImportedSkips.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal || '', scope: 'extra', accountId: acc.id });
             return;

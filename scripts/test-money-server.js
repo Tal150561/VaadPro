@@ -358,6 +358,49 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     t.eq('re-import is skipped, not double-counted', (r2.alreadyImportedSkips||[]).length, 1);
   }
 
+  t.section('Bank dedup — v2.14.29: prior import WITHOUT ref still de-dupes after mapping ref');
+  {
+    // The exact reported regression: a file was imported LAST MONTH with no
+    // אסמכתא column mapped → fingerprints stored as 3-part (legacy). Now the admin
+    // maps the ref column and re-imports the SAME file. Those rows must still read
+    // "already imported" (via the legacy fallback), NOT re-appear as new.
+    const refMapping   = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+    const noRefMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'אסמכתא'],
+      ['ברקן טל', '230', '17/08/2026', '3367'],
+    ];
+    const tenants = [{ id: 'T', name: 'ברקן טל', phone: '0500000000', keywords: '', customAmount: 230, openingDebt: 0 }];
+    // Prior import: NO ref column → legacy 3-part fingerprint stored.
+    const r1 = B.analyzeBankRowsServer(rows, noRefMapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    t.eq('prior import stored a legacy (3-part) fingerprint', r1.newFingerprints.length, 1);
+    t.eq('legacy fp has no ref part', r1.newFingerprints[0].split('|').length, 3);
+    const prior = new Set(r1.newFingerprints);
+    // Re-import the SAME file, now WITH ref mapped.
+    const r2 = B.analyzeBankRowsServer(rows, refMapping, tenants, {}, '2026-08', { amount: 230 }, prior);
+    t.eq('re-import with ref mapped adds NO new fingerprints', r2.newFingerprints.length, 0);
+    t.eq('re-import is reported as already-imported, not matched', r2.matched.length, 0);
+    t.eq('already-imported skip surfaced', (r2.alreadyImportedSkips||[]).length, 1);
+  }
+
+  t.section('Bank dedup — v2.14.29: legacy fallback does NOT re-collapse two genuine rows');
+  {
+    // Same-day/amount/name, distinct ref. One was already imported (as 4-part).
+    // The OTHER must still count — the legacy fallback must not swallow it just
+    // because they share a 3-part key.
+    const refMapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+    const rowA = [['שם','סכום','תאריך','אסמכתא'], ['שחם חנה','230','19/08/2026','589592']];
+    const rowB = [['שם','סכום','תאריך','אסמכתא'], ['שחם חנה','230','19/08/2026','589593']];
+    const tenants = [{ id: 'H', name: 'שחם חנה', phone: '0500000000', keywords: '', customAmount: 230, openingDebt: 0 }];
+    const r1 = B.analyzeBankRowsServer(rowA, refMapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    t.eq('first payment (589592) imported', r1.newFingerprints.length, 1);
+    const prior = new Set(r1.newFingerprints);
+    const r2 = B.analyzeBankRowsServer(rowB, refMapping, tenants, {}, '2026-08', { amount: 230 }, prior);
+    t.eq('second payment (589593) still counts — NOT swallowed by legacy fallback', r2.matched.length, 1);
+    t.eq('second payment records a new fingerprint', r2.newFingerprints.length, 1);
+    t.eq('second payment not reported as already-imported', (r2.alreadyImportedSkips||[]).length, 0);
+  }
+
   t.section('Bank dedup — in-file duplicate counted once (main account)');
   {
     // צבי אלתר appears TWICE with 217 on the SAME date — the exact reported bug.
