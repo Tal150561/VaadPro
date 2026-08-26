@@ -912,6 +912,12 @@ function vpLogout() {
           </div>
         </div>
         <div class="schedule-box" style="margin-top:16px;">📅 <span id="scheduleText">הגדר תזמון</span></div>
+        <!-- v2.14.30 — auto-send master switch (pause/resume) + status -->
+        <div style="margin-top:12px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <span id="autoSendStateLabel" style="font-size:0.86rem;font-weight:600;"></span>
+          <button class="btn btn-secondary" id="btnToggleAutoSend" onclick="toggleAutoSend()" style="height:32px;padding:0 14px;font-size:0.82rem;"></button>
+        </div>
+        <div id="lastAutoSendError" style="margin-top:8px;font-size:0.82rem;"></div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
           <span id="lastAutoSendStatus" style="font-size:0.82rem;"></span>
           <button class="btn btn-secondary" id="btnResendAuto" onclick="resendAuto()" style="height:32px;padding:0 14px;font-size:0.82rem;">🔁 שלח עכשיו</button>
@@ -2319,6 +2325,24 @@ function updateSchedule() {
   const ml=c.manualMonth?c.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'?');
   const el=document.getElementById('scheduleText');
   if(el) el.innerHTML='הודעות ישלחו ב-<strong>'+(c.sendDay||1)+'</strong> לחודש בשעה <strong>'+h+':'+m+'</strong> — חודש: <strong>'+ml+'</strong>';
+  // v2.14.30 — auto-send master switch state (default ON: flag absent => enabled)
+  const enabled = c.autoSendEnabled !== false;
+  const lbl=document.getElementById('autoSendStateLabel');
+  const tbtn=document.getElementById('btnToggleAutoSend');
+  if(lbl) lbl.innerHTML = enabled
+    ? '<span style="color:var(--green)">🟢 שליחה אוטומטית פועלת</span>'
+    : '<span style="color:#f59e0b">🟠 שליחה אוטומטית מושהית</span>';
+  if(tbtn) tbtn.textContent = enabled ? '⏸ השהה' : '▶ הפעל';
+  // v2.14.30 — auto-send failure banner (Part 3)
+  const eb=document.getElementById('lastAutoSendError');
+  if(eb){
+    const err=c.lastAutoSendError;
+    if(err&&err.date){
+      const ed=new Date(err.date);
+      const eds=ed.toLocaleDateString('he-IL')+' '+ed.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
+      eb.innerHTML='<span style="color:#ef4444">⚠️ שליחה אוטומטית ב-'+eds+' נכשלה'+(err.failed?(' ('+err.failed+' דיירים)'):'')+': '+esc(err.error||'')+'</span>';
+    } else { eb.innerHTML=''; }
+  }
   // Update lastAutoSend status line
   const sl=document.getElementById('lastAutoSendStatus');
   if(sl){
@@ -2326,14 +2350,48 @@ function updateSchedule() {
     if(las&&las.date){
       const d=new Date(las.date);
       const ds=d.toLocaleDateString('he-IL')+' '+d.toLocaleTimeString('he-IL',{hour:'2-digit',minute:'2-digit'});
-      sl.innerHTML='<span style="color:var(--green)">✅ נשלח ב-'+ds+' — '+las.sent+' דיירים — חודש: '+las.month+'</span>';
+      sl.innerHTML='<span style="color:var(--green)">✅ שליחה אוטומטית אחרונה: '+las.sent+' הודעות ב-'+ds+' — חודש: '+las.month+'</span>';
     } else {
-      sl.innerHTML='<span style="color:var(--text3)">⏳ לא נשלח עדיין החודש</span>';
+      sl.innerHTML='<span style="color:var(--text3)">⏳ טרם בוצעה שליחה אוטומטית</span>';
     }
   }
 }
 
+// v2.14.30 — Part 1 helper: warn before a MANUAL send when a scheduled auto-send
+// is still pending this month. Returns true if the user confirms (or if there is
+// no conflict and the send may proceed silently). Shows the confirm ONLY when the
+// auto-send is ENABLED and this month's scheduled date/time has NOT yet passed —
+// if it's paused, or the send date already went by, there is no clash to warn about.
+function confirmManualSend(){
+  const c=data.config||{};
+  if(c.autoSendEnabled===false) return true;              // paused → no scheduled send to clash with
+  const sendDay=parseInt(c.sendDay)||1;
+  const sendHour=parseInt(c.sendHour!=null?c.sendHour:9);
+  const sendMinute=parseInt(c.sendMinute)||0;
+  // "now" in Israel time so the comparison matches the server cron's clock
+  const nowIl=new Date(new Date().toLocaleString('en-US',{timeZone:'Asia/Jerusalem'}));
+  const scheduled=new Date(nowIl.getFullYear(),nowIl.getMonth(),sendDay,sendHour,sendMinute,0,0);
+  if(nowIl>=scheduled) return true;                        // this month's auto-send already passed → no clash
+  const hh=String(sendHour).padStart(2,'0'), mm=String(sendMinute).padStart(2,'0');
+  return confirm('שים לב — הודעות אוטומטיות יישלחו ב-'+sendDay+' לחודש בשעה '+hh+':'+mm+'.\nלשלוח גם ידנית עכשיו בכל זאת?');
+}
+
+// v2.14.30 — Part 4: toggle the auto-send master switch and persist it.
+async function toggleAutoSend(){
+  const c=data.config||{};
+  const nowEnabled = c.autoSendEnabled !== false;
+  const next = !nowEnabled;
+  if(nowEnabled && !confirm('להשהות את השליחה האוטומטית? לא יישלחו תזכורות בתאריך הקבוע עד שתופעל שוב.')) return;
+  data.config=Object.assign({},data.config,{autoSendEnabled:next});
+  updateSchedule();
+  try{
+    await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:data.config})});
+    toast(next?'🟢 שליחה אוטומטית הופעלה':'🟠 שליחה אוטומטית הושהתה','success');
+  }catch(e){ toast('❌ שגיאה בשמירה','error'); }
+}
+
 async function resendAuto() {
+  if(!confirmManualSend()) return;
   const btn=document.getElementById('btnResendAuto');
   const st=document.getElementById('resendAutoStatus');
   if(btn) btn.disabled=true;
@@ -2342,17 +2400,20 @@ async function resendAuto() {
     const r=await fetch(API+'/resend-auto',{method:'POST',headers:{'Content-Type':'application/json'}});
     const d=await r.json();
     if(d.ok){
-      if(d.sent>0){
+      // Refresh data first so the status/error banners reflect the run
+      const rd=await fetch(API+'/data'); const jd=await rd.json();
+      data.config=Object.assign(data.config,jd.config||{});
+      if(jd.effectiveMonth) data.effectiveMonth=jd.effectiveMonth;
+      updateSchedule();
+      render();
+      if(d.failed>0){
+        toast('⚠️ '+(d.sent||0)+' נשלחו, '+d.failed+' נכשלו: '+(d.error||''),'error');
+        if(st) st.textContent='';
+      } else if(d.sent>0){
         toast('\u2705 \u05e0\u05e9\u05dc\u05d7\u05d5 '+d.sent+' \u05d4\u05d5\u05d3\u05e2\u05d5\u05ea \u05dc\u05d7\u05d5\u05d3\u05e9 '+d.month,'success');
         if(st) st.textContent='';
-        // Refresh data to update lastAutoSend display
-        const rd=await fetch(API+'/data'); const jd=await rd.json();
-        data.config=Object.assign(data.config,jd.config||{});
-        if(jd.effectiveMonth) data.effectiveMonth=jd.effectiveMonth;
-        updateSchedule();
-        render();
       } else {
-        if(st) st.textContent='\u05db\u05dc \u05d4\u05d3\u05d9\u05d9\u05e8\u05d9\u05dd \u05db\u05d1\u05e8 \u05e7\u05d9\u05d1\u05dc\u05d5 \u05d0\u05d5 \u05e9\u05d9\u05dc\u05de\u05d5';
+        if(st) st.textContent='\u05db\u05dc \u05d4\u05d3\u05d9\u05d9\u05e8\u05d9\u05dd \u05db\u05d1\u05e8 \u05e9\u05d9\u05dc\u05de\u05d5';
       }
     } else {
       if(st) st.textContent='\u05e9\u05d2\u05d9\u05d0\u05d4: '+(d.error||'');
@@ -2976,6 +3037,7 @@ async function confirmImport() {
 }
 
 async function sendOne(id) {
+  if(!confirmManualSend()) return;
   const btn=document.getElementById('send-btn-'+id);
   if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span>';}
   try{
@@ -3085,6 +3147,7 @@ async function resetWaAuth() {
 }
 
 async function sendAll() {
+  if(!confirmManualSend()) return;
   const btn=document.getElementById('btnSendAll');
   btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span> שולח...';
   try{
@@ -3108,6 +3171,7 @@ async function sendUnpaidOnly() {
   const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
   const unpaid=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+em];return !lv||(!String(lv).startsWith('manual_paid')&&!String(lv).startsWith('bank_import'));});
   if(!unpaid.length){toast('✅ כולם כבר שילמו!','success');return;}
+  if(!confirmManualSend()) return;
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
   document.getElementById('sendingStatus').textContent='שולח '+unpaid.length+' הודעות...';
   toast('📤 שולח למי שלא שילם החודש ('+unpaid.length+')...','success');

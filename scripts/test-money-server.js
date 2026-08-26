@@ -912,21 +912,28 @@ t.section('Stage 3 — buildBalanceLine ({יתרה})');
   t.eq('overpayer gets no balance line', S.buildBalanceLine(dOver, mkTenant, mk), '');
 }
 
-t.section('Stage 3 — autoSendShouldRemind (partial payer NOT skipped)');
+t.section('v2.14.30 — autoSendShouldRemind (skip ONLY a full payment)');
 {
   const cfg = { amount: 230, manualMonth: 'מאי' };
   const mk = '2026-05';
   const tn = { id: 'p2', name: 'עמית' };
   const mk2 = (sl) => ({ config: cfg, sentLog: sl, paymentHistory: {}, tenants: [tn] });
   t.eq('nothing yet → remind', S.autoSendShouldRemind(mk2({}), tn, mk), true);
-  t.eq('already reminded (sent_) → skip',
-    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'sent_2026-05-10T00:00:00Z' }), tn, mk), false);
+  // ⚠️ v2.14.30 — behaviour CHANGED: a `sent_` marker (manual OR a prior auto
+  // reminder) no longer skips an unpaid tenant. This is the root-cause fix — a
+  // manual nudge from the תשלומים tab must NOT suppress the scheduled send.
+  t.eq('reminded (sent_) but UNPAID → still remind (v2.14.30)',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'sent_2026-05-10T00:00:00Z' }), tn, mk), true);
   t.eq('full payment → skip',
     S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_230_payer_x' }), tn, mk), false);
-  t.eq('PARTIAL payment → remind (the Stage 3 fix)',
+  t.eq('PARTIAL payment → remind',
     S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_150_payer_x' }), tn, mk), true);
-  t.eq('overpayment → skip',
+  t.eq('overpayment (full+credit) → skip',
     S.autoSendShouldRemind(mk2({ 'p2_מאי': 'bank_import_2026-05-10T00:00:00Z_300_payer_x' }), tn, mk), false);
+  // Combined real-world case: operator reminded manually, tenant then paid in full
+  // → must skip (the payment, not the reminder, is what stops the auto-send).
+  t.eq('manually reminded THEN paid in full → skip',
+    S.autoSendShouldRemind(mk2({ 'p2_מאי': 'manual_paid_2026-05-12T00:00:00Z_amount_230' }), tn, mk), false);
 }
 
 // ════════════════════════════════════════════════════════════════

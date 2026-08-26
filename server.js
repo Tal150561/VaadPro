@@ -2375,21 +2375,30 @@ function buildOffsetBlock(d, tenant) {
   return 'מתוך תשלומך: *' + o.monthCharge + ' ₪* עבור דמי החודש, ו' + parts.join(', ו') + '.';
 }
 
-// Should AutoSend still remind this tenant for the current month? A partial payer
-// must NOT be skipped (they still owe the balance); a full payer / already-reminded
-// tenant IS skipped. Delegates status to calcMonthBalance — the one source.
+// Should AutoSend still remind this tenant for the current month?
+// ⚠️ v2.14.30 — the rule is now "remind everyone who has NOT paid in full",
+// regardless of whether a reminder (manual OR a prior auto reminder) already
+// went out. A `sent_` marker used to SKIP the tenant — that was the root cause
+// of "auto-send never fires": the operator would remind everyone manually from
+// the תשלומים tab, which stamped `sent_` on every unpaid tenant, and the 25th
+// cron then saw everyone "already reminded" and sent nothing. The whole point
+// of a SCHEDULED send is that it fires on its date for every debtor, so a manual
+// nudge must NOT suppress it. Double-fire of the CRON itself on the same day is
+// prevented separately by the config.lastAutoSend daily guard in runAutoSendCron.
+// Skip ONLY a full payment. Delegates status to calcMonthBalance — the one source.
 function autoSendShouldRemind(d, tenant, mk) {
   const sentLog = d.sentLog || {};
   const month = getEffectiveMonth(d.config || {});
   const val = sentLog[tenant.id + '_' + month];
   if (!val) return true;                            // nothing yet → remind (unpaid)
-  if (String(val).startsWith('sent_')) return false;// already reminded → skip
+  if (String(val).startsWith('sent_')) return true; // reminded (manual/auto) but UNPAID → still remind
   if (!sentLogIsPayment(val)) return true;          // unknown non-payment → remind
   const history = (d.paymentHistory || {})[String(tenant.id)] || [];
   const live = (tenant.customAmount) || ((d.config || {}).amount) || 300;
   const expected = getExpectedAmount(history, mk, live);
   const bal = calcMonthBalance(val, expected);
-  return bal.status === 'partial';                  // partial → remind for the balance; paid → skip
+  // paid in full → skip; partial → remind for the balance.
+  return bal.status !== 'paid';
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -2832,7 +2841,7 @@ app.post('/api/resend-auto', authMiddleware, async (req, res) => {
     const user = users.find(u => u.tenantId === req.user.tenantId);
     if (!user) return res.json({ ok: false, error: 'user not found' });
     const result = await doAutoSend(user);
-    res.json({ ok: true, sent: result.sent, month: result.month });
+    res.json({ ok: true, sent: result.sent, failed: result.failed || 0, error: result.error || null, month: result.month });
   } catch(e) {
     console.error('[resend-auto]', e.message);
     res.json({ ok: false, error: e.message });
@@ -4673,13 +4682,19 @@ async function doAutoSend(user) {
   const globalAmount = config.amount || 300;
   const tmpl = config.template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   let sent = 0;
+  // Part 3 (v2.14.30) — surface auto-send failures to the operator. We tally how
+  // many targeted tenants FAILED to send and remember the first error message, so
+  // the settings card can show "האוטומטי ב-25.8 נכשל: WhatsApp מנותק" instead of
+  // the failure hiding only in the server log.
+  let failed = 0;
+  let firstErr = '';
 
   for (const tenant of (d.tenants || [])) {
     const key = tenant.id + '_' + month;
-    // Stage 3 (v2.13.18): a PARTIAL payer must still be reminded (for the balance).
-    // Old logic `if (d.sentLog[key]) continue` skipped anyone with any sentLog value,
-    // so a short payment silenced the reminder. autoSendShouldRemind delegates the
-    // decision to calcMonthBalance: paid→skip, reminded→skip, unpaid/partial→remind.
+    // Stage 3 (v2.13.18) + v2.14.30: remind anyone not paid in full — a partial
+    // payer for the balance, AND anyone already reminded manually (a manual nudge
+    // no longer suppresses the scheduled send). autoSendShouldRemind is the single
+    // decision source: paid→skip, everyone else→remind.
     if (!autoSendShouldRemind(d, tenant, mk)) continue;
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
     const debt   = calcTotalDebt(d, tenant.id, mk);
@@ -4717,20 +4732,36 @@ async function doAutoSend(user) {
       sent++;
       await new Promise(r => setTimeout(r, 1200));
     } catch(e) {
+      failed++;
+      if (!firstErr) firstErr = e.message || 'שגיאה לא ידועה';
       console.error(`[AutoSend] ${user.email} → ${tenant.name}: ${e.message}`);
     }
   }
 
-  if (sent > 0) {
-    // Save lastAutoSend info for UI display
-    const nowIso = new Date().toISOString();
-    d.config.lastAutoSend = { date: nowIso, sent, month };
+  const nowIso = new Date().toISOString();
+  // Part 3 (v2.14.30) — record BOTH outcomes on config for the UI:
+  //   • lastAutoSend      — the last run that actually delivered ≥1 message.
+  //   • lastAutoSendError — the last run that had ≥1 failure (cleared on a fully
+  //     clean run). `failed` counts only tenants we TRIED and couldn't reach.
+  if (sent > 0)  d.config.lastAutoSend = { date: nowIso, sent, month };
+  if (failed > 0) {
+    d.config.lastAutoSendError = { date: nowIso, failed, sent, month, error: firstErr };
+  } else if (sent > 0) {
+    // a fully successful run clears any stale error banner
+    if (d.config.lastAutoSendError) delete d.config.lastAutoSendError;
+  }
+
+  if (sent > 0 || failed > 0) {
     saveTenantData(user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory, config: d.config });
+  }
+  if (sent > 0 && failed === 0) {
     console.log(`[AutoSend] ✅ ${user.email} — sent to ${sent} unpaid tenants for ${month}`);
+  } else if (failed > 0) {
+    console.log(`[AutoSend] ⚠️ ${user.email} — ${sent} sent, ${failed} FAILED for ${month} (${firstErr})`);
   } else {
     console.log(`[AutoSend] ${user.email} — no unsent unpaid tenants for ${month}`);
   }
-  return { sent, month };
+  return { sent, failed, month, error: failed > 0 ? firstErr : null };
 }
 
 /**
@@ -4759,6 +4790,11 @@ async function runAutoSendCron() {
     try {
       const d = loadTenantData(user.tenantId);
       const config = d.config || {};
+      // Part 4 (v2.14.30) — pause switch. A building can turn the scheduled send
+      // OFF entirely. Default ON: the flag is opt-OUT, so an absent flag (every
+      // existing customer) keeps sending exactly as before. Checked FIRST, before
+      // any date/time work.
+      if (config.autoSendEnabled === false) continue;
       const sendDay    = parseInt(config.sendDay)    || 1;
       const sendHour   = parseInt(config.sendHour)   || 9;
       const sendMinute = parseInt(config.sendMinute) || 0;
@@ -4784,11 +4820,16 @@ async function runAutoSendCron() {
         }
       }
 
-      // Check if there are any unsent tenants
+      // Part 2 (v2.14.30) — "unsent" now means "has NOT paid in full". A `sent_`
+      // reminder marker (manual or auto) no longer counts as done: the scheduled
+      // send must still reach an unpaid tenant even if they were nudged manually.
+      // Mirrors autoSendShouldRemind so the pre-check and the per-tenant decision
+      // agree (otherwise the cron would bail here and never enter doAutoSend).
       const month = getEffectiveMonth(config);
-      const hasUnsent = (d.tenants || []).some(t => !d.sentLog[t.id + '_' + month]);
+      const mk    = getMonthKey(config);
+      const hasUnsent = (d.tenants || []).some(t => autoSendShouldRemind(d, t, mk));
       if (!hasUnsent) {
-        console.log(`[AutoSend] ${user.email} — all tenants already paid or reminded for ${month}, skipping`);
+        console.log(`[AutoSend] ${user.email} — all tenants already paid for ${month}, skipping`);
         continue;
       }
 
@@ -7435,7 +7476,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.7 – SaaS Server      ║');
+  console.log('║   VaadPro v2.14.30 – SaaS Server     ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
