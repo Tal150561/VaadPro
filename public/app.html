@@ -2576,7 +2576,7 @@ function startEdit(id) {
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;margin-bottom:4px;" placeholder="מילות חיפוש"><input id="eapt-'+id+'" type="number" value="'+(t.aptNumber||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מספר דירה (לזיהוי הערה)" min="1">';
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
-  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span>';
+  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span><br><label style="font-size:0.75rem;color:var(--text3);display:inline-flex;align-items:center;gap:4px;margin-top:4px;"><input id="esusp-'+id+'" type="checkbox" '+(t.suspended===true?'checked':'')+'> ⏸ השהה מגבייה (פטור מדמי ועד)</label>';
   cells[5].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
   document.getElementById('en-'+id).focus();
 }
@@ -2620,7 +2620,10 @@ async function saveEdit(id) {
       isEditing = false; render(); return;
     }
   }
+  const suspEl=document.getElementById('esusp-'+id);
+  const susp = suspEl ? suspEl.checked : (t.suspended===true);
   t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';
+  if (susp) t.suspended = true; else delete t.suspended;
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -3831,8 +3834,10 @@ function render() {
       const vmBal = (t.monthBalances && t.monthBalances[vm])
         || { status: (lv ? 'reminded' : 'unpaid'), paidAmount: 0, expected: 0, shortfall: 0, credit: 0 };
       const isPartial = (vmBal.status === 'partial');
+      const isExempt = (vmBal.status === 'exempt') || (t.suspended === true && !(isM||isB));
       let sb='';
-      if(isPartial) sb='<span class="badge badge-partial">⚠️ שולם חלקית · '+vmBal.paidAmount.toLocaleString()+'/'+vmBal.expected.toLocaleString()+'₪</span>'
+      if(isExempt) sb='<span class="badge" style="background:rgba(148,163,184,.15);color:var(--text2);border:1px solid var(--border);">⏸ מושהה מגבייה</span>';
+      else if(isPartial) sb='<span class="badge badge-partial">⚠️ שולם חלקית · '+vmBal.paidAmount.toLocaleString()+'/'+vmBal.expected.toLocaleString()+'₪</span>'
         + '<span style="font-size:0.7rem;color:var(--warn);display:block;margin-top:2px;">חסר '+vmBal.shortfall.toLocaleString()+'₪</span>';
       else if(isM) sb='<span class="badge badge-paid-manual">💵 שילם (ידני)</span>';
       else if(isB) sb='<span class="badge badge-paid-bank">🏦 שילם (בנק)'+bankAmount
@@ -7556,9 +7561,12 @@ function renderTenantAccountsModal() {
           <input type="text" value="${acc.matchKeywords||''}" onchange="taModalAccounts[${i}].matchKeywords=this.value" placeholder="כהן ביטוח, חב׳ ביטוח" style="width:100%;"></div>
       </div>
       ${debt ? `<div style="margin-top:6px;">${debt}</div>` : ''}
-      <div style="margin-top:8px;display:flex;align-items:center;gap:8px;">
+      <div style="margin-top:8px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" ${acc.active!==false?'checked':''} onchange="taModalAccounts[${i}].active=this.checked"> פעיל
+        </label>
+        <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text2);">
+          <input type="checkbox" ${acc.suspended===true?'checked':''} onchange="taModalAccounts[${i}].suspended=this.checked?true:undefined"> ⏸ השהה גבייה
         </label>
       </div>
     </div>`;
@@ -8390,6 +8398,12 @@ function renderExtraAccountsCell(tenantId) {
     if (acc.active === false) continue;
     const paid = acc.paidThisMonth;
     const debt = acc.totalDebt > 0 ? ` · חוב: ₪${acc.totalDebt}` : '';
+    if (acc.suspended === true) {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--text2);">⏸ ${acc.label} — מושהה${debt}</span>
+      </div>`;
+      continue;
+    }
     if (paid) {
       html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
         <span style="color:var(--accent);">✓ ${acc.label}</span>

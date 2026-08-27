@@ -1644,6 +1644,11 @@ app.get('/api/data', authMiddleware, (req, res) => {
       const tid  = String(t.id);
       const hist = (d.paymentHistory || {})[tid] || [];
       const live = t.customAmount || (d.config && d.config.amount) || 300;
+      // ⏸ v2.14.31 — suspended tenant: the ACTIVE month is exempt (expected=0,
+      // no shortfall). Prior debt (openingDebt/history) is still surfaced via
+      // totalDebt/priorDebt below (design 3A). A suspended main account does not
+      // affect its extra accounts (design 2C — those carry their own flag).
+      const suspended = (t.suspended === true);
       // Per-month balance map for every month present in sentLog (main account).
       const monthBalances = {};
       Object.keys(d.sentLog || {}).forEach(key => {
@@ -1657,7 +1662,12 @@ app.get('/api/data', authMiddleware, (req, res) => {
         monthBalances[heb] = calcMonthBalance(d.sentLog[key], getExpectedAmount(hist, mKey, live));
       });
       // Balance for a month with NO sentLog entry (unpaid) — still needed by views.
-      const emBal = monthBalances[emNow] || calcMonthBalance(null, getExpectedAmount(hist, mkNow, live));
+      // ⏸ suspended → active month is exempt (unless already actually paid, which
+      // we preserve so a payment during suspension still shows as paid).
+      let emBal = monthBalances[emNow] || calcMonthBalance(null, getExpectedAmount(hist, mkNow, live));
+      if (suspended && emBal.status !== 'paid') {
+        emBal = { status: 'exempt', paidAmount: 0, expected: 0, shortfall: 0, credit: 0 };
+      }
       // ⚠️ v2.13.32 — priorDebt shipped from the server (SAME logic as the portal,
       // GET /api/portal/:token). calcTotalDebt is ACCRUED debt: it folds in the
       // current month ONLY when that month is short-paid (partial) OR already has
@@ -1669,10 +1679,12 @@ app.get('/api/data', authMiddleware, (req, res) => {
       // (₪230 owed reported as ₪460). app.html previously subtracted only the
       // partial case and hit exactly that bug. One definition, two call sites.
       const totalNow = calcTotalDebt(d, tid, mkNow);
-      const curInTotal =
+      // ⏸ suspended: the active month contributes nothing to debt (exempt), so it
+      // is fully excluded from priorDebt's current-month subtraction too.
+      const curInTotal = suspended ? 0 : (
         (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
         (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
-          ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0);
+          ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0));
       return {
         ...t,
         creditBalance: getCreditBalance(d, tid),
@@ -2262,7 +2274,10 @@ function resolvePayerPhone(tenant, acc) {
  */
 function buildAccountsBlock(d, tenant, month) {
   const sentLog = d.sentLog || {};
-  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
+  // ⏸ v2.14.31 — a suspended extra account (acc.suspended===true) is exempt and
+  // must NOT appear in the reminder (design 2C — per-account). active===false
+  // already filtered; suspension is a separate, softer state.
+  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false && a.suspended !== true);
   const recipients = {};
   if (!extraAccounts.length) return { block: '', recipients };
 
@@ -2389,6 +2404,22 @@ function buildOffsetBlock(d, tenant) {
 function autoSendShouldRemind(d, tenant, mk) {
   const sentLog = d.sentLog || {};
   const month = getEffectiveMonth(d.config || {});
+  // ⏸ v2.14.31 — main account suspended (exempt). The main-account charge is NOT
+  // a reason to remind. But design 2C is per-account: if the tenant still has an
+  // ACTIVE, non-suspended extra account that is unpaid this month, we DO remind
+  // (the reminder body will contain only the extra-account line — the main line
+  // is suppressed by waMessageForTenant / the suspended-main check downstream).
+  if (tenant.suspended === true) {
+    const em = month;
+    const owesExtra = (tenant.extraAccounts || []).some(acc => {
+      if (acc.active === false || acc.suspended === true) return false;
+      if ((parseFloat(acc.amount) || 0) <= 0) return false;
+      const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
+      const lv = String(sentLog[slKey] || '');
+      return !(lv.startsWith('manual_paid') || lv.startsWith('bank_import'));
+    });
+    return owesExtra;   // remind only if an extra account is still owed
+  }
   const val = sentLog[tenant.id + '_' + month];
   if (!val) return true;                            // nothing yet → remind (unpaid)
   if (String(val).startsWith('sent_')) return true; // reminded (manual/auto) but UNPAID → still remind
@@ -4423,6 +4454,12 @@ function closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth) {
       for (const tenant of d.tenants) {
         const tid = String(tenant.id);
         if (!d.paymentHistory[tid]) d.paymentHistory[tid] = [];
+
+        // ⏸ v2.14.31 — collection suspension (exempt). A tenant flagged
+        // suspended===true accrues NO new debt for the closing month. Existing
+        // openingDebt/history is untouched (design 3A: prior debt is kept &
+        // displayed, only forward accrual freezes). Skip BEFORE any amount math.
+        if (tenant.suspended === true) continue;
 
         const amount = parseFloat(tenant.customAmount || (d.config && d.config.amount) || 300);
 
@@ -7262,6 +7299,7 @@ app.get('/api/accounts-status', authMiddleware, (req, res) => {
       return {
         id: acc.id, label: acc.label, amount: acc.amount,
         frequency: acc.frequency, active: acc.active !== false,
+        suspended: acc.suspended === true,
         paidThisMonth, totalDebt, historyDebt, openingDebt
       };
     });
@@ -7280,6 +7318,10 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
 
   for (const acc of accounts) {
     if (acc.active === false) continue;
+    // ⏸ v2.14.31 — per-account collection suspension (design 2C: each account
+    // suspended independently). A main-account suspension does NOT suspend the
+    // extra account and vice-versa. Existing acc.openingDebt is kept (3A).
+    if (acc.suspended === true) continue;
     // Check frequency: only charge if this month is a billing month
     const [year, month] = prevKey.split('-').map(Number);
     if (acc.frequency === 'quarterly' && (month % 3 !== 0)) continue; // bill on 3,6,9,12
@@ -7476,7 +7518,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.30 – SaaS Server     ║');
+  console.log('║   VaadPro v2.14.31 – SaaS Server     ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

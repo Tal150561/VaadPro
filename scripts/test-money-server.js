@@ -937,6 +937,79 @@ t.section('v2.14.30 — autoSendShouldRemind (skip ONLY a full payment)');
 }
 
 // ════════════════════════════════════════════════════════════════
+// v2.14.31 — collection suspension (השהיית גבייה): exempt tenants/accounts
+// ════════════════════════════════════════════════════════════════
+// Design: 1A boolean flag · 2C per-entity (main tenant.suspended, per-account
+// acc.suspended, independent) · 3A prior debt kept, only forward accrual frozen
+// · 4A a distinct 'exempt' status. Runs the REAL close functions + real
+// autoSendShouldRemind (no re-implementation).
+t.section('v2.14.31 — suspension: main account no accrual on close (3A)');
+{
+  const { loadCloseMonth } = require('./test-lib');
+  // Two tenants, neither paid מאי. One suspended, one not. Close 2026-05 on Jun 1.
+  const mkBld = () => ({
+    config: { amount: 300, manualMonth: 'מאי' },
+    sentLog: {}, paymentHistory: {}, closedMonths: [],
+    tenants: [
+      { id: 'a', name: 'רגיל',  openingDebt: 0 },
+      { id: 'b', name: 'מושהה', openingDebt: 100, suspended: true }
+    ]
+  });
+  const bld = mkBld();
+  const h = loadCloseMonth(bld, new Date('2026-06-01T06:00:00Z'));
+  h.runForBuilding(bld, '2026-05', 'מאי');
+  const norm = bld.tenants.find(x => x.id === 'a');
+  const susp = bld.tenants.find(x => x.id === 'b');
+  t.eq('normal tenant accrued the month (0→300)', norm.openingDebt, 300);
+  t.eq('suspended tenant did NOT accrue (openingDebt unchanged)', susp.openingDebt, 100);
+}
+
+t.section('v2.14.31 — suspension: extra account no accrual on close (2C+3A)');
+{
+  const loadCloseExtra = require('./test-lib').loadCloseExtra;
+  const closeExtra = loadCloseExtra();
+  // One tenant, two extra accounts, neither paid. Account #1 suspended.
+  const d = { paymentHistory: {} };
+  const tenant = { id: 't', name: 'דייר', extraAccounts: [
+    { id: 'ins', label: 'ביטוח', amount: 200, openingDebt: 50, suspended: true },
+    { id: 'ele', label: 'חשמל',  amount: 80,  openingDebt: 0 }
+  ] };
+  const closed = closeExtra(d, tenant, '2026-05');
+  const ins = tenant.extraAccounts.find(a => a.id === 'ins');
+  const ele = tenant.extraAccounts.find(a => a.id === 'ele');
+  t.eq('suspended account did NOT accrue (50 unchanged)', ins.openingDebt, 50);
+  t.eq('active account DID accrue (0→80)', ele.openingDebt, 80);
+  t.eq('only the non-suspended account counted as closed', closed, 1);
+}
+
+t.section('v2.14.31 — suspension: autoSend respects per-account rule (2C)');
+{
+  const cfg = { amount: 230, manualMonth: 'מאי' };
+  const mk = '2026-05';
+  // Suspended MAIN, but has an ACTIVE unpaid extra → still remind (for the extra).
+  const tnExtra = { id: 's1', name: 'מושהה+ביטוח', suspended: true,
+    extraAccounts: [{ id: 'ins', label: 'ביטוח', amount: 200, active: true }] };
+  t.eq('suspended main + unpaid active extra → remind',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnExtra] }, tnExtra, mk), true);
+  // Suspended MAIN, extra also suspended → nothing to send.
+  const tnBoth = { id: 's2', name: 'הכל מושהה', suspended: true,
+    extraAccounts: [{ id: 'ins', label: 'ביטוח', amount: 200, active: true, suspended: true }] };
+  t.eq('suspended main + suspended extra → skip',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnBoth] }, tnBoth, mk), false);
+  // Suspended MAIN, extra already paid → nothing to send.
+  const tnPaid = { id: 's3', name: 'מושהה+שולם', suspended: true,
+    extraAccounts: [{ id: 'ins', label: 'ביטוח', amount: 200, active: true }] };
+  t.eq('suspended main + extra paid → skip',
+    S.autoSendShouldRemind({ config: cfg,
+      sentLog: { 's3__acc__ins_מאי': 'manual_paid_2026-05-10T00:00:00Z_amount_200' },
+      paymentHistory: {}, tenants: [tnPaid] }, tnPaid, mk), false);
+  // Suspended MAIN, no extras at all → skip.
+  const tnNone = { id: 's4', name: 'מושהה בלבד', suspended: true, extraAccounts: [] };
+  t.eq('suspended main + no extras → skip',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnNone] }, tnNone, mk), false);
+}
+
+// ════════════════════════════════════════════════════════════════
 // Stage 4 (v2.13.21) — closeMonthUnpaid accrues partial-payment shortfall
 // ════════════════════════════════════════════════════════════════
 // The ONLY stage that touches debt logic. Runs the REAL closeMonthUnpaid via

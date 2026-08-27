@@ -108,6 +108,15 @@ function loadBankAnalyzer() {
 // the written patch so the test can assert openingDebt + shortfallBanked.
 // It also needs the money helpers in scope (none, actually — it is self-contained
 // on HEBREW_MONTHS + the injected I/O), so we extract just the function.
+// v2.14.31 — extract the REAL closeExtraAccountsUnpaid for suspension tests.
+function loadCloseExtra() {
+  const src = readSource('server.js');
+  const code = extractFunctions(src, ['closeExtraAccountsUnpaid'])
+    + 'module.exports={closeExtraAccountsUnpaid};';
+  const mod = runInSandbox(code, {});
+  return mod.closeExtraAccountsUnpaid;
+}
+
 function loadCloseMonth(building, nowDate) {
   const src = readSource('server.js');
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
@@ -291,6 +300,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadSentlogKeyDelete, loadResetPayments, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };
