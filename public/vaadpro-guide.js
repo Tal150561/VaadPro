@@ -109,10 +109,13 @@
       '<li><strong>תג חיבור ווטסאפ</strong> — בצד שמאל, מציג מצב חיבור; לחיצה פותחת/מתחילה חיבור.</li></ul>' +
       '<h3>פס הסטטיסטיקה</h3>' +
       '<table class="vpg-t"><tr><th>מדד</th><th>משמעות</th></tr>' +
-      '<tr><td>דיירים רשומים</td><td>מספר הדיירים במערכת.</td></tr>' +
-      '<tr><td>שילמו החודש</td><td>כמה סומנו כמשלמים.</td></tr>' +
-      '<tr><td>ממתינים</td><td>כמה טרם שילמו.</td></tr>' +
-      '<tr><td>סה"כ לגבייה</td><td>הסכום הצפוי לחודש.</td></tr></table>' +
+      '<tr><td>סה"כ לגביה</td><td>הסכום הכולל שצפוי להיגבות כרגע — דמי הוועד של החודש + חוב מצטבר + חשבונות נוספים. לחיצה פותחת פירוט מלא.</td></tr>' +
+      '<tr><td>חייבים חריגים</td><td>דיירים שסך חובם (שוטף + קודם + חשבונות נוספים) חוצה את הסף שהגדרתם בהגדרות. לחיצה פותחת רשימה + מכתב התראה.</td></tr>' +
+      '<tr><td>חייבים</td><td>כמה דיירים חייבים כסף כרגע (כל סכום). לחיצה פותחת את הרשימה.</td></tr>' +
+      '<tr><td>ללא חוב</td><td>כמה דיירים אינם חייבים כלום כרגע. לחיצה פותחת את הרשימה.</td></tr>' +
+      '<tr><td>דיירים רשומים</td><td>סך כל הדיירים במערכת. כאשר יש דיירים בהשהיית גבייה, מופיעה תחתיו שורה: <strong>"מתוכם N מושהים ⏸"</strong>.</td></tr>' +
+      '</table>' +
+      '<div class="vpg-box tip"><div class="bt">⏸ דיירים מושהים</div>דייר בהשהיית גבייה אינו נצבר לו חוב חדש, ולכן אם אין לו חוב קודם הוא ייספר תחת <strong>"ללא חוב"</strong> (הוא באמת לא חייב כלום). אם יש לו חוב קודם שנשמר — הוא ייספר תחת <strong>"חייבים"</strong>. השורה <strong>"מתוכם N מושהים"</strong> מראה כמה מכלל הרשומים נמצאים בהשהיה, בלי קשר לחוב. (ראו "השהיית גבייה" בטאב דיירים.)</div>' +
       '<h3>שורת הטאבים</h3><p>תפריט ראשי לכל מסכי המערכת — כל טאב מתואר בפרק נפרד במדריך זה.</p>'
   },
   {
@@ -200,6 +203,17 @@
       '<ul><li>טבלת שילם / ממתין / נשלחה תזכורת לכל דייר.</li>' +
       '<li>אפשר <strong>לסמן/לבטל תשלום ידנית</strong> (למשל מזומן).</li>' +
       '<li>"📊 ייצא מעקב שנתי לאקסל" — טבלת כל החודשים מול כל הדיירים.</li></ul>' +
+      '<h3>🎨 מקרא צבעים — משמעות הסטטוסים</h3>' +
+      '<p>ליד כל דייר מופיע תג צבעוני שמסמן את מצב התשלום שלו החודש:</p>' +
+      '<table class="vpg-t"><tr><th>תג</th><th>צבע</th><th>משמעות</th><th>מה לעשות</th></tr>' +
+      '<tr><td>💵 שילם (ידני)</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#58a6ff;vertical-align:middle;margin-inline-end:6px;"></span>כחול</td><td>סומן כמשולם ידנית (מזומן / העברה שאותרה ידנית).</td><td>✅ תקין — אין צורך בפעולה.</td></tr>' +
+      '<tr><td>🏦 שילם (בנק)</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#a371f7;vertical-align:middle;margin-inline-end:6px;"></span>סגול</td><td>התשלום זוהה אוטומטית מייבוא קובץ הבנק.</td><td>✅ תקין — אין צורך בפעולה.</td></tr>' +
+      '<tr><td>⚠️ שולם חלקית</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#f5a623;vertical-align:middle;margin-inline-end:6px;"></span>כתום</td><td>שולם פחות מהנדרש; מוצג "שולם X / נדרש Y" והיתרה נספרת כחוב.</td><td>⚠️ מעקב — היתרה תיגבה בהמשך / בתזכורת.</td></tr>' +
+      '<tr><td>⏳ לא שילם</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#e3b341;vertical-align:middle;margin-inline-end:6px;"></span>צהוב</td><td>ממתין לתשלום; בסגירת החודש יצטבר לחוב.</td><td>❗ דורש פעולה — שלחו תזכורת / בדקו מול הדייר.</td></tr>' +
+      '<tr><td>📱 נשלחה תזכורת</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#25D366;vertical-align:middle;margin-inline-end:6px;"></span>ירוק</td><td>נשלחה תזכורת ב-WhatsApp אך התשלום עדיין לא אותר.</td><td>⏳ בתהליך — ממתינים לתשלום.</td></tr>' +
+      '<tr><td>⏸ מושהה מגבייה</td><td><span style="display:inline-block;width:14px;height:14px;border-radius:3px;background:#8b949e;vertical-align:middle;margin-inline-end:6px;"></span>אפור</td><td>הדייר בהשהיית גבייה — פטור זמני, אינו נצבר לחוב (ראו "השהיית גבייה" בטאב דיירים).</td><td>⏸ מחוץ למעגל — לא דורש כלום כרגע.</td></tr>' +
+      '</table>' +
+      '<div class="vpg-box tip"><div class="bt">💡 למה אפור?</div>הצבע האפור מבדיל את המושהה גם ממי ששילם וגם ממי שחייב — הוא פשוט <strong>מחוץ למעגל הגבייה</strong> כרגע. אותו סימון ⏸ אפור מופיע גם ליד חשבון נוסף מושהה, וגם בדשבורד (\u201Cמתוכם N מושהים\u201D תחת \u201Cדיירים רשומים\u201D, כשיש מושהים).</div>' +
       '<h3>תשלום חלקי</h3>' +
       '<p>אם דייר שילם <strong>פחות</strong> מהסכום החודשי (למשל 150 ₪ מתוך 230 ₪), המערכת מזהה זאת אוטומטית:</p>' +
       '<ul><li>הסטטוס יוצג כ<strong>"שולם חלקית"</strong> עם פירוט <span class="vpg-var">שולם / נדרש</span>.</li>' +
