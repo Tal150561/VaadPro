@@ -424,7 +424,7 @@ function vpLogout() {
 
 <div class="stats-outer">
   <div class="stats-row">
-    <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div></div>
+    <div class="stat-card"><div class="stat-num" id="sTenants">0</div><div class="stat-label">דיירים רשומים</div><div class="stat-hint" id="sTenantsHint" style="font-size:0.62rem;color:var(--text3);margin-top:3px;line-height:1.35;"></div></div>
     <div class="stat-card" id="sSentCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('paid')"><div class="stat-num" id="sSent">0</div><div class="stat-label">ללא חוב<span class="stat-mag"> 🔎</span></div></div>
     <div class="stat-card" id="sPendingCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showTenantStatusList('pending')"><div class="stat-num warn" id="sPending">0</div><div class="stat-label">חייבים<span class="stat-mag"> 🔎</span></div></div>
     <div class="stat-card" id="sExcessCard" style="cursor:pointer;" title="לחץ לפירוט מלא" onclick="showExcessDebtList()"><div class="stat-num warn" id="sExcess" style="color:var(--danger);">0</div><div class="stat-label">חייבים חריגים<span class="stat-mag"> 🔎</span></div><div class="stat-hint" id="sExcessHint" style="font-size:0.62rem;color:var(--text3);margin-top:3px;line-height:1.35;"></div></div>
@@ -3716,6 +3716,16 @@ function render() {
   document.getElementById('sTenants').textContent=data.tenants.length;
   document.getElementById('sSent').textContent=paidCount;
   document.getElementById('sPending').textContent=pending;
+  // v2.14.32 — "מתוכם N מושהים" sub-line under דיירים רשומים. Display-only count
+  // of tenants flagged suspended (⏸). Shown ONLY when at least one exists (0 →
+  // blank, no noise). Does NOT change the חייבים/ללא חוב counts — a suspended
+  // tenant with prior debt is still legitimately owed; this only surfaces how
+  // many of the registered tenants are on collection-hold.
+  var _suspHintEl = document.getElementById('sTenantsHint');
+  if (_suspHintEl) {
+    var _suspCount = (data.tenants || []).filter(function(t){ return t.suspended === true; }).length;
+    _suspHintEl.textContent = _suspCount > 0 ? ('מתוכם ' + _suspCount + ' מושהים ⏸') : '';
+  }
   // v2.13.27 — "סה״כ לגביה" now reflects the REAL collectible figure:
   // main-account current month + main-account prior debt + extra accounts
   // (current charge + their own accumulated debt), broken down by account type.

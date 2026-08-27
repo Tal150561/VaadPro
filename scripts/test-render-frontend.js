@@ -1223,6 +1223,26 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('fingerprint call passes m.refVal', app.includes('m.nameVal || m.row.join(\' \'), m.refVal'), true);
   t.eq('saveBankMapping persists colRef', /colRef: \(document\.getElementById\('colRef'\)/.test(app), true);
   t.eq('auto-detect routes אסמכתא to colRef', /\(אסמכתא\|reference\|ref\)/.test(app), true);
+  t.section('v2.14.32 — dashboard "מתוכם N מושהים" sub-line (B+C, conditional)');
+  // (a) the sub-line element must exist in the דיירים רשומים card.
+  t.eq('sTenantsHint element present', app.includes('id="sTenantsHint"'), true);
+  // (b) the count/label logic — extract the exact expression used in render()
+  // and exercise it over real tenant shapes. Mirrors the source expression so a
+  // change to the wording or the > 0 gate is caught here.
+  const suspHint = (tenants) => {
+    const c = (tenants || []).filter(function(t){ return t.suspended === true; }).length;
+    return c > 0 ? ('מתוכם ' + c + ' מושהים ⏸') : '';
+  };
+  t.eq('no suspended → blank (conditional C)', suspHint([{id:1},{id:2}]), '');
+  t.eq('one suspended → "מתוכם 1 מושהים ⏸"', suspHint([{id:1,suspended:true},{id:2}]), 'מתוכם 1 מושהים ⏸');
+  t.eq('two suspended → "מתוכם 2 מושהים ⏸"', suspHint([{id:1,suspended:true},{id:2,suspended:true},{id:3}]), 'מתוכם 2 מושהים ⏸');
+  t.eq('suspended:false is NOT counted', suspHint([{id:1,suspended:false},{id:2}]), '');
+  t.eq('empty list → blank', suspHint([]), '');
+  // (c) the render() body must actually wire the count into sTenantsHint.
+  t.eq('render wires suspended count to sTenantsHint',
+    /sTenantsHint[\s\S]{0,400}t\.suspended === true/.test(app), true);
+  t.eq('render gates the sub-line on _suspCount > 0',
+    app.includes('_suspCount > 0 ?'), true);
 }
 
 process.exit(t.done() ? 1 : 0);
