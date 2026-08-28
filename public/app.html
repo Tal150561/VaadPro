@@ -518,6 +518,7 @@ function vpLogout() {
           <div><label>מספר דירה <span style="opacity:.5;">(אופציונלי — לזיהוי לפי הערת בנק. בעל־בית שמשלם לכמה דירות)</span></label><input type="number" id="inAptNumber" placeholder="לדוגמה: 6" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>סכום אישי ₪ <span style="opacity:.5;">(אופציונלי — ברירת מחדל מהגדרות)</span></label><input type="number" id="inCustomAmount" placeholder="ריק = ברירת מחדל" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>יתרת פתיחה ₪ <span style="opacity:.5;">(אופציונלי — חוב קודם, או ערך שלילי = יתרת זכות לדייר. מתעדכן אוטומטית בסגירת חודש)</span></label><input type="number" id="inOpeningDebt" placeholder="0" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div style="display:flex;align-items:center;margin-top:18px;"><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;white-space:nowrap;"><input type="checkbox" id="inSuspended" style="width:auto;"> ⏸ השהה מגבייה <span style="opacity:.5;font-size:0.8rem;">(פטור זמני)</span></label></div>
           <button class="btn btn-green" onclick="addTenant()" style="height:40px;margin-top:18px;">➕ הוסף</button>
         </div>
         <div class="hint" style="margin-top:8px;">מילות חיפוש: ביטויים מופרדים בפסיקים שמופיעים בקובץ הבנק עבור דייר זה</div>
@@ -2549,8 +2550,12 @@ async function addTenant() {
   const openingDebt = od ? parseFloat(od) : 0;
   const propertyLabel=document.getElementById('inPropertyLabel').value.trim();
   const aptNumber=(document.getElementById('inAptNumber').value||'').replace(/\D/g,'');
-  data.tenants.push({id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||''});
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';
+  const suspEl=document.getElementById('inSuspended');
+  const suspended = suspEl ? suspEl.checked : false;
+  const newT={id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||''};
+  if (suspended) newT.suspended = true;
+  data.tenants.push(newT);
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';if(suspEl)suspEl.checked=false;
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
   if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');

@@ -1224,6 +1224,20 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('CSV export column מספר_דירה', app.includes("he:'מספר_דירה'"), true);
   t.eq('CSV header maps מספר_דירה→aptNumber', app.includes("'מספר_דירה':'aptNumber'"), true);
   t.eq('import fields include aptNumber', /aptNumber: \(f\.aptNumber \|\| ''\)\.replace/.test(app), true);
+
+  t.section('v2.14.34 — suspended flag plumbing (add-form / edit / import / export)');
+  // add-tenant manual form
+  t.eq('add-tenant form has #inSuspended checkbox', app.includes('id="inSuspended"'), true);
+  t.eq('addTenant reads the checkbox', /suspEl\s*\?\s*suspEl\.checked/.test(app), true);
+  t.eq('addTenant sets suspended only when checked', /if \(suspended\) newT\.suspended = true;/.test(app), true);
+  t.eq('addTenant resets checkbox after add', /suspEl\)suspEl\.checked=false/.test(app), true);
+  // inline edit
+  t.eq('inline edit has #esusp- checkbox', app.includes("id=\"esusp-'+id+'\""), true);
+  t.eq('saveEdit sets/deletes suspended', /if \(susp\) t\.suspended = true; else delete t\.suspended;/.test(app), true);
+  // import + export (already covered functionally above; assert wiring here too)
+  t.eq('export column סטטוס present', app.includes("he:'סטטוס'"), true);
+  t.eq('export emits מושהה for suspended', /t\.suspended === true\) \? 'מושהה' : ''/.test(app), true);
+  t.eq('import maps סטטוס header → suspended', app.includes("'סטטוס':'suspended'"), true);
   t.eq('apt match-type icon 🏠', app.includes("matchType==='apt'?'🏠'"), true);
 }
 
