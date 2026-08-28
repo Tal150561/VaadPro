@@ -75,6 +75,7 @@
   }
   .greeting h2 { font-size: 1.1rem; font-weight: 800; margin-bottom: 2px; }
   .greeting p { font-size: 0.82rem; color: var(--text2); }
+  .greeting #buildingName { font-size: 0.78rem; opacity: 0.85; margin-top: 1px; }
 
   /* Current month card */
   .current-card {
@@ -260,6 +261,7 @@
       <div class="greeting-icon">👋</div>
       <div>
         <h2 id="tenantName">שלום!</h2>
+        <p id="portalTitle">פורטל תשלומים</p>
         <p id="buildingName"></p>
       </div>
     </div>
@@ -490,7 +492,15 @@ function render(d) {
 
   // Greeting
   document.getElementById('tenantName').textContent = 'שלום, ' + d.tenant.name + '!';
-  document.getElementById('buildingName').textContent = d.building.name || 'פורטל תשלומי ועד בית';
+  // Fixed neutral title (portal now holds more than ועד-בית fees) + a subtitle
+  // that identifies the building/organization. org label comes from the server
+  // (getLabels → orgType + overrides): "ועד הבית" / "קיבוץ" / custom.
+  var _org = (d.building && d.building.org) ? String(d.building.org).trim() : '';
+  var _bldg = (d.building && d.building.name) ? String(d.building.name).trim() : '';
+  var _subtitle = _bldg ? (_org ? _bldg + ' · ' + _org : _bldg) : _org;
+  document.getElementById('portalTitle').textContent = 'פורטל תשלומים';
+  document.getElementById('buildingName').textContent = _subtitle;
+  document.getElementById('buildingName').style.display = _subtitle ? '' : 'none';
 
   // Build month selector if history exists
   allData = d;

@@ -6075,7 +6075,7 @@ app.get('/api/portal/:token', (req, res) => {
         id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false
       }))
     },
-    building: { name: d.config?.buildingName || '' },
+    building: { name: d.config?.buildingName || '', org: t(getLabels(d.config), 'org') },
     current: (() => {
       // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
       // page renders it verbatim. Previously tenant-portal.html did this math
@@ -7518,7 +7518,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.32 – SaaS Server     ║');
+  console.log('║   VaadPro v2.14.35 – SaaS Server     ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

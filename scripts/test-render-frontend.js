@@ -136,6 +136,44 @@ for (const dead of ['effectiveOpeningDebt', 'creditAfterHistory', 'totalPriorDeb
   t.eq(dead + ' is not an orphan', used && !declared, false);
 }
 
+// ── 5b. tenant-portal.html: header title + building·org subtitle (v2.14.35) ──
+t.section('tenant-portal.html — header title + subtitle (v2.14.35)');
+// Fixed neutral title element + a subtitle that composes "<building> · <org>".
+// org comes from the server payload (d.building.org via getLabels). Guards:
+//  - a static #portalTitle element exists with the neutral fixed text
+//  - the render sets #portalTitle textContent and composes the subtitle
+//  - the composition + the empty-hide gate behave over real building shapes
+t.eq('static portalTitle element with neutral fixed text',
+  /id="portalTitle">\s*פורטל תשלומים\s*</.test(portal), true);
+t.eq('render sets the fixed portal title',
+  /getElementById\('portalTitle'\)\.textContent\s*=\s*'פורטל תשלומים'/.test(portal), true);
+t.eq('render composes subtitle from building name + org',
+  /_subtitle\s*=\s*_bldg\s*\?\s*\(_org\s*\?\s*_bldg\s*\+\s*' · '\s*\+\s*_org\s*:\s*_bldg\)\s*:\s*_org/.test(portal), true);
+t.eq('render hides the subtitle line when empty',
+  /getElementById\('buildingName'\)\.style\.display\s*=\s*_subtitle\s*\?\s*''\s*:\s*'none'/.test(portal), true);
+// Execute the exact composition logic over real shapes.
+function portalSubtitle(building) {
+  const _org  = (building && building.org)  ? String(building.org).trim()  : '';
+  const _bldg = (building && building.name) ? String(building.name).trim() : '';
+  return _bldg ? (_org ? _bldg + ' · ' + _org : _bldg) : _org;
+}
+t.eq('building + org → "name · org"',
+  portalSubtitle({ name: 'אחוזה 82', org: 'ועד הבית' }), 'אחוזה 82 · ועד הבית');
+t.eq('kibbutz org label flows through',
+  portalSubtitle({ name: 'נווה ים', org: 'קיבוץ' }), 'נווה ים · קיבוץ');
+t.eq('name only (org empty) → just the name',
+  portalSubtitle({ name: 'אחוזה 82', org: '' }), 'אחוזה 82');
+t.eq('org only (no building name) → just the org, no leading dot',
+  portalSubtitle({ name: '', org: 'ועד הבית' }), 'ועד הבית');
+t.eq('both empty → empty subtitle (line hidden)',
+  portalSubtitle({ name: '', org: '' }), '');
+t.eq('missing building object → empty subtitle',
+  portalSubtitle(undefined), '');
+// Server must actually send org on the portal building object.
+const srv = readSource('server.js');
+t.eq('server portal payload exposes building.org from getLabels',
+  /building:\s*\{\s*name:[^}]*org:\s*t\(getLabels\(d\.config\),\s*'org'\)/.test(srv), true);
+
 t.section('app.html — import month is self-contained (v2.13.17)');
 // The July/June mis-tag root cause: with an empty bankMonth, analyzeBankRows fell
 // back to getEffectiveMonth() = the global manualMonth, so importing an old month
