@@ -905,6 +905,43 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   const p7 = H.planTenantImport(existing, keys, [['','','','','','','','']]);
   t.eq('fully blank row skipped', p7.updates.length + p7.creates.length + p7.errors.length, 0);
 
+  // ── v2.14.34 — "סטטוס" (suspension) column, scope=main tenant, design 2A ──
+  const keysS = ['id','name','phone','email','keywords','customAmount','openingDebt','propertyLabel','aptNumber','suspended'];
+  const existS = [
+    { id: 201, name: 'פעיל',  phone: '0501110001', keywords: 'a', customAmount: null, openingDebt: 0 },
+    { id: 202, name: 'מושהה', phone: '0501110002', keywords: 'b', customAmount: null, openingDebt: 0, suspended: true }
+  ];
+  // (a) create a NEW suspended tenant from "מושהה"
+  const s1 = H.planTenantImport(existS, keysS,
+    [['','חדש מושהה','0509990001','','x','','0','','','מושהה']]);
+  t.eq('new "מושהה" → create with suspended:true', s1.creates[0].fields.suspended, true);
+  // (b) tolerant dictionary — "כן" / "1" / "suspended" all suspend; "פעיל"/"" don't
+  t.eq('"כן" suspends', H.planTenantImport(existS, keysS, [['','a','0509990002','','x','','0','','','כן']]).creates[0].fields.suspended, true);
+  t.eq('"1" suspends',  H.planTenantImport(existS, keysS, [['','a','0509990003','','x','','0','','','1']]).creates[0].fields.suspended, true);
+  t.eq('"פעיל" stays active', H.planTenantImport(existS, keysS, [['','a','0509990004','','x','','0','','','פעיל']]).creates[0].fields.suspended, false);
+  t.eq('blank status cell → active (false)', H.planTenantImport(existS, keysS, [['','a','0509990005','','x','','0','','','']]).creates[0].fields.suspended, false);
+  // (c) unrecognised value → warning + treated as active
+  const sBad = H.planTenantImport(existS, keysS, [['','a','0509990006','','x','','0','','','גיבריש']]);
+  t.eq('unrecognised status warns', sBad.warnings.some(w => /סטטוס/.test(w.msg)), true);
+  t.eq('unrecognised status → active', sBad.creates[0].fields.suspended, false);
+  // (d) UPDATE flips: active→suspended and suspended→active are flagged in preview
+  const sFlip1 = H.planTenantImport(existS, keysS, [['201','פעיל','0501110001','','a','','0','','','מושהה']]);
+  t.eq('active→מושהה flagged', sFlip1.updates[0].moneyChanges.some(c => /סטטוס/.test(c)), true);
+  t.eq('active→מושהה sets suspended:true', sFlip1.updates[0].fields.suspended, true);
+  const sFlip2 = H.planTenantImport(existS, keysS, [['202','מושהה','0501110002','','b','','0','','','פעיל']]);
+  t.eq('מושהה→active sets suspended:false', sFlip2.updates[0].fields.suspended, false);
+  // (e) DESIGN 2A — column ABSENT → suspended left untouched (null), no flip, no wipe
+  const sNoCol = H.planTenantImport(existS, keys /* no suspended key */,
+    [['202','מושהה','0501110002','','b','','0','']]);
+  t.eq('no status column → suspended stays null (do not touch)', sNoCol.updates[0].fields.suspended, null);
+  t.eq('no status column → no סטטוס change line', sNoCol.updates[0].moneyChanges.some(c => /סטטוס/.test(c)), false);
+
+  // apply-path assertions: confirmImport writes/deletes the flag by tri-state
+  const confirmSusp = (app.match(/async function confirmImport\(\) \{[\s\S]*?^\}/m) || [''])[0];
+  t.eq('apply sets suspended on true', /u\.fields\.suspended === true\) t\.suspended = true/.test(confirmSusp), true);
+  t.eq('apply deletes suspended on false', /u\.fields\.suspended === false\) delete t\.suspended/.test(confirmSusp), true);
+  t.eq('export includes סטטוס column', /he:'סטטוס'/.test(app), true);
+
   // MUTATION CHECK — importer must never touch payment data. Assert the write
   // path (confirmImport, merged v2.14.6) references only tenant fields, never paymentHistory/sentLog.
   const confirmBody = (app.match(/async function confirmImport\(\) \{[\s\S]*?^\}/m) || [''])[0];

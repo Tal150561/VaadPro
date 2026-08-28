@@ -545,6 +545,8 @@ function vpLogout() {
                 <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">תשלום_חודשי</th>
                 <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">חוב_התחלתי</th>
                 <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">תווית_נכס</th>
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">מספר_דירה</th>
+                <th style="padding:4px 10px;border:1px solid var(--border);text-align:right;">סטטוס</th>
               </tr></thead>
               <tbody><tr>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);"></td>
@@ -555,6 +557,8 @@ function vpLogout() {
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">217</td>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">0</td>
                 <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">דירה 3</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">3</td>
+                <td style="padding:4px 10px;border:1px solid var(--border);color:var(--text2);">מושהה</td>
               </tr></tbody>
             </table>
           </div>
@@ -563,6 +567,7 @@ function vpLogout() {
             📌 שורה ראשונה = כותרות | טלפון בפורמט 05X-XXXXXXX<br>
             💡 <strong>הכי פשוט:</strong> לחץ "📥 ייצא CSV" למעלה, ערוך את הקובץ ב-Excel, וייבא אותו בחזרה — כל השדות נשמרים.<br>
             🔄 <strong>מעדכן ומוסיף:</strong> דייר קיים (לפי <code>id</code>, ואם אין — לפי טלפון) יעודכן; דייר חדש ייווסף. דיירים שלא בקובץ יישארו כמו שהם.<br>
+            ⏸ <strong>סטטוס:</strong> ריק או "פעיל" = דייר פעיל; "מושהה" = בהשהיית גבייה (פטור זמני מדמי ועד). <u>אם עמודת סטטוס לא קיימת בקובץ — לא נוגעים בהשהיות הקיימות.</u><br>
             ⚠️ <strong>חוב_התחלתי / תשלום_חודשי</strong> משנים ערכי כסף — כל שינוי יוצג באזהרה לפני האישור.
           </div>
         </div>
@@ -2657,7 +2662,8 @@ var TENANT_EXPORT_COLS = [
   { key:'customAmount',  he:'תשלום_חודשי' },
   { key:'openingDebt',   he:'חוב_התחלתי' },
   { key:'propertyLabel', he:'תווית_נכס' },
-  { key:'aptNumber',     he:'מספר_דירה' }
+  { key:'aptNumber',     he:'מספר_דירה' },
+  { key:'suspended',     he:'סטטוס' }
 ];
 
 function tenantExportRows() {
@@ -2673,7 +2679,8 @@ function tenantExportRows() {
       (t.customAmount === 0 || t.customAmount) ? t.customAmount : '',
       (t.openingDebt === 0 || t.openingDebt) ? t.openingDebt : '',
       t.propertyLabel || '',
-      t.aptNumber || ''
+      t.aptNumber || '',
+      (t.suspended === true) ? 'מושהה' : ''
     ]);
   });
   return rows;
@@ -2725,7 +2732,8 @@ function tenantHeaderToKey(rawHeader) {
     'תשלום_חודשי':'customAmount', 'customamount':'customAmount', 'סכום':'customAmount', 'תשלום':'customAmount',
     'חוב_התחלתי':'openingDebt', 'openingdebt':'openingDebt', 'חוב':'openingDebt',
     'תווית_נכס':'propertyLabel', 'propertylabel':'propertyLabel', 'דירה':'propertyLabel', 'נכס':'propertyLabel',
-    'מספר_דירה':'aptNumber', 'דירה_מספר':'aptNumber', 'aptnumber':'aptNumber', 'apt':'aptNumber'
+    'מספר_דירה':'aptNumber', 'דירה_מספר':'aptNumber', 'aptnumber':'aptNumber', 'apt':'aptNumber',
+    'סטטוס':'suspended', 'status':'suspended', 'מצב':'suspended', 'השהיה':'suspended', 'suspended':'suspended'
   };
   return map[h] || null;
 }
@@ -2763,6 +2771,21 @@ function rowToFields(headerKeys, row) {
 // Identity: id first, then phone (for id-less rows). Never deletes.
 function planTenantImport(existingTenants, headerKeys, dataRows) {
   var plan = { updates:[], creates:[], errors:[], warnings:[] };
+  // v2.14.34 — "סטטוס" column (scope: MAIN tenant only; extra-account suspension
+  // stays manual). Design 2A: the column is honoured ONLY when present in the
+  // file. If the header has no סטטוס column, suspended is left untouched on every
+  // tenant (a routine re-import of an old file must NOT wipe existing holds).
+  var hasStatusCol = headerKeys.indexOf('suspended') !== -1;
+  // 1B — tolerant dictionary. Returns true (suspended) / false (active) / null
+  // (blank cell → treated as active per design). Case/-space-insensitive, Hebrew
+  // + a few English/numeric synonyms.
+  function parseStatusCell(raw) {
+    var v = String(raw == null ? '' : raw).trim().toLowerCase();
+    if (v === '') return false;                       // blank in a present column = active
+    if (['מושהה','השהיה','מושעה','כן','yes','y','1','true','suspended','hold','pause'].indexOf(v) !== -1) return true;
+    if (['פעיל','פעילה','לא','no','n','0','false','active'].indexOf(v) !== -1) return false;
+    return null;                                      // unrecognised → caller warns, treats as active
+  }
   var byId = {}, byPhone = {};
   (existingTenants || []).forEach(function(t){
     byId[String(t.id)] = t;
@@ -2785,6 +2808,18 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
     if (!ca.ok) { plan.errors.push({ row:rowNum, msg:'תשלום חודשי: ' + ca.error }); continue; }
     var od = parseMoneyCell(f.openingDebt, 0, true);  // allow credit (negative)
     if (!od.ok) { plan.errors.push({ row:rowNum, msg:'חוב התחלתי: ' + od.error }); continue; }
+
+    // v2.14.34 — resolve suspension status only if the column exists (2A).
+    var suspVal = null; // null = "don't touch"
+    if (hasStatusCol) {
+      var parsed = parseStatusCell(f.suspended);
+      if (parsed === null) {
+        plan.warnings.push({ row:rowNum, msg:'"' + name + '" — ערך סטטוס לא מזוהה ("' + (f.suspended||'') + '") — יטופל כפעיל' });
+        suspVal = false;
+      } else {
+        suspVal = parsed;
+      }
+    }
 
     if (!(f.keywords || '').trim()) {
       plan.warnings.push({ row:rowNum, msg:'"' + name + '" — אין מילות חיפוש (זיהוי בנק לא יעבוד עבורו)' });
@@ -2810,7 +2845,8 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
       customAmount: ca.value,
       openingDebt: od.value,
       propertyLabel: (f.propertyLabel || '').trim(),
-      aptNumber: (f.aptNumber || '').replace(/\D/g,'')
+      aptNumber: (f.aptNumber || '').replace(/\D/g,''),
+      suspended: suspVal   // true / false / null(don't touch)
     };
 
     if (match) {
@@ -2823,6 +2859,13 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
       var oldOd = match.openingDebt || 0;
       if (oldOd !== newFields.openingDebt) {
         moneyChanges.push('חוב התחלתי: ' + oldOd + ' → ' + newFields.openingDebt);
+      }
+      // v2.14.34 — surface a suspension flip (only when the column drove a change).
+      if (newFields.suspended !== null) {
+        var oldSusp = (match.suspended === true);
+        if (oldSusp !== newFields.suspended) {
+          moneyChanges.push('סטטוס: ' + (oldSusp?'מושהה':'פעיל') + ' → ' + (newFields.suspended?'מושהה':'פעיל'));
+        }
       }
       plan.updates.push({ row:rowNum, id:match.id, name:name, fields:newFields, moneyChanges:moneyChanges });
     } else {
@@ -3016,15 +3059,21 @@ async function confirmImport() {
     t.keywords=u.fields.keywords; t.customAmount=u.fields.customAmount;
     t.openingDebt=u.fields.openingDebt; t.propertyLabel=u.fields.propertyLabel;
     t.aptNumber=u.fields.aptNumber||'';
+    // v2.14.34 — suspension: null means the column was absent → leave as-is (2A).
+    if (u.fields.suspended === true) t.suspended = true;
+    else if (u.fields.suspended === false) delete t.suspended;
   });
   plan.creates.forEach(function(c){
-    data.tenants.push({
+    var nt = {
       id:Date.now()+Math.floor(Math.random()*1000),
       name:c.fields.name, phone:c.fields.phone, email:c.fields.email,
       keywords:c.fields.keywords, customAmount:c.fields.customAmount,
       openingDebt:c.fields.openingDebt, propertyLabel:c.fields.propertyLabel,
       aptNumber:c.fields.aptNumber||''
-    });
+    };
+    // v2.14.34 — new tenant starts suspended only if the file says so.
+    if (c.fields.suspended === true) nt.suspended = true;
+    data.tenants.push(nt);
   });
   const n=plan.updates.length+plan.creates.length;
   window._importPlan=null;
