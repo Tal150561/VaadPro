@@ -173,6 +173,13 @@ t.eq('missing building object → empty subtitle',
 const srv = readSource('server.js');
 t.eq('server portal payload exposes building.org from getLabels',
   /building:\s*\{\s*name:[^}]*org:\s*t\(getLabels\(d\.config\),\s*'org'\)/.test(srv), true);
+// v2.14.35b — building NAME must come from the user account (users.json), not
+// config (config.buildingName is almost always empty). Regression guard for the
+// "subtitle showed only the org" bug.
+t.eq('portal resolves building name from the user account',
+  /portalUser\s*=\s*loadUsers\(\)\.find\(u\s*=>\s*u\.tenantId\s*===\s*entry\.tenantDataId\)/.test(srv), true);
+t.eq('portal payload uses the resolved building name',
+  /building:\s*\{\s*name:\s*portalBuildingName/.test(srv), true);
 
 t.section('app.html — import month is self-contained (v2.13.17)');
 // The July/June mis-tag root cause: with an empty bankMonth, analyzeBankRows fell

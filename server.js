@@ -5988,6 +5988,13 @@ app.get('/api/portal/:token', (req, res) => {
   if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
 
   const config = d.config || {};
+  // Building display name lives on the USER account (users.json), not in config
+  // (confirmed v2.14.27). entry.tenantDataId === the owner's tenantId, so look the
+  // user up and use its buildingName; fall back to config only if ever set there.
+  const portalUser = loadUsers().find(u => u.tenantId === entry.tenantDataId);
+  const portalBuildingName = (portalUser && portalUser.buildingName)
+    ? portalUser.buildingName
+    : (config.buildingName || '');
   const globalAmount = config.amount || 300;
   const amount = tenant.customAmount || globalAmount;
   const currentMonthKey = getMonthKey(config);
@@ -6075,7 +6082,7 @@ app.get('/api/portal/:token', (req, res) => {
         id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false
       }))
     },
-    building: { name: d.config?.buildingName || '', org: t(getLabels(d.config), 'org') },
+    building: { name: portalBuildingName, org: t(getLabels(d.config), 'org') },
     current: (() => {
       // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
       // page renders it verbatim. Previously tenant-portal.html did this math
