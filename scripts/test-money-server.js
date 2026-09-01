@@ -1010,6 +1010,59 @@ t.section('v2.14.31 — suspension: autoSend respects per-account rule (2C)');
 }
 
 // ════════════════════════════════════════════════════════════════
+// v2.14.36 — credit-in-advance gate in autoSendShouldRemind (design B+1)
+// ════════════════════════════════════════════════════════════════
+// A tenant who paid several months ahead has NO sentLog entry for the current
+// month (nothing landed this month), yet owes nothing — the charge is covered by
+// banked credit (negative openingDebt). The pre-v2.14.36 `!val → remind` rule
+// nagged them. The gate consults getCreditBalance (authoritative) and suppresses
+// the MAIN reminder when credit ≥ the month charge; an unpaid ACTIVE extra is
+// still its own reason to remind (per-account, symmetric with the suspended rule).
+// Runs the REAL autoSendShouldRemind + REAL getCreditBalance — no re-implementation.
+t.section('v2.14.36 — autoSend: credit-in-advance suppresses the reminder');
+{
+  const cfg = { amount: 300, manualMonth: 'יולי' };
+  const mk  = '2026-07';
+  // Banked credit of 600 (paid 2 months ahead) → openingDebt -600, no sentLog this
+  // month. getCreditBalance = 600 ≥ 300 month charge → MAIN covered → skip.
+  const tnCredit = { id: 'c1', name: 'שילם מראש', openingDebt: -600 };
+  t.eq('credit 600 ≥ charge 300, no sentLog → SKIP (was the bug)',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnCredit] }, tnCredit, mk), false);
+  // Exactly one month of credit (300) → still covers this month → skip.
+  const tnExact = { id: 'c2', name: 'קרדיט מדויק', openingDebt: -300 };
+  t.eq('credit 300 == charge 300 → SKIP',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnExact] }, tnExact, mk), false);
+  // Credit smaller than the month charge (partial credit) → NOT covered → remind.
+  const tnShort = { id: 'c3', name: 'קרדיט חלקי', openingDebt: -100 };
+  t.eq('credit 100 < charge 300 → REMIND (other direction)',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnShort] }, tnShort, mk), true);
+  // No credit at all, no sentLog → the ordinary unpaid case → remind (unchanged).
+  const tnPlain = { id: 'c4', name: 'רגיל חייב', openingDebt: 0 };
+  t.eq('no credit, no sentLog → REMIND (unchanged baseline)',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnPlain] }, tnPlain, mk), true);
+  // main==extra: credit covers the MAIN charge, but an ACTIVE extra is unpaid this
+  // month → still remind (the body will carry only the extra line downstream).
+  const tnCredExtra = { id: 'c5', name: 'קרדיט + חשמל חייב', openingDebt: -600,
+    extraAccounts: [{ id: 'ele', label: 'חשמל', amount: 80, active: true }] };
+  t.eq('credit covers main BUT active extra unpaid → REMIND (per-account)',
+    S.autoSendShouldRemind({ config: cfg, sentLog: {}, paymentHistory: {}, tenants: [tnCredExtra] }, tnCredExtra, mk), true);
+  // Same, but the extra is already paid → nothing owed anywhere → skip.
+  const tnCredExtraPaid = { id: 'c6', name: 'קרדיט + חשמל שולם', openingDebt: -600,
+    extraAccounts: [{ id: 'ele', label: 'חשמל', amount: 80, active: true }] };
+  t.eq('credit covers main AND extra paid → SKIP',
+    S.autoSendShouldRemind({ config: cfg,
+      sentLog: { 'c6__acc__ele_יולי': 'manual_paid_2026-07-03T00:00:00Z_amount_80' },
+      paymentHistory: {}, tenants: [tnCredExtraPaid] }, tnCredExtraPaid, mk), false);
+  // A real PARTIAL payment this month (val present) must NOT be swallowed by the
+  // credit gate — the gate only touches the no-sentLog case. Partial → remind.
+  const tnPartial = { id: 'c7', name: 'קרדיט אבל שילם חלקית החודש', openingDebt: -600 };
+  t.eq('partial payment this month still REMINDS (gate is no-sentLog only)',
+    S.autoSendShouldRemind({ config: cfg,
+      sentLog: { 'c7_יולי': 'bank_import_2026-07-05T00:00:00Z_100_payer_x' },
+      paymentHistory: {}, tenants: [tnPartial] }, tnPartial, mk), true);
+}
+
+// ════════════════════════════════════════════════════════════════
 // Stage 4 (v2.13.21) — closeMonthUnpaid accrues partial-payment shortfall
 // ════════════════════════════════════════════════════════════════
 // The ONLY stage that touches debt logic. Runs the REAL closeMonthUnpaid via

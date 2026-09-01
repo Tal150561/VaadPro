@@ -3225,9 +3225,19 @@ async function sendAll() {
 }
 
 async function sendUnpaidOnly() {
+  // v2.14.36 — CONSUME the server's authoritative decision (t.shouldRemind),
+  // computed by autoSendShouldRemind, instead of re-deriving from sentLog here.
+  // This makes "שלח רק לחייבים" behave EXACTLY like the automatic send: it skips
+  // paid-in-full, suspended, AND credit-in-advance tenants (a tenant who paid a few
+  // months ahead has no current-month sentLog entry but owes nothing this month).
+  // Fallback to the old sentLog derivation only if the server predates the field
+  // (shouldRemind === undefined), so an older backend never sends to nobody.
   const em=(data.config&&data.config.manualMonth)?data.config.manualMonth:(data.effectiveMonth||data.currentAutoMonth||'');
-  const unpaid=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+em];return !lv||(!String(lv).startsWith('manual_paid')&&!String(lv).startsWith('bank_import'));});
-  if(!unpaid.length){toast('✅ כולם כבר שילמו!','success');return;}
+  const unpaid=data.tenants.filter(function(t){
+    if(typeof t.shouldRemind!=='undefined') return t.shouldRemind===true;
+    var lv=data.sentLog[t.id+'_'+em];return !lv||(!String(lv).startsWith('manual_paid')&&!String(lv).startsWith('bank_import'));
+  });
+  if(!unpaid.length){toast('✅ אין למי לשלוח — כולם שילמו / מכוסים ביתרת זכות / מושהים','success');return;}
   if(!confirmManualSend()) return;
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
   document.getElementById('sendingStatus').textContent='שולח '+unpaid.length+' הודעות...';

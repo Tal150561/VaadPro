@@ -58,7 +58,9 @@ const SERVER_FNS = [
   'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate',
   'closeAndOpenInterval', 'seedTariffsIfMissing',
   // Stage 3 (v2.13.18) — partial-payment balance reminder
-  'buildBalanceLine', 'buildOffsetBlock', 'autoSendShouldRemind',
+  // v2.14.36 — tenantOwesActiveExtra: shared extra-account "still owes" helper
+  // (autoSendShouldRemind closes over it — must be extracted alongside it).
+  'buildBalanceLine', 'buildOffsetBlock', 'tenantOwesActiveExtra', 'autoSendShouldRemind',
   // v2.14.18 — {שורת_חוב_קודם} whole-line prior-debt placeholder
   'buildPriorDebtLine',
   // v2.14.19 — {שורת_זכות} whole-line credit placeholder

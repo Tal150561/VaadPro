@@ -1341,4 +1341,41 @@ t.section('app.html — tenant CSV import (v2.14.6)');
     app.includes('_suspCount > 0 ?'), true);
 }
 
+// ── v2.14.36: "שלח רק לחייבים" consumes server t.shouldRemind ──────
+// The button used to re-derive the send decision from sentLog in the browser
+// (duplicating autoSendShouldRemind), which missed credit-in-advance / suspended.
+// It now CONSUMES t.shouldRemind (computed server-side by autoSendShouldRemind),
+// with a fallback to the old sentLog derivation only when the field is absent
+// (older backend). We (a) execute the exact filter predicate over real tenant
+// shapes and (b) assert the source wires the field + fallback + the new toast.
+t.section('v2.14.36 — sendUnpaidOnly consumes shouldRemind (not local sentLog math)');
+{
+  const app = readSource('public/app.html');
+  // (a) execute the real predicate. Mirror the source expression exactly.
+  const em = 'יולי';
+  const sentLog = {
+    'x_יולי': 'manual_paid_2026-07-01T00:00:00Z_amount_300' // paid this month
+  };
+  const pred = (t) => {
+    if (typeof t.shouldRemind !== 'undefined') return t.shouldRemind === true;
+    var lv = sentLog[t.id + '_' + em];
+    return !lv || (!String(lv).startsWith('manual_paid') && !String(lv).startsWith('bank_import'));
+  };
+  // With the field present, ONLY t.shouldRemind decides — sentLog is ignored.
+  t.eq('shouldRemind:true → included', pred({ id: 'a', shouldRemind: true }), true);
+  t.eq('shouldRemind:false → excluded (credit/suspended/paid)', pred({ id: 'b', shouldRemind: false }), false);
+  t.eq('shouldRemind:false wins even if sentLog looks unpaid',
+    pred({ id: 'nokey', shouldRemind: false }), false);
+  t.eq('shouldRemind:true wins even if sentLog shows paid',
+    pred({ id: 'x', shouldRemind: true }), true);
+  // Fallback path (field absent, older backend): old sentLog derivation applies.
+  t.eq('no field + paid sentLog → excluded (fallback)', pred({ id: 'x' }), false);
+  t.eq('no field + no sentLog → included (fallback)', pred({ id: 'noentry' }), true);
+  // (b) source wiring: the field, the typeof-guarded fallback, and the toast.
+  t.eq('sendUnpaidOnly reads t.shouldRemind', /t\.shouldRemind===true|t\.shouldRemind === true/.test(app), true);
+  t.eq('sendUnpaidOnly keeps a typeof fallback', app.includes("typeof t.shouldRemind!=='undefined'"), true);
+  t.eq('sendUnpaidOnly empty-case toast updated (mentions credit/suspended)',
+    app.includes('מכוסים ביתרת זכות'), true);
+}
+
 process.exit(t.done() ? 1 : 0);

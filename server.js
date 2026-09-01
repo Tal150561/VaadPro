@@ -1692,7 +1692,14 @@ app.get('/api/data', authMiddleware, (req, res) => {
         priorDebt:     Math.max(0, totalNow - curInTotal), // accrued debt BEFORE the active month
         effectiveAmount: live,        // resolved customAmount || config.amount || 300
         monthBalances,                // { hebMonth: {status, paidAmount, expected, shortfall, credit} }
-        currentBalance: emBal         // balance for the ACTIVE month (em)
+        currentBalance: emBal,        // balance for the ACTIVE month (em)
+        // 💬 v2.14.36 — AUTHORITATIVE "still owes a reminder this month?" flag.
+        // Computed by the SAME function the cron/auto path uses (autoSendShouldRemind),
+        // so the "שלח רק לחייבים" button consumes this instead of re-deriving the
+        // decision from sentLog in the browser (CONSUME, DO NOT COMPUTE). This makes
+        // the button honour credit-in-advance / suspended / paid-in-full exactly like
+        // the automatic send. NOTE: "שלח לכולם" is deliberately NOT gated by this.
+        shouldRemind:  autoSendShouldRemind(d, t, mkNow)
       };
     });
   }
@@ -2401,6 +2408,22 @@ function buildOffsetBlock(d, tenant) {
 // nudge must NOT suppress it. Double-fire of the CRON itself on the same day is
 // prevented separately by the config.lastAutoSend daily guard in runAutoSendCron.
 // Skip ONLY a full payment. Delegates status to calcMonthBalance — the one source.
+// Does this tenant still owe on any ACTIVE, non-suspended extra account for the
+// active (Hebrew) month `em`? Per-account (design 2C): an unpaid extra account is
+// its own reason to remind, independent of the main account's state. Extracted
+// (v2.14.36) so the suspended branch AND the new main-account-credit branch share
+// ONE definition instead of two copies (CONSUME, DO NOT COMPUTE).
+function tenantOwesActiveExtra(d, tenant, em) {
+  const sentLog = d.sentLog || {};
+  return (tenant.extraAccounts || []).some(acc => {
+    if (acc.active === false || acc.suspended === true) return false;
+    if ((parseFloat(acc.amount) || 0) <= 0) return false;
+    const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
+    const lv = String(sentLog[slKey] || '');
+    return !(lv.startsWith('manual_paid') || lv.startsWith('bank_import'));
+  });
+}
+
 function autoSendShouldRemind(d, tenant, mk) {
   const sentLog = d.sentLog || {};
   const month = getEffectiveMonth(d.config || {});
@@ -2410,18 +2433,31 @@ function autoSendShouldRemind(d, tenant, mk) {
   // (the reminder body will contain only the extra-account line — the main line
   // is suppressed by waMessageForTenant / the suspended-main check downstream).
   if (tenant.suspended === true) {
-    const em = month;
-    const owesExtra = (tenant.extraAccounts || []).some(acc => {
-      if (acc.active === false || acc.suspended === true) return false;
-      if ((parseFloat(acc.amount) || 0) <= 0) return false;
-      const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
-      const lv = String(sentLog[slKey] || '');
-      return !(lv.startsWith('manual_paid') || lv.startsWith('bank_import'));
-    });
-    return owesExtra;   // remind only if an extra account is still owed
+    return tenantOwesActiveExtra(d, tenant, month);   // remind only if an extra account is still owed
   }
   const val = sentLog[tenant.id + '_' + month];
-  if (!val) return true;                            // nothing yet → remind (unpaid)
+  // 💳 v2.14.36 — CREDIT-IN-ADVANCE gate (design B+1, per-account).
+  // A tenant who paid ahead (e.g. 3 months in one go) has NO sentLog entry for the
+  // current month, so the `!val` branch below used to treat them as an unpaid
+  // debtor and remind them — even though they owe nothing. Before that branch,
+  // check the AUTHORITATIVE credit balance (getCreditBalance — the same figure the
+  // dashboard and portal show, with the double-count guard). If credit covers the
+  // MAIN-account charge for this month, the main account is NOT a reason to remind.
+  // Symmetric with the suspended branch: an active extra account that is still
+  // unpaid this month is its own reason to remind (the reminder body then carries
+  // only the extra-account line). Guarded so this ONLY suppresses the "silent"
+  // no-sentLog case — a real partial/short payment (val present) still falls
+  // through to the balance check below unchanged.
+  if (!val) {
+    const live0 = (tenant.customAmount) || ((d.config || {}).amount) || 300;
+    const monthCharge = getExpectedAmount((d.paymentHistory || {})[String(tenant.id)] || [], mk, live0);
+    const credit = getCreditBalance(d, String(tenant.id));
+    if (credit >= monthCharge && monthCharge >= 0) {
+      // Main account is covered by credit → remind ONLY if an extra account owes.
+      return tenantOwesActiveExtra(d, tenant, month);
+    }
+    return true;                                    // nothing yet, no covering credit → remind (unpaid)
+  }
   if (String(val).startsWith('sent_')) return true; // reminded (manual/auto) but UNPAID → still remind
   if (!sentLogIsPayment(val)) return true;          // unknown non-payment → remind
   const history = (d.paymentHistory || {})[String(tenant.id)] || [];
@@ -7525,7 +7561,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.35 – SaaS Server     ║');
+  console.log('║   VaadPro v2.14.36 – SaaS Server     ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');
