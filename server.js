@@ -54,6 +54,12 @@ const { Boom } = require('@hapi/boom');
 const qrcode    = require('qrcode');
 
 const app  = express();
+
+// v2.14.37 — single source of truth for the running server version. Read from
+// package.json so the boot banner and the /api/data stamp can NEVER drift from
+// the deployed version again (the banner used to be a hand-edited string).
+let SERVER_VERSION = '';
+try { SERVER_VERSION = require('./package.json').version || ''; } catch (e) { SERVER_VERSION = ''; }
 const PORT = process.env.PORT || 3002;
 
 // ── קבצי Bridge מוטמעים ─────────────────────────────────────────
@@ -1624,6 +1630,10 @@ app.get('/api/status', authMiddleware, (req, res) => {
 // Data CRUD
 app.get('/api/data', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
+  // v2.14.37 — ship the running server version so the frontend can compare it to
+  // the HTML version it was loaded with and warn the operator to hard-refresh
+  // (Ctrl+Shift+R) when the browser is holding a stale cached app.html.
+  d.serverVersion     = SERVER_VERSION;
   d.effectiveMonth    = getEffectiveMonth(d.config);
   d.currentAutoMonth  = getEffectiveMonth(d.config);
   // Stage 2: computed labels (orgType + overrides) so the frontend mirrors the
@@ -7561,7 +7571,7 @@ function reconnectExistingSessions() {
 app.listen(PORT, () => {
   console.log('');
   console.log('╔══════════════════════════════════════╗');
-  console.log('║   VaadPro v2.14.36 – SaaS Server     ║');
+  console.log('║   VaadPro v' + (SERVER_VERSION || '?') + ' – SaaS Server     ║');
   console.log('║   http://localhost:' + PORT + '              ║');
   console.log('╚══════════════════════════════════════╝');
   console.log('');

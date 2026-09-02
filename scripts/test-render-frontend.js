@@ -1378,4 +1378,51 @@ t.section('v2.14.36 — sendUnpaidOnly consumes shouldRemind (not local sentLog 
     app.includes('מכוסים ביתרת זכות'), true);
 }
 
+// ── v2.14.37: header version stamp + stale-cache (Ctrl+Shift+R) warning ──
+// applyVersionStamp() compares the baked-in HTML_VERSION against data.serverVersion
+// (shipped by /api/data) and shows a red refresh warning ONLY on a real mismatch.
+// We (a) execute the real function over the three cases and (b) assert the source
+// wires the constant, the /api/data field, the header elements, and the call site.
+t.section('v2.14.37 — version stamp warns on server/HTML mismatch');
+{
+  const app = readSource('public/app.html');
+
+  // (a) execute the real applyVersionStamp over a DOM stub.
+  const fnSrc = extractFunctions(app, ['applyVersionStamp']); // returns the fn source text
+  t.eq('applyVersionStamp is present in the source', /function applyVersionStamp/.test(fnSrc), true);
+
+  function run(serverVersion) {
+    const els = {
+      appVerNum:  { textContent: '', style: {} },
+      appVerWarn: { style: {} }
+    };
+    const document = { getElementById: (id) => els[id] || null };
+    const data = (typeof serverVersion === 'undefined') ? {} : { serverVersion };
+    const HTML_VERSION = '2.14.37';
+    const f = new Function('document', 'data', 'HTML_VERSION',
+      fnSrc + '\n; return applyVersionStamp();');
+    f(document, data, HTML_VERSION);
+    return els;
+  }
+
+  const match = run('2.14.37');
+  t.eq('match → warning hidden', match.appVerWarn.style.display, 'none');
+  t.eq('match → shows plain version', match.appVerNum.textContent, 'v2.14.37');
+
+  const mismatch = run('2.14.99');
+  t.eq('mismatch → warning shown', mismatch.appVerWarn.style.display, 'inline');
+  t.eq('mismatch → shows both versions',
+    mismatch.appVerNum.textContent.includes('2.14.37') &&
+    mismatch.appVerNum.textContent.includes('2.14.99'), true);
+
+  const noSv = run(undefined);
+  t.eq('absent serverVersion (old backend) → no false warning', noSv.appVerWarn.style.display, 'none');
+
+  // (b) source wiring.
+  t.eq('HTML_VERSION constant defined', /const HTML_VERSION\s*=\s*'[\d.]+'/.test(app), true);
+  t.eq('header has #appVerWarn element', app.includes('id="appVerWarn"'), true);
+  t.eq('warning text is the Ctrl+Shift+R prompt', app.includes('רענן: Ctrl+Shift+R'), true);
+  t.eq('applyVersionStamp is called from loadData', /try\s*\{\s*applyVersionStamp\(\)/.test(app), true);
+}
+
 process.exit(t.done() ? 1 : 0);
