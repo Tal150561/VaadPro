@@ -2021,4 +2021,64 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
+// ════════════════════════════════════════════════════════════════════════
+// v2.14.38 — lump-sum single-row split across months (the Randi/apt-3 bug)
+// A tenant who falls behind and pays ONE transfer covering several months
+// (460=2×230, note "יולי אוגוסט") used to land wholly on the row's date-month
+// as a phantom overpayment. analyzeBankRowsServer now fans it out per month.
+// Mutation targets: removing the split → the FIRST test (two months) fails;
+// ignoring isPaid → the "skip already-paid month" test fails.
+// ════════════════════════════════════════════════════════════════════════
+{
+  const { loadBankAnalyzer } = require('./test-lib');
+  const B = loadBankAnalyzer();
+  const dft = [{ rate: 230, startDate: '2000-01-01', endDate: null }];
+  const tOf = () => ([{ id: 'R', name: 'מירי', phone: '0527247713', keywords: 'סיגולים, מירי', aptNumber: '3', customAmount: null }]);
+  const amtOf = (sl, heb) => parseFloat(String(sl['R_' + heb]).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
+
+  t.section('v2.14.38 — lump-sum split: note names the months');
+  {
+    const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','460','07/08/2026','ועד הבית יולי אוגוסט']];
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    t.eq('split into TWO months', r.matched[0].monthsSplit, 2);
+    t.eq('July key written = 230', amtOf(r.newSentLog, 'יולי'), 230);
+    t.eq('August key written = 230 (NOT 460)', amtOf(r.newSentLog, 'אוגוסט'), 230);
+    t.eq('splitMonths reported', JSON.stringify(r.matched[0].splitMonths), JSON.stringify(['2026-07','2026-08']));
+  }
+
+  t.section('v2.14.38 — lump-sum split: no note, backfill unpaid priors');
+  {
+    const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','690','07/08/2026','']];
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    t.eq('x3 → three months', r.matched[0].monthsSplit, 3);
+    t.eq('June=230', amtOf(r.newSentLog, 'יוני'), 230);
+    t.eq('July=230', amtOf(r.newSentLog, 'יולי'), 230);
+    t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
+  }
+
+  t.section('v2.14.38 — lump-sum split: never overwrites an already-paid month');
+  {
+    // July already paid (in sentLog). 460 in Aug ⇒ backfill must SKIP July and use June.
+    const sl = { 'R_יולי': 'bank_import_2026-07-01T00:00:00.000Z_230_payer_x' };
+    const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','460','07/08/2026','']];
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), sl, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    t.eq('July NOT overwritten (still original)', r.newSentLog['R_יולי'], sl['R_יולי']);
+    t.eq('June filled instead', amtOf(r.newSentLog, 'יוני'), 230);
+    t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
+  }
+
+  t.section('v2.14.38 — no split on exact single charge (byte-identical path)');
+  {
+    const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','230','07/08/2026','']];
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    t.eq('single charge → one month only', r.matched[0].monthsSplit, 1);
+    t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
+    t.eq('no July key', r.newSentLog['R_יולי'], undefined);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

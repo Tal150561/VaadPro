@@ -6658,6 +6658,136 @@ function bankRowMonthKey(dateVal) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
 
+// ══ splitOverpayAcrossMonths (v2.14.38) — see scripts/lib-split-overpay.js ══
+// ⚠️ DUPLICATED VERBATIM in public/app.html and unit-tested in
+// scripts/test-split-overpay.js. Keep all copies identical.
+const SPLIT_MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+// mk "YYYY-MM" → previous month key. "2026-01" → "2025-12".
+function prevMonthKey(mk) {
+  const p = String(mk).split('-');
+  let y = parseInt(p[0]), m = parseInt(p[1]);
+  m -= 1;
+  if (m < 1) { m = 12; y -= 1; }
+  return y + '-' + String(m).padStart(2, '0');
+}
+
+// Extract DISTINCT Hebrew month keys named in a free-text note, resolved against
+// refYear. Word-bounded so "מאיה" doesn't match "מאי". Returns YYYY-MM strings in
+// the order the months appear on the calendar (not the order typed). Empty if
+// none. Cross-year note (e.g. "דצמבר ינואר") not supported → returns as found and
+// the count-guard in the caller will simply decline to split (safe).
+function monthsNamedInNote(note, refYear) {
+  if (!note) return [];
+  const s = String(note);
+  const found = new Set();
+  for (let i = 0; i < SPLIT_MONTHS_HE.length; i++) {
+    const name = SPLIT_MONTHS_HE[i];
+    const re = new RegExp('(?:^|[\\s,/(\\-])' + name + '(?=[\\s,/)\\-]|$)');
+    if (re.test(s)) found.add(refYear + '-' + String(i + 1).padStart(2, '0'));
+  }
+  return Array.from(found).sort();
+}
+
+/**
+ * Expand overpaying single-month buckets into per-month buckets.
+ *
+ * @param {Map} buckets  monthKey → { sum, payerName, count }  (from groupMatchesByMonth; MUTATED & returned)
+ * @param {object} opts
+ *   @param {(mk:string)=>number}  chargeForMonth  per-month charge (tariff-aware); >0
+ *   @param {(mk:string)=>boolean} isPaid          true if that month already has a paid/bank_import sentLog
+ *   @param {string}  [note]      the row's note text (for strategy A)
+ *   @param {number}  [refYear]   year to resolve note month-names against (default: year of the bucket)
+ *   @param {number}  [maxBack]   safety cap on how many months back to fill (default 12)
+ * @returns {{buckets:Map, split:boolean, months:string[]}} split=true if any expansion happened
+ */
+function splitOverpayAcrossMonths(buckets, opts) {
+  opts = opts || {};
+  const chargeForMonth = typeof opts.chargeForMonth === 'function' ? opts.chargeForMonth : () => 0;
+  const isPaid = typeof opts.isPaid === 'function' ? opts.isPaid : () => false;
+  const maxBack = opts.maxBack != null ? opts.maxBack : 12;
+  const note = opts.note || '';
+
+  // Only ever act on a SINGLE-bucket, SINGLE-row payment. A file that already has
+  // multiple dated months (real multi-row) is left exactly as groupMatchesByMonth
+  // produced it — that path already works. count>1 means several rows summed into
+  // one month (e.g. two same-day transfers) — also left alone (ambiguous; not our
+  // case). This keeps the common path byte-identical.
+  if (!buckets || buckets.size !== 1) return { buckets, split: false, months: [] };
+  const onlyMk = buckets.keys().next().value;
+  const b = buckets.get(onlyMk);
+  if (!b || b.count !== 1) return { buckets, split: false, months: [] };
+
+  const charge = chargeForMonth(onlyMk);
+  if (!(charge > 0)) return { buckets, split: false, months: [] };
+
+  // Clean integer multiple ≥2? (tolerate 1-agora rounding)
+  const ratio = b.sum / charge;
+  const mult = Math.round(ratio);
+  if (mult < 2 || Math.abs(b.sum - mult * charge) > 0.011) {
+    return { buckets, split: false, months: [] };
+  }
+
+  // ── Strategy A: note names exactly `mult` months ──────────────────────
+  const refYear = opts.refYear != null ? opts.refYear : parseInt(String(onlyMk).split('-')[0]);
+  const named = monthsNamedInNote(note, refYear);
+  let targetMonths = null;
+  if (named.length === mult) {
+    // Use the named months verbatim (they may include the row's own month). Only
+    // accept if none of them is already paid EXCEPT the row's own month (which is
+    // the bucket we're replacing). If a *different* named month is already paid,
+    // decline strategy A and fall through to backward-fill (safer).
+    const conflict = named.some(mk => mk !== onlyMk && isPaid(mk));
+    if (!conflict) targetMonths = named.slice();
+  }
+
+  // ── Strategy B: backward-fill unpaid prior months, oldest→newest ──────
+  if (!targetMonths) {
+    // Collect the row's own month plus as many UNPAID prior months as needed to
+    // absorb `mult` charges. Walk backward from the month BEFORE onlyMk, skipping
+    // paid months, until we've gathered (mult-1) unpaid priors (the row's own
+    // month is always target #1). Whatever we can't place stays as credit on
+    // onlyMk (handled below by the leftover).
+    const priors = [];
+    let cur = prevMonthKey(onlyMk);
+    let steps = 0;
+    while (priors.length < mult - 1 && steps < maxBack) {
+      if (!isPaid(cur)) priors.push(cur);
+      cur = prevMonthKey(cur);
+      steps++;
+    }
+    priors.reverse(); // oldest → newest
+    targetMonths = priors.concat([onlyMk]); // own month last
+  }
+
+  // Nothing to do if the split collapses back to the single original month.
+  if (targetMonths.length <= 1 && targetMonths[0] === onlyMk) {
+    // But there may still be leftover credit (mult>1 yet no unpaid priors found).
+    // Leave the whole sum on onlyMk exactly as-is → it reads as a legitimate
+    // advance-payment credit. This is the "conservative, don't push forward" case.
+    return { buckets, split: false, months: [] };
+  }
+
+  // Build the new bucket set. Each target month gets exactly one charge; the
+  // ORIGINAL month absorbs any leftover (advance credit) so the money always
+  // balances to b.sum to the agora.
+  const newBuckets = new Map();
+  let placed = 0;
+  for (const mk of targetMonths) {
+    const c = chargeForMonth(mk) || charge;
+    newBuckets.set(mk, { sum: Math.round(c * 100) / 100, payerName: b.payerName, count: 1 });
+    placed = Math.round((placed + c) * 100) / 100;
+  }
+  const leftover = Math.round((b.sum - placed) * 100) / 100;
+  if (Math.abs(leftover) > 0.011) {
+    // Remainder → credit on the original month (advance). Add on top of its charge.
+    const ob = newBuckets.get(onlyMk);
+    ob.sum = Math.round((ob.sum + leftover) * 100) / 100;
+  }
+
+  return { buckets: newBuckets, split: true, months: targetMonths.slice() };
+}
+
 // ── groupMatchesByMonth (v2.14.4, #3 multi-month split) ────────────
 // Given a tenant's matched rows (each `{amount, date, ...}`), bucket them by the
 // month parsed from `date`. Rows with no parseable date fall into `fallbackMk`
@@ -6695,7 +6825,7 @@ function groupMatchesByMonth(matches, fallbackMk) {
 // summing them all into the chosen month (which read as a phantom overpayment
 // credit). Single-month files are unchanged. `em`/`monthKey` remain the FALLBACK
 // month for rows with no parseable date, and the reported `month` for the UI.
-function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints) {
+function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints, paymentHistory, defaultTariffs) {
   const iName   = parseInt(mapping.colName   ?? -1);
   const iAmount = parseInt(mapping.colAmount ?? -1);
   const iDate   = parseInt(mapping.colDate   ?? -1);
@@ -6748,6 +6878,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   // parseable date). em = its Hebrew name (also the reported `month` for the UI).
   const fallbackMk = monthKey || getMonthKey(config);
   const em = MONTHS_HE[parseInt(fallbackMk.split('-')[1]) - 1];
+  const defaultTariffs0 = defaultTariffs || null;
   // Hebrew month name for any YYYY-MM key produced by the per-row grouping.
   const hebOfMk = (mk) => MONTHS_HE[parseInt(String(mk).split('-')[1]) - 1];
 
@@ -6925,7 +7056,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       seenRowIdx.add(m.rowIdx);
       consumedFingerprints.add(fp);
       newFingerprints.push(fp);
-      tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal, date: m.dateVal });
+      tenantMatches.push({ amount: m.amount, matchType: type, payerName: m.nameVal, date: m.dateVal, note: m.noteVal });
     });
 
     if (tenantMatches.length > 0) {
@@ -6949,12 +7080,32 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // them into `em` (which read as a phantom overpayment). Single-month files
       // produce exactly one bucket → byte-identical to the old single-key write.
       // Rows with no parseable date fall back to `fallbackMk` (the chosen month).
-      const { buckets } = groupMatchesByMonth(tenantMatches, fallbackMk);
+      const grouped0 = groupMatchesByMonth(tenantMatches, fallbackMk);
+      // ── v2.14.38: split a single lump-sum row that covers several months ──
+      // A tenant who fell behind and pays 2×/3× the monthly charge in ONE transfer
+      // (often noting "יולי אוגוסט") arrived as ONE bucket → phantom overpayment.
+      // splitOverpayAcrossMonths fans it out into per-month buckets (note-named
+      // first, else backfill unpaid priors oldest→newest, leftover=advance credit).
+      // Guardrails: clean multiple only, never overwrites an already-paid month,
+      // tariff-aware charge. No split ⇒ buckets unchanged (single-month identical).
+      const noteText = (tenantMatches[0] && tenantMatches[0].note) || '';
+      const chargeForMonth = (mk) => resolveTariffRate(
+        tenant, defaultTariffs0, mk,
+        (tenant.customAmount) || (config && config.amount) || 300
+      );
+      const isPaidMonth = (mk) => {
+        const heb = hebOfMk(mk);
+        const v = String(newSentLog[tenant.id + '_' + heb] || '');
+        return v.startsWith('bank_import') || v.startsWith('manual_paid');
+      };
+      const { buckets } = splitOverpayAcrossMonths(grouped0.buckets, {
+        chargeForMonth, isPaid: isPaidMonth, note: noteText
+      });
       for (const [mk, b] of buckets) {
         const hebMk = hebOfMk(mk);
         newSentLog[tenant.id + '_' + hebMk] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
       }
-      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false, monthsSplit: buckets.size });
+      matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false, monthsSplit: buckets.size, splitMonths: Array.from(buckets.keys()) });
     } else if (!tenantHadPriorImport) {
       // Only genuinely unrecognized tenants go here. A tenant whose sole rows were
       // already imported in a prior run is reported in `alreadyImportedSkips`, not
@@ -6993,7 +7144,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           }
           consumedFingerprints.add(fp);
           newFingerprints.push(fp);
-          accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx, date: m.dateVal });
+          accMatches.push({ amount: m.amount, payerName: m.nameVal, rowIdx: m.rowIdx, date: m.dateVal, note: m.noteVal });
         });
         if (accMatches.length > 0) {
           // ── v2.14.4 (#3): split extra-account payments by month too (symmetric). ──
@@ -7001,7 +7152,22 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           // guard is now checked per TARGET month (not only for `em`), so importing a
           // second month's file does not skip a month already marked by an earlier import.
           const phKey = String(tenant.id) + '__acc__' + acc.id;
-          const { buckets } = groupMatchesByMonth(accMatches, fallbackMk);
+          const grouped0Acc = groupMatchesByMonth(accMatches, fallbackMk);
+          // ── v2.14.38: lump-sum split for extra accounts (symmetric with main). ──
+          // Charge = acc.amount (extra accounts have no tariff history). isPaid reads
+          // the extra-account sentLog key (phKey_<heb>). No split ⇒ unchanged.
+          const accCharge = parseFloat(acc.amount) || 0;
+          const accNote = (accMatches[0] && accMatches[0].note) || '';
+          const isPaidAccMonth = (mk) => {
+            const heb = hebOfMk(mk);
+            const v = String(newSentLog[phKey + '_' + heb] || '');
+            return v.startsWith('bank_import') || v.startsWith('manual_paid');
+          };
+          const { buckets } = accCharge > 0
+            ? splitOverpayAcrossMonths(grouped0Acc.buckets, {
+                chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, note: accNote
+              })
+            : grouped0Acc;
           let anyWritten = false;
           let reportedTotal = 0;
           const reportedPayer = (accMatches[0] && accMatches[0].payerName) || '';
@@ -7088,7 +7254,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
 
     const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips } = analyzeBankRowsServer(
-      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp
+      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs
     );
 
     // רשום paymentHistory לדיירים רגילים שזוהו
@@ -7097,19 +7263,33 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // the historical rate for importMonthKey, not today's customAmount.
     const seededImport = seedTariffsIfMissing(d);
     const importMonthKey = monthKey || (() => { const n = new Date(); return n.getFullYear() + '-' + String(n.getMonth()+1).padStart(2,'0'); })();
+    // ── v2.14.38: record paymentHistory against EACH month written to sentLog, not
+    // only the single fallback `month`. Before, this loop read one key (tenantId_month)
+    // and wrote ONE paymentHistory record — so a split payment (v2.14.4 multi-row, or
+    // the v2.14.38 lump-sum split) left its extra months in sentLog with NO matching
+    // paymentHistory record, and the credit/debt math (which reads both) diverged.
+    // `m.splitMonths` (YYYY-MM keys returned by analyzeBankRowsServer) drives it now;
+    // absent (older shape) ⇒ fall back to the single importMonthKey (identical to before).
     matched.forEach(m => {
       if (String(m.tenantId).includes('__acc__')) return; // extraAccounts מטופלים בנפרד
-      const slKey = String(m.tenantId) + '_' + month; // month = שם חודש בעברית
-      const slVal = String(newSentLog[slKey] || '');
-      let payerName = '', paidAmount = null;
-      const payerMatch = slVal.match(/_payer_(.+)$/);
-      if (payerMatch) payerName = payerMatch[1];
-      const amtMatch = slVal.match(/bank_import_[^_]+_([\d.]+)_/);
-      if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
       const tenant = (d.tenants || []).find(t => String(t.id) === String(m.tenantId));
       const legacyFallback = (tenant && tenant.customAmount) || (d.config && d.config.amount) || 300;
-      const amount = resolveTariffRate(tenant, d.defaultTariffs, importMonthKey, legacyFallback);
-      recordPayment(tenantDataForHistory, String(m.tenantId), importMonthKey, 'bank', amount, m.name, payerName, paidAmount);
+      const monthsToRecord = (Array.isArray(m.splitMonths) && m.splitMonths.length)
+        ? m.splitMonths
+        : [importMonthKey];
+      monthsToRecord.forEach(mkISO => {
+        const hebMk = HEBREW_MONTHS[parseInt(String(mkISO).split('-')[1]) - 1];
+        const slKey = String(m.tenantId) + '_' + hebMk;
+        const slVal = String(newSentLog[slKey] || '');
+        if (!(slVal.startsWith('bank_import') || slVal.startsWith('manual_paid'))) return;
+        let payerName = '', paidAmount = null;
+        const payerMatch = slVal.match(/_payer_(.+)$/);
+        if (payerMatch) payerName = payerMatch[1];
+        const amtMatch = slVal.match(/bank_import_[^_]+_([\d.]+)_/);
+        if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
+        const amount = resolveTariffRate(tenant, d.defaultTariffs, mkISO, legacyFallback);
+        recordPayment(tenantDataForHistory, String(m.tenantId), mkISO, 'bank', amount, m.name, payerName, paidAmount);
+      });
     });
 
     // מיזוג paymentHistory של חשבונות נוספים עם הקיים
