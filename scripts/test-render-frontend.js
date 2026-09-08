@@ -864,6 +864,15 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('renderClosedMonthApprovals exists', /function renderClosedMonthApprovals\(/.test(app), true);
   t.eq('approveClosedMonthPayment posts apply-closed-month-payment', /apply-closed-month-payment/.test(app), true);
   t.eq('redundant _closedHits removed (single source of truth)', /_closedHits/.test(app), false);
+  // v2.14.39a regression — renderClosedMonthApprovals is a TOP-LEVEL function, so it
+  // must use the GLOBAL month-names constant (VP_MONTHS), never MONTH_NAMES_HE which
+  // is a const LOCAL to analyzeBankRows. Referencing the local threw a ReferenceError
+  // that crashed the panel after commit (green toast, but no panel).
+  {
+    var panelFn = (app.match(/function renderClosedMonthApprovals\([\s\S]*?\n}\n/) || [''])[0];
+    t.eq('approval panel does NOT reference function-local MONTH_NAMES_HE', /MONTH_NAMES_HE/.test(panelFn), false);
+    t.eq('approval panel uses global VP_MONTHS', /VP_MONTHS/.test(panelFn), true);
+  }
 }
 
 t.section('app.html — tenant CSV import (v2.14.6)');

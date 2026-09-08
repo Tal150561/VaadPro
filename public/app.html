@@ -1728,7 +1728,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.39a';
+const HTML_VERSION = '2.14.39b';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4952,7 +4952,7 @@ function renderClosedMonthApprovals(hits){
     else document.body.appendChild(box);
   }
   if (!hits.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
-  var hebOf = function(mk){ return MONTH_NAMES_HE[parseInt(String(mk).split('-')[1]) - 1] + ' ' + String(mk).split('-')[0]; };
+  var hebOf = function(mk){ return VP_MONTHS[parseInt(String(mk).split('-')[1]) - 1] + ' ' + String(mk).split('-')[0]; };
   var h = '<div style="background:rgba(227,179,65,.10);border:1px solid rgba(227,179,65,.4);border-radius:10px;padding:12px 14px;margin:12px 0;">'
     + '<div style="font-weight:700;color:var(--warn);margin-bottom:4px;">⏳ תשלומים לחודשים שכבר נסגרו — דורשים אישור</div>'
     + '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">התקבלו תשלומים עבור חודשים שכבר נסגרו והחוב שלהם כבר נצבר. אישור יזקוף את התשלום כנגד החוב המצטבר (פעם אחת). ללא אישור — לא ישתנה דבר.</div>';
