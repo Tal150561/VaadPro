@@ -4853,9 +4853,21 @@ function commitBankImport(){
   if(!P){ toast('אין ייבוא ממתין לאישור','error'); return; }
   var matched = P.matched, hebOfMk = P.hebOfMk, em = P.em;
 
+  // v2.14.39b — OPTION 1 (locked with Tal, session 22): the whole file is imported
+  // to ONE selected month. If that month is CLOSED, splitting makes no sense — the
+  // full payment is money for the closed month and must be reverse-accrued against
+  // the real debt on approval, never fanned back onto older (already-in-openingDebt)
+  // months as a phantom "paid". So when selectedMonthKey is closed we SKIP the split
+  // dialog entirely and route each tenant's FULL amount to the approval panel as one
+  // row. (Open selected-month keeps the v2.14.38 auto-split, which prevents the
+  // Randi phantom-credit bug on open months. No dialog in either case.)
+  var _selClosed = (Array.isArray(data.closedMonths) ? data.closedMonths : []).indexOf(selectedMonthKey) >= 0;
+
   // Multi-month split confirm — deferred here from detection time.
+  // v2.14.39b: only offered for an OPEN selected month. For a closed month the
+  // split is bypassed (see _selClosed handling in the commit loop below).
   var doSplit = false;
-  if (P.splitMonths && P.splitMonths.length) {
+  if (!_selClosed && P.splitMonths && P.splitMonths.length) {
     var monthsList = P.splitMonths.map(function(mk){ return hebOfMk(mk) + ' ' + mk.split('-')[0]; }).join(', ');
     doSplit = confirm(
       'הקובץ מכיל תשלומים מ-' + P.splitMonths.length + ' חודשים שונים (' + monthsList + ').\n\n' +
@@ -4875,6 +4887,15 @@ function commitBankImport(){
 
   matched.forEach(function(m){
     var payerName = (m.payments[0] && m.payments[0].payerName) || '';
+    // v2.14.39b — OPTION 1: selected month CLOSED → the tenant's FULL amount is one
+    // approval row for that closed month. No split, no silent open-month writes.
+    if (_selClosed) {
+      _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: selectedMonthKey, scope: 'main',
+                              charge: m.amount, payerName: payerName });
+      delete m._buckets;
+      delete m._lumpSplit;
+      return;
+    }
     // v2.14.38: a LUMP-SUM split (one row fanned into months) always writes its
     // per-month buckets — collapsing it back to `em` would recreate the phantom
     // overpayment we are fixing. A genuine multi-ROW file still obeys `doSplit`.

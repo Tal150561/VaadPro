@@ -873,6 +873,11 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
     t.eq('approval panel does NOT reference function-local MONTH_NAMES_HE', /MONTH_NAMES_HE/.test(panelFn), false);
     t.eq('approval panel uses global VP_MONTHS', /VP_MONTHS/.test(panelFn), true);
   }
+  // v2.14.39b — OPTION 1: a CLOSED selected month bypasses the split dialog and
+  // routes each tenant's FULL amount to the approval panel as one row.
+  t.eq('computes _selClosed from selectedMonthKey vs closedMonths', /_selClosed\s*=\s*\(Array\.isArray\(data\.closedMonths\)/.test(commit), true);
+  t.eq('split dialog suppressed when selected month closed', /if \(!_selClosed && P\.splitMonths/.test(commit), true);
+  t.eq('closed selected month → full m.amount to approvals (skip split)', /if \(_selClosed\)\s*\{[\s\S]{0,220}?_closedApprovals\.push\([\s\S]{0,160}?charge:\s*m\.amount/.test(commit), true);
 }
 
 t.section('app.html — tenant CSV import (v2.14.6)');
