@@ -858,6 +858,12 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('cancelBankImport saves nothing', /function cancelBankImport\(\)\{[\s\S]*?_pendingBankImport\s*=\s*null/.test(app), true);
   t.eq('preview wires אשר ורשום → commit', /onclick="commitBankImport\(\)"/.test(app), true);
   t.eq('preview wires בטל → cancel', /onclick="cancelBankImport\(\)"/.test(app), true);
+  // v2.14.39a — closed-month approval routing (single source of truth)
+  t.eq('commit routes closed bucket to approvals using b.sum', /_closedApprovals\.push\(\{[^}]*charge:\s*b\.sum/.test(commit), true);
+  t.eq('commit does NOT write sentLog for closed bucket (returns first)', /_closedMainSet\.has\(mk\)[\s\S]{0,400}?return;/.test(commit), true);
+  t.eq('renderClosedMonthApprovals exists', /function renderClosedMonthApprovals\(/.test(app), true);
+  t.eq('approveClosedMonthPayment posts apply-closed-month-payment', /apply-closed-month-payment/.test(app), true);
+  t.eq('redundant _closedHits removed (single source of truth)', /_closedHits/.test(app), false);
 }
 
 t.section('app.html — tenant CSV import (v2.14.6)');

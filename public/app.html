@@ -4778,16 +4778,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
         note: _splitNote
       });
       grouped.buckets = _sp.buckets;
-      // Detect any bucket month that is itself closed (e.g. the row's own month is a
-      // closed month). Such money stays as credit; the operator decides whether to
-      // reverse-accrue it against the closed month's debt via the approval row.
-      var _closedHits = [];
-      for (var _mk of grouped.buckets.keys()) {
-        if (_closedMain.has(_mk)) {
-          _closedHits.push({ tenantId: tenant.id, name: tenant.name, month: _mk, scope: 'main',
-                             charge: _splitCharge, payerName: (tenantMatches[0] && tenantMatches[0].payerName) || '' });
-        }
-      }
+      // NOTE (v2.14.39a): closed-month detection is done ONCE, at commit time, by
+      // scanning the buckets against closedMonths and using each bucket's ACTUAL
+      // sum (b.sum) as the amount to reverse-accrue. We deliberately do NOT collect
+      // a separate preview-time hit list here: that duplicated the scan and carried
+      // the month charge instead of the bucket sum, which disagree in the
+      // split+closed edge (e.g. Elad: July open→written 100, August closed→panel
+      // 100). One source of truth avoids that ambiguity.
       matched.push({
         tenant:tenant,
         amount:totalAmount,
@@ -4796,7 +4793,6 @@ function splitOverpayAcrossMonths(buckets, opts) {
         payments:tenantMatches,  // כל התשלומים עם תאריך וסכום
         _buckets:grouped.buckets,
         _lumpSplit:_sp.split,     // v2.14.38: TRUE ⇒ one row fanned into months (not a multi-row file)
-        _closedHits:_closedHits,  // v2.14.39: closed-month payments awaiting operator approval
         monthsSplit:grouped.buckets.size
       });
     } else if(!tenantHadPriorImport){
@@ -4905,18 +4901,8 @@ function commitBankImport(){
           'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
       }
     }
-    // Merge any closed hits the analyzer flagged at preview time (own-month-closed
-    // buckets caught before commit), de-duped by tenant+month.
-    if (Array.isArray(m._closedHits)) {
-      m._closedHits.forEach(function(h){
-        if (!_closedApprovals.some(function(x){ return String(x.tenantId)===String(h.tenantId) && x.month===h.month && (x.scope||'main')===(h.scope||'main'); })) {
-          _closedApprovals.push(h);
-        }
-      });
-    }
     delete m._buckets;
     delete m._lumpSplit;
-    delete m._closedHits;
   });
 
   // Persist prior + newly-consumed fingerprints (capped at 5000). ONLY now.
@@ -4972,7 +4958,7 @@ function renderClosedMonthApprovals(hits){
     + '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">התקבלו תשלומים עבור חודשים שכבר נסגרו והחוב שלהם כבר נצבר. אישור יזקוף את התשלום כנגד החוב המצטבר (פעם אחת). ללא אישור — לא ישתנה דבר.</div>';
   hits.forEach(function(hit, i){
     h += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);">'
-      + '<div style="font-size:0.86rem;">💰 <b>'+ (hit.name||'') +'</b> — '+ (hit.charge!=null?hit.charge+' ₪':'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
+      + '<div style="font-size:0.86rem;">💰 <b>'+ (hit.name||'') +'</b> — '+ ((hit.charge!=null?hit.charge:hit.amount)!=null?(hit.charge!=null?hit.charge:hit.amount)+' ₪':'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
       + (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
       + '<div style="display:flex;gap:6px;flex-shrink:0;">'
       + '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף לחוב</button>'
@@ -4991,7 +4977,7 @@ function approveClosedMonthPayment(idx){
   fetch(API + '/apply-closed-month-payment', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ tenantId: hit.tenantId, month: hit.month, scope: hit.scope || 'main',
-                           accountId: hit.accountId || null, paidAmount: hit.charge, payerName: hit.payerName || '' })
+                           accountId: hit.accountId || null, paidAmount: (hit.charge!=null?hit.charge:hit.amount), payerName: hit.payerName || '' })
   }).then(function(r){ return r.json(); }).then(function(d){
     if (d && d.ok) {
       if (d.alreadyApplied) toast('כבר נזקף קודם — לא בוצעה פעולה נוספת','info');

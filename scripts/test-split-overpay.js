@@ -8,6 +8,7 @@ function eq(name, a, b) { ok(name + ' (got ' + JSON.stringify(a) + ')', JSON.str
 // helper to build a one-row single bucket
 function bucket(mk, sum) { const m = new Map(); m.set(mk, { sum, payerName: 'P', count: 1 }); return m; }
 const charge230 = () => 230;
+const charge100 = () => 100;
 const nonePaid = () => false;
 
 // ── prevMonthKey ──
@@ -176,7 +177,24 @@ const closedIs = (mks) => (mk) => mks.includes(mk);
   ok('G3 closed July=wall → no split (≠ gap behavior)', wall.split === false);
 }
 
-// ── MUTATION direction 1: if trigger fired on non-multiple, the 250 test would split (proves guard active) ──
+// ── v2.14.39a — Elad edge: split + closed month in ONE row ──────────────
+// July OPEN, August CLOSED, dues 100, paid 200 (×2), note "יולי אוגוסט".
+// Expect: split fires → Jul+Aug buckets of 100 each. Jul (open) is written
+// silently; Aug (closed) drops to the approval panel. The panel amount MUST be
+// the BUCKET sum (100), not the whole payment (200) and not _splitCharge-as-total.
+{
+  const closed = (mk) => mk === '2026-08';
+  const r = splitOverpayAcrossMonths(
+    bucket('2026-08', 200),
+    { chargeForMonth: charge100, isPaid: nonePaid, isClosed: closed, note: 'ועד הבית יולי אוגוסט' }
+  );
+  eq('Elad edge: split months Jul+Aug', r.months, ['2026-07','2026-08']);
+  eq('Elad edge: July bucket = 100 (open→written)', r.buckets.get('2026-07').sum, 100);
+  eq('Elad edge: Aug bucket = 100 (closed→panel amount)', r.buckets.get('2026-08').sum, 100);
+  // The commit loop routes the closed bucket to the panel using b.sum → 100.
+  ok('Elad edge: closed bucket carries its own sum, not the 200 total',
+     r.buckets.get('2026-08').sum === 100 && r.buckets.get('2026-08').sum !== 200);
+}
 // (implicitly covered: 'partial/odd amount → no split' would fail if the multiple-guard were removed)
 // ── MUTATION direction 2: if isPaid were ignored, 'x3 skip paid July' would write 2026-07 (proves guard active) ──
 // ── MUTATION direction 3 (v2.14.39): if the closed WALL (`if(isClosed(cur))break`) were removed, test B & D

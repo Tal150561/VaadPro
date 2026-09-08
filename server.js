@@ -7258,9 +7258,9 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // GUARDRAIL 3 — surface (do NOT auto-apply) a payment whose own month is
       // already closed: the split left it as credit; the operator resolves it in
       // the UI via the closed-month approval path. Agent never reverse-accrues.
-      for (const [mk] of buckets) {
+      for (const [mk, b] of buckets) {
         if (_closedMain.has(mk)) {
-          closedMonthHits.push({ tenantId: tenant.id, name: tenant.name, month: mk, scope: 'main' });
+          closedMonthHits.push({ tenantId: tenant.id, name: tenant.name, month: mk, scope: 'main', amount: b.sum });
         }
       }
       for (const [mk, b] of buckets) {
@@ -7332,9 +7332,9 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
                 chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, isClosed: isClosedAccMonth, note: accNote
               })
             : grouped0Acc;
-          for (const [mk] of buckets) {
+          for (const [mk, b] of buckets) {
             if (_closedExtra.has(mk)) {
-              closedMonthHits.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, month: mk, scope: 'extra', accountId: acc.id });
+              closedMonthHits.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, month: mk, scope: 'extra', accountId: acc.id, amount: b.sum });
             }
           }
           let anyWritten = false;

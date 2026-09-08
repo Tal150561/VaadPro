@@ -2211,6 +2211,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     t.eq('agent surfaces closedMonthHits', !!(Array.isArray(r.closedMonthHits) && r.closedMonthHits.length === 1), true);
     t.eq('hit month is July', r.closedMonthHits[0] && r.closedMonthHits[0].month, '2026-07');
     t.eq('hit scope main', r.closedMonthHits[0] && r.closedMonthHits[0].scope, 'main');
+    t.eq('hit carries bucket-sum amount (230)', r.closedMonthHits[0] && r.closedMonthHits[0].amount, 230);
   }
 }
 
