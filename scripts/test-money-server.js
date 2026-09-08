@@ -2079,6 +2079,91 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
     t.eq('no July key', r.newSentLog['R_יולי'], undefined);
   }
+
+  // ════════════════════════════════════════════════════════════════
+  // v2.14.39 — FIX 2: closed-month payment approval (reverse-accrual)
+  // via the REAL /api/apply-closed-month-payment route handler.
+  // ════════════════════════════════════════════════════════════════
+  t.section('v2.14.39 — closed-month reverse-accrual (main account)');
+  {
+    const { loadApplyClosedMonth } = require('./test-lib');
+    // Tenant owes 230 accrued for July (July already closed).
+    const mkBuilding = () => ({
+      config: { amount: 230 },
+      closedMonths: ['2026-07'],
+      closedMonthsExtra: [],
+      tenants: [{ id: 'R', name: 'רנדי', customAmount: 230, openingDebt: 230 }],
+      paymentHistory: { R: [] },
+      sentLog: {}
+    });
+
+    // 1) First approval → openingDebt 230→0, record carries the receipt, sentLog set.
+    const b1 = mkBuilding();
+    const r1 = loadApplyClosedMonth(b1, { tenantId: 'R', month: '2026-07', scope: 'main', paidAmount: 230, payerName: 'רנדי' });
+    t.eq('applied=true', r1.result && r1.result.applied, true);
+    t.eq('openingDebt 230→0', b1.tenants[0].openingDebt, 0);
+    t.eq('reversed 230', r1.result.reversed, 230);
+    const rec1 = b1.paymentHistory.R.find(x => x.month === '2026-07');
+    t.eq('record has receipt (debtOffset.reversedFrom)', !!(rec1 && rec1.debtOffset && rec1.debtOffset.reversedFrom === '2026-07'), true);
+    t.eq('sentLog July set to manual_paid', !!(String(b1.sentLog['R_יולי'] || '').startsWith('manual_paid')), true);
+
+    // 2) SECOND approval on the SAME building → NO-OP (receipt guard). openingDebt stays 0.
+    const r2 = loadApplyClosedMonth(b1, { tenantId: 'R', month: '2026-07', scope: 'main', paidAmount: 230 });
+    t.eq('second approval applied=false', r2.result && r2.result.applied, false);
+    t.eq('second approval alreadyApplied=true', r2.result && r2.result.alreadyApplied, true);
+    t.eq('openingDebt STILL 0 (no double subtract)', b1.tenants[0].openingDebt, 0);
+
+    // 3) Month not actually closed → 409, no write.
+    const b3 = mkBuilding(); b3.closedMonths = [];
+    const r3 = loadApplyClosedMonth(b3, { tenantId: 'R', month: '2026-07', scope: 'main' });
+    t.eq('not-closed month → status 409', r3.status, 409);
+    t.eq('not-closed month → openingDebt untouched', b3.tenants[0].openingDebt, 230);
+
+    // 4) Floor guard: openingDebt only 100 but charge 230 → subtract only 100 (never manufacture credit).
+    const b4 = mkBuilding(); b4.tenants[0].openingDebt = 100;
+    const r4 = loadApplyClosedMonth(b4, { tenantId: 'R', month: '2026-07', scope: 'main' });
+    t.eq('floor: reversed=100 (min(charge,debt))', r4.result.reversed, 100);
+    t.eq('floor: openingDebt 100→0 (not negative)', b4.tenants[0].openingDebt, 0);
+  }
+
+  t.section('v2.14.39 — closed-month reverse-accrual (extra account)');
+  {
+    const { loadApplyClosedMonth } = require('./test-lib');
+    const b = {
+      config: { amount: 230 },
+      closedMonths: [],
+      closedMonthsExtra: ['2026-07'],
+      tenants: [{ id: 'R', name: 'רנדי', extraAccounts: [{ id: 'A1', label: 'ביטוח', amount: 50, openingDebt: 50 }] }],
+      paymentHistory: {},
+      extraPaymentHistory: { 'R__acc__A1': [] },
+      sentLog: {}
+    };
+    const r = loadApplyClosedMonth(b, { tenantId: 'R', month: '2026-07', scope: 'extra', accountId: 'A1' });
+    t.eq('extra applied=true', r.result && r.result.applied, true);
+    t.eq('extra acc.openingDebt 50→0', b.tenants[0].extraAccounts[0].openingDebt, 0);
+    const rec = (b.extraPaymentHistory['R__acc__A1'] || []).find(x => x.month === '2026-07');
+    t.eq('extra record has receipt', !!(rec && rec.debtOffset && rec.debtOffset.reversedFrom === '2026-07'), true);
+    t.eq('extra sentLog key set', !!(String(b.sentLog['R__acc__A1_יולי'] || '').startsWith('manual_paid')), true);
+    // idempotency on extra too
+    const r2 = loadApplyClosedMonth(b, { tenantId: 'R', month: '2026-07', scope: 'extra', accountId: 'A1' });
+    t.eq('extra second approval no-op', r2.result && r2.result.applied, false);
+    t.eq('extra openingDebt still 0', b.tenants[0].extraAccounts[0].openingDebt, 0);
+  }
+
+  t.section('v2.14.39 — agent import queues closed-month hits, never reverse-accrues');
+  {
+    const { loadBankAnalyzer } = require('./test-lib');
+    const B2 = loadBankAnalyzer();
+    const dft = {};
+    // July closed; a 230 payment dated in July arrives via the agent analyzer.
+    const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','230','15/07/2026','']];
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const tenants = [{ id: 'R', name: 'מירי', phone: '0527247713', keywords: 'סיגולים, מירי', aptNumber: '3', customAmount: null }];
+    const r = B2.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-07', { amount: 230 }, new Set(), {}, dft, ['2026-07'], []);
+    t.eq('agent surfaces closedMonthHits', !!(Array.isArray(r.closedMonthHits) && r.closedMonthHits.length === 1), true);
+    t.eq('hit month is July', r.closedMonthHits[0] && r.closedMonthHits[0].month, '2026-07');
+    t.eq('hit scope main', r.closedMonthHits[0] && r.closedMonthHits[0].scope, 'main');
+  }
 }
 
 process.exit(t.done() ? 1 : 0);

@@ -138,9 +138,49 @@ eq('note: single month only', monthsNamedInNote('אוגוסט', 2026), ['2026-08
   ok('note-conflict → backfill not May', r.split === true && !r.buckets.has('2026-05') && r.buckets.get('2026-07') && r.buckets.get('2026-08'));
 }
 
+// ══════════════════════════════════════════════════════════════════════
+// v2.14.39 — GUARDRAIL 3: closed month = WALL, paid month = GAP
+// ══════════════════════════════════════════════════════════════════════
+const closedIs = (mks) => (mk) => mks.includes(mk);
+
+// A) baseline: no isClosed passed → identical to v2.14.38 (Jul+Aug)
+{
+  const r = splitOverpayAcrossMonths(bucket('2026-08', 460), { chargeForMonth: charge230, isPaid: nonePaid });
+  eq('G3 no isClosed → baseline Jul+Aug', r.months, ['2026-07','2026-08']);
+}
+// B) July CLOSED = wall → cannot reach past it → NO split (money stays credit on Aug)
+{
+  const r = splitOverpayAcrossMonths(bucket('2026-08', 460), { chargeForMonth: charge230, isPaid: nonePaid, isClosed: closedIs(['2026-07']) });
+  ok('G3 July closed=wall → no split', r.split === false);
+}
+// C) 690 (x3), May closed but Jun+Jul open → wall is older than needed → Jun+Jul+Aug
+{
+  const r = splitOverpayAcrossMonths(bucket('2026-08', 690), { chargeForMonth: charge230, isPaid: nonePaid, isClosed: closedIs(['2026-05']) });
+  eq('G3 690 May closed, Jun/Jul open → Jun+Jul+Aug', r.months, ['2026-06','2026-07','2026-08']);
+}
+// D) 690 (x3), July CLOSED = wall right behind → cannot reach any prior → NO split
+{
+  const r = splitOverpayAcrossMonths(bucket('2026-08', 690), { chargeForMonth: charge230, isPaid: nonePaid, isClosed: closedIs(['2026-07']) });
+  ok('G3 690 July closed=wall → no split', r.split === false);
+}
+// E) strategy A: note names closed July → decline A, backfill hits wall → NO silent write
+{
+  const r = splitOverpayAcrossMonths(bucket('2026-08', 460), { chargeForMonth: charge230, isPaid: nonePaid, isClosed: closedIs(['2026-07']), note: 'יולי אוגוסט' });
+  ok('G3 note names closed July → no silent write', r.split === false);
+}
+// F) DISTINCTION: paid July = GAP (skip, reach June) but closed July = WALL (stop).
+{
+  const gap  = splitOverpayAcrossMonths(bucket('2026-08', 460), { chargeForMonth: charge230, isPaid: closedIs(['2026-07']) /*as paid*/ });
+  const wall = splitOverpayAcrossMonths(bucket('2026-08', 460), { chargeForMonth: charge230, isPaid: nonePaid, isClosed: closedIs(['2026-07']) });
+  eq('G3 paid July=gap → Jun+Aug', gap.months, ['2026-06','2026-08']);
+  ok('G3 closed July=wall → no split (≠ gap behavior)', wall.split === false);
+}
+
 // ── MUTATION direction 1: if trigger fired on non-multiple, the 250 test would split (proves guard active) ──
 // (implicitly covered: 'partial/odd amount → no split' would fail if the multiple-guard were removed)
 // ── MUTATION direction 2: if isPaid were ignored, 'x3 skip paid July' would write 2026-07 (proves guard active) ──
+// ── MUTATION direction 3 (v2.14.39): if the closed WALL (`if(isClosed(cur))break`) were removed, test B & D
+//    would SPLIT instead of no-op (closed month would be filled silently). Verified via /tmp mutation run.
 
 console.log(`\nsplit-overpay: ${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

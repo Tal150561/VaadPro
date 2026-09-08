@@ -1,13 +1,14 @@
 {
   "name": "vaadpro",
-  "version": "2.14.38",
+  "version": "2.14.39",
   "description": "VaadPro — SaaS לניהול ועד בית",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "test": "npm run check:syntax && npm run check:guide && npm run test:money && npm run test:contract && npm run test:render",
+    "test": "npm run check:syntax && npm run check:guide && npm run test:split && npm run test:money && npm run test:contract && npm run test:render",
     "check:syntax": "node scripts/check-syntax.js",
     "check:guide": "node scripts/check-guide-coverage.js",
+    "test:split": "node scripts/test-split-overpay.js",
     "test:money": "node scripts/test-money-server.js",
     "test:contract": "node scripts/test-contract-e2e.js",
     "test:render": "node scripts/test-render-frontend.js",

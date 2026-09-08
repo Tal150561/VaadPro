@@ -1728,7 +1728,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.38';
+const HTML_VERSION = '2.14.39';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4440,8 +4440,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
   opts = opts || {};
   const chargeForMonth = typeof opts.chargeForMonth === 'function' ? opts.chargeForMonth : () => 0;
   const isPaid = typeof opts.isPaid === 'function' ? opts.isPaid : () => false;
+  const isClosed = typeof opts.isClosed === 'function' ? opts.isClosed : () => false;
   const maxBack = opts.maxBack != null ? opts.maxBack : 12;
   const note = opts.note || '';
+
+  // GUARDRAIL 3 (v2.14.39): "blocked" = a month the split may NOT silently place
+  // money on — already paid OR already closed (debt accrued to disk at close).
+  const isBlocked = (mk) => isPaid(mk) || isClosed(mk);
 
   // Only ever act on a SINGLE-bucket, SINGLE-row payment. A file that already has
   // multiple dated months (real multi-row) is left exactly as groupMatchesByMonth
@@ -4472,7 +4477,8 @@ function splitOverpayAcrossMonths(buckets, opts) {
     // accept if none of them is already paid EXCEPT the row's own month (which is
     // the bucket we're replacing). If a *different* named month is already paid,
     // decline strategy A and fall through to backward-fill (safer).
-    const conflict = named.some(mk => mk !== onlyMk && isPaid(mk));
+    // GUARDRAIL 3: a closed named month blocks strategy A exactly like a paid one.
+    const conflict = named.some(mk => mk !== onlyMk && isBlocked(mk));
     if (!conflict) targetMonths = named.slice();
   }
 
@@ -4483,10 +4489,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
     // paid months, until we've gathered (mult-1) unpaid priors (the row's own
     // month is always target #1). Whatever we can't place stays as credit on
     // onlyMk (handled below by the leftover).
+    // GUARDRAIL 3: closed month = WALL (stop; never reach past it — the payment is
+    // for the month just missed, not an older one), paid month = GAP (skip, walk on).
     const priors = [];
     let cur = prevMonthKey(onlyMk);
     let steps = 0;
     while (priors.length < mult - 1 && steps < maxBack) {
+      if (isClosed(cur)) break;
       if (!isPaid(cur)) priors.push(cur);
       cur = prevMonthKey(cur);
       steps++;
@@ -4757,12 +4766,28 @@ function splitOverpayAcrossMonths(buckets, opts) {
         var v = String((data.sentLog||{})[tenant.id + '_' + heb] || '');
         return v.indexOf('bank_import')===0 || v.indexOf('manual_paid')===0;
       };
+      // GUARDRAIL 3 (v2.14.39): closed months are a WALL for the split. A payment
+      // that lands on a closed month is NOT written silently; instead we collect it
+      // as a closed-month hit and surface a decision row after the preview.
+      var _closedMain = new Set(Array.isArray(data.closedMonths) ? data.closedMonths : []);
+      var _isClosedM = function(mk){ return _closedMain.has(mk); };
       var _sp = splitOverpayAcrossMonths(grouped.buckets, {
         chargeForMonth: function(){ return _splitCharge; },
         isPaid: _isPaidM,
+        isClosed: _isClosedM,
         note: _splitNote
       });
       grouped.buckets = _sp.buckets;
+      // Detect any bucket month that is itself closed (e.g. the row's own month is a
+      // closed month). Such money stays as credit; the operator decides whether to
+      // reverse-accrue it against the closed month's debt via the approval row.
+      var _closedHits = [];
+      for (var _mk of grouped.buckets.keys()) {
+        if (_closedMain.has(_mk)) {
+          _closedHits.push({ tenantId: tenant.id, name: tenant.name, month: _mk, scope: 'main',
+                             charge: _splitCharge, payerName: (tenantMatches[0] && tenantMatches[0].payerName) || '' });
+        }
+      }
       matched.push({
         tenant:tenant,
         amount:totalAmount,
@@ -4771,6 +4796,7 @@ function splitOverpayAcrossMonths(buckets, opts) {
         payments:tenantMatches,  // כל התשלומים עם תאריך וסכום
         _buckets:grouped.buckets,
         _lumpSplit:_sp.split,     // v2.14.38: TRUE ⇒ one row fanned into months (not a multi-row file)
+        _closedHits:_closedHits,  // v2.14.39: closed-month payments awaiting operator approval
         monthsSplit:grouped.buckets.size
       });
     } else if(!tenantHadPriorImport){
@@ -4842,6 +4868,15 @@ function commitBankImport(){
     );
   }
 
+  // v2.14.39 — GUARDRAIL 3 at commit: a bucket whose month is CLOSED must never be
+  // written to sentLog here. The split already refused to fan money ONTO other
+  // closed months, but the row's OWN month can be closed (a late payment arriving
+  // after that month closed). Strip such buckets from the silent write and route
+  // them to the closed-month approval panel instead. Nothing touches openingDebt
+  // until the operator approves — matching the design (2+3): 3 never writes, 2 asks.
+  var _closedMainSet = new Set(Array.isArray(data.closedMonths) ? data.closedMonths : []);
+  var _closedApprovals = [];
+
   matched.forEach(function(m){
     var payerName = (m.payments[0] && m.payments[0].payerName) || '';
     // v2.14.38: a LUMP-SUM split (one row fanned into months) always writes its
@@ -4849,16 +4884,39 @@ function commitBankImport(){
     // overpayment we are fixing. A genuine multi-ROW file still obeys `doSplit`.
     if ((doSplit || m._lumpSplit) && m._buckets && m._buckets.size > 1) {
       m._buckets.forEach(function(b, mk){
+        if (_closedMainSet.has(mk)) {                       // closed → approval, not silent write
+          _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: mk, scope: 'main',
+                                  charge: b.sum, payerName: (b.payerName || payerName) });
+          return;
+        }
         var hebMk = hebOfMk(mk);
         data.sentLog[m.tenant.id + '_' + hebMk] =
           'bank_import_' + new Date().toISOString() + '_' + b.sum + '_payer_' + (b.payerName || payerName);
       });
     } else {
-      data.sentLog[m.tenant.id + '_' + em] =
-        'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
+      // Single-month write. If that single month is closed, route to approval.
+      var singleMk = P.selectedMonthKey || null;
+      // em is a Hebrew-month key; resolve the YYYY-MM the write targets for the closed-check.
+      if (singleMk && _closedMainSet.has(singleMk)) {
+        _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: singleMk, scope: 'main',
+                                charge: m.amount, payerName: payerName });
+      } else {
+        data.sentLog[m.tenant.id + '_' + em] =
+          'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
+      }
+    }
+    // Merge any closed hits the analyzer flagged at preview time (own-month-closed
+    // buckets caught before commit), de-duped by tenant+month.
+    if (Array.isArray(m._closedHits)) {
+      m._closedHits.forEach(function(h){
+        if (!_closedApprovals.some(function(x){ return String(x.tenantId)===String(h.tenantId) && x.month===h.month && (x.scope||'main')===(h.scope||'main'); })) {
+          _closedApprovals.push(h);
+        }
+      });
     }
     delete m._buckets;
     delete m._lumpSplit;
+    delete m._closedHits;
   });
 
   // Persist prior + newly-consumed fingerprints (capped at 5000). ONLY now.
@@ -4884,9 +4942,72 @@ function commitBankImport(){
   toast('✅ נרשמו ' + mCount + ' תשלומים ל-' + matched.length + ' דיירים','success');
 
   window._pendingBankImport = null;
+  window._closedMonthApprovals = _closedApprovals; // v2.14.39 — for the approval panel
   render();
   showBankResult(matched, P.unmatched, P.total, P.ta, P.fileName, P.filterByAmount, P.alreadyImportedSkips, /*previewMode=*/false, null);
+  renderClosedMonthApprovals(_closedApprovals); // v2.14.39
   resetDropZone();
+}
+
+// ── v2.14.39 — FIX 2: closed-month payment approval panel ──────────────────────
+// A late payment for an ALREADY-CLOSED month is never written silently (GUARDRAIL
+// 3). Here we show the operator a decision row per such payment. Clicking "לזקוף"
+// calls POST /api/apply-closed-month-payment, which reverse-accrues ONCE (receipt-
+// guarded). "התעלם" just drops the row from view (no write). Nothing touches
+// openingDebt until the operator clicks לזקוף.
+function renderClosedMonthApprovals(hits){
+  hits = hits || [];
+  var box = document.getElementById('closedMonthApprovals');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'closedMonthApprovals';
+    var rd = document.getElementById('bankResult');
+    if (rd && rd.parentNode) rd.parentNode.insertBefore(box, rd.nextSibling);
+    else document.body.appendChild(box);
+  }
+  if (!hits.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var hebOf = function(mk){ return MONTH_NAMES_HE[parseInt(String(mk).split('-')[1]) - 1] + ' ' + String(mk).split('-')[0]; };
+  var h = '<div style="background:rgba(227,179,65,.10);border:1px solid rgba(227,179,65,.4);border-radius:10px;padding:12px 14px;margin:12px 0;">'
+    + '<div style="font-weight:700;color:var(--warn);margin-bottom:4px;">⏳ תשלומים לחודשים שכבר נסגרו — דורשים אישור</div>'
+    + '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">התקבלו תשלומים עבור חודשים שכבר נסגרו והחוב שלהם כבר נצבר. אישור יזקוף את התשלום כנגד החוב המצטבר (פעם אחת). ללא אישור — לא ישתנה דבר.</div>';
+  hits.forEach(function(hit, i){
+    h += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);">'
+      + '<div style="font-size:0.86rem;">💰 <b>'+ (hit.name||'') +'</b> — '+ (hit.charge!=null?hit.charge+' ₪':'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
+      + (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
+      + '<div style="display:flex;gap:6px;flex-shrink:0;">'
+      + '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף לחוב</button>'
+      + '<button class="btn btn-sm btn-ghost" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
+      + '</div></div>';
+  });
+  h += '</div>';
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
+
+function approveClosedMonthPayment(idx){
+  var hits = window._closedMonthApprovals || [];
+  var hit = hits[idx];
+  if (!hit) return;
+  fetch(API + '/apply-closed-month-payment', {
+    method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify({ tenantId: hit.tenantId, month: hit.month, scope: hit.scope || 'main',
+                           accountId: hit.accountId || null, paidAmount: hit.charge, payerName: hit.payerName || '' })
+  }).then(function(r){ return r.json(); }).then(function(d){
+    if (d && d.ok) {
+      if (d.alreadyApplied) toast('כבר נזקף קודם — לא בוצעה פעולה נוספת','info');
+      else toast('✅ נזקף ' + (d.reversed!=null?d.reversed+' ₪ ':'') + 'לחוב של ' + (hit.name||''),'success');
+      var row = document.querySelector('#closedMonthApprovals [data-cm-idx="'+idx+'"]');
+      if (row) row.style.display = 'none';
+      loadData();
+    } else {
+      toast('שגיאה בזקיפה: ' + ((d&&d.error)||'לא ידוע'),'error');
+    }
+  }).catch(function(){ toast('שגיאת רשת בזקיפה','error'); });
+}
+
+function dismissClosedMonthPayment(idx){
+  var row = document.querySelector('#closedMonthApprovals [data-cm-idx="'+idx+'"]');
+  if (row) row.style.display = 'none';
 }
 
 function cancelBankImport(){

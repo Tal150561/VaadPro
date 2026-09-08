@@ -4465,6 +4465,134 @@ app.post('/api/close-previous-month', authMiddleware, (req, res) => {
   }
 });
 
+// ── POST /api/apply-closed-month-payment ────────────────────────────
+// FIX 2 (v2.14.39) — the ONLY sanctioned reverse-accrual. When a late payment
+// arrives for a month that is ALREADY closed (its debt already accrued into
+// openingDebt by closeMonthUnpaidForBuilding), the automatic split refuses to
+// touch it (GUARDRAIL 3 — closed month = wall). This endpoint applies it, but
+// ONLY on explicit operator approval, and ONLY ONCE.
+//
+// ⚠️ This is a SECOND writer of openingDebt besides closeMonthUnpaidForBuilding.
+// The whole safety of the feature rests on the RECEIPT: a debtOffset stamp with
+// reversedFrom===month on a paymentHistory record for that month. Before
+// subtracting, we look for that receipt; if present, we NO-OP. So a double
+// click, a page reload + re-click, an agent re-detect, or a redeploy can never
+// subtract twice — the Randi bug cannot be reborn from this direction.
+//
+// The accrual MATH in closeMonthUnpaidForBuilding is NOT touched (byte-identical).
+// This endpoint only reverses, per-payment, what close already accrued.
+app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
+  try {
+    const { tenantId, month, scope, accountId, paidAmount, payerName } = req.body || {};
+    if (!tenantId || !month) return res.status(400).json({ ok: false, error: 'tenantId ו-month נדרשים' });
+    if (!/^\d{4}-\d{2}$/.test(String(month))) return res.status(400).json({ ok: false, error: 'month חייב להיות בפורמט YYYY-MM' });
+
+    const d = loadTenantData(req.user.tenantId);
+    const tid = String(tenantId);
+    const tenant = (d.tenants || []).find(t => String(t.id) === tid);
+    if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+
+    const isExtra = scope === 'extra';
+    // Confirm the month really is closed for the relevant space — otherwise this
+    // is not a closed-month payment at all and the normal paths should handle it.
+    const closedList = isExtra
+      ? (Array.isArray(d.closedMonthsExtra) ? d.closedMonthsExtra : [])
+      : (Array.isArray(d.closedMonths) ? d.closedMonths : []);
+    if (!closedList.includes(month)) {
+      return res.status(409).json({ ok: false, error: `חודש ${month} אינו סגור ל${isExtra ? 'חשבון נוסף' : 'חשבון הראשי'} — השתמש בנתיב הרגיל, לא בזקיפה.` });
+    }
+
+    const mIdx  = parseInt(String(month).split('-')[1]) - 1;
+    const heb   = HEBREW_MONTHS[mIdx];
+
+    let acc = null;
+    if (isExtra) {
+      acc = (tenant.extraAccounts || []).find(a => String(a.id) === String(accountId));
+      if (!acc) return res.status(404).json({ ok: false, error: 'חשבון נוסף לא נמצא' });
+    }
+
+    // Per-month charge, tariff-aware for the main account (frozen historical rate),
+    // acc.amount for an extra account.
+    const charge = isExtra
+      ? (parseFloat(acc.amount) || 0)
+      : resolveTariffRate(tenant, d.defaultTariffs, month, (tenant.customAmount) || (d.config && d.config.amount) || 300);
+    if (!(charge > 0)) return res.status(400).json({ ok: false, error: 'דמי החודש אינם חיוביים — לא ניתן לזקוף' });
+
+    // paymentHistory key + record space (main vs extra).
+    const phKey = isExtra ? (tid + '__acc__' + acc.id) : tid;
+    const store = isExtra ? (d.extraPaymentHistory || (d.extraPaymentHistory = {})) : (d.paymentHistory || (d.paymentHistory = {}));
+    if (!store[phKey]) store[phKey] = [];
+    const recs = store[phKey];
+
+    // ── RECEIPT GUARD (the load-bearing safety property) ──────────────
+    // If ANY record for this month already carries a reverse-accrual receipt,
+    // this payment was already applied → NO-OP. Idempotent by construction.
+    const already = recs.find(r => r.month === month && r.debtOffset && r.debtOffset.reversedFrom === month);
+    if (already) {
+      return res.json({ ok: true, applied: false, alreadyApplied: true, month, charge, openingDebt: tenant.openingDebt, note: 'כבר נזקף — לא בוצעה פעולה נוספת' });
+    }
+
+    // ── Reverse the accrual: openingDebt -= charge, floored at 0 ──────
+    // Floor at 0: close accrued at most `charge` for this month, so subtracting
+    // `charge` cannot legitimately drive THIS reversal below zero. Flooring is a
+    // belt-and-suspenders guard against a prior data anomaly manufacturing credit.
+    const before = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+    const paid   = paidAmount != null ? (parseFloat(paidAmount) || charge) : charge;
+    const reversed = Math.round(Math.min(charge, before) * 100) / 100;
+    const after  = Math.round((before - reversed) * 100) / 100;
+    if (isExtra) {
+      acc.openingDebt = after; // extra accounts carry their own openingDebt
+    } else {
+      tenant.openingDebt = after;
+    }
+
+    // ── Write the settled record + the RECEIPT ────────────────────────
+    // Remove any stale non-receipt record for this month first (there shouldn't be
+    // one — close deletes unpaid records — but be defensive), then add the settled
+    // record carrying the receipt. sentLog is set so status reads paid.
+    const kept = recs.filter(r => r.month !== month);
+    kept.push({
+      month,
+      paid: true,
+      amount: charge,
+      paidAmount: paid,
+      date: new Date().toISOString().split('T')[0],
+      type: isExtra ? 'bank_import' : 'manual',
+      name: tenant.name,
+      payerName: payerName || '',
+      debtOffset: {
+        reversedFrom: month,      // ← the receipt: proves this month was reverse-accrued
+        monthCharge: charge,
+        reversedAmount: reversed, // how much openingDebt actually dropped
+        appliedAt: new Date().toISOString()
+      }
+    });
+    store[phKey] = kept;
+
+    // sentLog key so the month reads as paid in every derivation.
+    const slKey = isExtra ? (phKey + '_' + heb) : (tid + '_' + heb);
+    if (!d.sentLog) d.sentLog = {};
+    d.sentLog[slKey] = `manual_paid_${new Date().toISOString()}_${paid}_payer_${payerName || ''}`;
+
+    // Drop this hit from the pending queue (match tenant+month+scope+account).
+    if (Array.isArray(d.pendingClosedMonthPayments)) {
+      d.pendingClosedMonthPayments = d.pendingClosedMonthPayments.filter(h =>
+        !(String(h.tenantId) === tid && h.month === month && (h.scope || 'main') === (scope || 'main') && String(h.accountId || '') === String(accountId || ''))
+      );
+    }
+
+    const savePatch = { sentLog: d.sentLog, paymentHistory: d.paymentHistory, tenants: d.tenants };
+    if (isExtra) savePatch.extraPaymentHistory = d.extraPaymentHistory;
+    if (Array.isArray(d.pendingClosedMonthPayments)) savePatch.pendingClosedMonthPayments = d.pendingClosedMonthPayments;
+    saveTenantData(req.user.tenantId, savePatch);
+
+    return res.json({ ok: true, applied: true, month, scope: scope || 'main', accountId: accountId || null, charge, reversed, openingDebtBefore: before, openingDebt: after });
+  } catch (e) {
+    console.error('[apply-closed-month-payment]', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ====================================================================
 // SECTION 14 — MONTH CLOSE  (⚠️ DEBT ACCRUAL)
 // closeMonthUnpaid is the ONLY place unpaid balances accrue into
@@ -6705,8 +6833,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
   opts = opts || {};
   const chargeForMonth = typeof opts.chargeForMonth === 'function' ? opts.chargeForMonth : () => 0;
   const isPaid = typeof opts.isPaid === 'function' ? opts.isPaid : () => false;
+  const isClosed = typeof opts.isClosed === 'function' ? opts.isClosed : () => false;
   const maxBack = opts.maxBack != null ? opts.maxBack : 12;
   const note = opts.note || '';
+
+  // GUARDRAIL 3 (v2.14.39): "blocked" = a month the split may NOT silently place
+  // money on — already paid OR already closed (debt accrued to disk at close).
+  const isBlocked = (mk) => isPaid(mk) || isClosed(mk);
 
   // Only ever act on a SINGLE-bucket, SINGLE-row payment. A file that already has
   // multiple dated months (real multi-row) is left exactly as groupMatchesByMonth
@@ -6737,7 +6870,8 @@ function splitOverpayAcrossMonths(buckets, opts) {
     // accept if none of them is already paid EXCEPT the row's own month (which is
     // the bucket we're replacing). If a *different* named month is already paid,
     // decline strategy A and fall through to backward-fill (safer).
-    const conflict = named.some(mk => mk !== onlyMk && isPaid(mk));
+    // GUARDRAIL 3: a closed named month blocks strategy A exactly like a paid one.
+    const conflict = named.some(mk => mk !== onlyMk && isBlocked(mk));
     if (!conflict) targetMonths = named.slice();
   }
 
@@ -6748,10 +6882,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
     // paid months, until we've gathered (mult-1) unpaid priors (the row's own
     // month is always target #1). Whatever we can't place stays as credit on
     // onlyMk (handled below by the leftover).
+    // GUARDRAIL 3: closed month = WALL (stop; never reach past it — the payment is
+    // for the month just missed, not an older one), paid month = GAP (skip, walk on).
     const priors = [];
     let cur = prevMonthKey(onlyMk);
     let steps = 0;
     while (priors.length < mult - 1 && steps < maxBack) {
+      if (isClosed(cur)) break;
       if (!isPaid(cur)) priors.push(cur);
       cur = prevMonthKey(cur);
       steps++;
@@ -6825,7 +6962,15 @@ function groupMatchesByMonth(matches, fallbackMk) {
 // summing them all into the chosen month (which read as a phantom overpayment
 // credit). Single-month files are unchanged. `em`/`monthKey` remain the FALLBACK
 // month for rows with no parseable date, and the reported `month` for the UI.
-function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints, paymentHistory, defaultTariffs) {
+function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints, paymentHistory, defaultTariffs, closedMonths, closedMonthsExtra) {
+  // GUARDRAIL 3 (v2.14.39): the agent import path is UNATTENDED — it never does the
+  // closed-month reverse-accrual (that requires human approval in the UI). It only
+  // needs to NOT silently write onto a closed month. We pass isClosed into the split
+  // so a closed month acts as a wall; any late closed-month payment stays as credit
+  // and is surfaced to the operator via `closedMonthHits` for manual resolution.
+  const _closedMain  = Array.isArray(closedMonths)      ? new Set(closedMonths)      : new Set();
+  const _closedExtra = Array.isArray(closedMonthsExtra) ? new Set(closedMonthsExtra) : new Set();
+  const closedMonthHits = [];
   const iName   = parseInt(mapping.colName   ?? -1);
   const iAmount = parseInt(mapping.colAmount ?? -1);
   const iDate   = parseInt(mapping.colDate   ?? -1);
@@ -7098,9 +7243,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         const v = String(newSentLog[tenant.id + '_' + heb] || '');
         return v.startsWith('bank_import') || v.startsWith('manual_paid');
       };
+      const isClosedMonth = (mk) => _closedMain.has(mk); // GUARDRAIL 3
       const { buckets } = splitOverpayAcrossMonths(grouped0.buckets, {
-        chargeForMonth, isPaid: isPaidMonth, note: noteText
+        chargeForMonth, isPaid: isPaidMonth, isClosed: isClosedMonth, note: noteText
       });
+      // GUARDRAIL 3 — surface (do NOT auto-apply) a payment whose own month is
+      // already closed: the split left it as credit; the operator resolves it in
+      // the UI via the closed-month approval path. Agent never reverse-accrues.
+      for (const [mk] of buckets) {
+        if (_closedMain.has(mk)) {
+          closedMonthHits.push({ tenantId: tenant.id, name: tenant.name, month: mk, scope: 'main' });
+        }
+      }
       for (const [mk, b] of buckets) {
         const hebMk = hebOfMk(mk);
         newSentLog[tenant.id + '_' + hebMk] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
@@ -7163,11 +7317,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
             const v = String(newSentLog[phKey + '_' + heb] || '');
             return v.startsWith('bank_import') || v.startsWith('manual_paid');
           };
+          // GUARDRAIL 3: extra accounts close against the SEPARATE closedMonthsExtra marker.
+          const isClosedAccMonth = (mk) => _closedExtra.has(mk);
           const { buckets } = accCharge > 0
             ? splitOverpayAcrossMonths(grouped0Acc.buckets, {
-                chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, note: accNote
+                chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, isClosed: isClosedAccMonth, note: accNote
               })
             : grouped0Acc;
+          for (const [mk] of buckets) {
+            if (_closedExtra.has(mk)) {
+              closedMonthHits.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, month: mk, scope: 'extra', accountId: acc.id });
+            }
+          }
           let anyWritten = false;
           let reportedTotal = 0;
           const reportedPayer = (accMatches[0] && accMatches[0].payerName) || '';
@@ -7209,7 +7370,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     }
   }); // end updatedTenants.forEach
 
-  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings, alreadyImportedSkips };
+  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -7253,8 +7414,9 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // whose fingerprint is already here, so nothing is counted twice.
     const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
 
-    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips } = analyzeBankRowsServer(
-      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs
+    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits } = analyzeBankRowsServer(
+      rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs,
+      d.closedMonths, d.closedMonthsExtra
     );
 
     // רשום paymentHistory לדיירים רגילים שזוהו
@@ -7344,9 +7506,24 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
 
     const importSave = { sentLog: newSentLog, paymentHistory: mergedPaymentHistory, lastBankSyncImport: importResult, importedBankFingerprints: cappedFp };
     if (seededImport && d.defaultTariffs) importSave.defaultTariffs = d.defaultTariffs;
+    // GUARDRAIL 3 (agent): a late payment for an already-closed month was NOT applied
+    // to the closed month (the split treated it as a wall). Queue it so the operator
+    // can resolve it in the UI via the closed-month approval path. Merge with any
+    // existing pending queue, de-duping on tenant+month+scope+account so repeated
+    // unattended runs of the same file don't pile up duplicates.
+    if (Array.isArray(closedMonthHits) && closedMonthHits.length) {
+      const prevQ = Array.isArray(d.pendingClosedMonthPayments) ? d.pendingClosedMonthPayments : [];
+      const keyOf = h => [h.tenantId, h.month, h.scope || 'main', h.accountId || ''].join('|');
+      const seen = new Set(prevQ.map(keyOf));
+      const merged = prevQ.slice();
+      for (const h of closedMonthHits) {
+        if (!seen.has(keyOf(h))) { seen.add(keyOf(h)); merged.push(Object.assign({ detectedAt: new Date().toISOString(), source: 'agent' }, h)); }
+      }
+      importSave.pendingClosedMonthPayments = merged;
+    }
     saveTenantData(req.user.tenantId, importSave);
 
-    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [] });
+    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [], closedMonthHits: closedMonthHits || [] });
   } catch (err) {
     console.error('[import-bank]', err);
     res.status(500).json({ ok: false, error: err.message });

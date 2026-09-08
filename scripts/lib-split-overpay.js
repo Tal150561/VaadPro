@@ -73,6 +73,14 @@ function monthsNamedInNote(note, refYear) {
  * @param {object} opts
  *   @param {(mk:string)=>number}  chargeForMonth  per-month charge (tariff-aware); >0
  *   @param {(mk:string)=>boolean} isPaid          true if that month already has a paid/bank_import sentLog
+ *   @param {(mk:string)=>boolean} [isClosed]      true if that month is in closedMonths (its debt already
+ *                                                 accrued to openingDebt at close). GUARDRAIL 3 (v2.14.39):
+ *                                                 the split NEVER lands money on a closed month silently —
+ *                                                 it is treated like an already-paid month here. A late
+ *                                                 payment for a closed month is handled ONLY by the manual
+ *                                                 closed-month approval path (reverse-accrual), never by the
+ *                                                 automatic split. Overflow with no OPEN month to land on →
+ *                                                 stays as advance credit on the row's own month.
  *   @param {string}  [note]      the row's note text (for strategy A)
  *   @param {number}  [refYear]   year to resolve note month-names against (default: year of the bucket)
  *   @param {number}  [maxBack]   safety cap on how many months back to fill (default 12)
@@ -82,8 +90,16 @@ function splitOverpayAcrossMonths(buckets, opts) {
   opts = opts || {};
   const chargeForMonth = typeof opts.chargeForMonth === 'function' ? opts.chargeForMonth : () => 0;
   const isPaid = typeof opts.isPaid === 'function' ? opts.isPaid : () => false;
+  const isClosed = typeof opts.isClosed === 'function' ? opts.isClosed : () => false;
   const maxBack = opts.maxBack != null ? opts.maxBack : 12;
   const note = opts.note || '';
+
+  // GUARDRAIL 3 (v2.14.39): a month the split may NOT silently place money on is
+  // one that is either already paid OR already closed (debt accrued to disk). The
+  // row's OWN month (onlyMk) is exempt from the closed-check for the collapse test
+  // only — but note that a bank row dated inside a closed month can't be split
+  // ONTO that closed month either; see the collapse guard below.
+  const isBlocked = (mk) => isPaid(mk) || isClosed(mk);
 
   // Only ever act on a SINGLE-bucket, SINGLE-row payment. A file that already has
   // multiple dated months (real multi-row) is left exactly as groupMatchesByMonth
@@ -111,25 +127,35 @@ function splitOverpayAcrossMonths(buckets, opts) {
   let targetMonths = null;
   if (named.length === mult) {
     // Use the named months verbatim (they may include the row's own month). Only
-    // accept if none of them is already paid EXCEPT the row's own month (which is
-    // the bucket we're replacing). If a *different* named month is already paid,
-    // decline strategy A and fall through to backward-fill (safer).
-    const conflict = named.some(mk => mk !== onlyMk && isPaid(mk));
+    // accept if none of them is already paid OR closed EXCEPT the row's own month
+    // (which is the bucket we're replacing). If a *different* named month is paid
+    // or closed, decline strategy A and fall through to backward-fill (safer).
+    // GUARDRAIL 3: a closed named month blocks strategy A exactly like a paid one —
+    // the split must never write a charge onto a closed month.
+    const conflict = named.some(mk => mk !== onlyMk && isBlocked(mk));
     if (!conflict) targetMonths = named.slice();
   }
 
   // ── Strategy B: backward-fill unpaid prior months, oldest→newest ──────
   if (!targetMonths) {
-    // Collect the row's own month plus as many UNPAID prior months as needed to
-    // absorb `mult` charges. Walk backward from the month BEFORE onlyMk, skipping
-    // paid months, until we've gathered (mult-1) unpaid priors (the row's own
-    // month is always target #1). Whatever we can't place stays as credit on
-    // onlyMk (handled below by the leftover).
+    // Collect the row's own month plus as many OPEN unpaid prior months as needed
+    // to absorb `mult` charges. Walk backward from the month BEFORE onlyMk.
+    //
+    // Two different wall/gap rules (GUARDRAIL 3, the important distinction):
+    //   • PAID month  → GAP: skip it and keep walking. A paid month in the middle
+    //     is just a month already settled; the real open debt may be older.
+    //   • CLOSED month → WALL: STOP. A closed month's debt is already accrued to
+    //     openingDebt on disk. Reaching PAST it to grab an older open month would
+    //     misattribute this payment (a 460 paid in Aug after July closed is for
+    //     July, not for some older open month). Everything we couldn't place stays
+    //     as advance credit on onlyMk and is resolved — for the closed month — only
+    //     via the manual closed-month approval path (reverse-accrual), never here.
     const priors = [];
     let cur = prevMonthKey(onlyMk);
     let steps = 0;
     while (priors.length < mult - 1 && steps < maxBack) {
-      if (!isPaid(cur)) priors.push(cur);
+      if (isClosed(cur)) break;        // WALL — do not skip past a closed month
+      if (!isPaid(cur)) priors.push(cur); // GAP — skip a paid month, keep walking
       cur = prevMonthKey(cur);
       steps++;
     }

@@ -216,6 +216,48 @@ function loadResetPayments(building, reqBody) {
 }
 
 
+// ── Load the /api/apply-closed-month-payment handler (v2.14.39) ──────
+// FIX 2: the sanctioned reverse-accrual for a late payment to an ALREADY-CLOSED
+// month. Lifts the REAL route body and runs it against stubbed load/save so the
+// test drives the actual shipped logic (receipt guard, openingDebt subtraction,
+// sentLog write). The handler closes over resolveTariffRate + HEBREW_MONTHS, so
+// we inject those (extracted verbatim from server.js) into the sandbox.
+function loadApplyClosedMonth(building, reqBody) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/apply-closed-month-payment'");
+  if (start < 0) throw new Error('test-lib: /api/apply-closed-month-payment route not found');
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const saved = [];
+  const captured = {};
+  const stubs = {
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
+    console,
+    req: { user: { tenantId: 'T1' }, body: reqBody || {} },
+    res: {
+      _status: 200,
+      status(c){ this._status = c; return this; },
+      json(o){ captured.result = o; captured.status = this._status; }
+    }
+  };
+  const code = months + '\n'
+    + extractFunctions(src, ['monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate'])
+    + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const mod = runInSandbox(code, stubs);
+  mod.handler(stubs.req, stubs.res);
+  return { result: captured.result, status: captured.status, saved, building };
+}
+
+
 // lives inline in a route handler. If you change the route, change this too —
 // the E2E test asserts the shape the frontend depends on.
 function enrichTenants(S, d) {
@@ -304,6 +346,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadApplyClosedMonth, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };
