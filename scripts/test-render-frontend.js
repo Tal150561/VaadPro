@@ -1419,7 +1419,7 @@ t.section('v2.14.37 — version stamp warns on server/HTML mismatch');
   t.eq('absent serverVersion (old backend) → no false warning', noSv.appVerWarn.style.display, 'none');
 
   // (b) source wiring.
-  t.eq('HTML_VERSION constant defined', /const HTML_VERSION\s*=\s*'[\d.]+'/.test(app), true);
+  t.eq('HTML_VERSION constant defined', /const HTML_VERSION\s*=\s*'[\d.]+[a-z]?'/.test(app), true);
   t.eq('header has #appVerWarn element', app.includes('id="appVerWarn"'), true);
   t.eq('warning text is the Ctrl+Shift+R prompt', app.includes('רענן: Ctrl+Shift+R'), true);
   t.eq('applyVersionStamp is called from loadData', /try\s*\{\s*applyVersionStamp\(\)/.test(app), true);

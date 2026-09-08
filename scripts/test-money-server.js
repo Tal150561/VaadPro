@@ -2118,12 +2118,60 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     const r3 = loadApplyClosedMonth(b3, { tenantId: 'R', month: '2026-07', scope: 'main' });
     t.eq('not-closed month → status 409', r3.status, 409);
     t.eq('not-closed month → openingDebt untouched', b3.tenants[0].openingDebt, 230);
+  }
 
-    // 4) Floor guard: openingDebt only 100 but charge 230 → subtract only 100 (never manufacture credit).
-    const b4 = mkBuilding(); b4.tenants[0].openingDebt = 100;
-    const r4 = loadApplyClosedMonth(b4, { tenantId: 'R', month: '2026-07', scope: 'main' });
-    t.eq('floor: reversed=100 (min(charge,debt))', r4.result.reversed, 100);
-    t.eq('floor: openingDebt 100→0 (not negative)', b4.tenants[0].openingDebt, 0);
+  // ════════════════════════════════════════════════════════════════
+  // v2.14.39a — reverse-accrual applies FULL paidAmount; excess → credit
+  // (openingDebt may go negative). openingDebt values below are POST-close
+  // (already accrued), matching what the live endpoint receives.
+  // The 7 rows mirror the Hebrew table locked with Tal (session 22).
+  // ════════════════════════════════════════════════════════════════
+  t.section('v2.14.39a — full-payment reverse-accrual + excess→credit');
+  {
+    const { loadApplyClosedMonth } = require('./test-lib');
+    const mk = (openingDebtPostClose, charge) => ({
+      config: { amount: charge },
+      closedMonths: ['2026-08'],
+      closedMonthsExtra: [],
+      tenants: [{ id: 'R', name: 'אור', customAmount: charge, openingDebt: openingDebtPostClose }],
+      paymentHistory: { R: [] },
+      sentLog: {}
+    });
+    const apply = (b, paid) => loadApplyClosedMonth(b, { tenantId: 'R', month: '2026-08', scope: 'main', paidAmount: paid, payerName: 'אור' });
+
+    // Row 1 — no prior debt, charge 200 accrued at close (=200), paid 1000 → −800 (credit 800)
+    { const b = mk(200, 200); const r = apply(b, 1000);
+      t.eq('row1 openingDebt 200→−800', b.tenants[0].openingDebt, -800);
+      t.eq('row1 reversed=1000 (full paid)', r.result.reversed, 1000); }
+
+    // Row 2 — prior debt 300 + charge 200 = 500 post-close, paid 1000 → −500 (credit 500)
+    { const b = mk(500, 200); const r = apply(b, 1000);
+      t.eq('row2 openingDebt 500→−500', b.tenants[0].openingDebt, -500); }
+
+    // Row 3 — prior debt 900 + charge 200 = 1100 post-close, paid 1000 → 100 (debt 100, no credit)
+    { const b = mk(1100, 200); const r = apply(b, 1000);
+      t.eq('row3 openingDebt 1100→100 (debt remains)', b.tenants[0].openingDebt, 100); }
+
+    // Row 4 — no prior debt, charge 200 (=200 post-close), paid exactly 200 → 0
+    { const b = mk(200, 200); apply(b, 200);
+      t.eq('row4 exact payment → openingDebt 0', b.tenants[0].openingDebt, 0); }
+
+    // Row 5 — prior debt 500 + charge 200 = 700 post-close, paid only 200 → 500 remains
+    { const b = mk(700, 200); apply(b, 200);
+      t.eq('row5 partial → openingDebt 500 remains', b.tenants[0].openingDebt, 500); }
+
+    // Row 7 — idempotency with credit: approve 1000 (→−800), re-approve → STILL −800 (not −1800)
+    { const b = mk(200, 200);
+      apply(b, 1000);
+      t.eq('row7 first approval → −800', b.tenants[0].openingDebt, -800);
+      const r2 = apply(b, 1000);
+      t.eq('row7 re-approval applied=false', r2.result && r2.result.applied, false);
+      t.eq('row7 credit NOT doubled (still −800)', b.tenants[0].openingDebt, -800); }
+
+    // receipt records the FULL reversed amount (needed so a guard reads the right figure)
+    { const b = mk(200, 200); apply(b, 1000);
+      const rec = b.paymentHistory.R.find(x => x.month === '2026-08');
+      t.eq('receipt reversedAmount = full paid (1000)', rec && rec.debtOffset && rec.debtOffset.reversedAmount, 1000); }
   }
 
   t.section('v2.14.39 — closed-month reverse-accrual (extra account)');

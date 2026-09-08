@@ -4532,14 +4532,22 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
       return res.json({ ok: true, applied: false, alreadyApplied: true, month, charge, openingDebt: tenant.openingDebt, note: 'כבר נזקף — לא בוצעה פעולה נוספת' });
     }
 
-    // ── Reverse the accrual: openingDebt -= charge, floored at 0 ──────
-    // Floor at 0: close accrued at most `charge` for this month, so subtracting
-    // `charge` cannot legitimately drive THIS reversal below zero. Flooring is a
-    // belt-and-suspenders guard against a prior data anomaly manufacturing credit.
-    const before = Math.max(0, parseFloat(tenant.openingDebt) || 0);
+    // ── Reverse the accrual: openingDebt -= FULL paidAmount (v2.14.39a) ──
+    // The operator's approval IS the authorization that this payment belongs to
+    // this account (dues / ערבות הדדית). So we subtract the WHOLE amount paid, not
+    // just the month charge: it first swallows the accrued month debt + any prior
+    // openingDebt, and any remainder drives openingDebt NEGATIVE — which every
+    // derivation (getCreditBalance) reads as forward CREDIT. This is safe ONLY
+    // because a human confirmed the payment (the "התעלם" button is the escape hatch
+    // for non-dues money). No floor: a genuine overpayment legitimately becomes
+    // credit, exactly like a live overpayment on an OPEN month. Idempotency is still
+    // enforced by the receipt guard above — this can run at most once per payment.
+    const before = isExtra
+      ? (parseFloat(acc.openingDebt) || 0)   // extra accounts carry their own openingDebt
+      : (parseFloat(tenant.openingDebt) || 0); // main; may already be negative (existing credit)
     const paid   = paidAmount != null ? (parseFloat(paidAmount) || charge) : charge;
-    const reversed = Math.round(Math.min(charge, before) * 100) / 100;
-    const after  = Math.round((before - reversed) * 100) / 100;
+    const reversed = paid;                               // full amount applied
+    const after  = Math.round((before - reversed) * 100) / 100; // may be negative → credit
     if (isExtra) {
       acc.openingDebt = after; // extra accounts carry their own openingDebt
     } else {
@@ -4563,7 +4571,7 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
       debtOffset: {
         reversedFrom: month,      // ← the receipt: proves this month was reverse-accrued
         monthCharge: charge,
-        reversedAmount: reversed, // how much openingDebt actually dropped
+        reversedAmount: reversed, // full paidAmount applied to openingDebt (v2.14.39a)
         appliedAt: new Date().toISOString()
       }
     });
