@@ -4861,7 +4861,7 @@ function commitBankImport(){
   // dialog entirely and route each tenant's FULL amount to the approval panel as one
   // row. (Open selected-month keeps the v2.14.38 auto-split, which prevents the
   // Randi phantom-credit bug on open months. No dialog in either case.)
-  var _selClosed = (Array.isArray(data.closedMonths) ? data.closedMonths : []).indexOf(selectedMonthKey) >= 0;
+  var _selClosed = (Array.isArray(data.closedMonths) ? data.closedMonths : []).indexOf(P.selectedMonthKey) >= 0;
 
   // Multi-month split confirm — deferred here from detection time.
   // v2.14.39b: only offered for an OPEN selected month. For a closed month the
@@ -4890,7 +4890,7 @@ function commitBankImport(){
     // v2.14.39b — OPTION 1: selected month CLOSED → the tenant's FULL amount is one
     // approval row for that closed month. No split, no silent open-month writes.
     if (_selClosed) {
-      _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: selectedMonthKey, scope: 'main',
+      _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: P.selectedMonthKey, scope: 'main',
                               charge: m.amount, payerName: payerName });
       delete m._buckets;
       delete m._lumpSplit;

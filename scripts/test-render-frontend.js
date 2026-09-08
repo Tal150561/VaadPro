@@ -858,6 +858,45 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('cancelBankImport saves nothing', /function cancelBankImport\(\)\{[\s\S]*?_pendingBankImport\s*=\s*null/.test(app), true);
   t.eq('preview wires אשר ורשום → commit', /onclick="commitBankImport\(\)"/.test(app), true);
   t.eq('preview wires בטל → cancel', /onclick="cancelBankImport\(\)"/.test(app), true);
+  // v2.14.39b — EXECUTION test (not just regex): run commitBankImport's closed-month
+  // path in isolation so a bare in-scope-leak identifier (e.g. selectedMonthKey or
+  // MONTH_NAMES_HE that only exist inside analyzeBankRows) throws ReferenceError here,
+  // exactly as it did in the browser. Static regex missed this twice; execution won't.
+  {
+    var commitSrc = extractFunctions(app, ['commitBankImport']);
+    // Capture the approval-panel call args.
+    var captured = { approvals: null, toastMsg: null, threw: null };
+    var mkTenant = function(id,name,amount){ return { tenant:{id:id,name:name}, amount:amount, count:1, payments:[{payerName:name}], _buckets:new Map([['2026-08',{sum:amount,payerName:name,count:1}]]), _lumpSplit:true }; };
+    var P = {
+      matched: [ mkTenant('R','אור',1000), mkTenant('R2','בן',300) ],
+      unmatched: [], alreadyImportedSkips: [], dupWarnings: [],
+      newFp: [], priorFp: [], em: 'אוגוסט', selectedMonthKey: '2026-08',
+      hebOfMk: function(mk){ return VP_MONTHS[parseInt(mk.split('-')[1])-1]; },
+      splitMonths: ['2026-04','2026-05','2026-06','2026-07','2026-08'],
+      total: 2, ta: 0, fileName: 'x.xls', filterByAmount: false
+    };
+    var scope = {
+      window: { _pendingBankImport: P, _closedMonthApprovals: null },
+      data: { closedMonths: ['2026-08'], sentLog: {}, importedBankFingerprints: [] },
+      VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+      API: '', fetch: function(){ return Promise.resolve({ json:function(){ return Promise.resolve({ok:true}); } }); },
+      toast: function(msg){ captured.toastMsg = msg; },
+      render: function(){}, showBankResult: function(){}, resetDropZone: function(){},
+      renderClosedMonthApprovals: function(a){ captured.approvals = a; },
+      localStorage: { getItem:function(){return 't';} },
+      document: { getElementById:function(){return null;}, querySelector:function(){return null;}, createElement:function(){return {style:{},appendChild:function(){}}; }, body:{appendChild:function(){}} },
+      console: console
+    };
+    try {
+      var runner = new Function(Object.keys(scope).join(','), commitSrc + '\n; return commitBankImport;');
+      var fn = runner.apply(null, Object.keys(scope).map(function(k){ return scope[k]; }));
+      fn();
+    } catch(e){ captured.threw = e.message; }
+    t.eq('commitBankImport runs without scope-leak ReferenceError', captured.threw, null);
+    t.eq('closed month → renderClosedMonthApprovals called with rows', !!(captured.approvals && captured.approvals.length === 2), true);
+    t.eq('closed month → FULL amount routed (אור=1000, not split share)', captured.approvals && captured.approvals[0] && captured.approvals[0].charge, 1000);
+  }
+
   // v2.14.39a — closed-month approval routing (single source of truth)
   t.eq('commit routes closed bucket to approvals using b.sum', /_closedApprovals\.push\(\{[^}]*charge:\s*b\.sum/.test(commit), true);
   t.eq('commit does NOT write sentLog for closed bucket (returns first)', /_closedMainSet\.has\(mk\)[\s\S]{0,400}?return;/.test(commit), true);
