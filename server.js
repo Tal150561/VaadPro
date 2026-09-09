@@ -4512,11 +4512,15 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
     }
 
     // Per-month charge, tariff-aware for the main account (frozen historical rate),
-    // acc.amount for an extra account.
+    // acc.amount for an extra account. NOTE (v2.14.39b): since v2.14.39a the debt
+    // math subtracts the FULL paidAmount and no longer depends on `charge`; charge
+    // is only metadata on the record + receipt. So we must NOT block a member whose
+    // monthly dues are 0 (e.g. a member who owes nothing monthly but sent money —
+    // the whole payment legitimately becomes credit). The real invariant is that
+    // the PAID amount is positive; that is checked after `paid` is resolved below.
     const charge = isExtra
       ? (parseFloat(acc.amount) || 0)
       : resolveTariffRate(tenant, d.defaultTariffs, month, (tenant.customAmount) || (d.config && d.config.amount) || 300);
-    if (!(charge > 0)) return res.status(400).json({ ok: false, error: 'דמי החודש אינם חיוביים — לא ניתן לזקוף' });
 
     // paymentHistory key + record space (main vs extra).
     const phKey = isExtra ? (tid + '__acc__' + acc.id) : tid;
@@ -4545,7 +4549,8 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
     const before = isExtra
       ? (parseFloat(acc.openingDebt) || 0)   // extra accounts carry their own openingDebt
       : (parseFloat(tenant.openingDebt) || 0); // main; may already be negative (existing credit)
-    const paid   = paidAmount != null ? (parseFloat(paidAmount) || charge) : charge;
+    const paid   = paidAmount != null ? (parseFloat(paidAmount) || 0) : charge;
+    if (!(paid > 0)) return res.status(400).json({ ok: false, error: 'סכום התשלום לזקיפה אינו חיובי' });
     const reversed = paid;                               // full amount applied
     const after  = Math.round((before - reversed) * 100) / 100; // may be negative → credit
     if (isExtra) {

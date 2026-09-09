@@ -2172,6 +2172,18 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     { const b = mk(200, 200); apply(b, 1000);
       const rec = b.paymentHistory.R.find(x => x.month === '2026-08');
       t.eq('receipt reversedAmount = full paid (1000)', rec && rec.debtOffset && rec.debtOffset.reversedAmount, 1000); }
+
+    // v2.14.39b — אוסנת case: member with monthly dues = 0 pays 100 → full 100 becomes
+    // credit. The old `charge>0` guard wrongly blocked this (400 "דמי החודש אינם חיוביים").
+    { const b = mk(0, 0); // openingDebt 0, charge 0
+      const r = apply(b, 100);
+      t.eq('dues=0 member: applied=true (not blocked)', r.result && r.result.applied, true);
+      t.eq('dues=0 member: 100 → credit (openingDebt −100)', b.tenants[0].openingDebt, -100); }
+
+    // guard still rejects a non-positive PAID amount
+    { const b = mk(200, 200);
+      const r = apply(b, 0);
+      t.eq('paid=0 → rejected 400', r.status, 400); }
   }
 
   t.section('v2.14.39 — closed-month reverse-accrual (extra account)');
