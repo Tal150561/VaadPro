@@ -937,6 +937,21 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('panel: shows why-here trigger (🏷️ למה כאן)', /🏷️ למה כאן/.test(app), true);
   t.eq('panel: shows what-happens preview (👁️ אם תזקוף)', /👁️ אם תזקוף/.test(app), true);
   t.eq('panel: batch approve reads only CHECKED+visible rows', /function _cmCheckedIndexes\(/.test(app), true);
+  // v2.14.40 hotfix — the row content must carry an EXPLICIT visible color. The
+  // panel briefly rendered blank because the name line had no color and inherited
+  // a dark value, and helper lines referenced --text3 which is NOT defined in
+  // :root. Guard both: the panel fn must not use --text3, and the row must set an
+  // explicit color:var(--text).
+  {
+    var panelSrc = (app.match(/function renderClosedMonthApprovals\([\s\S]*?\n}\n/) || [''])[0];
+    // widen: capture up to the next top-level function after the panel
+    var pStart = app.indexOf('function renderClosedMonthApprovals(');
+    var pEnd = app.indexOf('\nfunction ', pStart + 10);
+    var panelFull = pStart >= 0 ? app.slice(pStart, pEnd > 0 ? pEnd : pStart + 4000) : '';
+    t.eq('panel does NOT use undefined --text3', /var\(--text3\)/.test(panelFull), false);
+    t.eq('panel row sets explicit visible color', /class="match-row"[^>]*color:var\(--text\)/.test(panelFull), true);
+    t.eq('panel name line sets explicit color', /font-size:0\.88rem;color:var\(--text\)/.test(panelFull), true);
+  }
   // approveClosedMonthPayment must still POST to the SAME endpoint (server untouched)
   t.eq('approve still posts apply-closed-month-payment (server unchanged)', /apply-closed-month-payment/.test(app), true);
   // _cmIsSafe: exact-dues and clean multiples are safe; odd amounts are not.

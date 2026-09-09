@@ -5053,24 +5053,24 @@ function renderClosedMonthApprovals(hits){
     var amt = (hit.charge!=null?hit.charge:hit.amount);
     var bankLine = '';
     if (hit.payerName || hit.note) {
-      bankLine = '<div style="font-size:0.76rem;color:var(--text3);margin-top:3px;">🏦 מהבנק: '
+      bankLine = '<div style="font-size:0.76rem;color:var(--text2);margin-top:3px;">🏦 מהבנק: '
         + (hit.payerName ? '<span style="color:var(--text2);">'+esc(hit.payerName)+'</span>' : '')
         + (hit.note ? (hit.payerName?' · ':'') + '<span style="unicode-bidi:plaintext;">"'+esc(hit.note)+'"</span>' : '')
         + '</div>';
     }
-    rowsHtml += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);">'
+    rowsHtml += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);color:var(--text);">'
       + '<input type="checkbox" class="cm-chk" data-cm-chk="'+i+'" '+(safe?'checked':'')+' style="margin-top:3px;flex-shrink:0;transform:scale(1.2);cursor:pointer;">'
-      + '<div style="flex:1;min-width:0;">'
-      +   '<div style="font-size:0.88rem;">💰 <b>'+ esc(hit.name||'') +'</b> — '+ (amt!=null?nis(amt):'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
+      + '<div style="flex:1;min-width:0;color:var(--text);">'
+      +   '<div style="font-size:0.88rem;color:var(--text);">💰 <b>'+ esc(hit.name||'') +'</b> — '+ (amt!=null?nis(amt):'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
       +     (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
       +   bankLine
-      +   '<div style="font-size:0.76rem;color:var(--text3);margin-top:3px;">🏷️ למה כאן: החודש כבר נסגר והחוב שלו כבר נצבר — '
+      +   '<div style="font-size:0.76rem;color:var(--text2);margin-top:3px;">🏷️ למה כאן: החודש כבר נסגר והחוב שלו כבר נצבר — '
       +     (safe? 'הסכום תואם דמי הוועד (סומן אוטומטית).' : '<span style="color:var(--warn);">סכום/הערה חריגים — בדוק לפני אישור.</span>') +'</div>'
       +   '<div style="font-size:0.76rem;color:var(--accent);margin-top:3px;">👁️ אם תזקוף: '+ preview(hit) +'</div>'
       + '</div>'
       + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0;">'
-      +   '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף</button>'
-      +   '<button class="btn btn-sm btn-ghost" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
+      +   '<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף</button>'
+      +   '<button class="btn btn-sm btn-ghost" style="border:1px solid var(--border);background:transparent;color:var(--text);" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
       + '</div></div>';
   });
 
