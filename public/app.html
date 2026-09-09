@@ -521,7 +521,8 @@ function vpLogout() {
           <div><label>טלפון</label><input type="tel" id="inPhone" placeholder="0501234567" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>אימייל <span style="opacity:.5;">(אופציונלי)</span></label><input type="email" id="inEmail" placeholder="tenant@email.com" style="direction:ltr;" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>מילות חיפוש לבנק <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inKeywords" placeholder="כהן י, העברה 052" onkeydown="if(event.key==='Enter')addTenant()"></div>
-          <div><label>מספר דירה <span style="opacity:.5;">(אופציונלי — לזיהוי לפי הערת בנק. בעל־בית שמשלם לכמה דירות)</span></label><input type="number" id="inAptNumber" placeholder="לדוגמה: 6" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div id="wrapAptNumber"><label><span id="lblAptNumber">מספר דירה</span> <span style="opacity:.5;">(אופציונלי — לזיהוי לפי הערת בנק. בעל־בית שמשלם לכמה דירות)</span></label><input type="number" id="inAptNumber" placeholder="לדוגמה: 6" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
+          <div id="wrapGushChelka" style="display:none;"><label>גוש/חלקה <span style="opacity:.5;">(אופציונלי)</span></label><input type="text" id="inGushChelka" placeholder="לדוגמה: 1234/56" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>סכום אישי ₪ <span style="opacity:.5;">(אופציונלי — ברירת מחדל מהגדרות)</span></label><input type="number" id="inCustomAmount" placeholder="ריק = ברירת מחדל" min="1" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div><label>יתרת פתיחה ₪ <span style="opacity:.5;">(אופציונלי — חוב קודם, או ערך שלילי = יתרת זכות לדייר. מתעדכן אוטומטית בסגירת חודש)</span></label><input type="number" id="inOpeningDebt" placeholder="0" onkeydown="if(event.key==='Enter')addTenant()"></div>
           <div style="display:flex;align-items:center;margin-top:18px;"><label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-weight:normal;white-space:nowrap;"><input type="checkbox" id="inSuspended" style="width:auto;"> ⏸ השהה מגבייה <span style="opacity:.5;font-size:0.8rem;">(פטור זמני)</span></label></div>
@@ -958,7 +959,8 @@ function vpLogout() {
             <div style="display:grid;gap:8px;max-width:380px;">
               <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">יחיד (דייר)</span><input type="text" id="ovPerson" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
               <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">רבים (דיירים)</span><input type="text" id="ovPersons" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
-              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">יחידת דיור (דירה)</span><input type="text" id="ovUnit" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">יחידת דיור (דירה / גוש-חלקה)</span><input type="text" id="ovUnit" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
+              <div style="display:flex;align-items:center;gap:8px;"><span style="width:120px;font-size:0.84rem;color:var(--text2);">חשבון ראשי</span><input type="text" id="ovMainAccount" placeholder="" style="flex:1;" oninput="saveOrgSettings()"></div>
             </div>
             <span id="orgSaveStatus" style="font-size:0.78rem;color:var(--text3);display:block;margin-top:8px;"></span>
           </div>
@@ -1728,7 +1730,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.39b';
+const HTML_VERSION = '2.14.40';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -1758,8 +1760,8 @@ let _dataLoadedOnce = false; // one-time boot data load guard — survives loadD
 // orgType absent -> 'vaad' -> existing strings -> existing customer sees NO change.
 const LABELS = {
   he: {
-    vaad:    { org:'ועד הבית', person:'דייר', persons:'דיירים', unit:'דירה', body:'ועד הבית' },
-    kibbutz: { org:'קיבוץ', person:'חבר', persons:'חברים', unit:'בית/נכס', body:'הנהלת הקיבוץ' }
+    vaad:    { org:'ועד הבית', person:'דייר', persons:'דיירים', unit:'דירה', body:'ועד הבית', mainAccount:'ועד בית' },
+    kibbutz: { org:'קיבוץ', person:'חבר', persons:'חברים', unit:'גוש/חלקה', body:'הנהלת הקיבוץ', mainAccount:'ערבות הדדית' }
   }
 };
 const LABEL_LANG = 'he';
@@ -1794,6 +1796,15 @@ function applyLabels() {
   if (lh) lh.childNodes[0].textContent = '\uD83D\uDCCB רשימת ' + t('persons');
   const taTitle = document.getElementById('taModalTitleLabel');
   if (taTitle) taTitle.textContent = '\uD83D\uDCB3 חשבונות ל' + t('person') + ': ';
+  // v2.14.40 — kibbutz uses a free-text גוש/חלקה field (t.gushChelka) instead of the
+  // numeric apartment number. aptNumber is bank-matching only, so we HIDE its field
+  // for a kibbutz (never repurpose it — it strips non-digits). The label stays
+  // "מספר דירה" for vaad; the separate gush field carries its own label.
+  var _isKibbutz = (data.config && data.config.orgType === 'kibbutz');
+  var wa = document.getElementById('wrapAptNumber');
+  var wg = document.getElementById('wrapGushChelka');
+  if (wa) wa.style.display = _isKibbutz ? 'none' : '';
+  if (wg) wg.style.display = _isKibbutz ? '' : 'none';
 }
 // displayName for a property record: propertyLabel (Stage 2) || name (bank-match key).
 function tenantDisplayName(t2) {
@@ -2329,6 +2340,11 @@ function fillOrgSettings(){
   const p=document.getElementById('ovPerson'); if(p) p.value=ov.person||'';
   const ps=document.getElementById('ovPersons'); if(ps) ps.value=ov.persons||'';
   const u=document.getElementById('ovUnit'); if(u) u.value=ov.unit||'';
+  const ma=document.getElementById('ovMainAccount'); if(ma) ma.value=ov.mainAccount||'';
+  // v2.14.40 — show org-type defaults as placeholders so the operator sees the fallback
+  var _base=(LABELS.he[orgType])||LABELS.he.vaad;
+  if(p) p.placeholder=_base.person||''; if(ps) ps.placeholder=_base.persons||'';
+  if(u) u.placeholder=_base.unit||''; if(ma) ma.placeholder=_base.mainAccount||'';
 }
 let orgSaveTimer=null;
 // Save orgType + overrides. Sends the WHOLE config so the top-level Object.assign
@@ -2339,7 +2355,8 @@ function saveOrgSettings(){
   const ovIn={
     person:(document.getElementById('ovPerson')||{}).value||'',
     persons:(document.getElementById('ovPersons')||{}).value||'',
-    unit:(document.getElementById('ovUnit')||{}).value||''
+    unit:(document.getElementById('ovUnit')||{}).value||'',
+    mainAccount:(document.getElementById('ovMainAccount')||{}).value||''
   };
   const he={};
   Object.keys(ovIn).forEach(function(k){ if(String(ovIn[k]).trim()!=='') he[k]=String(ovIn[k]).trim(); });
@@ -2584,12 +2601,13 @@ async function addTenant() {
   const openingDebt = od ? parseFloat(od) : 0;
   const propertyLabel=document.getElementById('inPropertyLabel').value.trim();
   const aptNumber=(document.getElementById('inAptNumber').value||'').replace(/\D/g,'');
+  const gushChelka=(document.getElementById('inGushChelka')?document.getElementById('inGushChelka').value:'').trim();
   const suspEl=document.getElementById('inSuspended');
   const suspended = suspEl ? suspEl.checked : false;
-  const newT={id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||''};
+  const newT={id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||'',gushChelka:gushChelka||''};
   if (suspended) newT.suspended = true;
   data.tenants.push(newT);
-  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';if(suspEl)suspEl.checked=false;
+  document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';if(document.getElementById('inGushChelka'))document.getElementById('inGushChelka').value='';if(suspEl)suspEl.checked=false;
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
   if (saveR && saveR.limitError) { data.tenants.pop(); toast('⚠️ ' + saveR.error, 'error'); return; }
   render(); toast('✅ דייר נוסף!','success');
@@ -2617,7 +2635,10 @@ function startEdit(id) {
   isEditing = true;
   const cells=row.querySelectorAll('td');
   cells[0].innerHTML='<input id="epl-'+id+'" value="'+(t.propertyLabel||'').replace(/"/g,'&quot;')+'" style="width:100%;margin-bottom:4px;font-size:0.79rem;" placeholder="תווית נכס (אופציונלי)"><input id="en-'+id+'" value="'+t.name+'" style="width:100%;" placeholder="שם איש קשר">';
-  cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;margin-bottom:4px;" placeholder="מילות חיפוש"><input id="eapt-'+id+'" type="number" value="'+(t.aptNumber||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מספר דירה (לזיהוי הערה)" min="1">';
+  var _isKibbutz = (data.config && data.config.orgType === 'kibbutz');
+  var _aptEdit = '<input id="eapt-'+id+'" type="number" value="'+(t.aptNumber||'')+'" style="width:100%;font-size:0.79rem;" placeholder="מספר דירה (לזיהוי הערה)" min="1">';
+  var _gushEdit = '<input id="egush-'+id+'" type="text" value="'+(t.gushChelka||'').replace(/"/g,'&quot;')+'" style="width:100%;font-size:0.79rem;" placeholder="גוש/חלקה (לדוגמה: 1234/56)">';
+  cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;margin-bottom:4px;" placeholder="מילות חיפוש">' + (_isKibbutz ? _gushEdit : _aptEdit);
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
   cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span><br><label style="font-size:0.75rem;color:var(--text3);display:inline-flex;align-items:center;gap:4px;margin-top:4px;"><input id="esusp-'+id+'" type="checkbox" '+(t.suspended===true?'checked':'')+'> ⏸ השהה מגבייה (פטור מדמי ועד)</label>';
@@ -2646,6 +2667,8 @@ async function saveEdit(id) {
   const pl = plEl ? plEl.value.trim() : (t.propertyLabel||'');
   const aptEl=document.getElementById('eapt-'+id);
   const apt = aptEl ? (aptEl.value||'').replace(/\D/g,'') : (t.aptNumber||'');
+  const gushEl=document.getElementById('egush-'+id);
+  const gush = gushEl ? gushEl.value.trim() : (t.gushChelka||'');
   // ⚠️ v2.14.13 — warn before manually overriding openingDebt if a month-close
   // already banked debt/credit for this tenant. The close computes openingDebt
   // (accrual + surplus offset); editing it by hand discards that computation and
@@ -2666,7 +2689,7 @@ async function saveEdit(id) {
   }
   const suspEl=document.getElementById('esusp-'+id);
   const susp = suspEl ? suspEl.checked : (t.suspended===true);
-  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';
+  t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';t.gushChelka=gush||'';
   if (susp) t.suspended = true; else delete t.suspended;
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
@@ -2702,6 +2725,7 @@ var TENANT_EXPORT_COLS = [
   { key:'openingDebt',   he:'חוב_התחלתי' },
   { key:'propertyLabel', he:'תווית_נכס' },
   { key:'aptNumber',     he:'מספר_דירה' },
+  { key:'gushChelka',    he:'גוש/חלקה' },
   { key:'suspended',     he:'סטטוס' }
 ];
 
@@ -2719,6 +2743,7 @@ function tenantExportRows() {
       (t.openingDebt === 0 || t.openingDebt) ? t.openingDebt : '',
       t.propertyLabel || '',
       t.aptNumber || '',
+      t.gushChelka || '',
       (t.suspended === true) ? 'מושהה' : ''
     ]);
   });
@@ -2749,7 +2774,7 @@ function exportTenantsExcel() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
   var rows = tenantExportRows();
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14},{wch:12}];
+  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:12}];
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
@@ -2772,6 +2797,7 @@ function tenantHeaderToKey(rawHeader) {
     'חוב_התחלתי':'openingDebt', 'openingdebt':'openingDebt', 'חוב':'openingDebt',
     'תווית_נכס':'propertyLabel', 'propertylabel':'propertyLabel', 'דירה':'propertyLabel', 'נכס':'propertyLabel',
     'מספר_דירה':'aptNumber', 'דירה_מספר':'aptNumber', 'aptnumber':'aptNumber', 'apt':'aptNumber',
+    'גוש/חלקה':'gushChelka', 'גוש_חלקה':'gushChelka', 'גושחלקה':'gushChelka', 'גוש':'gushChelka', 'חלקה':'gushChelka', 'gushchelka':'gushChelka', 'gush':'gushChelka',
     'סטטוס':'suspended', 'status':'suspended', 'מצב':'suspended', 'השהיה':'suspended', 'suspended':'suspended'
   };
   return map[h] || null;
@@ -2885,6 +2911,7 @@ function planTenantImport(existingTenants, headerKeys, dataRows) {
       openingDebt: od.value,
       propertyLabel: (f.propertyLabel || '').trim(),
       aptNumber: (f.aptNumber || '').replace(/\D/g,''),
+      gushChelka: (f.gushChelka || '').trim(),
       suspended: suspVal   // true / false / null(don't touch)
     };
 
@@ -3098,6 +3125,7 @@ async function confirmImport() {
     t.keywords=u.fields.keywords; t.customAmount=u.fields.customAmount;
     t.openingDebt=u.fields.openingDebt; t.propertyLabel=u.fields.propertyLabel;
     t.aptNumber=u.fields.aptNumber||'';
+    t.gushChelka=u.fields.gushChelka||'';
     // v2.14.34 — suspension: null means the column was absent → leave as-is (2A).
     if (u.fields.suspended === true) t.suspended = true;
     else if (u.fields.suspended === false) delete t.suspended;
@@ -3108,7 +3136,8 @@ async function confirmImport() {
       name:c.fields.name, phone:c.fields.phone, email:c.fields.email,
       keywords:c.fields.keywords, customAmount:c.fields.customAmount,
       openingDebt:c.fields.openingDebt, propertyLabel:c.fields.propertyLabel,
-      aptNumber:c.fields.aptNumber||''
+      aptNumber:c.fields.aptNumber||'',
+      gushChelka:c.fields.gushChelka||''
     };
     // v2.14.34 — new tenant starts suspended only if the file says so.
     if (c.fields.suspended === true) nt.suspended = true;
@@ -4887,11 +4916,17 @@ function commitBankImport(){
 
   matched.forEach(function(m){
     var payerName = (m.payments[0] && m.payments[0].payerName) || '';
+    // v2.14.40 — panel enrichment: carry the original bank note + the tenant's
+    // CURRENT openingDebt so the approval panel can show "why here" (the raw bank
+    // text) and a "what happens" preview (debt A → B). Display-only; the actual
+    // reverse-accrual is still done server-side by /api/apply-closed-month-payment.
+    var _bankNote = (m.payments[0] && m.payments[0].note) || '';
+    var _prevDebt = Math.round((parseFloat(m.tenant.openingDebt) || 0) * 100) / 100;
     // v2.14.39b — OPTION 1: selected month CLOSED → the tenant's FULL amount is one
     // approval row for that closed month. No split, no silent open-month writes.
     if (_selClosed) {
       _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: P.selectedMonthKey, scope: 'main',
-                              charge: m.amount, payerName: payerName });
+                              charge: m.amount, payerName: payerName, note: _bankNote, prevDebt: _prevDebt });
       delete m._buckets;
       delete m._lumpSplit;
       return;
@@ -4903,7 +4938,7 @@ function commitBankImport(){
       m._buckets.forEach(function(b, mk){
         if (_closedMainSet.has(mk)) {                       // closed → approval, not silent write
           _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: mk, scope: 'main',
-                                  charge: b.sum, payerName: (b.payerName || payerName) });
+                                  charge: b.sum, payerName: (b.payerName || payerName), note: _bankNote, prevDebt: _prevDebt });
           return;
         }
         var hebMk = hebOfMk(mk);
@@ -4916,7 +4951,7 @@ function commitBankImport(){
       // em is a Hebrew-month key; resolve the YYYY-MM the write targets for the closed-check.
       if (singleMk && _closedMainSet.has(singleMk)) {
         _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: singleMk, scope: 'main',
-                                charge: m.amount, payerName: payerName });
+                                charge: m.amount, payerName: payerName, note: _bankNote, prevDebt: _prevDebt });
       } else {
         data.sentLog[m.tenant.id + '_' + em] =
           'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
@@ -4962,6 +4997,27 @@ function commitBankImport(){
 // calls POST /api/apply-closed-month-payment, which reverse-accrues ONCE (receipt-
 // guarded). "התעלם" just drops the row from view (no write). Nothing touches
 // openingDebt until the operator clicks לזקוף.
+// v2.14.40 — "why here" trigger label + smart pre-check.
+// A hit is a SAFE default-checked row when its amount looks like ordinary dues:
+// exactly the monthly charge, or a clean integer multiple of it. Odd amounts
+// (e.g. a one-off 1000 "ערבות הדדית") and rows whose note doesn't look like dues
+// stay UNCHECKED so the operator eyeballs only the exceptions.
+function _cmMonthlyCharge(hit){
+  // best-effort monthly dues for this tenant (custom amount → config default)
+  var t = (data.tenants||[]).filter(function(x){ return x.id===hit.tenantId; })[0];
+  var c = (t && t.customAmount) || (data.config && data.config.amount) || 0;
+  return Math.round((parseFloat(c)||0)*100)/100;
+}
+function _cmIsSafe(hit){
+  var amt = (hit.charge!=null?hit.charge:hit.amount);
+  amt = Math.round((parseFloat(amt)||0)*100)/100;
+  var due = _cmMonthlyCharge(hit);
+  if (!(amt>0) || !(due>0)) return false;
+  var mult = amt/due;
+  // clean multiple of the dues (1×,2×,3×…) within a cent → looks like dues
+  return Math.abs(mult - Math.round(mult)) < 0.005 && Math.round(mult) >= 1;
+}
+
 function renderClosedMonthApprovals(hits){
   hits = hits || [];
   var box = document.getElementById('closedMonthApprovals');
@@ -4974,42 +5030,128 @@ function renderClosedMonthApprovals(hits){
   }
   if (!hits.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
   var hebOf = function(mk){ return VP_MONTHS[parseInt(String(mk).split('-')[1]) - 1] + ' ' + String(mk).split('-')[0]; };
-  var h = '<div style="background:rgba(227,179,65,.10);border:1px solid rgba(227,179,65,.4);border-radius:10px;padding:12px 14px;margin:12px 0;">'
-    + '<div style="font-weight:700;color:var(--warn);margin-bottom:4px;">⏳ תשלומים לחודשים שכבר נסגרו — דורשים אישור</div>'
-    + '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">התקבלו תשלומים עבור חודשים שכבר נסגרו והחוב שלהם כבר נצבר. אישור יזקוף את התשלום כנגד החוב המצטבר (פעם אחת). ללא אישור — לא ישתנה דבר.</div>';
+  var nis = function(v){ return (Math.round((parseFloat(v)||0)*100)/100) + ' ₪'; };
+  // "what happens" preview: openingDebt A → B (B floors at 0; below 0 becomes credit)
+  var preview = function(hit){
+    var amt = Math.round(((hit.charge!=null?hit.charge:hit.amount)||0)*100)/100;
+    var a = Math.round((parseFloat(hit.prevDebt)||0)*100)/100;
+    var after = Math.round((a - amt)*100)/100;
+    if (a <= 0) {
+      // no standing debt → the whole payment becomes forward credit
+      return 'אין חוב קודם → כל התשלום (' + nis(amt) + ') יהפוך ל<b>זכות</b>';
+    }
+    if (after > 0)  return 'החוב יקטן מ-' + nis(a) + ' ל-<b>' + nis(after) + '</b>';
+    if (after === 0) return 'החוב (' + nis(a) + ') יתאפס <b>ל-0</b>';
+    return 'החוב (' + nis(a) + ') יתאפס, והעודף <b>' + nis(Math.abs(after)) + '</b> יהפוך ל<b>זכות</b>';
+  };
+
+  var safeCount = 0;
+  var rowsHtml = '';
   hits.forEach(function(hit, i){
-    h += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06);">'
-      + '<div style="font-size:0.86rem;">💰 <b>'+ (hit.name||'') +'</b> — '+ ((hit.charge!=null?hit.charge:hit.amount)!=null?(hit.charge!=null?hit.charge:hit.amount)+' ₪':'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
-      + (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
-      + '<div style="display:flex;gap:6px;flex-shrink:0;">'
-      + '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף לחוב</button>'
-      + '<button class="btn btn-sm btn-ghost" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
+    var safe = _cmIsSafe(hit);
+    if (safe) safeCount++;
+    var amt = (hit.charge!=null?hit.charge:hit.amount);
+    var bankLine = '';
+    if (hit.payerName || hit.note) {
+      bankLine = '<div style="font-size:0.76rem;color:var(--text3);margin-top:3px;">🏦 מהבנק: '
+        + (hit.payerName ? '<span style="color:var(--text2);">'+esc(hit.payerName)+'</span>' : '')
+        + (hit.note ? (hit.payerName?' · ':'') + '<span style="unicode-bidi:plaintext;">"'+esc(hit.note)+'"</span>' : '')
+        + '</div>';
+    }
+    rowsHtml += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);">'
+      + '<input type="checkbox" class="cm-chk" data-cm-chk="'+i+'" '+(safe?'checked':'')+' style="margin-top:3px;flex-shrink:0;transform:scale(1.2);cursor:pointer;">'
+      + '<div style="flex:1;min-width:0;">'
+      +   '<div style="font-size:0.88rem;">💰 <b>'+ esc(hit.name||'') +'</b> — '+ (amt!=null?nis(amt):'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
+      +     (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
+      +   bankLine
+      +   '<div style="font-size:0.76rem;color:var(--text3);margin-top:3px;">🏷️ למה כאן: החודש כבר נסגר והחוב שלו כבר נצבר — '
+      +     (safe? 'הסכום תואם דמי הוועד (סומן אוטומטית).' : '<span style="color:var(--warn);">סכום/הערה חריגים — בדוק לפני אישור.</span>') +'</div>'
+      +   '<div style="font-size:0.76rem;color:var(--accent);margin-top:3px;">👁️ אם תזקוף: '+ preview(hit) +'</div>'
+      + '</div>'
+      + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0;">'
+      +   '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף</button>'
+      +   '<button class="btn btn-sm btn-ghost" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
       + '</div></div>';
   });
-  h += '</div>';
+
+  var h = '<div style="background:rgba(227,179,65,.10);border:1px solid rgba(227,179,65,.4);border-radius:10px;padding:12px 14px;margin:12px 0;">'
+    + '<div style="font-weight:700;color:var(--warn);margin-bottom:4px;">⏳ תשלומים לחודשים שכבר נסגרו — דורשים אישור</div>'
+    + '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">התקבלו '+hits.length+' תשלומים עבור חודשים שכבר נסגרו והחוב שלהם כבר נצבר. אישור יזקוף את התשלום כנגד החוב המצטבר (פעם אחת). ללא אישור — לא ישתנה דבר.'
+    + (safeCount ? ' <b>'+safeCount+'</b> שורות סומנו אוטומטית כדמי-ועד רגילים.' : '') + '</div>'
+    // ── batch bar ──
+    + '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid rgba(255,255,255,.08);">'
+    +   '<button class="btn btn-sm" style="background:var(--accent);" onclick="approveCheckedClosedMonthPayments()">✅ זקוף מסומנים</button>'
+    +   '<button class="btn btn-sm btn-ghost" onclick="dismissCheckedClosedMonthPayments()">🚫 התעלם ממסומנים</button>'
+    +   '<span style="width:1px;height:18px;background:rgba(255,255,255,.15);"></span>'
+    +   '<label style="font-size:0.78rem;color:var(--text2);cursor:pointer;display:inline-flex;align-items:center;gap:5px;"><input type="checkbox" id="cmSelectAll" onchange="toggleAllClosedMonthChecks(this.checked)"> בחר הכל</label>'
+    + '</div>'
+    + rowsHtml
+    + '</div>';
   box.innerHTML = h;
   box.style.display = 'block';
+  // reflect select-all state
+  var sa = document.getElementById('cmSelectAll');
+  if (sa) sa.checked = (safeCount === hits.length && hits.length>0);
 }
 
-function approveClosedMonthPayment(idx){
+// ── batch helpers (v2.14.40) ──────────────────────────────────────────────
+function _cmCheckedIndexes(){
+  var out = [];
+  document.querySelectorAll('#closedMonthApprovals .cm-chk').forEach(function(cb){
+    var row = cb.closest('.match-row');
+    if (cb.checked && row && row.style.display !== 'none') out.push(parseInt(cb.getAttribute('data-cm-chk'),10));
+  });
+  return out;
+}
+function toggleAllClosedMonthChecks(on){
+  document.querySelectorAll('#closedMonthApprovals .cm-chk').forEach(function(cb){
+    var row = cb.closest('.match-row');
+    if (row && row.style.display !== 'none') cb.checked = !!on;
+  });
+}
+function approveCheckedClosedMonthPayments(){
+  var idxs = _cmCheckedIndexes();
+  if (!idxs.length) { toast('לא נבחרו שורות לזקיפה','info'); return; }
+  if (!confirm('לזקוף ' + idxs.length + ' תשלומים לחוב? פעולה זו תעדכן יתרות.')) return;
+  // sequential to keep server writes ordered and avoid a burst of concurrent POSTs
+  var i = 0;
+  (function next(){
+    if (i >= idxs.length) { loadData(); return; }
+    approveClosedMonthPayment(idxs[i], /*silent=*/true, function(){ i++; next(); });
+  })();
+}
+function dismissCheckedClosedMonthPayments(){
+  var idxs = _cmCheckedIndexes();
+  if (!idxs.length) { toast('לא נבחרו שורות','info'); return; }
+  idxs.forEach(function(idx){
+    var row = document.querySelector('#closedMonthApprovals [data-cm-idx="'+idx+'"]');
+    if (row) row.style.display = 'none';
+  });
+  toast('התעלמת מ-' + idxs.length + ' שורות — לא בוצעה זקיפה','info');
+}
+
+function approveClosedMonthPayment(idx, silent, done){
   var hits = window._closedMonthApprovals || [];
   var hit = hits[idx];
-  if (!hit) return;
+  if (!hit) { if (done) done(); return; }
   fetch(API + '/apply-closed-month-payment', {
     method:'POST', headers:{'Content-Type':'application/json'},
     body: JSON.stringify({ tenantId: hit.tenantId, month: hit.month, scope: hit.scope || 'main',
                            accountId: hit.accountId || null, paidAmount: (hit.charge!=null?hit.charge:hit.amount), payerName: hit.payerName || '' })
   }).then(function(r){ return r.json(); }).then(function(d){
     if (d && d.ok) {
-      if (d.alreadyApplied) toast('כבר נזקף קודם — לא בוצעה פעולה נוספת','info');
-      else toast('✅ נזקף ' + (d.reversed!=null?d.reversed+' ₪ ':'') + 'לחוב של ' + (hit.name||''),'success');
+      if (!silent) {
+        if (d.alreadyApplied) toast('כבר נזקף קודם — לא בוצעה פעולה נוספת','info');
+        else toast('✅ נזקף ' + (d.reversed!=null?d.reversed+' ₪ ':'') + 'לחוב של ' + (hit.name||''),'success');
+      }
       var row = document.querySelector('#closedMonthApprovals [data-cm-idx="'+idx+'"]');
       if (row) row.style.display = 'none';
-      loadData();
+      if (!silent) loadData();
     } else {
-      toast('שגיאה בזקיפה: ' + ((d&&d.error)||'לא ידוע'),'error');
+      toast('שגיאה בזקיפה' + (hit.name?(' ('+hit.name+')'):'') + ': ' + ((d&&d.error)||'לא ידוע'),'error');
     }
-  }).catch(function(){ toast('שגיאת רשת בזקיפה','error'); });
+    if (done) done();
+  }).catch(function(){ toast('שגיאת רשת בזקיפה','error'); if (done) done(); });
 }
 
 function dismissClosedMonthPayment(idx){
@@ -8736,7 +8878,7 @@ function showCollectionBreakdown() {
      + 'זהו הסכום שעדיין <strong>לא נגבה</strong> — כלומר כמה כסף אמור להיכנס לקופה. סכומים שכבר שולמו אינם נכללים כאן.'
      + '</div>';
 
-  h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:12px 0 2px;">💰 דמי ועד (חשבון ראשי)</div>';
+  h += '<div style="font-weight:700;font-size:0.82rem;color:var(--text2);margin:12px 0 2px;">💰 ' + esc(t('mainAccount')) + ' (חשבון ראשי)</div>';
   h += row('חיוב החודש שטרם שולם',
            b.mainCurrent,
            'דמי הוועד של ' + getEffectiveMonth() + ' — ' + b.mainCurrentCount + ' דיירים שעדיין לא שילמו את החודש',

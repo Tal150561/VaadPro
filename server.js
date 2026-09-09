@@ -2221,18 +2221,20 @@ app.post('/api/reconnect', authMiddleware, async (req, res) => {
 const LABELS = {
   he: {
     vaad: {
-      org:     'ועד הבית',
-      person:  'דייר',
-      persons: 'דיירים',
-      unit:    'דירה',
-      body:    'ועד הבית'
+      org:         'ועד הבית',
+      person:      'דייר',
+      persons:     'דיירים',
+      unit:        'דירה',
+      body:        'ועד הבית',
+      mainAccount: 'ועד בית'   // v2.14.40 — name of the primary collection account
     },
     kibbutz: {
-      org:     'קיבוץ',
-      person:  'חבר',
-      persons: 'חברים',
-      unit:    'בית/נכס',
-      body:    'הנהלת הקיבוץ'
+      org:         'קיבוץ',
+      person:      'חבר',
+      persons:     'חברים',
+      unit:        'גוש/חלקה', // v2.14.40 — kibbutz has no apartment number
+      body:        'הנהלת הקיבוץ',
+      mainAccount: 'ערבות הדדית' // v2.14.40 — kibbutz primary account name
     }
   }
 };
@@ -6269,7 +6271,7 @@ app.get('/api/portal/:token', (req, res) => {
         id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false
       }))
     },
-    building: { name: portalBuildingName, org: t(getLabels(d.config), 'org') },
+    building: { name: portalBuildingName, org: t(getLabels(d.config), 'org'), mainAccount: t(getLabels(d.config), 'mainAccount') },
     current: (() => {
       // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
       // page renders it verbatim. Previously tenant-portal.html did this math

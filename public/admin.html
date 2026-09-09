@@ -928,7 +928,8 @@
       <div style="font-size:13px;color:var(--muted,#888);margin-bottom:8px;">דריסת מונחים (ריק = ברירת מחדל של סוג הארגון)</div>
       <div class="field"><label>יחיד (דייר)</label><input type="text" id="labelsOvPerson" /></div>
       <div class="field"><label>רבים (דיירים)</label><input type="text" id="labelsOvPersons" /></div>
-      <div class="field"><label>יחידת דיור (דירה)</label><input type="text" id="labelsOvUnit" /></div>
+      <div class="field"><label>יחידת דיור (דירה / גוש-חלקה)</label><input type="text" id="labelsOvUnit" /></div>
+      <div class="field"><label>חשבון ראשי (ועד בית / ערבות הדדית)</label><input type="text" id="labelsOvMainAccount" /></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('labelsModal')">ביטול</button>
@@ -1988,6 +1989,7 @@ async function openLabelsModal(email, name) {
   document.getElementById('labelsOvPerson').value = '';
   document.getElementById('labelsOvPersons').value = '';
   document.getElementById('labelsOvUnit').value = '';
+  document.getElementById('labelsOvMainAccount').value = '';
   try {
     const res = await fetch('/api/admin/labels/' + encodeURIComponent(email), { headers: adminHeaders() });
     const d = await res.json();
@@ -1997,11 +1999,13 @@ async function openLabelsModal(email, name) {
       document.getElementById('labelsOvPerson').value = ov.person || '';
       document.getElementById('labelsOvPersons').value = ov.persons || '';
       document.getElementById('labelsOvUnit').value = ov.unit || '';
+      document.getElementById('labelsOvMainAccount').value = ov.mainAccount || '';
       // placeholders show the org-type defaults so the operator sees the fallback
       const base = (d.baseSets && d.baseSets[d.orgType]) || (d.baseSets && d.baseSets.vaad) || {};
       document.getElementById('labelsOvPerson').placeholder = base.person || '';
       document.getElementById('labelsOvPersons').placeholder = base.persons || '';
       document.getElementById('labelsOvUnit').placeholder = base.unit || '';
+      document.getElementById('labelsOvMainAccount').placeholder = base.mainAccount || '';
     } else {
       toast(d.error || 'שגיאה בטעינה', 'err');
     }
@@ -2016,9 +2020,11 @@ async function saveLabels() {
   const p = document.getElementById('labelsOvPerson').value.trim();
   const ps = document.getElementById('labelsOvPersons').value.trim();
   const u = document.getElementById('labelsOvUnit').value.trim();
+  const ma = document.getElementById('labelsOvMainAccount').value.trim();
   if (p) he.person = p;
   if (ps) he.persons = ps;
   if (u) he.unit = u;
+  if (ma) he.mainAccount = ma;
   const labelOverrides = Object.keys(he).length ? { he: he } : {};
   const res = await fetch('/api/admin/labels/' + encodeURIComponent(email), {
     method: 'POST', headers: adminHeaders(),

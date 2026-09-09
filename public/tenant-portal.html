@@ -642,7 +642,8 @@ function render(d) {
   // Unified breakdown card: main account + open extra accounts + grand total.
   // Reuses values already computed above — does NOT recompute debt logic.
   renderUnifiedBreakdown(d, {
-    mainLabel: (d.building && d.building.name) ? d.building.name : 'ועד הבית',
+    mainLabel: (d.building && d.building.name) ? d.building.name
+             : ((d.building && d.building.mainAccount) ? d.building.mainAccount : 'ועד הבית'),
     mainCurrent: c.amount,
     mainPaid: currentPaid,               // from server balance.status, not raw c.status
     mainPriorDebt: historyDebt,          // = c.priorDebt from the server (already ≥0)

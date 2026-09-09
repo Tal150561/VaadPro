@@ -237,9 +237,10 @@ t.section('app.html — collection breakdown modal ACTUALLY OPENS (v2.13.30)');
   const accountsStatus = { '11': [{ id: 'a1', label: 'חשמל', amount: 50,
       paidThisMonth: false, totalDebt: 100, active: true }] };
   let opened = null;
-  const api = new Function('document', 'data', 'accountsStatus', 'getEffectiveMonth', 'openModal',
+  const api = new Function('document', 'data', 'accountsStatus', 'getEffectiveMonth', 'openModal', 't', 'esc',
     'var collectionBreakdown=null;' + fns + '\n; return {computeCollectionBreakdown, showCollectionBreakdown};'
-  )(doc, data, accountsStatus, () => 'יולי', id => { opened = id; });
+  )(doc, data, accountsStatus, () => 'יולי', id => { opened = id; },
+    key => (key === 'mainAccount' ? 'ועד בית' : key), s => String(s == null ? '' : s));
 
   let threw = null;
   try { api.showCollectionBreakdown(); } catch (e) { threw = e.message; }
@@ -917,6 +918,40 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('computes _selClosed from selectedMonthKey vs closedMonths', /_selClosed\s*=\s*\(Array\.isArray\(data\.closedMonths\)/.test(commit), true);
   t.eq('split dialog suppressed when selected month closed', /if \(!_selClosed && P\.splitMonths/.test(commit), true);
   t.eq('closed selected month → full m.amount to approvals (skip split)', /if \(_selClosed\)\s*\{[\s\S]{0,220}?_closedApprovals\.push\([\s\S]{0,160}?charge:\s*m\.amount/.test(commit), true);
+
+  // ── v2.14.40 — enriched approval panel (why-here + bank note + preview + batch) ──
+  // Hits must now carry the original bank note + the tenant's current openingDebt so
+  // the panel can show "why here" (raw bank text) and a "what happens" preview.
+  t.eq('commit enriches approval hits with bank note', /note:\s*_bankNote/.test(commit), true);
+  t.eq('commit enriches approval hits with prevDebt', /prevDebt:\s*_prevDebt/.test(commit), true);
+  t.eq('_bankNote read from the payment row note', /_bankNote\s*=\s*\(m\.payments\[0\][\s\S]{0,40}?\.note\)/.test(commit), true);
+  t.eq('_prevDebt read from tenant.openingDebt', /_prevDebt\s*=[\s\S]{0,60}?m\.tenant\.openingDebt/.test(commit), true);
+  // Panel UI: smart pre-check + bulk actions + note display all present.
+  t.eq('panel: smart pre-check helper _cmIsSafe exists', /function _cmIsSafe\(/.test(app), true);
+  t.eq('panel: monthly-charge helper _cmMonthlyCharge exists', /function _cmMonthlyCharge\(/.test(app), true);
+  t.eq('panel: bulk approve-checked handler exists', /function approveCheckedClosedMonthPayments\(/.test(app), true);
+  t.eq('panel: bulk dismiss-checked handler exists', /function dismissCheckedClosedMonthPayments\(/.test(app), true);
+  t.eq('panel: select-all toggle exists', /function toggleAllClosedMonthChecks\(/.test(app), true);
+  t.eq('panel: renders per-row checkbox (cm-chk)', /class="cm-chk"/.test(app), true);
+  t.eq('panel: shows original bank note (🏦 מהבנק)', /🏦 מהבנק/.test(app), true);
+  t.eq('panel: shows why-here trigger (🏷️ למה כאן)', /🏷️ למה כאן/.test(app), true);
+  t.eq('panel: shows what-happens preview (👁️ אם תזקוף)', /👁️ אם תזקוף/.test(app), true);
+  t.eq('panel: batch approve reads only CHECKED+visible rows', /function _cmCheckedIndexes\(/.test(app), true);
+  // approveClosedMonthPayment must still POST to the SAME endpoint (server untouched)
+  t.eq('approve still posts apply-closed-month-payment (server unchanged)', /apply-closed-month-payment/.test(app), true);
+  // _cmIsSafe: exact-dues and clean multiples are safe; odd amounts are not.
+  {
+    var appScope = { data: { tenants:[{id:1,customAmount:200}], config:{amount:300} } };
+    var mkSafe = new Function('data','hit',
+      (app.match(/function _cmMonthlyCharge\([\s\S]*?\n}\n/)||[''])[0] +
+      (app.match(/function _cmIsSafe\([\s\S]*?\n}\n/)||[''])[0] +
+      '\n; return _cmIsSafe(hit);');
+    t.eq('_cmIsSafe: exact dues (200) → safe', mkSafe(appScope.data, {tenantId:1, charge:200}), true);
+    t.eq('_cmIsSafe: clean 3× dues (600) → safe', mkSafe(appScope.data, {tenantId:1, charge:600}), true);
+    t.eq('_cmIsSafe: odd amount (250 vs 200) → NOT safe', mkSafe(appScope.data, {tenantId:1, charge:250}), false);
+    t.eq('_cmIsSafe: odd amount (1050 vs 200) → NOT safe', mkSafe(appScope.data, {tenantId:1, charge:1050}), false);
+    t.eq('_cmIsSafe: zero/neg → NOT safe', mkSafe(appScope.data, {tenantId:1, charge:0}), false);
+  }
 }
 
 t.section('app.html — tenant CSV import (v2.14.6)');
@@ -942,6 +977,20 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('Hebrew header חוב_התחלתי → openingDebt', H.tenantHeaderToKey('חוב_התחלתי'), 'openingDebt');
   t.eq('English header customAmount → customAmount', H.tenantHeaderToKey('customAmount'), 'customAmount');
   t.eq('unknown header → null', H.tenantHeaderToKey('גיבריש'), null);
+  // v2.14.40 — gush/chelka is its OWN field, separate from the (numeric) aptNumber.
+  t.eq('Hebrew header גוש/חלקה → gushChelka', H.tenantHeaderToKey('גוש/חלקה'), 'gushChelka');
+  t.eq('Hebrew header גוש_חלקה → gushChelka', H.tenantHeaderToKey('גוש_חלקה'), 'gushChelka');
+  t.eq('English header gushChelka → gushChelka', H.tenantHeaderToKey('gushChelka'), 'gushChelka');
+  t.eq('מספר_דירה still → aptNumber (unchanged)', H.tenantHeaderToKey('מספר_דירה'), 'aptNumber');
+  {
+    // rowToFields keeps the slash in gushChelka but strips non-digits from aptNumber
+    var gKeys = ['name','phone','aptNumber','gushChelka'];
+    var gf = H.rowToFields(gKeys, ['דנה','0541112222','6','1234/56']);
+    t.eq('gushChelka preserves slash (1234/56)', gf.gushChelka, '1234/56');
+    t.eq('aptNumber still digit-only (6)', gf.aptNumber, '6');
+    var gf2 = H.rowToFields(gKeys, ['רון','0541112223','','7788/12']);
+    t.eq('gushChelka independent of aptNumber', gf2.gushChelka, '7788/12');
+  }
 
   // ── money parsing ──
   t.eq('empty money → default', H.parseMoneyCell('', 0).value, 0);
