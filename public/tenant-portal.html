@@ -644,6 +644,9 @@ function render(d) {
   renderUnifiedBreakdown(d, {
     mainLabel: (d.building && d.building.name) ? d.building.name
              : ((d.building && d.building.mainAccount) ? d.building.mainAccount : 'ועד הבית'),
+    // v2.14.40 — the account-TYPE label (ועד בית / ערבות הדדית) for the subtitle,
+    // independent of the building name shown as the headline.
+    mainAccountLabel: (d.building && d.building.mainAccount) ? d.building.mainAccount : 'חשבון ראשי',
     mainCurrent: c.amount,
     mainPaid: currentPaid,               // from server balance.status, not raw c.status
     mainPriorDebt: historyDebt,          // = c.priorDebt from the server (already ≥0)
@@ -992,10 +995,11 @@ function renderUnifiedBreakdown(d, main) {
   var grandTotal = 0;
 
   // ── Main account row ──
+  var _mainTypeLabel = main.mainAccountLabel || 'חשבון ראשי';
   if (main.mainPaid && main.mainPriorDebt <= 0) {
-    html += lineHtml(main.mainLabel, 'חשבון ראשי · החודש', '✅ שולם', 'var(--accent)', false);
+    html += lineHtml(main.mainLabel, _mainTypeLabel + ' · החודש', '✅ שולם', 'var(--accent)', false);
   } else {
-    var mainSub = 'חשבון ראשי · ' + money(main.mainCurrent) + ' ₪ החודש' +
+    var mainSub = _mainTypeLabel + ' · ' + money(main.mainCurrent) + ' ₪ החודש' +
       (main.mainPriorDebt > 0 ? ' + חוב קודם ' + money(main.mainPriorDebt) + ' ₪' : '');
     html += lineHtml(main.mainLabel, mainSub, money(main.mainAmountDue) + ' ₪', 'var(--text)', false);
     grandTotal += money(main.mainAmountDue);

@@ -181,6 +181,22 @@ t.eq('portal resolves building name from the user account',
 t.eq('portal payload uses the resolved building name',
   /building:\s*\{\s*name:\s*portalBuildingName/.test(srv), true);
 
+// ── v2.14.40 — portal subtitle uses the customer's account-TYPE label ──
+// The unified-breakdown subtitle used a HARDCODED "חשבון ראשי" so both a vaad and a
+// kibbutz showed "חשבון ראשי" regardless of the label the admin/customer set. Now the
+// subtitle uses main.mainAccountLabel, sourced from d.building.mainAccount (getLabels
+// applies the per-customer override). Headline stays the building name.
+t.eq('portal sends building.mainAccount from getLabels',
+  /building:\s*\{[^}]*mainAccount:\s*t\(getLabels\(d\.config\),\s*'mainAccount'\)/.test(srv), true);
+t.eq('portal derives mainAccountLabel from building.mainAccount',
+  /mainAccountLabel:\s*\(d\.building\s*&&\s*d\.building\.mainAccount\)\s*\?\s*d\.building\.mainAccount\s*:\s*'חשבון ראשי'/.test(portal), true);
+t.eq('portal subtitle no longer hardcodes "חשבון ראשי ·"',
+  /'חשבון ראשי · '/.test(portal), false);
+t.eq('portal subtitle composes from the type label var',
+  /_mainTypeLabel\s*\+\s*' · '/.test(portal), true);
+t.eq('getLabels iterates fallback keys so mainAccount override applies',
+  /Object\.keys\(fallback\)\.forEach/.test(srv), true);
+
 t.section('app.html — import month is self-contained (v2.13.17)');
 // The July/June mis-tag root cause: with an empty bankMonth, analyzeBankRows fell
 // back to getEffectiveMonth() = the global manualMonth, so importing an old month
