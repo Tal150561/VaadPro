@@ -951,14 +951,13 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
     t.eq('panel does NOT use undefined --text3', /var\(--text3\)/.test(panelFull), false);
     t.eq('panel row sets explicit visible color', /data-cm-row="1"[^>]*color:var\(--text\)/.test(panelFull), true);
     t.eq('panel name line sets explicit color', /font-size:0\.88rem;color:var\(--text\)/.test(panelFull), true);
-    // v2.14.40 hotfix#2 — the content column collapsed to width:0 (text spilled
-    // vertically, one glyph per line, 900px-tall blank rows) because it relied on
-    // flex:1;min-width:0 inside a .match-row whose class forced justify-content.
-    // Guard the working recipe: dropped the class, content uses flex:1 1 auto with a
-    // width seed so it grows to fill instead of collapsing.
+    // v2.14.40 hotfix#3 — the content column kept collapsing to width:0 under flex
+    // (flex-grow didn't expand it in the RTL context; text spilled one glyph per
+    // line into 900px-tall blank rows). Switched to CSS Grid, whose 1fr track is
+    // guaranteed the remaining space and cannot collapse the way a flex child did.
     t.eq('panel row does NOT reuse .match-row class (layout conflict)', /class="match-row"/.test(panelFull), false);
-    t.eq('panel content column uses flex:1 1 auto', /flex:1 1 auto;width:1px/.test(panelFull), true);
-    t.eq('panel checkbox is flex:0 0 auto (no grow/shrink surprise)', /class="cm-chk"[^>]*flex:0 0 auto/.test(panelFull), true);
+    t.eq('panel row uses grid (collapse-proof), not flex', /data-cm-row="1"[^>]*display:grid/.test(panelFull), true);
+    t.eq('panel grid gives content the 1fr track', /grid-template-columns:auto 1fr auto/.test(panelFull), true);
   }
   // approveClosedMonthPayment must still POST to the SAME endpoint (server untouched)
   t.eq('approve still posts apply-closed-month-payment (server unchanged)', /apply-closed-month-payment/.test(app), true);
