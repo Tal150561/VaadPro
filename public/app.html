@@ -5058,9 +5058,9 @@ function renderClosedMonthApprovals(hits){
         + (hit.note ? (hit.payerName?' · ':'') + '<span style="unicode-bidi:plaintext;">"'+esc(hit.note)+'"</span>' : '')
         + '</div>';
     }
-    rowsHtml += '<div class="match-row" data-cm-idx="'+i+'" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);color:var(--text);">'
-      + '<input type="checkbox" class="cm-chk" data-cm-chk="'+i+'" '+(safe?'checked':'')+' style="margin-top:3px;flex-shrink:0;transform:scale(1.2);cursor:pointer;">'
-      + '<div style="flex:1;min-width:0;color:var(--text);">'
+    rowsHtml += '<div data-cm-row="1" data-cm-idx="'+i+'" style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-top:1px solid rgba(255,255,255,.06);color:var(--text);">'
+      + '<input type="checkbox" class="cm-chk" data-cm-chk="'+i+'" '+(safe?'checked':'')+' style="margin-top:3px;flex:0 0 auto;transform:scale(1.2);cursor:pointer;">'
+      + '<div style="flex:1 1 auto;width:1px;min-width:0;color:var(--text);">'
       +   '<div style="font-size:0.88rem;color:var(--text);">💰 <b>'+ esc(hit.name||'') +'</b> — '+ (amt!=null?nis(amt):'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
       +     (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
       +   bankLine
@@ -5068,7 +5068,7 @@ function renderClosedMonthApprovals(hits){
       +     (safe? 'הסכום תואם דמי הוועד (סומן אוטומטית).' : '<span style="color:var(--warn);">סכום/הערה חריגים — בדוק לפני אישור.</span>') +'</div>'
       +   '<div style="font-size:0.76rem;color:var(--accent);margin-top:3px;">👁️ אם תזקוף: '+ preview(hit) +'</div>'
       + '</div>'
-      + '<div style="display:flex;flex-direction:column;gap:5px;flex-shrink:0;">'
+      + '<div style="display:flex;flex-direction:column;gap:5px;flex:0 0 auto;">'
       +   '<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="approveClosedMonthPayment('+i+')">✅ לזקוף</button>'
       +   '<button class="btn btn-sm btn-ghost" style="border:1px solid var(--border);background:transparent;color:var(--text);" onclick="dismissClosedMonthPayment('+i+')">התעלם</button>'
       + '</div></div>';
@@ -5098,14 +5098,14 @@ function renderClosedMonthApprovals(hits){
 function _cmCheckedIndexes(){
   var out = [];
   document.querySelectorAll('#closedMonthApprovals .cm-chk').forEach(function(cb){
-    var row = cb.closest('.match-row');
+    var row = cb.closest('[data-cm-row]');
     if (cb.checked && row && row.style.display !== 'none') out.push(parseInt(cb.getAttribute('data-cm-chk'),10));
   });
   return out;
 }
 function toggleAllClosedMonthChecks(on){
   document.querySelectorAll('#closedMonthApprovals .cm-chk').forEach(function(cb){
-    var row = cb.closest('.match-row');
+    var row = cb.closest('[data-cm-row]');
     if (row && row.style.display !== 'none') cb.checked = !!on;
   });
 }
