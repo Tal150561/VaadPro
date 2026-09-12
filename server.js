@@ -4608,6 +4608,83 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
   }
 });
 
+// ── POST /api/apply-ambiguous-match (v2.14.42) ──────────────────────
+// Resolve ONE row the AGENT parked in d.pendingAmbiguousMatches because a bank
+// line matched 2+ members with no tie-breaker. Unlike the closed-month endpoint
+// this does NOT reverse-accrue — the payment's month is OPEN, so it is recorded
+// exactly like a normal bank import to the tenant the OPERATOR picked. The row is
+// then removed from the queue. Idempotency + the manual/agent overlap are handled
+// by the shared bank fingerprint: if the same row was already written by a manual
+// import, its fingerprint is in importedBankFingerprints and we treat this as a
+// no-op drop (never a double-write).
+app.post('/api/apply-ambiguous-match', authMiddleware, (req, res) => {
+  try {
+    const { rowKey, tenantId, decision } = req.body || {};
+    if (!rowKey) return res.status(400).json({ ok: false, error: 'rowKey נדרש' });
+    if (decision !== 'ignore' && !tenantId) return res.status(400).json({ ok: false, error: 'tenantId נדרש לשיוך' });
+
+    const d = loadTenantData(req.user.tenantId);
+    const queue = Array.isArray(d.pendingAmbiguousMatches) ? d.pendingAmbiguousMatches : [];
+    // rowKey identifies the queued row (rowIdx+amount+date+payer+scope), same shape
+    // the agent de-dupes on, so it is stable across reloads.
+    const keyOf = h => [h.rowIdx, h.amount, h.date || '', h.payerName || '', h.scope || 'main'].join('|');
+    const row = queue.find(h => keyOf(h) === rowKey);
+    if (!row) return res.json({ ok: true, applied: false, notFound: true, note: 'השורה כבר טופלה או הוסרה' });
+
+    // Shared-fingerprint overlap guard: if a manual import already wrote this row,
+    // its fingerprint is present → do NOT write again, just drop from the queue.
+    const fpList = Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : [];
+    const fp = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '', '');
+    const fpLegacy = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '');
+    const alreadyWritten = fpList.includes(fp) || fpList.includes(fpLegacy);
+
+    let applied = false, tenant = null;
+    if (decision !== 'ignore' && !alreadyWritten) {
+      const tid = String(tenantId);
+      tenant = (d.tenants || []).find(t => String(t.id) === tid);
+      if (!tenant) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+
+      // Resolve the payment's month from its date (fallback: current month), Hebrew key.
+      const mk = bankRowMonthKey(row.date) || getMonthKey(d.config);
+      const heb = HEBREW_MONTHS[parseInt(String(mk).split('-')[1]) - 1];
+      const slKey = tid + '_' + heb;
+
+      // ACCUMULATE onto any existing amount for this tenant-month (same rule as the
+      // manual ambiguous-apply: two rows to one member, or agent-on-top-of-existing,
+      // must sum — never overwrite).
+      const cur = String((d.sentLog || {})[slKey] || '');
+      const m = cur.match(/bank_import_[^_]+_([\d.]+)_/) || cur.match(/manual_paid_([\d.]+)/);
+      const prev = m ? (parseFloat(m[1]) || 0) : 0;
+      const accrued = Math.round((prev + (parseFloat(row.amount) || 0)) * 100) / 100;
+      if (!d.sentLog) d.sentLog = {};
+      d.sentLog[slKey] = `bank_import_${new Date().toISOString()}_${accrued}_payer_${row.payerName || ''}`;
+
+      // paymentHistory record for the resolved tenant + month.
+      const tdForHistory = { paymentHistory: d.paymentHistory || (d.paymentHistory = {}) };
+      const rate = resolveTariffRate(tenant, d.defaultTariffs, mk, (tenant.customAmount) || (d.config && d.config.amount) || 300);
+      recordPayment(tdForHistory, tid, mk, 'bank', rate, tenant.name, row.payerName || '', row.amount);
+
+      // Persist the fingerprint so a later manual/agent run won't re-import this row.
+      if (!fpList.includes(fp)) fpList.push(fp);
+      d.importedBankFingerprints = fpList.length > 5000 ? fpList.slice(fpList.length - 5000) : fpList;
+      applied = true;
+    }
+
+    // Drop the row from the queue in every branch (assigned, ignored, or already-written).
+    d.pendingAmbiguousMatches = queue.filter(h => keyOf(h) !== rowKey);
+
+    const savePatch = { pendingAmbiguousMatches: d.pendingAmbiguousMatches };
+    if (applied) { savePatch.sentLog = d.sentLog; savePatch.paymentHistory = d.paymentHistory; savePatch.importedBankFingerprints = d.importedBankFingerprints; }
+    saveTenantData(req.user.tenantId, savePatch);
+
+    return res.json({ ok: true, applied, alreadyWritten, decision: decision || 'assign',
+                      tenantName: tenant ? tenant.name : null, remaining: d.pendingAmbiguousMatches.length });
+  } catch (e) {
+    console.error('[apply-ambiguous-match]', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 // ====================================================================
 // SECTION 14 — MONTH CLOSE  (⚠️ DEBT ACCRUAL)
 // closeMonthUnpaid is the ONLY place unpaid balances accrue into
@@ -7521,10 +7598,28 @@ app.post('/api/bank-mapping', authMiddleware, (req, res) => {
 });
 
 // ── POST /api/import-bank ──────────────────────────────────────────
+// ── POST /api/banksync-pause (v2.14.42) ─────────────────────────────
+// Toggle the agent pause flag. Body: { paused: true|false }. authMiddleware (the
+// operator), not bankSyncAuth — this is the human turning the agent off/on.
+app.post('/api/banksync-pause', authMiddleware, (req, res) => {
+  try {
+    const paused = !!(req.body && req.body.paused);
+    saveTenantData(req.user.tenantId, { bankSyncPaused: paused });
+    return res.json({ ok: true, paused });
+  } catch (e) {
+    console.error('[banksync-pause]', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ ok: false, error: 'No file uploaded' });
     const d = loadTenantData(req.user.tenantId);
+    // v2.14.42: operator can PAUSE the agent to avoid colliding with a manual import
+    // in progress. The agent runs locally but uploads here, so gating at the endpoint
+    // stops it regardless. Manual imports (POST /api/data) are unaffected.
+    if (d.bankSyncPaused) return res.status(423).json({ ok: false, paused: true, error: 'BankSync מושהה ידנית — הייבוא האוטומטי מושבת זמנית.' });
     if (!d.bankMapping) return res.status(400).json({ ok: false, error: 'No bank mapping saved. Open VaadPro and click BankSync button first.' });
 
     const wb   = XLSX.read(req.file.buffer, { type: 'buffer' });

@@ -1731,7 +1731,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.41';
+const HTML_VERSION = '2.14.42';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2103,6 +2103,8 @@ async function loadData() {
     try { sessionStorage.setItem('vaad_data_backup', JSON.stringify(data)); } catch(e){}
     // טען נתוני חשבונות נוספים
     loadAccountsIfNeeded().catch(function(){});
+    // v2.14.42: surface the agent's queued ambiguous rows (if any) for manual decision.
+    try { renderPendingAmbiguousQueue(); } catch(e) { console.warn('ambiguous queue render skipped:', e); }
   } catch(e) {
     // השרת לא זמין – נסה לטעון מגיבוי מקומי
     try {
@@ -5410,6 +5412,97 @@ function resolveAmbiguousRow(i, tenantId){
   // dim the buttons on this row to show the choice is locked (re-clickable to change)
   var rowEl = document.querySelector('[data-amb-row="'+i+'"]');
   if (rowEl) rowEl.querySelectorAll('button').forEach(function(b){ b.style.opacity = '0.55'; });
+}
+
+// ── v2.14.42: AGENT ambiguous-queue panel ──────────────────────────────────
+// The BankSync agent parks rows it can't resolve into data.pendingAmbiguousMatches
+// (it never guesses). This panel surfaces them on page load so the operator can
+// decide each one — mirroring the inline manual panel, but sourced from the server
+// queue and applied via POST /api/apply-ambiguous-match (which accumulates + drops
+// the row). CRITICAL overlap guard: a row whose fingerprint is already in
+// data.importedBankFingerprints was written by a manual import in the meantime, so
+// we HIDE it here (and the endpoint also no-ops it) — no double decision, no
+// double write. This is what makes running the agent + manual imports in parallel
+// safe.
+function _ambRowKey(h){ return [h.rowIdx, h.amount, h.date||'', h.payerName||'', h.scope||'main'].join('|'); }
+function _ambRowFp(h){
+  // mirror bankRowFingerprint (3-part, no ref) for the overlap check
+  var dd = String(h.date||'').trim().toLowerCase().replace(/\s+/g,' ');
+  var aa = String(Math.round((parseFloat(h.amount)||0)*100)/100);
+  var nn = String(h.rawText||h.payerName||'').trim().toLowerCase().replace(/\s+/g,' ');
+  return dd+'|'+aa+'|'+nn;
+}
+function renderPendingAmbiguousQueue(){
+  var box = document.getElementById('pendingAmbiguousQueue');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'pendingAmbiguousQueue';
+    var anchor = document.getElementById('bankSyncStatus') || document.getElementById('bankResult');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+    else document.body.appendChild(box);
+  }
+  var queue = (data && Array.isArray(data.pendingAmbiguousMatches)) ? data.pendingAmbiguousMatches : [];
+  // overlap guard: hide rows already written by a manual import (fingerprint present)
+  var fpSet = new Set((data && Array.isArray(data.importedBankFingerprints)) ? data.importedBankFingerprints : []);
+  var rows = queue.filter(function(h){ return !fpSet.has(_ambRowFp(h)); });
+  if (!rows.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var isKib = (data.config && data.config.orgType === 'kibbutz');
+  var distLabel = isKib ? 'גוש/חלקה' : 'דירה';
+  var nis = function(v){ return (Math.round((parseFloat(v)||0)*100)/100) + ' ₪'; };
+  var distOf = function(t){ if(!t) return ''; var dd=isKib?(t.gushChelka||''):(t.aptNumber||''); return dd?(distLabel+' '+dd):('ללא '+distLabel); };
+  var h = '<div style="margin:12px 0;padding:14px;border-radius:12px;background:var(--card2,#161b22);border:1px solid var(--warn,#e3b341);">';
+  h += '<div style="font-weight:700;margin-bottom:6px;color:var(--warn,#e3b341);">🤖 ' + rows.length + ' תשלומים מהסוכן האוטומטי דורשים הכרעה</div>';
+  h += '<div style="font-size:0.8rem;color:var(--text2,#8b949e);margin-bottom:10px;">הסוכן זיהה תשלומים שמתאימים ליותר מדייר אחד ולא הכריע לבד. בחר למי לזקוף כל אחד, או התעלם.</div>';
+  rows.forEach(function(r){
+    var key = _ambRowKey(r);
+    var bankLine = '🏦 <span style="unicode-bidi:plaintext;">"' + esc(r.rawText||r.payerName||'') + '"</span>'
+      + (r.note ? ' · <span style="unicode-bidi:plaintext;color:var(--text2);">"' + esc(r.note) + '"</span>' : '');
+    h += '<div data-paq-row="' + esc(key) + '" style="padding:10px 0;border-top:1px solid rgba(255,255,255,.07);">';
+    h += '<div style="font-size:0.9rem;color:var(--text);margin-bottom:2px;">💰 <b>' + nis(r.amount) + '</b>' + (r.date?(' <span style="color:var(--text2);font-size:0.78rem;">('+esc(r.date)+')</span>'):'') + '</div>';
+    h += '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:8px;">' + bankLine + '</div>';
+    h += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">';
+    (r.candidates||[]).forEach(function(c){
+      var t = (data.tenants||[]).filter(function(x){ return x.id === c.id; })[0];
+      h += '<button onclick="decidePendingAmbiguous(' + JSON.stringify(key) + ',' + JSON.stringify(c.id) + ')" '
+        + 'style="background:var(--accent,#25D366);color:#04210f;border:none;border-radius:8px;padding:6px 10px;font-size:0.82rem;font-weight:600;cursor:pointer;">'
+        + 'זקוף ל־' + esc(c.name||'') + ' <span style="opacity:.7;font-weight:400;">(' + esc(distOf(t)) + ')</span></button>';
+    });
+    h += '<button onclick="decidePendingAmbiguous(' + JSON.stringify(key) + ',null)" '
+      + 'style="background:transparent;color:var(--text2,#8b949e);border:1px solid var(--border,#30363d);border-radius:8px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">התעלם</button>';
+    h += '<span data-paq-status style="font-size:0.8rem;color:var(--accent,#25D366);"></span>';
+    h += '</div></div>';
+  });
+  h += '</div>';
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
+
+async function decidePendingAmbiguous(rowKey, tenantId){
+  var rowEl = document.querySelector('[data-paq-row="'+CSS.escape(rowKey)+'"]');
+  var statusEl = rowEl ? rowEl.querySelector('[data-paq-status]') : null;
+  try {
+    var res = await fetch('/api/apply-ambiguous-match', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('vp_token') || '') },
+      body: JSON.stringify({ rowKey: rowKey, tenantId: tenantId, decision: (tenantId==null?'ignore':'assign') })
+    });
+    var d = await res.json();
+    if (!d.ok) throw new Error(d.error || 'שגיאה');
+    // update local queue so a re-render doesn't show the handled row
+    if (data && Array.isArray(data.pendingAmbiguousMatches)) {
+      data.pendingAmbiguousMatches = data.pendingAmbiguousMatches.filter(function(h){ return _ambRowKey(h) !== rowKey; });
+    }
+    if (d.alreadyWritten) toast('ℹ️ השורה כבר נרשמה בייבוא ידני — הוסרה מהתור', 'info');
+    else if (d.applied) toast('✅ שויך ל־' + (d.tenantName||'') , 'success');
+    else toast('🚫 דולג', 'info');
+    if (rowEl) rowEl.remove();
+    // if queue emptied, clear the panel
+    renderPendingAmbiguousQueue();
+    render();
+  } catch(e) {
+    if (statusEl) { statusEl.textContent = '❌ ' + e.message; statusEl.style.color = 'var(--danger,#e33)'; }
+    else toast('❌ ' + e.message, 'error');
+  }
 }
 
 function renderClosedMonthApprovals(hits){
@@ -10174,8 +10267,36 @@ async function loadBankSyncStatus() {
       alreadySeg +
       `<span style="color:var(--danger,#e33)">❌ ${r.unmatched} לא זוהו</span> &nbsp;` +
       `<span style="color:var(--text-muted)">(${r.month})</span>` +
-      `<button onclick="loadBankSyncStatus()" style="margin-right:10px;background:none;border:none;cursor:pointer;font-size:0.78rem;color:var(--text-muted);">🔄 רענן</button>`;
+      `<button onclick="loadBankSyncStatus()" style="margin-right:10px;background:none;border:none;cursor:pointer;font-size:0.78rem;color:var(--text-muted);">🔄 רענן</button>` +
+      _bankSyncPauseToggleHTML();
   } catch(_) {}
+}
+
+// v2.14.42: agent pause toggle. Reads the flag from the loaded data (window.data),
+// renders a "פעיל / מושהה" pill, and flips it via /api/banksync-pause. When paused,
+// the agent's POST /api/import-bank is rejected server-side — useful while you run a
+// manual import to avoid the two paths colliding on the same file.
+function _bankSyncPauseToggleHTML() {
+  var paused = !!(typeof data !== 'undefined' && data && data.bankSyncPaused);
+  if (paused) {
+    return `<button onclick="toggleBankSyncPause(false)" title="הפעל מחדש את הסוכן האוטומטי" style="margin-right:10px;background:rgba(227,179,65,.15);border:1px solid var(--warn,#e3b341);color:var(--warn,#e3b341);border-radius:12px;padding:2px 10px;font-size:0.72rem;cursor:pointer;">⏸️ מושהה — הפעל</button>`;
+  }
+  return `<button onclick="toggleBankSyncPause(true)" title="השהה את הסוכן האוטומטי (למשל בזמן ייבוא ידני)" style="margin-right:10px;background:rgba(37,211,102,.12);border:1px solid var(--accent,#25D366);color:var(--accent,#25D366);border-radius:12px;padding:2px 10px;font-size:0.72rem;cursor:pointer;">▶️ פעיל — השהה</button>`;
+}
+
+async function toggleBankSyncPause(paused) {
+  try {
+    const res = await fetch('/api/banksync-pause', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + (localStorage.getItem('vp_token') || '') },
+      body: JSON.stringify({ paused: paused })
+    });
+    const resp = await res.json();
+    if (!resp.ok) throw new Error(resp.error || 'שגיאה');
+    if (typeof data !== 'undefined' && data) data.bankSyncPaused = resp.paused;
+    toast(resp.paused ? '⏸️ הסוכן האוטומטי הושהה' : '▶️ הסוכן האוטומטי הופעל', resp.paused ? 'warn' : 'success');
+    loadBankSyncStatus();
+  } catch(e) { toast('❌ ' + e.message, 'error'); }
 }
 
 
