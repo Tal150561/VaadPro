@@ -99,7 +99,7 @@ function loadBankAnalyzer() {
   const splitMonths = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
     + (splitMonths ? splitMonths[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'analyzeBankRowsServer'])
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'analyzeBankRowsServer'])
     + 'module.exports={getMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,analyzeBankRowsServer};';
   return runInSandbox(code);
 }

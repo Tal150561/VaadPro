@@ -589,7 +589,8 @@ function vpLogout() {
     </div>
 
     <div class="card">
-      <div class="card-header" id="tenantsListHeader" style="cursor:pointer;user-select:none;" onclick="toggleSection('tenantsList')">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsCSV()">📥 ייצא CSV</button><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsExcel()" style="margin-right:6px;">📤 ייצא אקסל</button><span id="tenantsListIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
+      <div class="card-header" id="tenantsListHeader" style="cursor:pointer;user-select:none;" onclick="toggleSection('tenantsList')">📋 רשימת דיירים<div class="spacer"></div><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsCSV()">📥 ייצא CSV</button><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();exportTenantsExcel()" style="margin-right:6px;">📤 ייצא אקסל</button><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();checkKeywordUniqueness()" style="margin-right:6px;" title="מציג מילות חיפוש המשותפות לכמה דיירים">🔎 בדוק מילות חיפוש</button><span id="tenantsListIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▼ כווץ</span></div>
+      <div id="kwUniqueReport" style="display:none;margin:10px 0;padding:12px;border-radius:10px;background:var(--card2,#161b22);border:1px solid var(--border,#30363d);font-size:0.85rem;"></div>
       <div id="tenantsListBody" style="display:block;">
         <div style="padding:10px 0 12px;">
           <input type="text" id="tenantSearch" placeholder="🔎 חיפוש לפי שם, מילות חיפוש, טלפון, מייל, סכום או סטטוס..." oninput="onTenantSearch(this.value)" onclick="event.stopPropagation()" style="width:100%;height:34px;font-size:0.84rem;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface2);color:var(--text);">
@@ -1730,7 +1731,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.40';
+const HTML_VERSION = '2.14.41';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2606,6 +2607,20 @@ async function addTenant() {
   const suspended = suspEl ? suspEl.checked : false;
   const newT={id:Date.now(),name:name,phone:phone,email:email||'',keywords:kw,customAmount:customAmount||null,openingDebt:openingDebt||0,propertyLabel:propertyLabel||'',aptNumber:aptNumber||'',gushChelka:gushChelka||''};
   if (suspended) newT.suspended = true;
+  // v2.14.41 (B): soft heads-up if this member's keyword(s) already belong to
+  // another member. NOT blocking — shared keywords are legitimate (two כהן);
+  // the tiered matcher separates them by other signals, and truly-tied rows go
+  // to the import decision panel. We just nudge the user to add a distinguisher.
+  if (kw) {
+    try {
+      var _coll = findKeywordCollisions(data.tenants, { extraKeywords: kw, extraName: name });
+      if (_coll.length) {
+        var _isKib = (data.config && data.config.orgType === 'kibbutz');
+        var _kws = _coll.map(function(c){ return '"' + c.keyword + '"'; }).join(', ');
+        toast('ℹ️ מילת חיפוש משותפת לדייר קיים: ' + _kws + ' — כדאי להוסיף מבחין (' + (_isKib ? 'גוש/חלקה' : 'מס׳ דירה') + '). נשמר בכל זאת.');
+      }
+    } catch(e){ console.warn('keyword-collision check skipped:', e); }
+  }
   data.tenants.push(newT);
   document.getElementById('inName').value='';document.getElementById('inPhone').value='';document.getElementById('inEmail').value='';document.getElementById('inKeywords').value='';document.getElementById('inCustomAmount').value='';document.getElementById('inOpeningDebt').value='';document.getElementById('inPropertyLabel').value='';document.getElementById('inAptNumber').value='';if(document.getElementById('inGushChelka'))document.getElementById('inGushChelka').value='';if(suspEl)suspEl.checked=false;
   const saveR = await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(r=>r.json()).catch(()=>({ok:true}));
@@ -2691,6 +2706,18 @@ async function saveEdit(id) {
   const susp = suspEl ? suspEl.checked : (t.suspended===true);
   t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';t.gushChelka=gush||'';
   if (susp) t.suspended = true; else delete t.suspended;
+  // v2.14.41 (B): soft heads-up if the edited keywords now collide with another
+  // member (excludeId=this member so we compare against OTHERS). Non-blocking.
+  if (k) {
+    try {
+      var _coll = findKeywordCollisions(data.tenants, { excludeId: id, extraKeywords: k, extraName: n, extraId: id });
+      if (_coll.length) {
+        var _isKib = (data.config && data.config.orgType === 'kibbutz');
+        var _kws = _coll.map(function(c){ return '"' + c.keyword + '"'; }).join(', ');
+        toast('ℹ️ מילת חיפוש משותפת לדייר אחר: ' + _kws + ' — כדאי להוסיף מבחין (' + (_isKib ? 'גוש/חלקה' : 'מס׳ דירה') + ').');
+      }
+    } catch(e){ console.warn('keyword-collision check skipped:', e); }
+  }
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
   render();
@@ -2779,6 +2806,48 @@ function exportTenantsExcel() {
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
   toast('📤 קובץ Excel יוצא!','success');
+}
+
+// v2.14.41 (B): on-demand report of search-keywords shared by 2+ members. This
+// is the "show potential duplicates in the member file" view. Shared keywords
+// are NOT an error — the tiered bank matcher separates members by other signals
+// and truly-tied rows go to the import decision panel — so this only SUGGESTS
+// adding a distinguisher (apt number / gush-chelka). Never blocks anything.
+function checkKeywordUniqueness() {
+  var box = document.getElementById('kwUniqueReport');
+  if (!box) return;
+  function _closeBtn(){ return '<button onclick="closeKeywordUniqueness()" title="סגור" style="background:none;border:none;color:var(--text2,#8b949e);font-size:1.1rem;cursor:pointer;line-height:1;padding:0 4px;">✕</button>'; }
+  var coll = findKeywordCollisions(data.tenants);
+  var isKib = (data.config && data.config.orgType === 'kibbutz');
+  var distLabel = isKib ? 'גוש/חלקה' : 'מספר דירה';
+  if (!coll.length) {
+    box.innerHTML = '<div style="display:flex;align-items:flex-start;gap:8px;"><span style="color:var(--accent,#25D366);flex:1;">✓ כל מילות החיפוש ייחודיות — אין חפיפה שתדרוש הכרעה ידנית.</span>' + _closeBtn() + '</div>';
+    box.style.display = 'block';
+    return;
+  }
+  // sort by number of sharers desc, then keyword
+  coll.sort(function(a,b){ return b.members.length - a.members.length || (a.keyword < b.keyword ? -1 : 1); });
+  var h = '<div style="display:flex;align-items:flex-start;gap:8px;"><div style="font-weight:600;margin-bottom:8px;flex:1;">⚠️ ' + coll.length + ' מילות חיפוש משותפות שעלולות לדרוש הכרעה</div>' + _closeBtn() + '</div>';
+  h += '<div style="color:var(--text2,#8b949e);margin-bottom:10px;font-size:0.8rem;">זה תקין כשלכמה דיירים שם דומה. כדי שהמערכת תדע לשייך תשלום נכון — הוסף להם ' + distLabel + ' שונה. תשלום שלא ניתן להכריע יופיע ממילא בפאנל ההכרעה בייבוא הבנק.</div>';
+  h += '<table style="width:100%;border-collapse:collapse;font-size:0.82rem;">';
+  h += '<tr style="text-align:right;color:var(--text2,#8b949e);"><th style="padding:4px 6px;">מילת חיפוש</th><th style="padding:4px 6px;">דיירים</th></tr>';
+  coll.forEach(function(c){
+    var names = c.members.map(function(m){
+      var t = data.tenants.filter(function(x){ return x.id === m.id; })[0];
+      var dist = t ? (isKib ? (t.gushChelka||'') : (t.aptNumber||'')) : '';
+      return (m.name || '—') + (dist ? ' <span style="color:var(--text3,#6e7681);">(' + distLabel + ' ' + dist + ')</span>' : ' <span style="color:var(--warn,#e3b341);">(ללא ' + distLabel + ')</span>');
+    }).join('، ');
+    h += '<tr style="border-top:1px solid var(--border,#30363d);"><td style="padding:6px;font-weight:600;">' + c.keyword + '</td><td style="padding:6px;">' + names + '</td></tr>';
+  });
+  h += '</table>';
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
+
+// v2.14.41 (B): dismiss the keyword-uniqueness report panel.
+function closeKeywordUniqueness() {
+  var box = document.getElementById('kwUniqueReport');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
 }
 
 // ── PURE HELPERS (extracted + mutation-tested; no DOM, no I/O) ──────
@@ -3366,6 +3435,121 @@ function getEffectiveMonth() {
 // viewMonthOverride: null = חודש פעיל; אחרת שם חודש עברי לתצוגה בלבד
 let viewMonthOverride = null;
 const VP_MONTHS = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+
+// ── v2.14.41 tiered bank-row matcher + (B) keyword-uniqueness ──────────────
+// ⚠️ DUPLICATED VERBATIM from scripts/lib-match-score.js and server.js. The
+// bodies of kwMatchCount/scoreTenantRowMatch/compareScore/resolveRowCandidates/
+// findKeywordCollisions must stay md5-identical across all three (same rule as
+// splitOverpayAcrossMonths/kwMatches/bankRowFingerprint). See that lib for the
+// full design rationale. In brief: score each (row,tenant) into a QUALITY TIER
+// (apt 4 > name 3 > keyword-COUNT 2 > phone 1), compare tier-first (a stronger
+// tier dominates, never summed); a row with ≥2 candidates tied at the top
+// [tier,kwCount] is AMBIGUOUS → panel, a lone top wins silently. findKeyword-
+// Collisions is the setup-time SOFT warning for shared keywords (never blocks).
+function kwMatchCount(kws, rt) {
+  if (!kws || !kws.length) return 0;
+  var n = 0;
+  for (var i = 0; i < kws.length; i++) {
+    var k = kws[i];
+    if (!k || k.length < 2) continue;
+    var esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?:^|[\\s,/(-])' + esc + '(?=[\\s,/)-]|$)').test(rt)) n++;
+  }
+  return n;
+}
+function scoreTenantRowMatch(fields, rt, rtDigits, noteApts, aptBlocked) {
+  var kw = fields.kw || [];
+  var ps = fields.ps || '';
+  var nameParts = fields.nameParts || [];
+  var aptNum = fields.aptNum || '';
+  var kwCount = kwMatchCount(kw, rt);
+  var phoneHit = !!(ps && rtDigits.indexOf(ps) >= 0);
+  var uniqParts = nameParts.filter(function (p, i) { return nameParts.indexOf(p) === i; });
+  var nameHit = uniqParts.length >= 2 && uniqParts.every(function (p) { return rt.indexOf(p) >= 0; });
+  var nameBasisMatch = (kwCount > 0) || phoneHit || nameHit;
+  if (aptNum && noteApts.indexOf(aptNum) >= 0 && nameBasisMatch) {
+    return { tier: 4, kwCount: kwCount, matchType: 'apt' };
+  }
+  if (aptBlocked) return null;
+  if (nameHit)      return { tier: 3, kwCount: kwCount, matchType: 'name' };
+  if (kwCount > 0)  return { tier: 2, kwCount: kwCount, matchType: 'keyword' };
+  if (phoneHit)     return { tier: 1, kwCount: kwCount, matchType: 'phone' };
+  return null;
+}
+function compareScore(a, b) {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.tier === 2 && b.tier === 2) return a.kwCount - b.kwCount;
+  return 0;
+}
+function resolveRowCandidates(candidates) {
+  if (!candidates || !candidates.length) return { winner: null, ambiguous: false, top: [] };
+  var best = candidates[0];
+  for (var i = 1; i < candidates.length; i++) {
+    if (compareScore(candidates[i].score, best.score) > 0) best = candidates[i];
+  }
+  var top = candidates.filter(function (c) { return compareScore(c.score, best.score) === 0; });
+  if (top.length === 1) return { winner: top[0].id, ambiguous: false, top: top };
+  return { winner: null, ambiguous: true, top: top };
+}
+function findKeywordCollisions(tenants, opts) {
+  opts = opts || {};
+  var map = {};    // keyword → [{id,name}]
+  var kwSets = {}; // member id → { keyword: 1 }
+  function addMember(id, name, kwString) {
+    if (opts.excludeId != null && id === opts.excludeId) return;
+    var kws = String(kwString || '').split(',')
+      .map(function (k) { return k.trim().toLowerCase(); }).filter(Boolean);
+    var seen = {};
+    kwSets[id] = kwSets[id] || {};
+    kws.forEach(function (k) {
+      if (k.length < 2 || seen[k]) return;
+      seen[k] = 1;
+      kwSets[id][k] = 1;
+      (map[k] = map[k] || []).push({ id: id, name: name || '' });
+    });
+  }
+  (tenants || []).forEach(function (t) { addMember(t.id, t.name, t.keywords); });
+  if (opts.extraKeywords != null) {
+    addMember(opts.extraId != null ? opts.extraId : '__new__', opts.extraName || '', opts.extraKeywords);
+  }
+  var out = [];
+  Object.keys(map).forEach(function (k) {
+    var sharers = map[k];
+    if (sharers.length < 2) return;
+    var everySeparable = sharers.every(function (mem) {
+      var mine = kwSets[mem.id] || {};
+      return Object.keys(mine).some(function (w) {
+        if (w === k) return false;
+        return !sharers.some(function (other) {
+          return other.id !== mem.id && (kwSets[other.id] || {})[w];
+        });
+      });
+    });
+    if (!everySeparable) out.push({ keyword: k, members: sharers });
+  });
+  return out;
+}
+// Global twin of the tenant-loop-scoped extractAptNumbersFromNote — needed by the
+// v2.14.41 row-centric pre-pass, which runs before that loop. MUST stay identical
+// to the nested copy (RTL-safe; requireDira; 1–3 standalone digits).
+function extractAptNumbersFromNoteGlobal(note) {
+  if (!note) return [];
+  var s = String(note);
+  if (!/דיר[הת]/.test(s)) return [];
+  var nums = s.match(/(?:^|[^\d])(\d{1,3})(?![\d])/g);
+  if (!nums) return [];
+  return nums.map(function(x){ return x.replace(/\D/g,''); }).filter(Boolean);
+}
+// Global twin of the analyzeBankRows-scoped bankRowFingerprint — needed by
+// commitBankImport (v2.14.41 ambiguous-row apply), which runs outside that
+// function's scope. MUST stay identical to the nested copy + server bankRowFingerprint.
+function bankRowFingerprintGlobal(dateVal, amount, nameOrDesc, ref) {
+  var dd = String(dateVal||'').trim().toLowerCase().replace(/\s+/g,' ');
+  var aa = String(Math.round((parseFloat(amount)||0)*100)/100);
+  var nn = String(nameOrDesc||'').trim().toLowerCase().replace(/\s+/g,' ');
+  var rr = String(ref==null?'':ref).trim().toLowerCase().replace(/\s+/g,' ');
+  return rr ? (dd+'|'+aa+'|'+nn+'|'+rr) : (dd+'|'+aa+'|'+nn);
+}
 
 // ── סגירת חודש קודם ידנית (v2.14.8) ─────────────────────────────
 // מפעיל את צבירת החוב של החודש הקודם על פי דרישה, במקום לחכות ל-cron של
@@ -4638,6 +4822,56 @@ function splitOverpayAcrossMonths(buckets, opts) {
       .filter(Boolean)
   );
 
+  // ── v2.14.41 (A) ROW-CENTRIC PRE-PASS — ambiguity + best-match resolution ──
+  // The legacy loop below is tenant-centric + first-match-wins: whoever appears
+  // first in the list claims a matching row, silently. That misassigns a row that
+  // several members could match (בן קרטר bug) and can't tell "בן,קרטר"=2 beats
+  // "קרטר"=1. This pre-pass fixes both WITHOUT rewriting the loop's dedup/apt-note
+  // machinery: for every row it scores EVERY tenant with the shared tiered engine
+  // (apt>name>keyword-COUNT>phone), then decides a single winner or flags the row
+  // AMBIGUOUS (≥2 candidates tied at the top). The loop then only lets the WINNER
+  // claim a row; ambiguous rows are collected once into _ambiguousRows and never
+  // written — they go to the decision panel. Clean rows are untouched, so a file
+  // with zero contention imports EXACTLY as before.
+  var _tenantFields = data.tenants.map(function(t){
+    return {
+      id: t.id, tenant: t,
+      kw: t.keywords ? t.keywords.split(',').map(function(k){return k.trim().toLowerCase();}).filter(Boolean) : [],
+      ps: (t.phone||'').replace(/\D/g,'').slice(-7),
+      nameParts: (t.name||'').trim().toLowerCase().split(/\s+/).filter(function(p){return p.length>1;}),
+      aptNum: (t.aptNumber!=null)?String(t.aptNumber).replace(/\D/g,''):''
+    };
+  });
+  // rowIdx → { winnerId, ambiguous, candidates:[{id,name,score,tenant}] }
+  var _rowVerdict = {};
+  mr.forEach(function(m){
+    var rt = (m.nameVal ? m.nameVal : m.row.join(' ')).toLowerCase();
+    var rtDigits = m.row.join(' ').toLowerCase().replace(/\D/g,'');
+    var noteApts = extractAptNumbersFromNoteGlobal(m.noteVal||'');
+    // aptBlocked per tenant: note names ANOTHER existing tenant's apt whose owner
+    // also matches this row by name/keyword/phone (the v2.14.24 guard). Compute a
+    // helper that answers it for a given tenant's aptNum.
+    var cands = [];
+    _tenantFields.forEach(function(tf){
+      var aptBlocked = noteApts.some(function(n){
+        return n !== tf.aptNum && _tenantFields.some(function(o){
+          if (o.id === tf.id || o.aptNum !== n) return false;
+          // does OTHER tenant o match this row by name/keyword/phone?
+          var oc = kwMatchCount(o.kw, rt) > 0 ||
+                   (o.ps && rtDigits.indexOf(o.ps) >= 0) ||
+                   (o.nameParts.length>=2 && o.nameParts.every(function(p){return rt.indexOf(p)>=0;}));
+          return oc;
+        });
+      }) && !(tf.aptNum && noteApts.indexOf(tf.aptNum) >= 0);
+      var sc = scoreTenantRowMatch(tf, rt, rtDigits, noteApts, aptBlocked);
+      if (sc) cands.push({ id: tf.id, name: tf.tenant.name, score: sc, tenant: tf.tenant });
+    });
+    var verdict = resolveRowCandidates(cands);
+    _rowVerdict[m.rowIdx] = { winnerId: verdict.winner, ambiguous: verdict.ambiguous, candidates: cands, top: verdict.top };
+  });
+  var _ambiguousRows = [];       // rows that need a manual decision (2+ tied candidates)
+  var _ambiguousSeen = new Set(); // rowIdx already queued (collect once, not per-tenant)
+
   data.tenants.forEach(function(tenant){
     const kw=tenant.keywords
       ? tenant.keywords.split(',').map(function(k){return k.trim().toLowerCase();}).filter(Boolean)
@@ -4746,6 +4980,31 @@ function splitOverpayAcrossMonths(buckets, opts) {
       }
 
       if(type){
+        // ── v2.14.41 (A): consult the row-centric verdict before claiming. ──
+        // The legacy tenant-centric loop would let the FIRST matching tenant claim
+        // the row. Now a row is claimed only by its resolved WINNER; an ambiguous
+        // row (2+ tied candidates) is queued ONCE for the decision panel and never
+        // written. This is the safety net for everything apt-note can't auto-solve.
+        var _vd = _rowVerdict[m.rowIdx];
+        if (_vd) {
+          if (_vd.ambiguous) {
+            // block ALL tenants from this row; collect it once for the panel.
+            seenRowIdx.add(m.rowIdx);
+            if (!_ambiguousSeen.has(m.rowIdx)) {
+              _ambiguousSeen.add(m.rowIdx);
+              _ambiguousRows.push({
+                rowIdx: m.rowIdx, amount: m.amount, date: m.dateVal||'', note: m.noteVal||'',
+                payerName: m.nameVal||'', rawText: (m.nameVal||m.row.join(' ')),
+                candidates: _vd.top.map(function(c){ return { id: c.id, name: c.name, tier: c.score.tier, kwCount: c.score.kwCount }; })
+              });
+            }
+            return;
+          }
+          if (_vd.winnerId != null && _vd.winnerId !== tenant.id) {
+            // another tenant won this row — do not let this one grab it.
+            return;
+          }
+        }
         // ── Fingerprint dedup ──────────────────────────────────────
         // v2.14.29: `fp` is the canonical 4-part key (with ref) that we STORE and
         // use for in-file dedup. `fpLegacy` is the old 3-part key (no ref). The
@@ -4866,10 +5125,19 @@ function splitOverpayAcrossMonths(buckets, opts) {
     total: mr.length,
     ta: ta,
     fileName: fileName,
-    filterByAmount: filterByAmount
+    filterByAmount: filterByAmount,
+    ambiguousRows: _ambiguousRows
   };
 
+  // v2.14.41 (A): render the ambiguous-match decision panel (rows one bank line
+  // matched to 2+ members with no tie-breaker). Separate from the closed-month
+  // panel; both live under the preview. Nothing here is written until the user
+  // decides per row.
   showBankResult(matched, unmatched, mr.length, ta, fileName, filterByAmount, alreadyImportedSkips, /*previewMode=*/true, splitMonths);
+  // v2.14.41 (A): render the ambiguous panel AFTER showBankResult rebuilds
+  // #bankResult, so the panel is inserted below the fresh preview (and the
+  // "אשר ורשום" button's +N label reflects the current pending count).
+  renderAmbiguousMatchPanel(_ambiguousRows);
 }
 
 // ── v2.14.16: commit step for the manual (UI) bank import ──────────────────────
@@ -4961,6 +5229,48 @@ function commitBankImport(){
     delete m._lumpSplit;
   });
 
+  // ── v2.14.41 (A): apply ambiguous-row decisions. Rows the user assigned to a
+  // member are written to that member's sentLog for the selected month; ignored
+  // or undecided rows are left out entirely (never written). This is the manual
+  // resolution of the tie the pre-pass could not break. Closed selected-month is
+  // respected: an assigned row for a closed month routes to the closed-month
+  // approval panel (reverse-accrual), never a silent write.
+  var _ambApplied = 0, _ambIgnored = 0, _ambPending = 0;
+  // v2.14.41 FIX (session 24): sentLog holds ONE key per tenant-month, so writing
+  // each assigned row with '=' OVERWRITES earlier ones — two rows to the same כהן,
+  // or an ambiguous row for a tenant the matched-path already paid, would keep only
+  // the last amount. We must ACCUMULATE: read the current amount at the key (from a
+  // matched write or a prior ambiguous row) and ADD this row's amount before writing.
+  function _readSentLogAmount(key){
+    var v = String((data.sentLog||{})[key] || '');
+    var mm = v.match(/bank_import_[^_]+_([\d.]+)_/) || v.match(/manual_paid_([\d.]+)/);
+    return mm ? (parseFloat(mm[1]) || 0) : 0;
+  }
+  (P.ambiguousRows || []).forEach(function(r){
+    if (r._decision === 'assign' && r._assignTo != null) {
+      var t = data.tenants.filter(function(x){ return x.id === r._assignTo; })[0];
+      if (!t) { _ambPending++; return; }
+      if (_selClosed || _closedMainSet.has(P.selectedMonthKey)) {
+        _closedApprovals.push({ tenantId: t.id, name: t.name, month: P.selectedMonthKey, scope: 'main',
+                                charge: r.amount, payerName: r.payerName||'', note: r.note||'',
+                                prevDebt: Math.round((parseFloat(t.openingDebt)||0)*100)/100 });
+      } else {
+        var _key = t.id + '_' + em;
+        var _accrued = Math.round((_readSentLogAmount(_key) + (parseFloat(r.amount)||0)) * 100) / 100;
+        data.sentLog[_key] =
+          'bank_import_' + new Date().toISOString() + '_' + _accrued + '_payer_' + (r.payerName||'');
+        // fingerprint the row now that it is actually written (avoid re-import loss)
+        var _afp = bankRowFingerprintGlobal(r.date, r.amount, r.rawText || r.payerName || '', '');
+        if (P.newFp.indexOf(_afp) < 0) P.newFp.push(_afp);
+      }
+      _ambApplied++;
+    } else if (r._decision === 'ignore') {
+      _ambIgnored++;
+    } else {
+      _ambPending++; // left undecided → not written
+    }
+  });
+
   // Persist prior + newly-consumed fingerprints (capped at 5000). ONLY now.
   var allFp = P.priorFp.concat(P.newFp);
   if (allFp.length > 5000) allFp = allFp.slice(allFp.length - 5000);
@@ -4982,6 +5292,16 @@ function commitBankImport(){
 
   var mCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
   toast('✅ נרשמו ' + mCount + ' תשלומים ל-' + matched.length + ' דיירים','success');
+
+  // v2.14.41 (A): report ambiguous-row outcomes and clear that panel.
+  if ((P.ambiguousRows || []).length) {
+    var parts = [];
+    if (_ambApplied) parts.push('✅ ' + _ambApplied + ' שויכו ידנית');
+    if (_ambIgnored) parts.push('🚫 ' + _ambIgnored + ' דולגו');
+    if (_ambPending) parts.push('⏳ ' + _ambPending + ' ללא החלטה (לא נרשמו)');
+    if (parts.length) toast('הכרעת שורות עמומות: ' + parts.join(' · '), _ambPending ? 'warn' : 'info');
+    renderAmbiguousMatchPanel([]); // clear the panel
+  }
 
   window._pendingBankImport = null;
   window._closedMonthApprovals = _closedApprovals; // v2.14.39 — for the approval panel
@@ -5016,6 +5336,80 @@ function _cmIsSafe(hit){
   var mult = amt/due;
   // clean multiple of the dues (1×,2×,3×…) within a cent → looks like dues
   return Math.abs(mult - Math.round(mult)) < 0.005 && Math.round(mult) >= 1;
+}
+
+// ── v2.14.41 (A): ambiguous-match decision panel ───────────────────────────
+// Rows where one bank line matched 2+ members with no tie-breaker. Each row
+// offers a button per tied candidate (showing the candidate's distinguisher —
+// apt number for a vaad, gush/chelka for a kibbutz) plus "התעלם". Nothing is
+// written until the user picks. Assignment is applied by tagging the row's
+// chosen tenant into the pending import and re-committing that single row.
+function renderAmbiguousMatchPanel(rows){
+  rows = rows || [];
+  var box = document.getElementById('ambiguousMatchPanel');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'ambiguousMatchPanel';
+    var rd = document.getElementById('bankResult');
+    if (rd && rd.parentNode) rd.parentNode.insertBefore(box, rd.nextSibling);
+    else document.body.appendChild(box);
+  }
+  if (!rows.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var isKib = (data.config && data.config.orgType === 'kibbutz');
+  var distLabel = isKib ? 'גוש/חלקה' : 'דירה';
+  var nis = function(v){ return (Math.round((parseFloat(v)||0)*100)/100) + ' ₪'; };
+  var distOf = function(t){
+    if (!t) return '';
+    var d = isKib ? (t.gushChelka||'') : (t.aptNumber||'');
+    return d ? (distLabel + ' ' + d) : ('ללא ' + distLabel);
+  };
+  var h = '<div style="margin:12px 0;padding:14px;border-radius:12px;background:var(--card2,#161b22);border:1px solid var(--warn,#e3b341);">';
+  h += '<div style="font-weight:700;margin-bottom:6px;color:var(--warn,#e3b341);">🔀 ' + rows.length + ' תשלומים דורשים הכרעה — שורה אחת מתאימה ליותר מדייר אחד</div>';
+  h += '<div style="font-size:0.8rem;color:var(--text2,#8b949e);margin-bottom:10px;">המערכת לא הצליחה להכריע לבד (שם/מילת חיפוש זהים, ואין דירה/גוש-חלקה שמפריד). בחר למי לזקוף כל תשלום, או התעלם.</div>';
+  rows.forEach(function(r, i){
+    var bankLine = '🏦 <span style="unicode-bidi:plaintext;">"' + esc(r.rawText||r.payerName||'') + '"</span>'
+      + (r.note ? ' · <span style="unicode-bidi:plaintext;color:var(--text2);">"' + esc(r.note) + '"</span>' : '');
+    h += '<div data-amb-row="' + i + '" style="padding:10px 0;border-top:1px solid rgba(255,255,255,.07);">';
+    h += '<div style="font-size:0.9rem;color:var(--text);margin-bottom:2px;">💰 <b>' + nis(r.amount) + '</b>' + (r.date?(' <span style="color:var(--text2);font-size:0.78rem;">('+esc(r.date)+')</span>'):'') + '</div>';
+    h += '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:8px;">' + bankLine + '</div>';
+    h += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">';
+    r.candidates.forEach(function(c){
+      var t = data.tenants.filter(function(x){ return x.id === c.id; })[0];
+      var dist = distOf(t);
+      h += '<button onclick="resolveAmbiguousRow(' + i + ',' + JSON.stringify(c.id) + ')" '
+        + 'style="background:var(--accent,#25D366);color:#04210f;border:none;border-radius:8px;padding:6px 10px;font-size:0.82rem;font-weight:600;cursor:pointer;">'
+        + 'זקוף ל־' + esc(c.name||'') + ' <span style="opacity:.7;font-weight:400;">(' + esc(dist) + ')</span></button>';
+    });
+    h += '<button onclick="resolveAmbiguousRow(' + i + ',null)" '
+      + 'style="background:transparent;color:var(--text2,#8b949e);border:1px solid var(--border,#30363d);border-radius:8px;padding:6px 10px;font-size:0.82rem;cursor:pointer;">התעלם</button>';
+    h += '<span data-amb-status="' + i + '" style="font-size:0.8rem;color:var(--accent,#25D366);"></span>';
+    h += '</div></div>';
+  });
+  h += '</div>';
+  box.innerHTML = h;
+  box.style.display = 'block';
+}
+
+// Apply an ambiguous-row decision: tag the chosen tenant onto the pending import
+// so the commit writes it, or mark it ignored. Display-updates the row in place.
+function resolveAmbiguousRow(i, tenantId){
+  var P = window._pendingBankImport;
+  if (!P || !P.ambiguousRows || !P.ambiguousRows[i]) return;
+  var row = P.ambiguousRows[i];
+  row._decision = (tenantId == null) ? 'ignore' : 'assign';
+  row._assignTo = (tenantId == null) ? null : tenantId;
+  var statusEl = document.querySelector('[data-amb-status="'+i+'"]');
+  if (statusEl) {
+    if (tenantId == null) { statusEl.textContent = '— התעלמת'; statusEl.style.color = 'var(--text2,#8b949e)'; }
+    else {
+      var t = data.tenants.filter(function(x){ return x.id === tenantId; })[0];
+      statusEl.textContent = '✓ ישויך ל־' + (t ? t.name : '') + ' באישור';
+      statusEl.style.color = 'var(--accent,#25D366)';
+    }
+  }
+  // dim the buttons on this row to show the choice is locked (re-clickable to change)
+  var rowEl = document.querySelector('[data-amb-row="'+i+'"]');
+  if (rowEl) rowEl.querySelectorAll('button').forEach(function(b){ b.style.opacity = '0.55'; });
 }
 
 function renderClosedMonthApprovals(hits){
@@ -5216,13 +5610,18 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
   }
   if(previewMode){
     // Nothing is written yet — the admin must explicitly confirm to save.
+    var _ambCount = (window._pendingBankImport && window._pendingBankImport.ambiguousRows) ? window._pendingBankImport.ambiguousRows.length : 0;
     h+='<div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap;">';
-    if(matched.length>0){
-      h+='<button class="btn btn-green" onclick="commitBankImport()">✅ אשר ורשום ('+newTxCount+' תשלומים)</button>';
+    if(matched.length>0 || _ambCount>0){
+      var _btnLabel = '✅ אשר ורשום (' + newTxCount + ' תשלומים' + (_ambCount ? ' + ' + _ambCount + ' להכרעה למטה' : '') + ')';
+      h+='<button class="btn btn-green" onclick="commitBankImport()">'+_btnLabel+'</button>';
     }
     h+='<button class="btn btn-secondary" onclick="cancelBankImport()">✖️ בטל</button>';
     h+='</div>';
-    if(matched.length===0){
+    if(_ambCount>0){
+      h+='<div style="margin-top:8px;font-size:0.82rem;color:var(--warn,#e3b341);">🔀 יש '+_ambCount+' תשלומים שדורשים הכרעה (בפאנל למטה ⬇). בחר לכל אחד למי לזקוף, ואז לחץ "אשר ורשום" למעלה כדי לרשום הכל יחד.</div>';
+    }
+    if(matched.length===0 && _ambCount===0){
       h+='<div style="margin-top:8px;font-size:0.78rem;color:var(--text2);">אין תנועות חדשות לרישום'+(alreadyImportedSkips.length?' (כל השורות כבר יובאו בעבר).':'.')+'</div>';
     }
   } else if(matched.length>0){

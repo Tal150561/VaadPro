@@ -1571,4 +1571,107 @@ t.section('v2.14.37 — version stamp warns on server/HTML mismatch');
   t.eq('applyVersionStamp is called from loadData', /try\s*\{\s*applyVersionStamp\(\)/.test(app), true);
 }
 
+// ── v2.14.41 (A+B): tiered matcher + ambiguity panel + keyword uniqueness ──
+t.section('app.html — v2.14.41 (A) row-centric matcher wiring');
+{
+  const app = readSource('public/app.html');
+  // shared engine present as globals (not scoped inside analyzeBankRows)
+  t.eq('kwMatchCount global defined', /function kwMatchCount\s*\(/.test(app), true);
+  t.eq('scoreTenantRowMatch global defined', /function scoreTenantRowMatch\s*\(/.test(app), true);
+  t.eq('resolveRowCandidates global defined', /function resolveRowCandidates\s*\(/.test(app), true);
+  t.eq('extractAptNumbersFromNoteGlobal defined', /function extractAptNumbersFromNoteGlobal\s*\(/.test(app), true);
+  // pre-pass exists and builds a verdict map
+  t.eq('row-centric pre-pass builds _rowVerdict', app.includes('_rowVerdict'), true);
+  t.eq('pre-pass scores tenants via scoreTenantRowMatch', /scoreTenantRowMatch\(tf,/.test(app), true);
+  // loop consults the verdict before claiming
+  t.eq('loop gates on _rowVerdict', /var _vd = _rowVerdict\[m\.rowIdx\]/.test(app), true);
+  t.eq('ambiguous rows queue to _ambiguousRows', app.includes('_ambiguousRows.push('), true);
+  t.eq('winner-only claim (other tenant returns)', /_vd\.winnerId !== tenant\.id/.test(app), true);
+  // panel + resolution wired
+  t.eq('renderAmbiguousMatchPanel defined', /function renderAmbiguousMatchPanel\s*\(/.test(app), true);
+  t.eq('resolveAmbiguousRow defined', /function resolveAmbiguousRow\s*\(/.test(app), true);
+  t.eq('pending import carries ambiguousRows', /ambiguousRows: _ambiguousRows/.test(app), true);
+  t.eq('commit applies ambiguous decisions', /r\._decision === 'assign'/.test(app), true);
+  t.eq('panel shows candidate distinguisher (apt/gush)', app.includes('גוש/חלקה') && /aptNumber/.test(app), true);
+}
+
+t.section('app.html — v2.14.41 execute the pre-pass verdict (בן קרטר case)');
+{
+  const app = readSource('public/app.html');
+  function grab(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
+  const bundle = grab('kwMatchCount')+'\n'+grab('scoreTenantRowMatch')+'\n'+grab('compareScore')+'\n'+grab('resolveRowCandidates')+'\n'+grab('extractAptNumbersFromNoteGlobal');
+  const run = new Function(bundle + `
+    function F(o){return {id:o.id,tenant:o,kw:(o.keywords||'').split(',').map(function(k){return k.trim().toLowerCase();}).filter(Boolean),ps:(o.phone||'').replace(/\\D/g,'').slice(-7),nameParts:(o.name||'').trim().toLowerCase().split(/\\s+/).filter(function(p){return p.length>1;}),aptNum:o.aptNumber!=null?String(o.aptNumber).replace(/\\D/g,''):''};}
+    function decide(tenants, rt){
+      var tf=tenants.map(F); var d=rt.replace(/\\D/g,''); var cands=[];
+      tf.forEach(function(x){var s=scoreTenantRowMatch(x,rt,d,[],false);if(s)cands.push({id:x.id,name:x.tenant.name,score:s});});
+      return resolveRowCandidates(cands);
+    }
+    return decide;`)();
+  const tenants = [{id:1,name:'אריה קרטר',keywords:'אריה,קרטר'},{id:2,name:'בן קרטר',keywords:'בן,קרטר'}];
+  const v1 = run(tenants, 'בן קרטר');
+  t.eq('בן קרטר row → winner is בן (id 2), not first-in-list', v1.winner, 2);
+  t.eq('בן קרטר row → not ambiguous', v1.ambiguous, false);
+  const v2 = run(tenants, 'אריה קרטר');
+  t.eq('אריה קרטר row → winner is אריה (id 1)', v2.winner, 1);
+  const tied = [{id:1,name:'כהן א',keywords:'כהן'},{id:2,name:'כהן ב',keywords:'כהן'}];
+  const v3 = run(tied, 'כהן');
+  t.eq('bare כהן with two כהן → ambiguous', v3.ambiguous, true);
+  t.eq('bare כהן → no winner', v3.winner, null);
+}
+
+t.section('app.html — v2.14.41 (B) keyword-uniqueness UI');
+{
+  const app = readSource('public/app.html');
+  t.eq('findKeywordCollisions global defined', /function findKeywordCollisions\s*\(/.test(app), true);
+  t.eq('checkKeywordUniqueness defined', /function checkKeywordUniqueness\s*\(/.test(app), true);
+  t.eq('closeKeywordUniqueness defined', /function closeKeywordUniqueness\s*\(/.test(app), true);
+  t.eq('uniqueness button in tenants header', app.includes('checkKeywordUniqueness()'), true);
+  t.eq('report container present', app.includes('id="kwUniqueReport"'), true);
+  t.eq('addTenant runs collision check', /findKeywordCollisions\(data\.tenants, \{ extraKeywords: kw/.test(app), true);
+  t.eq('saveTenantEdit runs collision check (excludeId)', /findKeywordCollisions\(data\.tenants, \{ excludeId: id/.test(app), true);
+  // execute the collision detector (distinguisher-aware suppression)
+  function grab(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
+  const fkc = new Function(grab('findKeywordCollisions') + '\nreturn findKeywordCollisions;')();
+  t.eq('נועה/עומר share ברקן but unique first names → suppressed',
+    fkc([{id:1,name:'נועה ברקן',keywords:'נועה,ברקן'},{id:2,name:'עומר ברקן',keywords:'עומר,ברקן'}]).length, 0);
+  t.eq('two bare כהן → flagged',
+    fkc([{id:1,name:'כהן א',keywords:'כהן'},{id:2,name:'כהן ב',keywords:'כהן'}]).length, 1);
+}
+
+t.section('app.html — v2.14.41 commit path uses only in-scope functions');
+{
+  const app = readSource('public/app.html');
+  // bankRowFingerprint is nested inside analyzeBankRows; commitBankImport must use
+  // the global twin. Guard against the ReferenceError regression (session 24).
+  t.eq('global bankRowFingerprintGlobal defined', /function bankRowFingerprintGlobal\s*\(/.test(app), true);
+  function body(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);if(!m)return '';var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
+  const commit = body('commitBankImport');
+  t.eq('commitBankImport does NOT call nested bankRowFingerprint(', /[^G]bankRowFingerprint\(/.test(commit.replace(/bankRowFingerprintGlobal/g,'X')), false);
+  t.eq('commitBankImport uses bankRowFingerprintGlobal', commit.includes('bankRowFingerprintGlobal('), true);
+  // execute the global fingerprint to prove it is callable + correct shape
+  const fp = new Function(body('bankRowFingerprintGlobal') + '\nreturn bankRowFingerprintGlobal;')();
+  t.eq('global fp produces 3-part key without ref', fp('10/08/2026', 300, 'כהן', ''), '10/08/2026|300|כהן');
+  t.eq('global fp produces 4-part key with ref', fp('10/08/2026', 300, 'כהן', '401'), '10/08/2026|300|כהן|401');
+}
+
+t.section('app.html — v2.14.41 ambiguous-apply ACCUMULATES (no overwrite)');
+{
+  const app = readSource('public/app.html');
+  // The commit must read the existing sentLog amount and ADD, so two rows to the
+  // same tenant (or ambiguous-on-top-of-matched) sum instead of overwriting.
+  t.eq('_readSentLogAmount helper present', /function _readSentLogAmount\s*\(/.test(app), true);
+  t.eq('ambiguous write accrues (reads existing + adds)', /_readSentLogAmount\(_key\) \+ \(parseFloat\(r\.amount\)/.test(app), true);
+  t.eq('ambiguous write is NOT a bare overwrite', /data\.sentLog\[t\.id \+ '_' \+ em\] =\s*'bank_import_' \+ new Date\(\)\.toISOString\(\) \+ '_' \+ r\.amount/.test(app), false);
+  // execute the accumulation logic
+  function body(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);if(!m)return '';var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
+  const data = { sentLog: { '3_אוגוסט': 'bank_import_ISO_230_payer_נועה' } };
+  const read = new Function('data', body('_readSentLogAmount') + '\nreturn _readSentLogAmount;')(data);
+  t.eq('reads existing matched amount (230)', read('3_אוגוסט'), 230);
+  t.eq('missing key reads 0', read('99_אוגוסט'), 0);
+  // full accumulation: 230 existing + 500 = 730
+  const accrued = Math.round((read('3_אוגוסט') + 500) * 100) / 100;
+  t.eq('accrues existing + new (730)', accrued, 730);
+}
+
 process.exit(t.done() ? 1 : 0);

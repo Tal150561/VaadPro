@@ -2227,4 +2227,77 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
+// ── v2.14.41 (A): agent NEVER guesses ambiguous rows — queues them ──────────
+{
+  t.section('v2.14.41 — agent ambiguous-match (never guesses, queues instead)');
+  const { loadBankAnalyzer } = require("./test-lib");
+  const B = loadBankAnalyzer();
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3, colRef: -1 };
+
+  // Two כהן, no distinguisher; a bare "כהן" row → ambiguous, must NOT be written.
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'הערות'],
+      ['כהן', '300', '10/08/2026', 'ערבות הדדית'],
+    ];
+    const tenants = [
+      { id: 'A', name: 'כהן לוי', phone: '0500000001', keywords: 'כהן', customAmount: 300, openingDebt: 0 },
+      { id: 'B', name: 'כהן כהן', phone: '0500000002', keywords: 'כהן', customAmount: 300, openingDebt: 0 },
+    ];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 300 }, new Set());
+    t.eq('ambiguous row NOT written to sentLog (A)', r.newSentLog['A_אוגוסט'] == null, true);
+    t.eq('ambiguous row NOT written to sentLog (B)', r.newSentLog['B_אוגוסט'] == null, true);
+    t.eq('agent surfaces ambiguousMatchHits', Array.isArray(r.ambiguousMatchHits) && r.ambiguousMatchHits.length === 1, true);
+    t.eq('hit lists both candidates', r.ambiguousMatchHits[0].candidates.length, 2);
+    t.eq('no fingerprint consumed for ambiguous row', r.newFingerprints.length, 0);
+  }
+
+  // Clear full-name win → NOT ambiguous, written normally.
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'הערות'],
+      ['נועה ברקן', '230', '10/08/2026', 'ערבות הדדית'],
+    ];
+    const tenants = [
+      { id: 'N', name: 'נועה ברקן', phone: '0500000003', keywords: 'נועה,ברקן', customAmount: 230, openingDebt: 0 },
+      { id: 'O', name: 'עומר ברקן', phone: '0500000004', keywords: 'עומר,ברקן', customAmount: 230, openingDebt: 0 },
+    ];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 230 }, new Set());
+    t.eq('clear winner written (נועה)', String(r.newSentLog['N_אוגוסט'] || '').startsWith('bank_import'), true);
+    t.eq('other candidate NOT written (עומר)', r.newSentLog['O_אוגוסט'] == null, true);
+    t.eq('no ambiguous hit for clear full-name', (r.ambiguousMatchHits || []).length, 0);
+  }
+
+  // Two identical "כהן 150" rows → BOTH queued as separate ambiguous hits (no swallow).
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'הערות'],
+      ['כהן', '150', '10/08/2026', 'זיכוי'],
+      ['כהן', '150', '09/08/2026', 'זיכוי'],
+    ];
+    const tenants = [
+      { id: 'A', name: 'כהן לוי', phone: '0500000001', keywords: 'כהן', customAmount: 150, openingDebt: 0 },
+      { id: 'B', name: 'כהן כהן', phone: '0500000002', keywords: 'כהן', customAmount: 150, openingDebt: 0 },
+    ];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 150 }, new Set());
+    t.eq('two identical ambiguous rows both queued (no swallow)', (r.ambiguousMatchHits || []).length, 2);
+    t.eq('neither written', r.newSentLog['A_אוגוסט'] == null && r.newSentLog['B_אוגוסט'] == null, true);
+  }
+
+  // apt-note resolves ambiguity → auto-assigned, NOT queued.
+  {
+    const rows = [
+      ['שם', 'סכום', 'תאריך', 'הערות'],
+      ['כהן', '400', '10/08/2026', 'ועד בית דירה 6'],
+    ];
+    const tenants = [
+      { id: 'A', name: 'כהן לוי', phone: '0500000001', keywords: 'כהן', aptNumber: '5', customAmount: 400, openingDebt: 0 },
+      { id: 'B', name: 'כהן כהן', phone: '0500000002', keywords: 'כהן', aptNumber: '6', customAmount: 400, openingDebt: 0 },
+    ];
+    const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 400 }, new Set());
+    t.eq('apt-note resolves → written to the apt-6 owner (B)', String(r.newSentLog['B_אוגוסט'] || '').startsWith('bank_import'), true);
+    t.eq('apt-note resolves → NOT queued as ambiguous', (r.ambiguousMatchHits || []).length, 0);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

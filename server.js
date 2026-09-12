@@ -6963,6 +6963,59 @@ function groupMatchesByMonth(matches, fallbackMk) {
   return { buckets, distinctMonths: datedMonths.size };
 }
 
+// ── v2.14.41 tiered bank-row matcher (A) ───────────────────────────────────
+// ⚠️ DUPLICATED VERBATIM from scripts/lib-match-score.js and public/app.html.
+// Bodies of kwMatchCount/scoreTenantRowMatch/compareScore/resolveRowCandidates
+// must stay md5-identical across all three (same rule as splitOverpayAcrossMonths).
+// See the lib for the full rationale. Score each (row,tenant) into a QUALITY TIER
+// (apt 4 > name 3 > keyword-COUNT 2 > phone 1); a row with ≥2 candidates tied at
+// the top is AMBIGUOUS. The AGENT never guesses an ambiguous row — it queues it.
+function kwMatchCount(kws, rt) {
+  if (!kws || !kws.length) return 0;
+  var n = 0;
+  for (var i = 0; i < kws.length; i++) {
+    var k = kws[i];
+    if (!k || k.length < 2) continue;
+    var esc = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?:^|[\\s,/(-])' + esc + '(?=[\\s,/)-]|$)').test(rt)) n++;
+  }
+  return n;
+}
+function scoreTenantRowMatch(fields, rt, rtDigits, noteApts, aptBlocked) {
+  var kw = fields.kw || [];
+  var ps = fields.ps || '';
+  var nameParts = fields.nameParts || [];
+  var aptNum = fields.aptNum || '';
+  var kwCount = kwMatchCount(kw, rt);
+  var phoneHit = !!(ps && rtDigits.indexOf(ps) >= 0);
+  var uniqParts = nameParts.filter(function (p, i) { return nameParts.indexOf(p) === i; });
+  var nameHit = uniqParts.length >= 2 && uniqParts.every(function (p) { return rt.indexOf(p) >= 0; });
+  var nameBasisMatch = (kwCount > 0) || phoneHit || nameHit;
+  if (aptNum && noteApts.indexOf(aptNum) >= 0 && nameBasisMatch) {
+    return { tier: 4, kwCount: kwCount, matchType: 'apt' };
+  }
+  if (aptBlocked) return null;
+  if (nameHit)      return { tier: 3, kwCount: kwCount, matchType: 'name' };
+  if (kwCount > 0)  return { tier: 2, kwCount: kwCount, matchType: 'keyword' };
+  if (phoneHit)     return { tier: 1, kwCount: kwCount, matchType: 'phone' };
+  return null;
+}
+function compareScore(a, b) {
+  if (a.tier !== b.tier) return a.tier - b.tier;
+  if (a.tier === 2 && b.tier === 2) return a.kwCount - b.kwCount;
+  return 0;
+}
+function resolveRowCandidates(candidates) {
+  if (!candidates || !candidates.length) return { winner: null, ambiguous: false, top: [] };
+  var best = candidates[0];
+  for (var i = 1; i < candidates.length; i++) {
+    if (compareScore(candidates[i].score, best.score) > 0) best = candidates[i];
+  }
+  var top = candidates.filter(function (c) { return compareScore(c.score, best.score) === 0; });
+  if (top.length === 1) return { winner: top[0].id, ambiguous: false, top: top };
+  return { winner: null, ambiguous: true, top: top };
+}
+
 // ── analyzeBankRows (server-side port of client logic) ─────────────
 // `importedFingerprints` (optional Set) carries fingerprints already imported in
 // PRIOR runs; matched rows whose fingerprint is in it are skipped (cross-import
@@ -7121,6 +7174,43 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       .filter(Boolean)
   );
 
+  // ── v2.14.41 (A) ROW-CENTRIC PRE-PASS (agent path) ────────────────────────
+  // Mirrors the manual analyzeBankRows pre-pass. Scores every tenant per row with
+  // the shared tiered engine and resolves a single winner or flags AMBIGUOUS.
+  // The tenant loop below only lets the WINNER claim a row. Ambiguous rows are
+  // collected into ambiguousMatchHits and returned; the AGENT NEVER guesses them
+  // — /api/import-bank queues them for manual resolution in the UI. Clean rows
+  // import exactly as before.
+  const _tenantFields = updatedTenants.map(t => ({
+    id: t.id, tenant: t,
+    kw: t.keywords ? t.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean) : [],
+    ps: (t.phone || '').replace(/\D/g, '').slice(-7),
+    nameParts: (t.name || '').trim().toLowerCase().split(/\s+/).filter(p => p.length > 1),
+    aptNum: t.aptNumber != null ? String(t.aptNumber).replace(/\D/g, '') : ''
+  }));
+  const _rowVerdict = {};
+  mr.forEach(m => {
+    const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
+    const rtDigits = m.row.join(' ').toLowerCase().replace(/\D/g, '');
+    const noteApts = extractAptNumbersFromNote(m.noteVal);
+    const cands = [];
+    _tenantFields.forEach(tf => {
+      const aptBlocked = noteApts.some(n =>
+        n !== tf.aptNum && _tenantFields.some(o => {
+          if (o.id === tf.id || o.aptNum !== n) return false;
+          return kwMatchCount(o.kw, rt) > 0 ||
+                 (o.ps && rtDigits.indexOf(o.ps) >= 0) ||
+                 (o.nameParts.length >= 2 && o.nameParts.every(p => rt.indexOf(p) >= 0));
+        })) && !(tf.aptNum && noteApts.indexOf(tf.aptNum) >= 0);
+      const sc = scoreTenantRowMatch(tf, rt, rtDigits, noteApts, aptBlocked);
+      if (sc) cands.push({ id: tf.id, name: tf.tenant.name, score: sc, tenant: tf.tenant });
+    });
+    const verdict = resolveRowCandidates(cands);
+    _rowVerdict[m.rowIdx] = { winnerId: verdict.winner, ambiguous: verdict.ambiguous, top: verdict.top };
+  });
+  const ambiguousMatchHits = [];
+  const _ambiguousSeen = new Set();
+
   updatedTenants.forEach(tenant => {
     const kw = tenant.keywords
       ? tenant.keywords.split(',').map(k => k.trim().toLowerCase()).filter(Boolean)
@@ -7196,6 +7286,24 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (!type && !noteBlocksThisTenant && ps && rtFull.replace(/\D/g,'').includes(ps))   type = 'phone';
       if (!type && !noteBlocksThisTenant && nameParts.length >= 2 && nameParts.every(p => rt.includes(p))) type = 'name';
       if (!type) return;
+      // ── v2.14.41 (A): consult the row verdict. Winner-only claim; ambiguous
+      // rows are queued for manual resolution and never written by the agent. ──
+      const _vd = _rowVerdict[m.rowIdx];
+      if (_vd) {
+        if (_vd.ambiguous) {
+          seenRowIdx.add(m.rowIdx);
+          if (!_ambiguousSeen.has(m.rowIdx)) {
+            _ambiguousSeen.add(m.rowIdx);
+            ambiguousMatchHits.push({
+              rowIdx: m.rowIdx, amount: m.amount, date: m.dateVal || '', note: m.noteVal || '',
+              payerName: m.nameVal || '', rawText: (m.nameVal || m.row.join(' ')), scope: 'main',
+              candidates: _vd.top.map(c => ({ id: c.id, name: c.name, tier: c.score.tier, kwCount: c.score.kwCount }))
+            });
+          }
+          return;
+        }
+        if (_vd.winnerId != null && _vd.winnerId !== tenant.id) return;
+      }
       // ── Fingerprint dedup (main account) ──────────────────────────
       // v2.14.29: cross-import checks BOTH the 4-part key (with ref) and the
       // legacy 3-part key, so a file imported before the אסמכתא column was mapped
@@ -7385,7 +7493,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     }
   }); // end updatedTenants.forEach
 
-  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits };
+  return { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month: em, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits, ambiguousMatchHits };
 }
 
 // ── GET /api/last-bank-import ─────────────────────────────────────
@@ -7429,7 +7537,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // whose fingerprint is already here, so nothing is counted twice.
     const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
 
-    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits } = analyzeBankRowsServer(
+    const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits, ambiguousMatchHits } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs,
       d.closedMonths, d.closedMonthsExtra
     );
@@ -7536,9 +7644,23 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       }
       importSave.pendingClosedMonthPayments = merged;
     }
+    // ── v2.14.41 (A): queue ambiguous-match rows for manual UI resolution. The
+    // agent NEVER guesses which member a tied row belongs to — it parks the row in
+    // pendingAmbiguousMatches (de-duped on rowIdx+amount+date+payer) so the operator
+    // decides later, exactly the "never write money under ambiguity" principle.
+    if (Array.isArray(ambiguousMatchHits) && ambiguousMatchHits.length) {
+      const prevA = Array.isArray(d.pendingAmbiguousMatches) ? d.pendingAmbiguousMatches : [];
+      const keyOfA = h => [h.rowIdx, h.amount, h.date || '', h.payerName || '', h.scope || 'main'].join('|');
+      const seenA = new Set(prevA.map(keyOfA));
+      const mergedA = prevA.slice();
+      for (const h of ambiguousMatchHits) {
+        if (!seenA.has(keyOfA(h))) { seenA.add(keyOfA(h)); mergedA.push(Object.assign({ detectedAt: new Date().toISOString(), source: 'agent', month }, h)); }
+      }
+      importSave.pendingAmbiguousMatches = mergedA;
+    }
     saveTenantData(req.user.tenantId, importSave);
 
-    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [], closedMonthHits: closedMonthHits || [] });
+    res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [], closedMonthHits: closedMonthHits || [], ambiguousMatchHits: ambiguousMatchHits || [] });
   } catch (err) {
     console.error('[import-bank]', err);
     res.status(500).json({ ok: false, error: err.message });
