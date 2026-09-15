@@ -882,7 +882,7 @@ function vpLogout() {
 
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secPay')">⚙️ הגדרות תשלום ותזמון
-        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings')">?</button>
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-pay')">?</button>
         <span id="secPayIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secPayBody" style="display:none;">
@@ -942,6 +942,7 @@ function vpLogout() {
 
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleOrgCard()">🏢 סוג הארגון ומונחים
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-org')" style="margin-right:8px;">?</button>
         <span id="orgCardIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="orgCardBody" style="display:none;">
@@ -971,6 +972,7 @@ function vpLogout() {
 
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secTpl')">✉️ תבנית הודעה
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-template')" style="margin-right:8px;">?</button>
         <span id="secTplIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secTplBody" style="display:none;">
@@ -1007,6 +1009,7 @@ function vpLogout() {
 
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secBackup')">🔒 גיבוי ושחזור נתונים
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-backup')" style="margin-right:8px;">?</button>
         <span id="secBackupIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secBackupBody" style="display:none;">
@@ -1029,6 +1032,7 @@ function vpLogout() {
     <!-- v2.13.28 — repair stale frozen tariffs (zero-life interval bug) -->
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secRepair')">🛠️ תיקון חובות שגויים מתעריף שבוטל
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-repair')" style="margin-right:8px;">?</button>
         <span id="secRepairIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secRepairBody" style="display:none;">
@@ -1050,6 +1054,7 @@ function vpLogout() {
     <!-- v2.14.3 — clean slate: wipe all bank-import payment data (settings kept) -->
     <div class="card" style="border:1px solid rgba(229,72,77,.35);background:rgba(229,72,77,.05);">
       <div class="card-header" style="cursor:pointer;user-select:none;color:#e5484d;" onclick="toggleSection('secResetPayments')">🧹 התחלה נקייה — מחיקת כל התשלומים שנקלטו
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-reset')" style="margin-right:8px;">?</button>
         <span id="secResetPaymentsIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secResetPaymentsBody" style="display:none;">
@@ -1096,6 +1101,7 @@ function vpLogout() {
     <!-- ACCOUNT TEMPLATES CARD -->
     <div class="card" id="accountTemplatesCard">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secAcc')">💳 הגדרת חשבונות נוספים
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-accounts')" style="margin-right:8px;">?</button>
         <span style="font-size:0.75rem;color:var(--text3);margin-right:8px;">חשבונות שניתן לשייך לדיירים</span>
         <span id="secAccIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
@@ -1732,7 +1738,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.43';
+const HTML_VERSION = '2.14.44';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an

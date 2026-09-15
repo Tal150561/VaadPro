@@ -330,7 +330,7 @@
       '<div class="vpg-path">טאב ראשי · הגדרת המערכת והתאמה אישית</div>' +
       '<p class="vpg-lead">מרכז השליטה: סכום גבייה, תזמון, תבנית הודעה, גיבוי ועוד. ההגדרות נשמרות אוטומטית.</p>' +
       '<div class="vpg-box tip"><div class="bt">▶ מקטעים מכווצים</div>המקטעים בטאב זה סגורים כברירת מחדל כדי לשמור על מסך נקי. לחצו על כותרת מקטע כדי להרחיב או לכווץ אותו.</div>' +
-      '<h3>הגדרות תשלום ותזמון</h3>' +
+      '<h3 id="vpg-a-set-pay">הגדרות תשלום ותזמון</h3>' +
       '<table class="vpg-t"><tr><th>הגדרה</th><th>הסבר</th></tr>' +
       '<tr><td>סכום חודשי (₪)</td><td>הסכום הנגבה מכל דייר; משמש גם לזיהוי תשלומים בבנק.</td></tr>' +
       '<tr><td>יום בחודש לשליחה</td><td>יום התזכורת האוטומטית (1–28).</td></tr>' +
@@ -352,8 +352,8 @@
       '<span class="vpg-var">{פירוט_חוב}</span><span class="vpg-var">{חוב_קודם}</span><span class="vpg-var">{לינק_פורטל}</span></p>' +
       '<ul><li>{פירוט_חוב} — פירוט אוטומטי של החוב לפי חודשים שלא שולמו, כולל חשבונות נוספים.</li>' +
       '<li>אם התבנית ריקה — תישלח תבנית ברירת המחדל של המערכת.</li></ul>' +
-      '<h3>סוג הארגון ומונחים</h3><p>בחירת ועד בית / קיבוץ משנה מונחים בממשק. ב"הגדרות מתקדמות" אפשר להתאים מונחים: <strong>יחיד</strong> (דייר/חבר/תושב), <strong>רבים</strong>, <strong>יחידת דיור</strong> (דירה בוועד בית · גוש/חלקה בקיבוץ), ו<strong>חשבון ראשי</strong> (ועד בית · ערבות הדדית — או כל שם אחר שתבחרו). המונחים מתעדכנים בכל המערכת כולל פורטל הדייר וקבצי הייצוא. אין השפעה על תבנית ה-WhatsApp או חישוב החוב.</p>' +
-      '<h3>תבנית הודעה</h3>' +
+      '<h3 id="vpg-a-set-org">סוג הארגון ומונחים</h3><p>בחירת ועד בית / קיבוץ משנה מונחים בממשק. ב"הגדרות מתקדמות" אפשר להתאים מונחים: <strong>יחיד</strong> (דייר/חבר/תושב), <strong>רבים</strong>, <strong>יחידת דיור</strong> (דירה בוועד בית · גוש/חלקה בקיבוץ), ו<strong>חשבון ראשי</strong> (ועד בית · ערבות הדדית — או כל שם אחר שתבחרו). המונחים מתעדכנים בכל המערכת כולל פורטל הדייר וקבצי הייצוא. אין השפעה על תבנית ה-WhatsApp או חישוב החוב.</p>' +
+      '<h3 id="vpg-a-set-template">תבנית הודעה</h3>' +
       '<p>נוסח תזכורת התשלום. משתנים שיוחלפו לכל דייר:</p>' +
       '<p><span class="vpg-var">{שם}</span><span class="vpg-var">{חודש}</span><span class="vpg-var">{סכום}</span>' +
       '<span class="vpg-var">{חוב_קודם}</span><span class="vpg-var">{סה"כ}</span>' +
@@ -364,19 +364,19 @@
       '<li>{חשבונות} — רק אם יש חשבונות נוספים פתוחים.</li>' +
       '<li>{לינק_פורטל} — קישור אישי לפורטל הדייר.</li></ul>' +
       '<div class="vpg-box tip"><div class="bt">✨ שיפור עם AI</div>הקלידו הנחיה ("יותר נחמד" / "קצר ב-50%") ולחצו "שפר עם AI". אל תשכחו "💾 שמור תבנית".</div>' +
-      '<h3>חשבונות נוספים</h3><p>הגדרת חשבונות מעבר לדמי הוועד (קרן שיפוצים, חניה...). לאחר שמירה — שייכו לדיירים וציינו משלם (בעלים/שוכר).</p>' +
+      '<h3 id="vpg-a-set-accounts">חשבונות נוספים</h3><p>הגדרת חשבונות מעבר לדמי הוועד (קרן שיפוצים, חניה...). לאחר שמירה — שייכו לדיירים וציינו משלם (בעלים/שוכר).</p>' +
       '<div class="vpg-box tip"><div class="bt">⏸ השהיית חשבון בודד</div>בעריכת חשבונות של דייר, כל חשבון כולל סימון <strong>"⏸ השהה גבייה"</strong>. חשבון מושהה לא נצבר לחוב ולא נכלל בתזכורות — <strong>ללא תלות</strong> בדמי הוועד. כך ניתן לפטור דייר מביטוח בלבד, או להשהות דמי ועד תוך המשך חיוב הביטוח. יתרת פתיחה של החשבון נשמרת.</div>' +
-      '<h3>גיבוי ושחזור</h3>' +
+      '<h3 id="vpg-a-set-backup">גיבוי ושחזור</h3>' +
       '<ul><li><strong>💾 הורד גיבוי</strong> — שומר את כל הנתונים לקובץ. מומלץ חודשית.</li>' +
       '<li><strong>📂 שחזר מגיבוי</strong> — טוען נתונים מקובץ.</li></ul>' +
       '<div class="vpg-box danger"><div class="bt">⚠️ שחזור מוחק את הקיים</div>גבו תחילה! (המערכת יוצרת גיבוי בטיחות אוטומטי לפני כל שחזור.)</div>' +
       '<div class="vpg-box ok"><div class="bt">🛡️ גיבוי אוטומטי</div>גיבוי יומי בשרת + עותק למייל — רשת ביטחון נוספת.</div>' +
-      '<h3>🛠️ תיקון חובות שגויים מתעריף שבוטל</h3>' +
+      '<h3 id="vpg-a-set-repair">🛠️ תיקון חובות שגויים מתעריף שבוטל</h3>' +
       '<p>מקטע מכווץ בתחתית ההגדרות. פותר מצב ספציפי: הגדרתם לדייר <strong>תעריף אישי וביטלתם אותו באותו חודש</strong>, והמערכת שמרה בטעות את התעריף שבוטל כ<strong>סכום שהדייר היה אמור לשלם</strong> — כך נוצר חוב שגוי.</p>' +
       '<ul><li><strong>🔍 בדוק מה יתוקן</strong> — בדיקה בלבד, <strong>לא משנה שום נתון</strong>. מציג אילו רשומות יתוקנו ומה הסכום החדש. מומלץ ללחוץ עליו קודם.</li>' +
       '<li><strong>🛠️ בצע תיקון</strong> — מחשב מחדש את <strong>הסכום הצפוי</strong> בכל חודש לפי טבלת התעריפים המתוקנת.</li></ul>' +
       '<div class="vpg-box ok"><div class="bt">🛡️ לא נוגע בכמה ששולם</div>הכלי משנה רק את <strong>הסכום שהדייר היה אמור לשלם</strong> — לעולם לא את הסכום ששילם בפועל. פעולה כירורגית ובטוחה.</div>' +
-      '<h3>🧹 התחלה נקייה — מחיקת כל התשלומים שנקלטו</h3>' +
+      '<h3 id="vpg-a-set-reset">🧹 התחלה נקייה — מחיקת כל התשלומים שנקלטו</h3>' +
       '<p>מקטע אדום מכווץ בתחתית ההגדרות. מיועד ל<strong>בניין חדש שנתוני הייבוא שלו כולם שגויים</strong> — מנקה את כל מה שנקלט מקובץ הבנק ומתחיל מדף חלק. שימוש טיפוסי: אחרי תקופת בדיקות, לפני מעבר לעבודה אמיתית.</p>' +
       '<ul><li><strong>🔍 בדוק מה יימחק</strong> — בדיקה בלבד, מציג ספירה מדויקת של מה יימחק. מומלץ ללחוץ עליו קודם.</li>' +
       '<li><strong>🧹 מחק והתחל מחדש</strong> — מוחק סטטוסי תשלום, היסטוריית תשלומים, זיכרון הייבוא, וסימוני החודשים הסגורים (כולל חשבונות נוספים).</li></ul>' +
@@ -621,7 +621,12 @@
   }
 
   function gotoSection(id) {
-    var el = document.getElementById('vpg-sec-' + id);
+    // id may be "section" or "section#subAnchor" — scroll to the sub-anchor if present.
+    var hash = null, secId = id;
+    var hi = String(id).indexOf('#');
+    if (hi !== -1) { secId = id.slice(0, hi); hash = id.slice(hi + 1); }
+    var el = hash ? document.getElementById('vpg-a-' + hash) : document.getElementById('vpg-sec-' + secId);
+    if (!el) el = document.getElementById('vpg-sec-' + secId);
     if (el && el.scrollIntoView) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
   function spy() {
@@ -649,12 +654,15 @@
 
   function open(topic) {
     buildOverlay();
-    var id = ALIAS[topic] || (BY_ID[topic] ? topic : null);
+    // topic may be "settings#anchor" — resolve the base section for the title/alias.
+    var base = String(topic).split('#')[0];
+    var id = ALIAS[base] || (BY_ID[base] ? base : null);
     overlay.classList.add('show');
     document.body.style.overflow = 'hidden';
     if (id) {
       titleEl.textContent = (BY_ID[id].icon || '📖') + ' ' + BY_ID[id].title;
-      setTimeout(function () { gotoSection(id); }, 40);
+      var target = topic.indexOf('#') !== -1 ? id + topic.slice(topic.indexOf('#')) : id;
+      setTimeout(function () { gotoSection(target); }, 40);
     } else {
       titleEl.textContent = '📖 מדריך VaadPro';
       mainEl.scrollTop = 0;

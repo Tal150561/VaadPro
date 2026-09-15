@@ -1745,4 +1745,28 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
   t.eq('every customer-row button carries a tooltip (title=)', titleCount >= btnCount && btnCount >= 6, true);
 }
 
+// ── v2.14.44 — settings sub-section help buttons + guide sub-anchors ──
+t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
+{
+  const app3 = readSource('public/app.html');
+  const guide = readSource('public/vaadpro-guide.js');
+
+  // Each settings subsection has a ? button pointing at a settings#anchor topic.
+  const anchors = ['set-pay', 'set-org', 'set-template', 'set-backup', 'set-repair', 'set-reset', 'set-accounts'];
+  anchors.forEach(function (a) {
+    t.eq('app.html has help button for ' + a,
+      app3.includes("showHelp('settings#" + a + "')"), true);
+    t.eq('guide has anchor element for ' + a,
+      guide.includes('id="vpg-a-' + a + '"'), true);
+  });
+
+  // The guide's gotoSection resolves a "section#anchor" topic to vpg-a-<anchor>.
+  t.eq('gotoSection handles the # sub-anchor form', guide.includes("'vpg-a-' + hash"), true);
+  t.eq('open() forwards the # sub-anchor to gotoSection', /topic\.slice\(topic\.indexOf\('#'\)\)/.test(guide), true);
+
+  // The two v2.14.43 tools are still documented (must not have been dropped).
+  t.eq('guide still documents repair-tariffs', guide.includes('תיקון חובות שגויים מתעריף שבוטל'), true);
+  t.eq('guide still documents clean-slate', guide.includes('התחלה נקייה — מחיקת כל התשלומים שנקלטו'), true);
+}
+
 process.exit(t.done() ? 1 : 0);
