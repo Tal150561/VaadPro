@@ -1330,12 +1330,13 @@ function renderCustomers(users) {
       <td style="font-size:12px">${u.plan==='trial' ? formatDate(u.trialEnd) : '∞'}</td>
       <td>
         <div style="display:flex;gap:6px">
-          <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")'>Plan</button>
-          <button class="btn btn-sm btn-ghost" onclick='editCustomer("${u.email}")'>✏️</button>
-          <button class="btn btn-sm btn-ghost" onclick='openLabelsModal("${u.email}","${(u.buildingName||u.email).replace(/"/g,"&quot;")}")' title="מונחים / סוג ארגון">🏷️</button>
-          <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")'>📨</button>
-          <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")'>📋</button>
-          <button class="btn btn-sm btn-red" onclick='deleteCustomer("${u.email}")'>🗑</button>
+          <button class="btn btn-sm btn-blue" onclick='openPlanModal("${u.email}","${u.plan}")' title="מסלול ותוקף — שנה תוכנית (ניסיון/בתשלום/ללא הגבלה) והארך/קצר את תאריך התפוגה">Plan</button>
+          <button class="btn btn-sm btn-ghost" onclick='editCustomer("${u.email}")' title="עריכת פרטי לקוח — שם, טלפון, אימייל וסיסמה">✏️</button>
+          <button class="btn btn-sm btn-ghost" onclick='openLabelsModal("${u.email}","${(u.buildingName||u.email).replace(/"/g,"&quot;")}")' title="מונחים / סוג ארגון — התאם את שמות הכינויים (ועד בית / חברה / עמותה) והמונחים שהלקוח רואה">🏷️</button>
+          <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")' title="שלח הודעה — פותח את מסך ההודעות עם הלקוח כנמען (WhatsApp / מייל)">📨</button>
+          <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")' title="כרטיס CRM — היסטוריית קשר, שיחות, משימות ותמונת מצב של הבניין">📋</button>
+          <button class="btn btn-sm btn-ghost" onclick='resetOpeningDebt("${u.tenantId}","${(u.buildingName||u.fullName||u.email).replace(/"/g,"&quot;")}")' title="איפוס חוב התחלתי — מאפס את יתרת הפתיחה (openingDebt) של כל הדיירים בבניין. פעולה בלתי-הפיכה, לתמיכה בלבד. מציג קודם 'מה יאופס'">🧨</button>
+          <button class="btn btn-sm btn-red" onclick='deleteCustomer("${u.email}")' title="מחיקת לקוח — מוחק את הלקוח ואת כל הנתונים שלו לצמיתות">🗑</button>
         </div>
       </td>
     </tr>`;
@@ -2051,6 +2052,52 @@ async function deleteCustomer(email) {
   } else {
     toast(data.error || 'שגיאה', 'err');
   }
+}
+
+// ── v2.14.43 — איפוס חוב התחלתי (openingDebt) לבניין בודד — Super Admin בלבד ──
+// חצי הבלתי-הפיך של "התחלה נקייה", שהועבר מרמת הלקוח לכאן. תמיד מציג dry-run
+// ("מה יאופס") לפני הביצוע, ומאשר עם שם הבניין. השרת מגבה לפני האיפוס.
+async function resetOpeningDebt(tenantId, buildingName) {
+  if (!tenantId) { toast('אין tenantId לבניין זה', 'err'); return; }
+  // שלב 1 — dry-run: מה יאופס
+  let dry;
+  try {
+    const r = await fetch('/api/admin/reset-building-opening-debt', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ tenantId, dryRun: true })
+    });
+    dry = await r.json();
+  } catch(e) { toast('שגיאת רשת: ' + e.message, 'err'); return; }
+  if (!dry.ok) { toast(dry.error || 'שגיאה', 'err'); return; }
+  const s = dry.summary || {};
+  const nT = s.tenantsWithOpeningDebt || 0;
+  const nE = s.extraAccountsWithOpeningDebt || 0;
+  if (nT === 0 && nE === 0) {
+    toast('✅ אין חוב התחלתי לאיפוס — הבניין כבר נקי', 'ok');
+    return;
+  }
+  // שלב 2 — אישור עם שם הבניין + פירוט מה יאופס
+  const msg = '🧨 איפוס חוב התחלתי — ' + (s.buildingName || buildingName || tenantId) + '\n\n'
+            + '• דיירים עם חוב התחלתי שיאופס: ' + nT + ' מתוך ' + (s.tenantsTotal || 0) + '\n'
+            + (nE ? '• חשבונות נוספים שיאופסו: ' + nE + '\n' : '')
+            + '\n⚠️ פעולה בלתי-הפיכה — יתרות הפתיחה המקוריות לא ניתנות לשחזור אוטומטי.\n'
+            + 'גיבוי אוטומטי יישמר לפני האיפוס.\n\nלבצע?';
+  if (!confirm(msg)) return;
+  // שלב 3 — ביצוע
+  try {
+    const r2 = await fetch('/api/admin/reset-building-opening-debt', {
+      method: 'POST', headers: adminHeaders(),
+      body: JSON.stringify({ tenantId, dryRun: false })
+    });
+    const d2 = await r2.json();
+    if (d2.ok) {
+      const s2 = d2.summary || {};
+      toast('🧨 אופס חוב התחלתי ל-' + (s2.tenantsWithOpeningDebt || nT) + ' דיירים ✓'
+            + (d2.backupFile ? ' · גיבוי: ' + d2.backupFile : ''), 'ok');
+    } else {
+      toast(d2.error || 'שגיאה', 'err');
+    }
+  } catch(e) { toast('שגיאת רשת: ' + e.message, 'err'); }
 }
 
 // ════════════════════════════════════════════

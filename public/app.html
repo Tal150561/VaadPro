@@ -1056,8 +1056,9 @@ function vpLogout() {
         <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;line-height:1.7;">
           מוחק את <strong>כל התשלומים שנקלטו מייבוא קובץ בנק</strong> — סטטוסי תשלום, היסטוריית תשלומים,
           וזיכרון הייבוא — כולל חשבונות נוספים, ומתחיל מדף חלק.<br>
-          <strong>לא נמחק:</strong> רשימת הדיירים, הטלפונים, מילות החיפוש, התשלום החודשי המותאם, והגדרות הבניין.<br>
-          ⚠️ <strong>גם ה"חוב התחלתי" (openingDebt) יאופס</strong> — לאחר המחיקה תזין מחדש את החובות ההתחלתיים האמיתיים בטאב דיירים.
+          <strong>לא נמחק:</strong> רשימת הדיירים, הטלפונים, מילות החיפוש, התשלום החודשי המותאם, החוב ההתחלתי (יתרת פתיחה), והגדרות הבניין.<br>
+          ♻️ <strong>ניתן לשחזור:</strong> כל מה שנמחק כאן חוזר בייבוא מחדש של קובץ הבנק — לכן זו פעולה בטוחה יחסית.<br>
+          💡 טעית ב<strong>חוב התחלתי</strong> של דייר? אל תשתמש בכלי הזה — פשוט <strong>ערוך את הדייר</strong> (שדה "יתרת פתיחה") או <strong>ייבא קובץ דיירים מעודכן</strong>. איפוס גורף של החוב ההתחלתי לכל הבניין מתבצע רק דרך התמיכה.
         </p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary" onclick="resetBuildingPayments(true)">🔍 בדוק מה יימחק</button>
@@ -1731,7 +1732,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.42';
+const HTML_VERSION = '2.14.43';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -6685,7 +6686,7 @@ async function repairTariffs(dryRun) {
 async function resetBuildingPayments(dryRun) {
   const out = document.getElementById('resetPaymentsResult');
   if (!dryRun) {
-    if (!confirm('⚠️ למחוק את כל התשלומים שנקלטו ולהתחיל מחדש?\n\n• יימחקו: כל סטטוסי התשלום, היסטוריית התשלומים, וזיכרון הייבוא (כולל חשבונות נוספים)\n• יאופס: החוב ההתחלתי (openingDebt) של כל דייר\n• יישמרו: רשימת הדיירים, הטלפונים, התשלום החודשי המותאם, והגדרות הבניין\n\nגיבוי אוטומטי יישמר לפני המחיקה. הפעולה בלתי-הפיכה.\nלהמשיך?')) return;
+    if (!confirm('למחוק את כל התשלומים שנקלטו ולהתחיל מחדש?\n\n• יימחקו: כל סטטוסי התשלום, היסטוריית התשלומים, וזיכרון הייבוא (כולל חשבונות נוספים)\n• יישמרו: רשימת הדיירים, הטלפונים, התשלום החודשי המותאם, החוב ההתחלתי, והגדרות הבניין\n\n♻️ ניתן לשחזור: הכל חוזר בייבוא מחדש של קובץ הבנק.\nגיבוי אוטומטי יישמר לפני המחיקה.\nלהמשיך?')) return;
   }
   if (out) out.innerHTML = '<span style="font-size:0.83rem;color:var(--text2);">⏳ ' + (dryRun ? 'בודק…' : 'מוחק…') + '</span>';
   try {
@@ -6704,12 +6705,10 @@ async function resetBuildingPayments(dryRun) {
     const line = function(label, val){ return '<div style="background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:7px 10px;">' + label + ': <strong>' + val + '</strong></div>'; };
     h += line('סטטוסי תשלום (sentLog)', slTotal + ' (ראשי ' + (s.sentLogMain||0) + ' · נוספים ' + (s.sentLogExtra||0) + ')');
     h += line('רשומות היסטוריה', phTotal + ' (ראשי ' + (s.paymentHistoryRecordsMain||0) + ' · נוספים ' + (s.paymentHistoryRecordsExtra||0) + ')');
-    h += line('דיירים עם חוב התחלתי שיאופס', (s.tenantsWithOpeningDebt||0) + ' מתוך ' + (s.tenantsTotal||0));
-    if (s.extraAccountsWithOpeningDebt) h += line('חשבונות נוספים עם חוב שיאופס', s.extraAccountsWithOpeningDebt);
     h += line('זיכרון ייבוא (fingerprints)', s.importedFingerprints || 0);
     h += '</div>';
     if (!dryRun && d.backupFile) h += '<div class="hint" style="margin-top:8px;">💾 גיבוי נשמר: ' + d.backupFile + '</div>';
-    if (dryRun && (slTotal + phTotal) === 0 && !s.tenantsWithOpeningDebt) {
+    if (dryRun && (slTotal + phTotal) === 0 && !(s.importedFingerprints||0)) {
       h = '<span style="color:var(--accent);font-size:0.85rem;">✅ אין נתוני תשלום למחיקה — הבניין כבר נקי.</span>';
     }
     if (out) out.innerHTML = h;

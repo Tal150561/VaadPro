@@ -216,6 +216,45 @@ function loadResetPayments(building, reqBody) {
 }
 
 
+// ── Load the /api/admin/reset-building-opening-debt handler (v2.14.43) ──────
+// ADMIN-only zeroing of openingDebt for ONE building (the irreversible half of the
+// old clean-slate, moved out of the client). Extracts the REAL route body and runs
+// it against stubbed loadUsers/loadTenantData/saveTenantData/createBackup. Body
+// carries { tenantId, dryRun }. saveTenantData captures the patch for assertions.
+function loadResetOpeningDebt(building, reqBody, users) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/admin/reset-building-opening-debt'");
+  if (start < 0) throw new Error('test-lib: /api/admin/reset-building-opening-debt route not found');
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const saved = [];
+  let backupCalled = 0;
+  const captured = {};
+  const userList = users || [{ tenantId: 'T1', buildingName: 'בניין בדיקה' }];
+  const stubs = {
+    loadUsers: () => userList,
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
+    createBackup: () => { backupCalled++; return '/x/backup-pre-restore-test.zip'; },
+    path: { basename: (p) => String(p).split('/').pop() },
+    console,
+    req: { body: reqBody || {} },
+    res: { json: (o) => { captured.result = o; } }
+  };
+  const code = 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const mod = runInSandbox(code, stubs);
+  mod.handler(stubs.req, stubs.res);
+  return { result: captured.result, saved, backupCalled, building };
+}
+
+
 // ── Load the /api/apply-closed-month-payment handler (v2.14.39) ──────
 // FIX 2: the sanctioned reverse-accrual for a late payment to an ALREADY-CLOSED
 // month. Lifts the REAL route body and runs it against stubbed load/save so the
@@ -251,6 +290,47 @@ function loadApplyClosedMonth(building, reqBody) {
   };
   const code = months + '\n'
     + extractFunctions(src, ['monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate'])
+    + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const mod = runInSandbox(code, stubs);
+  mod.handler(stubs.req, stubs.res);
+  return { result: captured.result, status: captured.status, saved, building };
+}
+
+
+// ── Load the /api/apply-ambiguous-match handler (v2.14.42) ──────────
+// Resolves ONE agent-queued ambiguous row: records the payment to the chosen
+// tenant (accumulating onto any existing amount), fingerprints it, and drops it
+// from d.pendingAmbiguousMatches. The overlap guard no-ops a row already written
+// by a manual import (fingerprint present). Lifts the REAL route body.
+function loadApplyAmbiguous(building, reqBody) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/apply-ambiguous-match'");
+  if (start < 0) throw new Error('test-lib: /api/apply-ambiguous-match route not found');
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) {
+    const ch = src[i];
+    if (ch === '{') depth++;
+    else if (ch === '}') depth--;
+    i++;
+  }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const saved = [];
+  const captured = {};
+  const stubs = {
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
+    console,
+    req: { user: { tenantId: 'T1' }, body: reqBody || {} },
+    res: {
+      _status: 200,
+      status(c){ this._status = c; return this; },
+      json(o){ captured.result = o; captured.status = this._status; }
+    }
+  };
+  const code = months + '\n'
+    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'applyPaymentToDebt', 'recordPayment'])
     + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);
@@ -346,6 +426,6 @@ function makeRunner(title) {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadApplyClosedMonth, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetOpeningDebt, loadApplyClosedMonth, loadApplyAmbiguous, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };

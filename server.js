@@ -2032,14 +2032,19 @@ app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
 //   • paymentHistory     — every record, main + __acc__
 //   • importedBankFingerprints — so the dedup memory starts empty (re-import allowed)
 //   • lastBankSyncImport — the import receipt (display only)
-//   • openingDebt        — zeroed on every tenant AND every extra account
+//   • closedMonths / closedMonthsExtra — so a fresh manual close accrues again
 //
 // NEVER TOUCHES (settings, not results): the tenants list, names, phones,
 // keywords, customAmount, personalTariffs, extraAccounts definitions, config,
-// defaultTariffs, templates, WhatsApp. openingDebt is zeroed because Tal's
-// decision is דרך ב' — clean slate + re-enter the genuine opening debts by hand
-// (the on-disk value is a mix of the original entry AND accrual from the bad
-// imports, and the two are not separable after closeMonthUnpaid has run).
+// defaultTariffs, templates, WhatsApp — AND (v2.14.43) openingDebt.
+//
+// v2.14.43 — openingDebt is NO LONGER zeroed here. Because the on-disk value is a
+// mix of the original hand-entry AND accrual from bad imports (not separable after
+// closeMonthUnpaid), zeroing it is IRREVERSIBLE — the genuine opening debts are
+// gone. That irreversible action moved to the admin-only
+// /api/admin/reset-building-opening-debt (per-building, human-gated). A client
+// who entered a wrong opening debt fixes it the safe way: edit the tenant, or
+// re-import a tenants file with corrected חוב_התחלתי — both surgical & recoverable.
 //
 // SAFETY: always takes a pre-reset backup first (createBackup('pre-restore')),
 // and supports {dryRun:true} to preview the exact counts before writing.
@@ -2085,15 +2090,8 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
   // ── Real run — back up FIRST, then wipe. ──────────────────────────
   const backupFile = createBackup('pre-restore');
 
-  // Zero openingDebt on tenants + extra accounts (settings otherwise untouched).
-  const cleanedTenants = tenants.map(t => {
-    const copy = Object.assign({}, t, { openingDebt: 0 });
-    if (Array.isArray(t.extraAccounts)) {
-      copy.extraAccounts = t.extraAccounts.map(acc => Object.assign({}, acc, { openingDebt: 0 }));
-    }
-    return copy;
-  });
-
+  // v2.14.43 — openingDebt is intentionally NOT touched here (moved to the
+  // admin-only endpoint). tenants/extraAccounts definitions stay byte-untouched.
   saveTenantData(req.user.tenantId, {
     sentLog: {},
     paymentHistory: {},
@@ -2104,11 +2102,61 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
     // and the building shows ₪0 debt where real debt is due. Reset = "no month
     // has been closed yet", symmetric main + extra.
     closedMonths: [],
-    closedMonthsExtra: [],
-    tenants: cleanedTenants
+    closedMonthsExtra: []
   });
 
   console.log(`[reset-building-payments] tenant=${req.user.tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
+  res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
+});
+
+// ── POST /api/admin/reset-building-opening-debt — ADMIN-only, per building ─────
+// v2.14.43 — the IRREVERSIBLE half of the old "clean slate". Zeroes openingDebt on
+// every tenant AND every extra account of ONE building (tenantId from the body,
+// validated against the users list — same guard as /api/admin/reset-building-wa).
+//
+// WHY ADMIN-ONLY: the on-disk openingDebt is a mix of the original hand-entry and
+// accrual from bad imports, not separable after closeMonthUnpaid — so zeroing it
+// destroys the genuine opening debts with no automatic way back. Moving it behind
+// the operator (Tal) adds a human review step: the client asks, Tal confirms a
+// backup exists and that the building really wants a full reset, then runs it.
+//
+// SAFETY: always backs up first (createBackup('pre-restore')); supports {dryRun}.
+// SCOPE: exactly the one tenantId — no fan-out.
+app.post('/api/admin/reset-building-opening-debt', superAdminMiddleware, (req, res) => {
+  const { tenantId, dryRun } = req.body || {};
+  const users = loadUsers();
+  const validIds = new Set(users.map(u => u.tenantId));
+  if (!tenantId || !validIds.has(tenantId)) {
+    return res.json({ ok: false, error: 'ציין tenantId תקין' });
+  }
+
+  const d = loadTenantData(tenantId);
+  const tenants = d.tenants || [];
+  const tenantsWithOpeningDebt = tenants.filter(t => (parseFloat(t.openingDebt) || 0) !== 0).length;
+  let extraAccountsWithOpeningDebt = 0;
+  for (const t of tenants) {
+    for (const acc of (t.extraAccounts || [])) {
+      if ((parseFloat(acc.openingDebt) || 0) !== 0) extraAccountsWithOpeningDebt++;
+    }
+  }
+  const buildingName = (users.find(u => u.tenantId === tenantId) || {}).buildingName || tenantId;
+  const summary = { tenantsWithOpeningDebt, extraAccountsWithOpeningDebt, tenantsTotal: tenants.length, buildingName };
+
+  if (dryRun) {
+    console.log(`[admin/reset-opening-debt] tenant=${tenantId} DRY RUN`, summary);
+    return res.json({ ok: true, dryRun: true, summary });
+  }
+
+  const backupFile = createBackup('pre-restore');
+  const cleanedTenants = tenants.map(t => {
+    const copy = Object.assign({}, t, { openingDebt: 0 });
+    if (Array.isArray(t.extraAccounts)) {
+      copy.extraAccounts = t.extraAccounts.map(acc => Object.assign({}, acc, { openingDebt: 0 }));
+    }
+    return copy;
+  });
+  saveTenantData(tenantId, { tenants: cleanedTenants });
+  console.log(`[admin/reset-opening-debt] tenant=${tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
   res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
 });
 

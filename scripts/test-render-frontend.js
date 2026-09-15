@@ -1674,4 +1674,75 @@ t.section('app.html — v2.14.41 ambiguous-apply ACCUMULATES (no overwrite)');
   t.eq('accrues existing + new (730)', accrued, 730);
 }
 
+t.section('app.html — v2.14.42 agent-queue panel + pause toggle');
+{
+  const app = readSource('public/app.html');
+  // agent-queue panel
+  t.eq('renderPendingAmbiguousQueue defined', /function renderPendingAmbiguousQueue\s*\(/.test(app), true);
+  t.eq('decidePendingAmbiguous defined', /function decidePendingAmbiguous\s*\(/.test(app), true);
+  t.eq('reads pendingAmbiguousMatches', app.includes('data.pendingAmbiguousMatches'), true);
+  t.eq('queue rendered on loadData', /renderPendingAmbiguousQueue\(\)/.test(app), true);
+  t.eq('overlap guard filters by fingerprint', /fpSet\.has\(_ambRowFp/.test(app), true);
+  t.eq('calls apply-ambiguous-match endpoint', app.includes("'/api/apply-ambiguous-match'"), true);
+  // pause toggle
+  t.eq('toggleBankSyncPause defined', /function toggleBankSyncPause\s*\(/.test(app), true);
+  t.eq('pause toggle HTML helper defined', /function _bankSyncPauseToggleHTML\s*\(/.test(app), true);
+  t.eq('calls banksync-pause endpoint', app.includes("'/api/banksync-pause'"), true);
+  t.eq('pause toggle rendered in banner', app.includes('_bankSyncPauseToggleHTML()'), true);
+  // execute the fingerprint helper — must match server bankRowFingerprint 3-part shape
+  function body(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);if(!m)return '';var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
+  const fp = new Function(body('_ambRowFp') + '\nreturn _ambRowFp;')();
+  t.eq('_ambRowFp matches 3-part server key', fp({ date:'10/08/2026', amount:300, rawText:'כהן' }), '10/08/2026|300|כהן');
+  const rk = new Function(body('_ambRowKey') + '\nreturn _ambRowKey;')();
+  t.eq('_ambRowKey builds stable key', rk({ rowIdx:2, amount:300, date:'d', payerName:'כהן', scope:'main' }), '2|300|d|כהן|main');
+}
+
+// -- v2.14.43 -- clean-slate split: client keeps openingDebt, admin zeroes it --
+t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
+{
+  const app2 = readSource('public/app.html');
+  const adm = readSource('public/admin.html');
+  const srv2 = readSource('server.js');
+
+  // HTML_VERSION must equal package.json version (stale-cache detector).
+  const pkgVer = require('../package.json').version;
+  const hv = (app2.match(/const HTML_VERSION = '([^']+)'/) || [])[1];
+  t.eq('HTML_VERSION matches package.json', hv, pkgVer);
+
+  // CLIENT: the reset endpoint no longer zeroes openingDebt / sends tenants.
+  const cStart = srv2.indexOf("app.post('/api/reset-building-payments'");
+  const cEnd = srv2.indexOf("app.post('/api/admin/reset-building-opening-debt'");
+  const clientRoute = srv2.slice(cStart, cEnd);
+  t.eq('client reset does NOT send tenants in the save patch', /tenants:\s*cleanedTenants/.test(clientRoute), false);
+  t.eq('client reset still empties sentLog', /sentLog:\s*\{\}/.test(clientRoute), true);
+  t.eq('client reset still clears closedMonths', /closedMonths:\s*\[\]/.test(clientRoute), true);
+
+  // CLIENT copy: recoverable framing, no more openingDebt scare line.
+  t.eq('client card says recoverable (ניתן לשחזור)', app2.includes('ניתן לשחזור'), true);
+  t.eq('client card points to edit/import for opening debt', app2.includes('ייבא קובץ דיירים מעודכן'), true);
+  t.eq('client confirm no longer claims openingDebt reset', /יאופס: החוב ההתחלתי \(openingDebt\) של כל דייר/.test(app2), false);
+
+  // ADMIN endpoint exists, super-admin gated, validates tenantId, backs up.
+  const aStart = srv2.indexOf("app.post('/api/admin/reset-building-opening-debt'");
+  const aRoute = srv2.slice(aStart, aStart + 1400);
+  t.eq('admin endpoint is superAdmin-gated', /reset-building-opening-debt',\s*superAdminMiddleware/.test(srv2), true);
+  t.eq('admin endpoint validates tenantId against users', aRoute.includes('validIds.has(tenantId)'), true);
+  t.eq('admin endpoint backs up before wiping', aRoute.includes("createBackup('pre-restore')"), true);
+  t.eq('admin endpoint zeroes openingDebt', /openingDebt:\s*0/.test(aRoute), true);
+  t.eq('admin endpoint supports dryRun', aRoute.includes('dryRun'), true);
+
+  // ADMIN UI: the per-row button + handler + dry-run-then-confirm flow.
+  t.eq('admin row has reset-opening-debt button', adm.includes('resetOpeningDebt('), true);
+  t.eq('admin resetOpeningDebt handler defined', /async function resetOpeningDebt\s*\(/.test(adm), true);
+  t.eq('admin handler previews with dryRun first', /dryRun:\s*true/.test(adm.slice(adm.indexOf('function resetOpeningDebt'))), true);
+  t.eq('admin handler calls the endpoint', adm.includes("'/api/admin/reset-building-opening-debt'"), true);
+
+  // TOOLTIPS: every customer-row action button has a title=.
+  const rowStart = adm.indexOf('<button class="btn btn-sm btn-blue" onclick=\'openPlanModal');
+  const rowBlock = adm.slice(rowStart, rowStart + 1900);
+  const btnCount = (rowBlock.match(/<button /g) || []).length;
+  const titleCount = (rowBlock.match(/title="/g) || []).length;
+  t.eq('every customer-row button carries a tooltip (title=)', titleCount >= btnCount && btnCount >= 6, true);
+}
+
 process.exit(t.done() ? 1 : 0);

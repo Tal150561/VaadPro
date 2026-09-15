@@ -712,23 +712,68 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     // v2.14.8 — close markers cleared so a fresh close accrues real debt.
     t.eq('closedMonths cleared', patch.closedMonths.length, 0);
     t.eq('closedMonthsExtra cleared', patch.closedMonthsExtra.length, 0);
-    // openingDebt zeroed — main + extra.
-    t.eq('tenant openingDebt zeroed', patch.tenants[0].openingDebt, 0);
-    t.eq('extra account openingDebt zeroed', patch.tenants[0].extraAccounts[0].openingDebt, 0);
-    // PRESERVED — settings untouched.
-    t.eq('tenant name kept', patch.tenants[0].name, 'צבי אלתר');
-    t.eq('tenant phone kept', patch.tenants[0].phone, '0528064806');
-    t.eq('tenant keywords kept', patch.tenants[0].keywords, 'אלתר');
-    t.eq('customAmount kept', patch.tenants[0].customAmount, 217);
-    t.eq('personalTariffs kept', patch.tenants[0].personalTariffs[0].rate, 217);
-    t.eq('extraAccount definition kept (label)', patch.tenants[0].extraAccounts[0].label, 'ביטוח');
-    t.eq('extraAccount amount kept', patch.tenants[0].extraAccounts[0].amount, 50);
-    t.eq('extraAccount matchKeywords kept', patch.tenants[0].extraAccounts[0].matchKeywords, 'ביטוח');
-    t.eq('second tenant kept', patch.tenants[1].name, 'רוני מרחבי');
+    // v2.14.43 — the client reset NO LONGER touches openingDebt or the tenants
+    // list at all (that irreversible half moved to the admin-only endpoint).
+    t.eq('tenants NOT in patch (openingDebt untouched by client reset)', patch.tenants, undefined);
     // config is NOT in the patch (never sent → never touched).
     t.eq('config not in patch (untouched)', patch.config, undefined);
     t.eq('defaultTariffs not in patch (untouched)', patch.defaultTariffs, undefined);
     t.eq('receipt returns backup filename', r.result.backupFile, 'backup-pre-restore-test.zip');
+    // The building's real openingDebt survives the client reset.
+    t.eq('building openingDebt survived (main)', b.tenants[0].openingDebt, 217);
+    t.eq('building openingDebt survived (extra)', b.tenants[0].extraAccounts[0].openingDebt, 30);
+  }
+
+  // ── v2.14.43 — admin-only openingDebt reset (the moved irreversible half) ──
+  t.section('Admin reset openingDebt — dryRun previews without writing');
+  {
+    const { loadResetOpeningDebt } = require('./test-lib');
+    const b = makeBuilding();
+    const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
+    const r = loadResetOpeningDebt(b, { tenantId: 'T1', dryRun: true }, users);
+    t.eq('dryRun ok', r.result.ok === true && r.result.dryRun === true, true);
+    t.eq('counts tenants with openingDebt', r.result.summary.tenantsWithOpeningDebt, 1);
+    t.eq('counts extra accounts with openingDebt', r.result.summary.extraAccountsWithOpeningDebt, 1);
+    t.eq('returns building name for the confirm dialog', r.result.summary.buildingName, 'בניין הבדיקה');
+    t.eq('dryRun wrote nothing', r.saved.length, 0);
+    t.eq('dryRun took no backup', r.backupCalled, 0);
+    t.eq('dryRun left openingDebt intact', b.tenants[0].openingDebt, 217);
+  }
+
+  t.section('Admin reset openingDebt — real run zeroes debt, keeps everything else');
+  {
+    const { loadResetOpeningDebt } = require('./test-lib');
+    const b = makeBuilding();
+    const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
+    const r = loadResetOpeningDebt(b, { tenantId: 'T1', dryRun: false }, users);
+    t.eq('took a backup FIRST', r.backupCalled, 1);
+    t.eq('wrote exactly once', r.saved.length, 1);
+    const patch = r.saved[0].patch;
+    // ONLY tenants is in the patch — nothing else touched.
+    t.eq('tenant openingDebt zeroed', patch.tenants[0].openingDebt, 0);
+    t.eq('extra account openingDebt zeroed', patch.tenants[0].extraAccounts[0].openingDebt, 0);
+    // Settings preserved.
+    t.eq('tenant name kept', patch.tenants[0].name, 'צבי אלתר');
+    t.eq('tenant phone kept', patch.tenants[0].phone, '0528064806');
+    t.eq('customAmount kept', patch.tenants[0].customAmount, 217);
+    t.eq('extraAccount definition kept (label)', patch.tenants[0].extraAccounts[0].label, 'ביטוח');
+    t.eq('extraAccount amount kept', patch.tenants[0].extraAccounts[0].amount, 50);
+    t.eq('second tenant kept', patch.tenants[1].name, 'רוני מרחבי');
+    // Payment data is NOT part of this patch (this endpoint only zeroes debt).
+    t.eq('sentLog not in patch', patch.sentLog, undefined);
+    t.eq('paymentHistory not in patch', patch.paymentHistory, undefined);
+    t.eq('receipt returns backup filename', r.result.backupFile, 'backup-pre-restore-test.zip');
+  }
+
+  t.section('Admin reset openingDebt — rejects an unknown tenantId');
+  {
+    const { loadResetOpeningDebt } = require('./test-lib');
+    const b = makeBuilding();
+    const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
+    const r = loadResetOpeningDebt(b, { tenantId: 'GHOST', dryRun: false }, users);
+    t.eq('rejected unknown tenantId', r.result.ok, false);
+    t.eq('nothing written for bad id', r.saved.length, 0);
+    t.eq('no backup for bad id', r.backupCalled, 0);
   }
 }
 
@@ -2297,6 +2342,84 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     const r = B.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-08', { amount: 400 }, new Set());
     t.eq('apt-note resolves → written to the apt-6 owner (B)', String(r.newSentLog['B_אוגוסט'] || '').startsWith('bank_import'), true);
     t.eq('apt-note resolves → NOT queued as ambiguous', (r.ambiguousMatchHits || []).length, 0);
+  }
+}
+// ── v2.14.42: /api/apply-ambiguous-match — resolve agent-queued rows ──────────
+{
+  t.section('v2.14.42 — apply-ambiguous-match (accumulate, overlap guard, drop)');
+  const { loadApplyAmbiguous } = require('./test-lib');
+  const rowKeyOf = h => [h.rowIdx, h.amount, h.date||'', h.payerName||'', h.scope||'main'].join('|');
+
+  const mkBuilding = () => ({
+    config: { amount: 300 },
+    closedMonths: [], closedMonthsExtra: [],
+    defaultTariffs: {},
+    tenants: [
+      { id: 'A', name: 'כהן א', customAmount: 300, openingDebt: 0 },
+      { id: 'B', name: 'כהן ב', customAmount: 300, openingDebt: 0 }
+    ],
+    paymentHistory: {}, sentLog: {},
+    importedBankFingerprints: [],
+    pendingAmbiguousMatches: [
+      { rowIdx: 2, amount: 300, date: '10/08/2026', payerName: 'כהן', rawText: 'כהן', scope: 'main',
+        candidates: [{ id: 'A', name: 'כהן א' }, { id: 'B', name: 'כהן ב' }] }
+    ]
+  });
+
+  // 1) assign → payment written to chosen tenant, row dropped, fingerprint added
+  {
+    const b = mkBuilding();
+    const rk = rowKeyOf(b.pendingAmbiguousMatches[0]);
+    const r = loadApplyAmbiguous(b, { rowKey: rk, tenantId: 'A', decision: 'assign' });
+    t.eq('applied=true', r.result && r.result.applied, true);
+    t.eq('written to A (300)', /bank_import_[^_]+_300_/.test(String(b.sentLog['A_אוגוסט']||'')), true);
+    t.eq('row dropped from queue', b.pendingAmbiguousMatches.length, 0);
+    t.eq('fingerprint persisted', b.importedBankFingerprints.length, 1);
+    t.eq('B untouched', b.sentLog['B_אוגוסט'] == null, true);
+  }
+
+  // 2) ACCUMULATE onto an existing amount (A already paid 230)
+  {
+    const b = mkBuilding();
+    b.sentLog['A_אוגוסט'] = 'bank_import_ISO_230_payer_x';
+    const rk = rowKeyOf(b.pendingAmbiguousMatches[0]);
+    loadApplyAmbiguous(b, { rowKey: rk, tenantId: 'A', decision: 'assign' });
+    t.eq('accumulates 230+300=530', /bank_import_[^_]+_530_/.test(String(b.sentLog['A_אוגוסט']||'')), true);
+  }
+
+  // 3) OVERLAP GUARD — fingerprint already present (manual import wrote it) → no write, just drop
+  {
+    const b = mkBuilding();
+    const row = b.pendingAmbiguousMatches[0];
+    // precompute the 3-part fingerprint the endpoint checks
+    const dd = String(row.date).trim().toLowerCase().replace(/\s+/g,' ');
+    const aa = String(Math.round((row.amount)*100)/100);
+    const nn = String(row.rawText).trim().toLowerCase().replace(/\s+/g,' ');
+    b.importedBankFingerprints = [dd+'|'+aa+'|'+nn];
+    const rk = rowKeyOf(row);
+    const r = loadApplyAmbiguous(b, { rowKey: rk, tenantId: 'A', decision: 'assign' });
+    t.eq('overlap → applied=false', r.result.applied, false);
+    t.eq('overlap → alreadyWritten flagged', r.result.alreadyWritten, true);
+    t.eq('overlap → NOT written again', b.sentLog['A_אוגוסט'] == null, true);
+    t.eq('overlap → still dropped from queue', b.pendingAmbiguousMatches.length, 0);
+  }
+
+  // 4) ignore → nothing written, row dropped
+  {
+    const b = mkBuilding();
+    const rk = rowKeyOf(b.pendingAmbiguousMatches[0]);
+    const r = loadApplyAmbiguous(b, { rowKey: rk, decision: 'ignore' });
+    t.eq('ignore → applied=false', r.result.applied, false);
+    t.eq('ignore → nothing written', Object.keys(b.sentLog).length, 0);
+    t.eq('ignore → row dropped', b.pendingAmbiguousMatches.length, 0);
+  }
+
+  // 5) unknown rowKey → no-op notFound (idempotent double-click safety)
+  {
+    const b = mkBuilding();
+    const r = loadApplyAmbiguous(b, { rowKey: 'nonexistent|1|x|y|main', tenantId: 'A', decision: 'assign' });
+    t.eq('unknown key → notFound', r.result.notFound, true);
+    t.eq('unknown key → queue intact', b.pendingAmbiguousMatches.length, 1);
   }
 }
 
