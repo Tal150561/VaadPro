@@ -245,6 +245,52 @@
   .wa-setup-card h3{color:var(--accent);font-size:0.95rem;font-weight:700;margin-bottom:10px;}
   .wa-setup-step{display:flex;gap:10px;align-items:flex-start;padding:6px 0;}
   .wa-setup-num{width:22px;height:22px;border-radius:50%;background:var(--accent);color:#000;font-size:0.72rem;font-weight:800;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
+
+  /* ============================================================
+     v2.14.46 — MOBILE ADAPTATION (added Tal, Sep 2026)
+     Single mobile-only block. Desktop UI is untouched: every rule
+     here lives inside @media(max-width:640px) and never fires above it.
+     Fixes: header stacking, stats grid, horizontal-scroll tabs,
+     tighter padding, touch-target sizing, form field width.
+     ============================================================ */
+  @media(max-width:640px){
+    /* --- header: stop logo & badge from crushing; let it stack --- */
+    header{padding:12px 14px;}
+    .header-inner{flex-wrap:wrap;gap:10px;justify-content:center;}
+    .logo-area{gap:8px;}
+    header h1{font-size:1.15rem;}
+    header p{font-size:0.7rem;}
+    .conn-badge{padding:6px 12px;font-size:0.76rem;}
+
+    /* --- stats: 5 tiny cells are unreadable on a phone → 3 per row --- */
+    .stats-outer{padding:12px 10px 0;}
+    .stats-row{grid-template-columns:repeat(3,1fr);gap:6px;}
+
+    /* --- tabs: scroll sideways instead of getting cut off --- */
+    .tabs-outer{padding:14px 10px 0;}
+    .tabs{overflow-x:auto;flex-wrap:nowrap;-webkit-overflow-scrolling:touch;
+          scrollbar-width:none;}
+    .tabs::-webkit-scrollbar{display:none;}
+    .tab-btn{flex:0 0 auto;padding:11px 15px;font-size:0.85rem;min-height:44px;white-space:nowrap;}
+
+    /* --- main content: reclaim horizontal space --- */
+    main{padding:14px 10px;}
+    .card-header{padding:11px 14px;font-size:0.9rem;}
+    .actions-bar{padding:10px 14px;}
+
+    /* --- touch targets: buttons comfortable for a thumb --- */
+    .btn{min-height:44px;padding:10px 16px;}
+
+    /* --- forms/filters: give fields real width so they don't squeeze --- */
+    .add-row{gap:10px;}
+    .filter-row>div,.trend-controls>div,.col-select>div{min-width:100%;}
+
+    /* --- modals: use nearly the full screen width on a phone --- */
+    .modal{width:94%;padding:22px 18px;}
+
+    /* --- tenant chips grid: one comfortable column --- */
+    .tenant-select-grid{grid-template-columns:1fr;}
+  }
 </style>
   <link rel="icon" type="image/svg+xml" href="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHJlY3Qgd2lkdGg9IjMyIiBoZWlnaHQ9IjMyIiByeD0iNiIgZmlsbD0iIzExMTgyNyIvPjxyZWN0IHg9IjQiIHk9IjE2IiB3aWR0aD0iMTgiIGhlaWdodD0iMTQiIHJ4PSIyIiBmaWxsPSIjM2I4MmY2Ii8+PHBvbHlnb24gcG9pbnRzPSIxMyw0IDIyLDE2IDQsMTYiIGZpbGw9IiMyNTYzZWIiLz48cmVjdCB4PSI4IiB5PSIyMiIgd2lkdGg9IjYiIGhlaWdodD0iOCIgcng9IjEiIGZpbGw9IiMxZTNhNWYiLz48cGF0aCBkPSJNMjQgMjIgUTI4IDE4IDMyIDIyIiBmaWxsPSJub25lIiBzdHJva2U9IiMwNmI2ZDQiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+PHBhdGggZD0iTTI1IDE4IFEyOCAxNCAzMSAxOCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMDZiNmQ0IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPjxjaXJjbGUgY3g9IjI4IiBjeT0iMjQiIHI9IjIiIGZpbGw9IiMwNmI2ZDQiLz48L3N2Zz4=">
 </head>
