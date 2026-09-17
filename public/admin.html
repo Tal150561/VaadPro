@@ -563,7 +563,24 @@
         <span id="orphanStatus" style="font-size:13px;color:var(--text3)"></span>
       </div>
       <div class="table-wrap" style="margin-bottom:16px;padding:16px;">
-        <h3 style="margin:0 0 4px">🛡️ הגדרות גיבוי (שכבה 2)</h3>
+        <h3 style="margin:0;display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none" onclick="toggleHealthPanel()">
+          <span id="healthToggleIcon" style="font-size:12px;transition:transform .15s">▶</span>
+          💚 בריאות מערכת
+          <span id="healthHint" style="font-size:12px;font-weight:400;color:var(--text3);margin-right:auto"></span>
+        </h3>
+        <div id="healthPanelBody" style="display:none;margin-top:12px">
+          <div style="display:flex;gap:10px;align-items:center;margin-bottom:10px">
+            <button class="btn btn-ghost" style="padding:4px 10px;font-size:13px" onclick="loadSystemHealth()">🔄 רענן</button>
+          </div>
+          <div id="healthGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px"></div>
+        </div>
+      </div>
+      <div class="table-wrap" style="margin-bottom:16px;padding:16px;">
+          <span id="backupToggleIcon" style="font-size:12px;transition:transform .15s">▶</span>
+          🛡️ הגדרות גיבוי (שכבה 2)
+          <span id="backupLastHint" style="font-size:12px;font-weight:400;color:var(--text3);margin-right:auto"></span>
+        </h3>
+        <div id="backupPanelBody" style="display:none;margin-top:8px">
         <p style="font-size:13px;color:var(--text3);margin:0 0 12px">גיבוי יומי אוטומטי של כל נתוני המערכת. מספר הימים לשמירה — גיבויים ישנים יותר נמחקים אוטומטית.</p>
         <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
           <label style="font-size:14px">ימי שמירה:
@@ -586,6 +603,7 @@
           <span id="backupEmailStatus" style="font-size:13px;color:var(--text3)"></span>
         </div>
         <div id="backupList" style="margin-top:12px;font-size:13px;color:var(--text3)"></div>
+        </div>
       </div>
       <div class="table-wrap">
         <div class="table-header">
@@ -1309,6 +1327,7 @@ async function loadCustomers() {
   allCustomers = data.users || [];
   renderCustomers(allCustomers);
   loadBackupSettings();
+  loadSystemHealth();
 }
 
 function renderCustomers(users) {
@@ -2297,6 +2316,142 @@ async function resetBuildingWa() {
   }
 }
 
+function toggleHealthPanel() {
+  const body = document.getElementById('healthPanelBody');
+  const icon = document.getElementById('healthToggleIcon');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if (icon) icon.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+  if (!open && !body.dataset.loaded) loadSystemHealth();
+}
+
+function fmtUptime(sec) {
+  if (!sec && sec !== 0) return '—';
+  const d = Math.floor(sec / 86400), h = Math.floor((sec % 86400) / 3600), m = Math.floor((sec % 3600) / 60);
+  if (d) return `${d} ימים ${h} שע'`;
+  if (h) return `${h} שע' ${m} דק'`;
+  return `${m} דק'`;
+}
+
+function healthCard(title, value, sub, color) {
+  return `<div style="background:var(--surface2,#1c1c24);border:1px solid var(--border,#333);border-radius:10px;padding:12px">` +
+         `<div style="font-size:12px;color:var(--text3);margin-bottom:4px">${title}</div>` +
+         `<div style="font-size:20px;font-weight:700;color:${color || 'inherit'}">${value}</div>` +
+         (sub ? `<div style="font-size:12px;color:var(--text3);margin-top:2px">${sub}</div>` : '') +
+         `</div>`;
+}
+
+async function loadSystemHealth() {
+  const grid = document.getElementById('healthGrid');
+  const hint = document.getElementById('healthHint');
+  if (grid) grid.innerHTML = '<div style="color:var(--text3)">טוען...</div>';
+  try {
+    const res = await fetch('/api/admin/system-health', { headers: adminHeaders() });
+    const d = await res.json();
+    if (!d.ok) { if (grid) grid.innerHTML = '<div style="color:var(--text3)">שגיאה בטעינה</div>'; return; }
+    const c = d.customers, wa = d.whatsapp, bk = d.backups;
+    const lastBackup = bk.lastMtime ? timeAgoHe(bk.lastMtime) : 'אין';
+    const cards = [
+      healthCard('גרסה', d.version || '—', 'Node ' + (d.nodeVersion || '')),
+      healthCard('Uptime', fmtUptime(d.uptimeSec), 'זיכרון: ' + d.memRssMb + 'MB'),
+      healthCard('לקוחות', c.total, `פעילים ${c.active} · מושהים ${c.suspended}`,
+                 c.suspended > 0 ? 'var(--warn,#e0a800)' : undefined),
+      healthCard('ניסיון', c.trial, `פגים ב-30 יום: ${c.expiringSoon}`,
+                 c.expiringSoon > 0 ? 'var(--warn,#e0a800)' : undefined),
+      healthCard('WhatsApp', `${wa.connected}/${wa.connected + wa.disconnected}`, 'מחוברים',
+                 wa.disconnected > 0 ? 'var(--warn,#e0a800)' : 'var(--ok,#3fb950)'),
+      healthCard('גיבויים', bk.count, `אחרון: ${lastBackup} · ${Math.round(bk.sizeKb / 1024)}MB`),
+      healthCard('נתונים', d.data.files + ' קבצים', Math.round(d.data.sizeKb / 1024 * 10) / 10 + 'MB על הווליום'),
+    ];
+    if (grid) grid.innerHTML = cards.join('');
+    const body = document.getElementById('healthPanelBody');
+    if (body) body.dataset.loaded = '1';
+    if (hint) {
+      const warn = c.suspended + c.expiringSoon + wa.disconnected;
+      hint.textContent = warn > 0 ? `· ${warn} התראות` : '· הכל תקין ✓';
+    }
+  } catch(e) {
+    if (grid) grid.innerHTML = '<div style="color:var(--text3)">שגיאה: ' + e.message + '</div>';
+  }
+}
+
+function toggleBackupPanel() {
+  const body = document.getElementById('backupPanelBody');
+  const icon = document.getElementById('backupToggleIcon');
+  if (!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if (icon) icon.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+
+// "לפני X" בעברית מתוך timestamp ISO
+function timeAgoHe(iso) {
+  const diff = Date.now() - new Date(iso).getTime();
+  if (isNaN(diff)) return '';
+  const min = Math.floor(diff / 60000);
+  if (min < 1) return 'הרגע';
+  if (min < 60) return `לפני ${min} דק'`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `לפני ${hr} שע'`;
+  const d = Math.floor(hr / 24);
+  return `לפני ${d} ימים`;
+}
+
+// סיווג גיבוי לפי שם הקובץ → מפתח קבוצה
+function backupType(name) {
+  if (/^backup-daily-/i.test(name))       return 'daily';
+  if (/^backup-startup-/i.test(name))     return 'startup';
+  if (/^backup-pre-restore-/i.test(name)) return 'pre-restore';
+  if (/^backup-manual-/i.test(name))      return 'manual';
+  return 'other';
+}
+
+const BACKUP_GROUP_LABELS = {
+  daily: '📅 יומיים', startup: '🚀 אתחול', 'pre-restore': '↩️ טרום-שחזור',
+  manual: '✋ ידניים', other: '📦 אחרים'
+};
+const BACKUP_GROUP_ORDER = ['daily', 'manual', 'pre-restore', 'startup', 'other'];
+
+// רינדור הרשימה מקובצת לפי סוג, עם ספירה, הורדה ומחיקה לכל פריט
+function renderBackupGroups(all, total) {
+  const groups = {};
+  all.forEach(b => { const k = backupType(b.name); (groups[k] = groups[k] || []).push(b); });
+  let html = `<div style="margin-bottom:6px">סה"כ ${total} גיבויים:</div>`;
+  BACKUP_GROUP_ORDER.forEach(k => {
+    const items = groups[k];
+    if (!items || !items.length) return;
+    const rows = items.map(b => {
+      const when = b.mtime ? new Date(b.mtime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
+      const safe = b.name.replace(/'/g, "\\'");
+      const enc  = encodeURIComponent(b.name);
+      return `<div style="display:flex;align-items:center;gap:6px;padding:2px 0">` +
+             `<button class="btn btn-ghost" style="padding:2px 8px;font-size:12px" title="הורד" onclick="downloadBackup('${enc}')">⬇️</button>` +
+             `<button class="btn btn-ghost" style="padding:2px 8px;font-size:12px" title="מחק" onclick="deleteBackup('${safe}')">🗑️</button>` +
+             `<span>${b.name} — ${b.sizeKb}KB${when ? ' · ' + when : ''}</span></div>`;
+    }).join('');
+    html += `<details style="margin:6px 0" open>` +
+            `<summary style="cursor:pointer;font-weight:600">${BACKUP_GROUP_LABELS[k]} (${items.length})</summary>` +
+            `<div style="padding:4px 0 4px 8px">${rows}</div></details>`;
+  });
+  return html;
+}
+
+// הורדת גיבוי בודד (דרך fetch עם adminHeaders → blob, כי הורדה ישירה לא נושאת אימות)
+async function downloadBackup(enc) {
+  const name = decodeURIComponent(enc);
+  try {
+    const res = await fetch('/api/admin/backup-download?file=' + enc, { headers: adminHeaders() });
+    if (!res.ok) { toast('הורדה נכשלה', 'err'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    URL.revokeObjectURL(url);
+  } catch(e) { toast('שגיאה בהורדה: ' + e.message, 'err'); }
+}
+
 async function loadBackupSettings() {
   try {
     const res = await fetch('/api/admin/backup-settings', { headers: adminHeaders() });
@@ -2318,18 +2473,18 @@ async function loadBackupSettings() {
       }
     }
     const list = document.getElementById('backupList');
+    const hint = document.getElementById('backupLastHint');
+    const all = data.backups || [];
+    // חיווי "גיבוי אחרון: לפני X" בכותרת המכווצת
+    if (hint) {
+      const newest = all.reduce((m, b) => (b.mtime && (!m || b.mtime > m) ? b.mtime : m), null);
+      hint.textContent = newest ? '· גיבוי אחרון: ' + timeAgoHe(newest) : (data.count ? '' : '· אין גיבויים');
+    }
     if (list) {
       if (!data.count) {
         list.textContent = 'אין עדיין גיבויים (ייווצרו אוטומטית).';
       } else {
-        const rows = (data.backups || []).slice(0, 12).map(b => {
-          const when = b.mtime ? new Date(b.mtime).toLocaleString('he-IL', { timeZone: 'Asia/Jerusalem' }) : '';
-          const safe = b.name.replace(/'/g, "\\'");
-          return `<div style="display:flex;align-items:center;gap:8px;padding:3px 0">` +
-                 `<button class="btn btn-ghost" style="padding:2px 8px;font-size:12px" title="מחק גיבוי זה" onclick="deleteBackup('${safe}')">🗑️</button>` +
-                 `<span>${b.name} — ${b.sizeKb}KB${when ? ' · ' + when : ''}</span></div>`;
-        }).join('');
-        list.innerHTML = `סה"כ ${data.count} גיבויים. אחרונים:${rows}`;
+        list.innerHTML = renderBackupGroups(all, data.count);
       }
     }
   } catch(e) { /* שקט */ }

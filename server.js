@@ -4201,6 +4201,82 @@ app.post('/api/admin/backup-delete', superAdminMiddleware, (req, res) => {
   }
 });
 
+// GET ?file=... — הורדת גיבוי בודד (Super Admin). ולידציה זהה למחיקה (מניעת path traversal)
+app.get('/api/admin/backup-download', superAdminMiddleware, (req, res) => {
+  const file = req.query.file;
+  if (!file || typeof file !== 'string' ||
+      file !== path.basename(file) ||
+      !/^backup-[a-z-]+-\d[\d_-]*\.zip$/i.test(file)) {
+    return res.status(400).json({ ok: false, error: 'שם קובץ לא תקין' });
+  }
+  const fp = path.join(BACKUPS_DIR, file);
+  if (path.dirname(fp) !== BACKUPS_DIR || !fs.existsSync(fp)) {
+    return res.status(404).json({ ok: false, error: 'הגיבוי לא נמצא' });
+  }
+  console.log(`[Backup] downloaded ${file} by admin ${req.adminUser && req.adminUser.email}`);
+  res.download(fp, file);
+});
+
+// GET — בריאות מערכת (Super Admin): גרסה, uptime, זיכרון, דיסק, לקוחות, WhatsApp
+app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
+  const now = Date.now();
+  // — לקוחות —
+  let total = 0, active = 0, suspended = 0, trial = 0, expiringSoon = 0, waConnected = 0, waDisconnected = 0;
+  try {
+    const users = loadUsers();
+    total = users.length;
+    for (const u of users) {
+      if (u.suspended === true) suspended++; else active++;
+      if (u.plan === 'trial') {
+        trial++;
+        const te = u.trialEnd ? new Date(u.trialEnd).getTime() : 0;
+        if (te && te > now && te - now < 30 * 24 * 60 * 60 * 1000) expiringSoon++;
+      }
+      const st = waClients[u.tenantId] ? waClients[u.tenantId].status : null;
+      if (st === 'ready') waConnected++; else waDisconnected++;
+    }
+  } catch(e) {}
+  // — נתוני קבצים על הווליום —
+  let dataSizeKb = 0, dataFiles = 0;
+  try {
+    for (const f of fs.readdirSync(DATA_DIR)) {
+      if (f.endsWith('.json')) {
+        try { dataSizeKb += fs.statSync(path.join(DATA_DIR, f)).size; dataFiles++; } catch(e) {}
+      }
+    }
+    dataSizeKb = Math.round(dataSizeKb / 1024);
+  } catch(e) {}
+  // — גיבויים —
+  let backupCount = 0, lastBackupMtime = null, backupsSizeKb = 0;
+  try {
+    for (const f of fs.readdirSync(BACKUPS_DIR)) {
+      if (f.startsWith('backup-') && f.endsWith('.zip')) {
+        backupCount++;
+        try {
+          const st = fs.statSync(path.join(BACKUPS_DIR, f));
+          backupsSizeKb += st.size;
+          if (!lastBackupMtime || st.mtimeMs > lastBackupMtime) lastBackupMtime = st.mtimeMs;
+        } catch(e) {}
+      }
+    }
+    backupsSizeKb = Math.round(backupsSizeKb / 1024);
+  } catch(e) {}
+  const mem = process.memoryUsage();
+  res.json({
+    ok: true,
+    version: SERVER_VERSION || '',
+    nodeVersion: process.version,
+    uptimeSec: Math.round(process.uptime()),
+    serverTime: new Date().toISOString(),
+    memRssMb: Math.round(mem.rss / 1048576),
+    memHeapMb: Math.round(mem.heapUsed / 1048576),
+    customers: { total, active, suspended, trial, expiringSoon },
+    whatsapp: { connected: waConnected, disconnected: waDisconnected },
+    data: { files: dataFiles, sizeKb: dataSizeKb },
+    backups: { count: backupCount, sizeKb: backupsSizeKb, lastMtime: lastBackupMtime ? new Date(lastBackupMtime).toISOString() : null }
+  });
+});
+
 // POST — נקה גיבויי startup ישנים (משאיר את האחרון; daily/pre-restore/manual לא נגעים)
 app.post('/api/admin/backup-clean-startup', superAdminMiddleware, (req, res) => {
   let removed = 0;
