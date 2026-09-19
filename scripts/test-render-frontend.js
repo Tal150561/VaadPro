@@ -1252,16 +1252,58 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   t.eq('banner button calls bannerReconnect', app.includes('onclick="bannerReconnect()"'), true);
 
   // bannerReconnect exists and runs the full reset (calls reset-auth) when pending
-  const brBody = (app.match(/async function bannerReconnect\(\)[\s\S]*?\n\}/) || [''])[0];
+  const brBody = (app.match(/async function bannerReconnect\(forceReset\)[\s\S]*?\n\}/) || [''])[0];
   t.eq('bannerReconnect exists', brBody.length > 0, true);
   t.eq('bannerReconnect posts reset-auth when pending', brBody.includes("/wa/reset-auth"), true);
   t.eq('bannerReconnect falls back to handleConnClick when not pending',
-    /if \(!_waResetPending\) \{ handleConnClick\(\); return; \}/.test(brBody), true);
+    /if \(!_waResetPending && !forceReset\) \{ handleConnClick\(\); return; \}/.test(brBody), true);
   t.eq('bannerReconnect polls /status for fresh QR', brBody.includes("/status") && brBody.includes('qrDataUrl'), true);
 
   // MUTATION guard: the old wiring (banner → handleConnClick only) must be gone
   t.eq('banner no longer wired directly to handleConnClick',
     app.includes('id="waBannerReconnectBtn" onclick="handleConnClick()"'), false);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.47 — WA delivery self-heal + early-detection (getMessage,
+// delivery tracking, amber "suspect" banner)
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.47 — WA delivery self-heal + suspect banner');
+  const app = readSource('public/app.html');
+  const srv = readSource('server.js');
+
+  // — server: self-heal (getMessage) + hygiene —
+  t.eq('getMessage option wired for retry-resend', /getMessage:\s*async \(key\) =>/.test(srv), true);
+  t.eq('markOnlineOnConnect:false set', srv.includes('markOnlineOnConnect: false'), true);
+  t.eq('sendWaMsg stores sent message for retry', srv.includes('wa.msgStore.set(sent.key.id, sent.message)'), true);
+  t.eq('msgStore is size-capped', srv.includes('wa.msgStore.size > WA_MSG_STORE_MAX'), true);
+
+  // — server: delivery tracking —
+  t.eq('tracks each send in wa.deliveries', /wa\.deliveries\.set\(sent\.key\.id/.test(srv), true);
+  t.eq('messages.update listener present', srv.includes("sock.ev.on('messages.update'"), true);
+  t.eq('delivery ack requires status >= 3', srv.includes('u.update.status >= 3'), true);
+  t.eq('fresh delivery clears suspicion', /wa\.lastDeliveredAt = Date\.now\(\);\s*\n\s*wa\.deliverySuspect = false;/.test(srv), true);
+  t.eq('evaluateDeliverySuspect exists', /function evaluateDeliverySuspect\(o\)/.test(srv), true);
+  t.eq('periodic sweep scheduled', srv.includes('setInterval(sweepDeliveries, 60000)'), true);
+  t.eq('tracking cleared on fresh socket open', /if \(wa\.deliveries\) wa\.deliveries\.clear\(\); wa\.deliverySuspect = false;/.test(srv), true);
+
+  // — server: exposed to the UIs —
+  t.eq('/api/status ships deliverySuspect', srv.includes('deliverySuspect: !!wa.deliverySuspect'), true);
+  t.eq('system-health counts delivery suspects', srv.includes('deliverySuspect: waDeliverySuspect'), true);
+
+  // — frontend: amber banner + wiring —
+  t.eq('amber delivery banner present', app.includes('id="waDeliveryBanner"'), true);
+  t.eq('amber banner button forces a reset', app.includes('onclick="bannerReconnect(true)"'), true);
+  t.eq('showDeliveryBanner defined', /function showDeliveryBanner\(show, msg\)/.test(app), true);
+  t.eq('checkStatus reacts to s.deliverySuspect', /s\.status==='ready' && s\.deliverySuspect/.test(app), true);
+  t.eq('checkStatus shows the delivery banner', /showDeliveryBanner\(true,/.test(app), true);
+  t.eq('bannerReconnect honors forceReset', app.includes('!_waResetPending && !forceReset'), true);
+
+  // — guide documents the new behavior —
+  const guide = readSource('public/vaadpro-guide.js');
+  t.eq('guide documents delivery-suspect banner', guide.includes('ייתכן שהודעות לא נמסרו'), true);
+  t.eq('guide explains auto-resend', guide.includes('מנסה לשלוח מחדש אוטומטית'), true);
 }
 
 // ════════════════════════════════════════════════════════════════

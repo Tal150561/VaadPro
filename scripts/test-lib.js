@@ -424,8 +424,19 @@ function makeRunner(title) {
   };
 }
 
+// ── Load the WA delivery-suspect pure function (v2.14.47) ──────────
+// evaluateDeliverySuspect is a PURE decision fn (no I/O, no module constants),
+// so it extracts cleanly and is tested in isolation from the live socket glue.
+function loadDeliverySuspect() {
+  const src = readSource('server.js');
+  const code = extractFunctions(src, ['evaluateDeliverySuspect'])
+    + 'module.exports={evaluateDeliverySuspect};';
+  return runInSandbox(code);
+}
+
+
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetOpeningDebt, loadApplyClosedMonth, loadApplyAmbiguous, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetOpeningDebt, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };

@@ -2423,4 +2423,36 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
+// ── evaluateDeliverySuspect — WA delivery self-heal detection (v2.14.47) ──
+// PURE decision fn: "≥ minFails sends stale-undelivered AND nothing delivered
+// since the oldest of them" ⇒ session likely corrupt. A few offline recipients
+// among successful sends must NOT trip it.
+{
+  const { loadDeliverySuspect } = require('./test-lib');
+  const { evaluateDeliverySuspect } = loadDeliverySuspect();
+  t.section('evaluateDeliverySuspect — delivery-failure detection');
+  const NOW = 1000000;
+  const G = 240000, MAX = 1800000, MIN = 3;   // mirror live WA_DELIVERY_* constants
+  const stale = { ts: NOW - 300000 };          // 5 min old: past grace, within window
+  const fresh = { ts: NOW - 60000 };           // 1 min old: still inside grace
+  const aged  = { ts: NOW - 2000000 };         // >30 min: aged out, ignored
+  const ev = (undelivered, lastDeliveredAt) => evaluateDeliverySuspect({
+    now: NOW, undelivered, lastDeliveredAt: lastDeliveredAt || 0,
+    graceMs: G, minFails: MIN, maxAgeMs: MAX
+  });
+
+  t.eq('empty → not suspect', ev([]).suspect, false);
+  t.eq('3 stale, never delivered → suspect', ev([stale,stale,stale], 0).suspect, true);
+  t.eq('3 stale → staleFails counted', ev([stale,stale,stale], 0).staleFails, 3);
+  t.eq('2 stale → below min → not suspect', ev([stale,stale], 0).suspect, false);
+  t.eq('3 fresh (within grace) → not suspect yet', ev([fresh,fresh,fresh], 0).suspect, false);
+  t.eq('3 aged-out (past max) → ignored → not suspect', ev([aged,aged,aged], 0).suspect, false);
+  // a delivery AFTER the stale sends ⇒ session alive ⇒ not suspect
+  t.eq('3 stale but delivered since → not suspect', ev([stale,stale,stale], NOW - 100000).suspect, false);
+  // a delivery BEFORE the stale sends ⇒ nothing acked since ⇒ suspect
+  t.eq('3 stale, last delivery predates them → suspect', ev([stale,stale,stale], NOW - 500000).suspect, true);
+  // fresh ones don't count toward the threshold
+  t.eq('2 stale + 2 fresh → still below min → not suspect', ev([stale,stale,fresh,fresh], 0).suspect, false);
+}
+
 process.exit(t.done() ? 1 : 0);

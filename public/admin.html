@@ -2360,8 +2360,9 @@ async function loadSystemHealth() {
                  c.suspended > 0 ? 'var(--warn,#e0a800)' : undefined),
       healthCard('ניסיון', c.trial, `פגים ב-30 יום: ${c.expiringSoon}`,
                  c.expiringSoon > 0 ? 'var(--warn,#e0a800)' : undefined),
-      healthCard('WhatsApp', `${wa.connected}/${wa.connected + wa.disconnected}`, 'מחוברים',
-                 wa.disconnected > 0 ? 'var(--warn,#e0a800)' : 'var(--ok,#3fb950)'),
+      healthCard('WhatsApp', `${wa.connected}/${wa.connected + wa.disconnected}`,
+                 (wa.deliverySuspect > 0 ? `🟠 ${wa.deliverySuspect} חשד תקלת מסירה` : 'מחוברים'),
+                 (wa.disconnected > 0 || wa.deliverySuspect > 0) ? 'var(--warn,#e0a800)' : 'var(--ok,#3fb950)'),
       healthCard('גיבויים', bk.count, `אחרון: ${lastBackup} · ${Math.round(bk.sizeKb / 1024)}MB`),
       healthCard('נתונים', d.data.files + ' קבצים', Math.round(d.data.sizeKb / 1024 * 10) / 10 + 'MB על הווליום'),
     ];
@@ -2369,7 +2370,7 @@ async function loadSystemHealth() {
     const body = document.getElementById('healthPanelBody');
     if (body) body.dataset.loaded = '1';
     if (hint) {
-      const warn = c.suspended + c.expiringSoon + wa.disconnected;
+      const warn = c.suspended + c.expiringSoon + wa.disconnected + (wa.deliverySuspect || 0);
       hint.textContent = warn > 0 ? `· ${warn} התראות` : '· הכל תקין ✓';
     }
   } catch(e) {

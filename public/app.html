@@ -371,6 +371,14 @@ function vpLogout() {
   &nbsp;
   <button onclick="document.getElementById('waBanner').style.display='none'" style="background:none;border:none;font-size:15px;cursor:pointer;color:var(--text3);">✕</button>
 </div>
+<!-- v2.14.47 — באנר חשד לתקלת מסירה (מחובר, אך הודעות לא נמסרות) -->
+<div id="waDeliveryBanner" style="display:none;background:rgba(245,158,11,.14);border-bottom:1px solid rgba(245,158,11,.3);padding:8px 16px;text-align:center;font-size:13px;color:var(--text2);direction:rtl;">
+  <span id="waDeliveryBannerMsg">🟠 ייתכן שהודעות אחרונות לא נמסרו לנמענים</span>
+  &nbsp;
+  <button onclick="bannerReconnect(true)" style="background:rgba(245,158,11,.22);border:1px solid rgba(245,158,11,.45);border-radius:6px;padding:3px 10px;font-size:12px;color:inherit;cursor:pointer;">אפס חיבור וסרוק</button>
+  &nbsp;
+  <button onclick="document.getElementById('waDeliveryBanner').style.display='none'" style="background:none;border:none;font-size:15px;cursor:pointer;color:var(--text3);">✕</button>
+</div>
 
 <!-- Onboarding Wizard Modal -->
 <div class="modal-overlay" id="wizardModal" style="z-index:200;">
@@ -1784,7 +1792,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.46';
+const HTML_VERSION = '2.14.47';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2245,6 +2253,12 @@ async function checkStatus() {
       _waDisconnectedSince = null;
       _waResetPending = false;
     }
+    // v2.14.47 — באנר חשד למסירה: מחובר אך הודעות אחרונות לא נמסרו לנמענים
+    if (s.status==='ready' && s.deliverySuspect) {
+      showDeliveryBanner(true, '🟠 ייתכן שהודעות אחרונות לא הגיעו לנמענים. המערכת מנסה לשלוח מחדש אוטומטית; אם דיירים לא מקבלים — לחצו "אפס חיבור וסרוק" וסרקו ברקוד.');
+    } else {
+      showDeliveryBanner(false);
+    }
   } catch(e){
     if (_checkTimeoutId) { clearTimeout(_checkTimeoutId); _checkTimeoutId = null; }
     updateConnBadge({status:'disconnected'});
@@ -2256,6 +2270,15 @@ function showWaBanner(show, msg) {
   const bannerMsg = document.getElementById('waBannerMsg');
   if (!banner) return;
   if (show) { bannerMsg.textContent = msg || '⚠️ WhatsApp מנותק'; banner.style.display='block'; }
+  else { banner.style.display='none'; }
+}
+
+// v2.14.47 — באנר כתום נפרד לחשד תקלת-מסירה (לא מתנגש עם באנר הניתוק האדום)
+function showDeliveryBanner(show, msg) {
+  const banner = document.getElementById('waDeliveryBanner');
+  const bannerMsg = document.getElementById('waDeliveryBannerMsg');
+  if (!banner) return;
+  if (show) { if (bannerMsg) bannerMsg.textContent = msg || '🟠 ייתכן שהודעות לא נמסרו'; banner.style.display='block'; }
   else { banner.style.display='none'; }
 }
 
@@ -2301,9 +2324,9 @@ function handleConnClick() {
 // כפתור "חיבור מחדש" בבאנר. אם יש reset יזום (שדרוג מנוע WA) — מבצע reset מלא
 // (מוחק session בשרת ומאלץ QR חדש) ואז פותח מודל QR וממתין לברקוד הטרי.
 // אחרת — התנהגות רגילה (פתיחת מודל QR בלבד).
-async function bannerReconnect() {
+async function bannerReconnect(forceReset) {
   const btn = document.getElementById('waBannerReconnectBtn');
-  if (!_waResetPending) { handleConnClick(); return; }
+  if (!_waResetPending && !forceReset) { handleConnClick(); return; }
   if (btn) { btn.disabled = true; btn.textContent = '⏳ מאפס...'; }
   document.getElementById('qrModal').classList.add('show');
   document.getElementById('qrContainer').innerHTML='<div class="qr-loading">⏳ מאפס חיבור...</div>';

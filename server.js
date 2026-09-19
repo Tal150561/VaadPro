@@ -576,7 +576,7 @@ const deletedTenants = new Set(); // tenantId-ים שנמחקו — חוסם rec
  */
 function getWa(tenantId) {
   if (!waClients[tenantId]) {
-    waClients[tenantId] = { client: null, status: 'disconnected', qrData: null, phone: null, restarting: false, healthTimer: null, qrCount: 0, qrTimer: null };
+    waClients[tenantId] = { client: null, status: 'disconnected', qrData: null, phone: null, restarting: false, healthTimer: null, qrCount: 0, qrTimer: null, msgStore: new Map(), deliveries: new Map(), deliverySuspect: false, lastDeliveredAt: 0 };
   }
   return waClients[tenantId];
 }
@@ -592,6 +592,18 @@ const pinoLogger = require('pino')({ level: 'silent' });
 // ה-socket אחרי מספר מוגבל של QR-ים בלי סריקה.
 const QR_MAX_REFRESHES = 4;        // עד 4 QR-ים (~1.5 דק') ואז סוגרים
 const QR_IDLE_TIMEOUT_MS = 90000;  // או 90ש' ללא סריקה — מה שמגיע קודם
+
+// ── WhatsApp delivery-tracking + self-heal (v2.14.47) ────────────
+// getMessage lets Baileys re-encrypt & resend a message when the recipient's
+// device asks for a retry (the "Waiting for this message" case) — that needs a
+// small store of recently-sent messages. Delivery tracking watches for the
+// double-tick (status ≥ 3); if several sends age past the grace window with
+// NOTHING delivered, the building's session is flagged as a likely-corrupt
+// "delivery suspect" so the UI can prompt a reset before a tenant complains.
+const WA_MSG_STORE_MAX       = 500;            // recent sent messages kept for retry-resend
+const WA_DELIVERY_GRACE_MS   = 4 * 60 * 1000;  // undelivered longer than this counts as a failure
+const WA_DELIVERY_MIN_FAILS  = 3;              // ≥ this many stale-undelivered (0 delivered) → suspect
+const WA_DELIVERY_MAX_AGE_MS = 30 * 60 * 1000; // stop tracking a send after this
 
 /**
  * Cancel the pending QR idle-timeout for a WA slot. Safe on a null/absent
@@ -687,6 +699,69 @@ function resetBuildingWa(tenantId) {
 }
 
 /**
+ * Decide whether a building's WA session looks corrupt from delivery evidence.
+ * PURE — no I/O, no module constants — so it is unit-testable in isolation.
+ * "Suspect" = at least `minFails` sent messages have aged past the grace window
+ * still undelivered, AND nothing has been delivered since the oldest of them was
+ * sent. A few offline recipients among successful sends do NOT trip it (there
+ * would be a recent delivery); a dead session — everything out, nothing acked —
+ * does. Called periodically by sweepDeliveries().
+ * @param {{now:number, undelivered:Array<{ts:number}>, lastDeliveredAt:number, graceMs:number, minFails:number, maxAgeMs:number}} o
+ * @returns {{suspect:boolean, staleFails:number}}
+ */
+function evaluateDeliverySuspect(o) {
+  const now = o.now;
+  const undelivered = o.undelivered || [];
+  const lastDeliveredAt = o.lastDeliveredAt || 0;
+  let staleFails = 0;
+  let oldestStaleTs = 0;
+  for (let i = 0; i < undelivered.length; i++) {
+    const ts = undelivered[i].ts;
+    const age = now - ts;
+    if (age > o.graceMs && age <= o.maxAgeMs) {
+      staleFails++;
+      if (!oldestStaleTs || ts < oldestStaleTs) oldestStaleTs = ts;
+    }
+  }
+  const nothingDeliveredSince = !lastDeliveredAt || (oldestStaleTs > 0 && lastDeliveredAt < oldestStaleTs);
+  const suspect = staleFails >= o.minFails && nothingDeliveredSince;
+  return { suspect: suspect, staleFails: staleFails };
+}
+
+// Periodic sweep (one global timer): purge aged sends and recompute each
+// building's delivery-suspect flag from the tracked (undelivered) sends.
+function sweepDeliveries() {
+  const now = Date.now();
+  for (const tenantId of Object.keys(waClients)) {
+    const wa = waClients[tenantId];
+    if (!wa || !wa.deliveries) continue;
+    for (const [id, rec] of wa.deliveries) {
+      if (now - rec.ts > WA_DELIVERY_MAX_AGE_MS) wa.deliveries.delete(id);
+    }
+    const undelivered = [];
+    for (const rec of wa.deliveries.values()) undelivered.push(rec);
+    const r = evaluateDeliverySuspect({
+      now: now,
+      undelivered: undelivered,
+      lastDeliveredAt: wa.lastDeliveredAt || 0,
+      graceMs: WA_DELIVERY_GRACE_MS,
+      minFails: WA_DELIVERY_MIN_FAILS,
+      maxAgeMs: WA_DELIVERY_MAX_AGE_MS
+    });
+    if (r.suspect && !wa.deliverySuspect) {
+      console.log(`[WA:${tenantId}] ⚠️ delivery-suspect: ${r.staleFails} messages undelivered, nothing acked — session may be corrupt`);
+    }
+    wa.deliverySuspect = r.suspect;
+  }
+}
+let _deliverySweepTimer = null;
+function startDeliverySweep() {
+  if (_deliverySweepTimer || WA_MODE !== 'server') return;
+  _deliverySweepTimer = setInterval(sweepDeliveries, 60000);
+}
+startDeliverySweep();
+
+/**
  * Start a Baileys socket for one building and wire its event handlers
  * (QR → store for the UI, open → mark ready, close → decide restart vs stop).
  * Auth state lives at /app/data/wa_sessions/{tenantId}/ so a scanned session
@@ -721,6 +796,11 @@ async function initWa(tenantId) {
       connectTimeoutMs: 60000,
       keepAliveIntervalMs: 30000,
       retryRequestDelayMs: 2000,
+      markOnlineOnConnect: false, // v2.14.47 — reduce session desync vs the phone's primary session
+      getMessage: async (key) => { // v2.14.47 — feed Baileys the original text so it can re-encrypt & resend on a retry receipt ("Waiting for this message" self-heal)
+        try { return (wa.msgStore && wa.msgStore.get(key.id)) || undefined; }
+        catch (e) { return undefined; }
+      },
     });
 
     wa.client = sock;
@@ -749,6 +829,7 @@ async function initWa(tenantId) {
         stopQrWatch(wa);
         wa.qrCount = 0;
         wa.resetPending = false; // reconnected after a reset — clear the banner flag
+        if (wa.deliveries) wa.deliveries.clear(); wa.deliverySuspect = false; // v2.14.47 — fresh socket: reset delivery tracking
         wa.phone  = sock.user?.id?.split(':')[0] || null;
         console.log(`[WA:${tenantId}] connected — ${wa.phone}`);
         // עדכן firstConnectedAt / lastConnectedAt — מוציא מ"ממתינים להתקנה" באדמין
@@ -796,6 +877,21 @@ async function initWa(tenantId) {
 
     sock.ev.on('creds.update', saveCreds);
 
+    // v2.14.47 — delivery receipts: a double-tick (status ≥ 3) means the recipient's
+    // device actually received & decrypted the message. Drop it from the undelivered
+    // set and remember we had a live delivery (which clears any suspicion).
+    sock.ev.on('messages.update', (updates) => {
+      try {
+        for (const u of updates) {
+          if (u && u.key && u.key.fromMe && u.update && typeof u.update.status === 'number' && u.update.status >= 3) {
+            if (wa.deliveries) wa.deliveries.delete(u.key.id);
+            wa.lastDeliveredAt = Date.now();
+            wa.deliverySuspect = false;
+          }
+        }
+      } catch (e) {}
+    });
+
   } catch(e) {
     console.error(`[WA:${tenantId}] init error:`, e.message);
     wa.status = 'disconnected';
@@ -837,7 +933,17 @@ async function sendWaMsg(tenantId, phone, message) {
     // Baileys running on Railway — send directly
     if (!wa.client) throw new Error('WhatsApp לא מחובר — סרוק ברקוד חדש');
     const jid = normalized + '@s.whatsapp.net';
-    await wa.client.sendMessage(jid, { text: message });
+    const sent = await wa.client.sendMessage(jid, { text: message });
+    // v2.14.47 — remember the message (retry-resend store) and track it for delivery.
+    try {
+      if (sent && sent.key && sent.key.id) {
+        if (!wa.msgStore) wa.msgStore = new Map();
+        wa.msgStore.set(sent.key.id, sent.message);
+        if (wa.msgStore.size > WA_MSG_STORE_MAX) wa.msgStore.delete(wa.msgStore.keys().next().value);
+        if (!wa.deliveries) wa.deliveries = new Map();
+        wa.deliveries.set(sent.key.id, { ts: Date.now() });
+      }
+    } catch (e) {}
     return;
   }
 
@@ -1622,6 +1728,7 @@ app.get('/api/status', authMiddleware, (req, res) => {
     qrDataUrl:       wa.status === 'qr_expired' ? null : wa.qrData,
     phoneConnected:  wa.phone,
     resetPending:    !!wa.resetPending, // true after a reset → UI shows banner immediately
+    deliverySuspect: !!wa.deliverySuspect, // v2.14.47 — sends undelivered → UI shows amber banner
     effectiveMonth:  getEffectiveMonth(d.config),
     currentAutoMonth: getEffectiveMonth(d.config)
   });
@@ -4221,7 +4328,7 @@ app.get('/api/admin/backup-download', superAdminMiddleware, (req, res) => {
 app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
   const now = Date.now();
   // — לקוחות —
-  let total = 0, active = 0, suspended = 0, trial = 0, expiringSoon = 0, waConnected = 0, waDisconnected = 0;
+  let total = 0, active = 0, suspended = 0, trial = 0, expiringSoon = 0, waConnected = 0, waDisconnected = 0, waDeliverySuspect = 0;
   try {
     const users = loadUsers();
     total = users.length;
@@ -4232,8 +4339,10 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
         const te = u.trialEnd ? new Date(u.trialEnd).getTime() : 0;
         if (te && te > now && te - now < 30 * 24 * 60 * 60 * 1000) expiringSoon++;
       }
-      const st = waClients[u.tenantId] ? waClients[u.tenantId].status : null;
+      const waSlot = waClients[u.tenantId];
+      const st = waSlot ? waSlot.status : null;
       if (st === 'ready') waConnected++; else waDisconnected++;
+      if (waSlot && waSlot.deliverySuspect) waDeliverySuspect++;
     }
   } catch(e) {}
   // — נתוני קבצים על הווליום —
@@ -4271,7 +4380,7 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
     memRssMb: Math.round(mem.rss / 1048576),
     memHeapMb: Math.round(mem.heapUsed / 1048576),
     customers: { total, active, suspended, trial, expiringSoon },
-    whatsapp: { connected: waConnected, disconnected: waDisconnected },
+    whatsapp: { connected: waConnected, disconnected: waDisconnected, deliverySuspect: waDeliverySuspect },
     data: { files: dataFiles, sizeKb: dataSizeKb },
     backups: { count: backupCount, sizeKb: backupsSizeKb, lastMtime: lastBackupMtime ? new Date(lastBackupMtime).toISOString() : null }
   });
