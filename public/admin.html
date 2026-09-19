@@ -573,6 +573,17 @@
             <button class="btn btn-ghost" style="padding:4px 10px;font-size:13px" onclick="loadSystemHealth()">🔄 רענן</button>
           </div>
           <div id="healthGrid" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px"></div>
+          <!-- ═══ SIM-DELIVERY-SUSPECT (TEMP · v2.14.48) — REMOVE AFTER TESTING ═══ -->
+          <div id="simSuspectBox" style="margin-top:12px;padding:10px;border:1px dashed var(--warn,#e0a800);border-radius:8px;background:rgba(245,158,11,.06)">
+            <div style="font-size:12px;color:var(--text3);margin-bottom:6px">🧪 כלי בדיקה זמני — הדמיית “חשד תקלת מסירה” (יוסר אחרי הבדיקה)</div>
+            <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+              <select id="simSuspectSel" style="padding:5px 8px;border-radius:6px;background:var(--surface2,#1c1c24);color:inherit;border:1px solid var(--border,#333);font-size:13px;min-width:200px"><option value="">טוען בניינים…</option></select>
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:13px" onclick="simSuspect(true)">🟠 הדלק חשד</button>
+              <button class="btn btn-ghost" style="padding:4px 10px;font-size:13px" onclick="simSuspect(false)">✓ נקה חשד</button>
+              <span id="simSuspectStatus" style="font-size:12px;color:var(--text3)"></span>
+            </div>
+          </div>
+          <!-- ═══ END SIM-DELIVERY-SUSPECT ═══ -->
         </div>
       </div>
       <div class="table-wrap" style="margin-bottom:16px;padding:16px;">
@@ -2317,6 +2328,40 @@ async function resetBuildingWa() {
   }
 }
 
+// ═══ SIM-DELIVERY-SUSPECT (TEMP · v2.14.48) — REMOVE AFTER TESTING ═══
+// כלי בדיקה זמני. משתמש ב-/api/admin/wa-buildings הקיים לרשימה, ומפעיל את
+// /api/admin/sim-delivery-suspect (זיכרון בלבד). הסרה = מחיקת בלוק זה + ה-HTML התאום.
+async function loadSimSuspectList() {
+  const sel = document.getElementById('simSuspectSel');
+  if (!sel) return;
+  try {
+    const res = await fetch('/api/admin/wa-buildings', { headers: adminHeaders() });
+    const d = await res.json();
+    if (!d.ok || !d.buildings) { sel.innerHTML = '<option value="">שגיאה בטעינה</option>'; return; }
+    sel.innerHTML = d.buildings.map(b =>
+      `<option value="${b.tenantId}">${b.email} [${b.status}]</option>`
+    ).join('');
+  } catch (e) { sel.innerHTML = '<option value="">שגיאה: ' + e.message + '</option>'; }
+}
+async function simSuspect(on) {
+  const sel = document.getElementById('simSuspectSel');
+  const st  = document.getElementById('simSuspectStatus');
+  const tenantId = sel && sel.value;
+  if (!tenantId) { if (st) st.textContent = 'בחר בניין'; return; }
+  if (st) st.textContent = on ? 'מדליק…' : 'מנקה…';
+  try {
+    const res = await fetch('/api/admin/sim-delivery-suspect', {
+      method: 'POST', headers: adminHeaders(), body: JSON.stringify({ tenantId, on })
+    });
+    const d = await res.json();
+    if (!d.ok) { if (st) st.textContent = ''; toast(d.error || 'שגיאה', 'err'); return; }
+    if (st) st.textContent = d.deliverySuspect ? '🟠 חשד פעיל — רענן / פתח את אפליקציית הבניין' : '✓ נוקה';
+    loadSystemHealth();
+    toast(d.deliverySuspect ? 'חשד הודלק ✓ — בדוק את הבאנר באפליקציית הבניין' : 'חשד נוקה ✓', 'ok');
+  } catch (e) { if (st) st.textContent = ''; toast('שגיאה: ' + e.message, 'err'); }
+}
+// ═══ END SIM-DELIVERY-SUSPECT ═══
+
 function toggleHealthPanel() {
   const body = document.getElementById('healthPanelBody');
   const icon = document.getElementById('healthToggleIcon');
@@ -2346,6 +2391,7 @@ function healthCard(title, value, sub, color) {
 async function loadSystemHealth() {
   const grid = document.getElementById('healthGrid');
   const hint = document.getElementById('healthHint');
+  loadSimSuspectList(); // TEMP v2.14.48 — SIM-DELIVERY-SUSPECT (remove with the feature)
   if (grid) grid.innerHTML = '<div style="color:var(--text3)">טוען...</div>';
   try {
     const res = await fetch('/api/admin/system-health', { headers: adminHeaders() });

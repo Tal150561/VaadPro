@@ -4386,6 +4386,37 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
   });
 });
 
+// ═══════════ SIM-DELIVERY-SUSPECT (TEMP · v2.14.48) — REMOVE AFTER TESTING ═══════════
+// כלי סופר-אדמין זמני: מדמה מצב "חשד תקלת מסירה" (v2.14.47) כדי לראות את הבאנר
+// הכתום (אפליקציית הלקוח) + כרטיס הבריאות (אדמין) בלי לחכות לתקלת WhatsApp אמיתית.
+// בטוח לחלוטין: נוגע רק בזיכרון (wa.deliveries + wa.deliverySuspect) — לא בדיסק,
+// לא בנתוני בניין, לא ב-debt-core. אתחול Railway מנקה הכול, ואישור מסירה אמיתי
+// מכבה את החשד לבד. הסרה מלאה = מחיקת הבלוק הזה + התאום שלו ב-admin.html.
+app.post('/api/admin/sim-delivery-suspect', superAdminMiddleware, (req, res) => {
+  if (WA_MODE !== 'server') return res.json({ ok: false, error: 'זמין רק ב-server mode' });
+  const { tenantId, on } = req.body || {};
+  if (!tenantId) return res.json({ ok: false, error: 'חסר tenantId' });
+  let known = false;
+  try { known = loadUsers().some(u => u.tenantId === tenantId); } catch (e) {}
+  if (!known) return res.json({ ok: false, error: 'בניין לא קיים' });
+  const wa = getWa(tenantId);
+  if (on === false) {
+    if (wa.deliveries) { for (const k of [...wa.deliveries.keys()]) if (String(k).startsWith('__SIM__')) wa.deliveries.delete(k); }
+    wa.deliverySuspect = false;
+    console.log(`[sim] delivery-suspect CLEARED for ${tenantId}`);
+    return res.json({ ok: true, deliverySuspect: false });
+  }
+  // הזרק 3 שליחות מדומות שעברו את חלון-החסד, בלי שום מסירה מאז → הסריקה תדליק חשד
+  if (!wa.deliveries) wa.deliveries = new Map();
+  const staleTs = Date.now() - (WA_DELIVERY_GRACE_MS + 60000);
+  for (let i = 1; i <= WA_DELIVERY_MIN_FAILS; i++) wa.deliveries.set('__SIM__' + i, { ts: staleTs });
+  wa.lastDeliveredAt = 0;
+  sweepDeliveries(); // חשב עכשיו כדי שהחשד יידלק מיד (בלי להמתין ל-tick של 60ש')
+  console.log(`[sim] delivery-suspect INJECTED for ${tenantId} → ${wa.deliverySuspect}`);
+  res.json({ ok: true, deliverySuspect: !!wa.deliverySuspect });
+});
+// ═══════════ END SIM-DELIVERY-SUSPECT ═══════════
+
 // POST — נקה גיבויי startup ישנים (משאיר את האחרון; daily/pre-restore/manual לא נגעים)
 app.post('/api/admin/backup-clean-startup', superAdminMiddleware, (req, res) => {
   let removed = 0;
