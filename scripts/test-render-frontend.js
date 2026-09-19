@@ -1291,6 +1291,9 @@ t.section('app.html — tenant CSV import (v2.14.6)');
   // — server: exposed to the UIs —
   t.eq('/api/status ships deliverySuspect', srv.includes('deliverySuspect: !!wa.deliverySuspect'), true);
   t.eq('system-health counts delivery suspects', srv.includes('deliverySuspect: waDeliverySuspect'), true);
+  t.eq('system-health returns suspect building list', srv.includes('deliverySuspectList'), true);
+  { const admin = readSource('public/admin.html');
+    t.eq('admin health card names the suspect building(s)', admin.includes('suspectNames'), true); }
 
   // — frontend: amber banner + wiring —
   t.eq('amber delivery banner present', app.includes('id="waDeliveryBanner"'), true);

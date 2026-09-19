@@ -4329,6 +4329,7 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
   const now = Date.now();
   // — לקוחות —
   let total = 0, active = 0, suspended = 0, trial = 0, expiringSoon = 0, waConnected = 0, waDisconnected = 0, waDeliverySuspect = 0;
+  const waDeliverySuspectList = []; // v2.14.49 — which buildings are suspect (name, not just count)
   try {
     const users = loadUsers();
     total = users.length;
@@ -4342,7 +4343,7 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
       const waSlot = waClients[u.tenantId];
       const st = waSlot ? waSlot.status : null;
       if (st === 'ready') waConnected++; else waDisconnected++;
-      if (waSlot && waSlot.deliverySuspect) waDeliverySuspect++;
+      if (waSlot && waSlot.deliverySuspect) { waDeliverySuspect++; waDeliverySuspectList.push({ tenantId: u.tenantId, name: u.buildingName || u.address || u.email }); }
     }
   } catch(e) {}
   // — נתוני קבצים על הווליום —
@@ -4380,7 +4381,7 @@ app.get('/api/admin/system-health', superAdminMiddleware, (req, res) => {
     memRssMb: Math.round(mem.rss / 1048576),
     memHeapMb: Math.round(mem.heapUsed / 1048576),
     customers: { total, active, suspended, trial, expiringSoon },
-    whatsapp: { connected: waConnected, disconnected: waDisconnected, deliverySuspect: waDeliverySuspect },
+    whatsapp: { connected: waConnected, disconnected: waDisconnected, deliverySuspect: waDeliverySuspect, deliverySuspectList: waDeliverySuspectList },
     data: { files: dataFiles, sizeKb: dataSizeKb },
     backups: { count: backupCount, sizeKb: backupsSizeKb, lastMtime: lastBackupMtime ? new Date(lastBackupMtime).toISOString() : null }
   });

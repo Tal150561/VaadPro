@@ -2399,6 +2399,14 @@ async function loadSystemHealth() {
     if (!d.ok) { if (grid) grid.innerHTML = '<div style="color:var(--text3)">שגיאה בטעינה</div>'; return; }
     const c = d.customers, wa = d.whatsapp, bk = d.backups;
     const lastBackup = bk.lastMtime ? timeAgoHe(bk.lastMtime) : 'אין';
+    // v2.14.49 — name the suspect building(s) in the WhatsApp card, not just a count
+    const suspectNames = (wa.deliverySuspectList || []).map(x => x.name).filter(Boolean);
+    let waSub = 'מחוברים';
+    if (wa.deliverySuspect > 0) {
+      const shown = suspectNames.slice(0, 3).join(' · ');
+      const extra = suspectNames.length > 3 ? ` +${suspectNames.length - 3}` : '';
+      waSub = `🟠 חשד מסירה: ${shown}${extra}`;
+    }
     const cards = [
       healthCard('גרסה', d.version || '—', 'Node ' + (d.nodeVersion || '')),
       healthCard('Uptime', fmtUptime(d.uptimeSec), 'זיכרון: ' + d.memRssMb + 'MB'),
@@ -2407,7 +2415,7 @@ async function loadSystemHealth() {
       healthCard('ניסיון', c.trial, `פגים ב-30 יום: ${c.expiringSoon}`,
                  c.expiringSoon > 0 ? 'var(--warn,#e0a800)' : undefined),
       healthCard('WhatsApp', `${wa.connected}/${wa.connected + wa.disconnected}`,
-                 (wa.deliverySuspect > 0 ? `🟠 ${wa.deliverySuspect} חשד תקלת מסירה` : 'מחוברים'),
+                 waSub,
                  (wa.disconnected > 0 || wa.deliverySuspect > 0) ? 'var(--warn,#e0a800)' : 'var(--ok,#3fb950)'),
       healthCard('גיבויים', bk.count, `אחרון: ${lastBackup} · ${Math.round(bk.sizeKb / 1024)}MB`),
       healthCard('נתונים', d.data.files + ' קבצים', Math.round(d.data.sizeKb / 1024 * 10) / 10 + 'MB על הווליום'),
