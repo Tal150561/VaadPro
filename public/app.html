@@ -1792,7 +1792,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.51';
+const HTML_VERSION = '2.14.52';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2798,6 +2798,9 @@ async function saveEdit(id) {
   }
   isEditing = false;
   try{await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})});toast('💾 דייר עודכן!','success');}catch(e){toast('❌ שגיאה','error');}
+  // v2.14.52 — reload BEFORE render so an edited יתרת פתיחה / fee shows the
+  // server-computed totalDebt/creditBalance immediately (same fix as confirmImport v2.14.14).
+  await loadData();
   render();
 }
 
@@ -5356,7 +5359,15 @@ function commitBankImport(){
 
   const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp };
   if (P.selectedMonthKey) payload.bankMonthOverride = P.selectedMonthKey;
-  fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)}).catch(function(){});
+  // v2.14.52 — keep the save promise so we can RELOAD after it lands (see the end
+  // of this function). Previously fire-and-forget + render() of LOCAL data: the
+  // status badges updated (sentLog is local) but the SERVER-computed totalDebt /
+  // creditBalance stayed stale until F5 (נווה ים: אור showed 7,200 instead of
+  // 6,700 right after a September import). Same bug class v2.14.14 fixed in
+  // confirmImport(). Manual UI path only — the BankSync agent path is untouched.
+  var _bankSaveP = fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
+    .then(function(r){ return r.json(); })
+    .catch(function(){ toast('❌ שמירת הייבוא נכשלה — רענן ובדוק','error'); return null; });
 
   if (P.dupWarnings.length) {
     var msg = P.dupWarnings.map(function(w){ return w.name + ' — ' + w.amount + '₪ (' + (w.date||'') + ')'; }).join('\n');
@@ -5387,6 +5398,10 @@ function commitBankImport(){
   showBankResult(matched, P.unmatched, P.total, P.ta, P.fileName, P.filterByAmount, P.alreadyImportedSkips, /*previewMode=*/false, null);
   renderClosedMonthApprovals(_closedApprovals); // v2.14.39
   resetDropZone();
+  // v2.14.52 — once the save has landed, reload so server-computed fields
+  // (totalDebt / creditBalance / monthBalances) refresh without F5. render() does
+  // not touch #bankResult / #closedMonthApprovals, so the import receipt stays.
+  _bankSaveP.then(function(){ return loadData(); }).then(function(){ render(); });
 }
 
 // ── v2.14.39 — FIX 2: closed-month payment approval panel ──────────────────────

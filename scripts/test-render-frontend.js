@@ -1792,6 +1792,19 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
   t.eq('admin handler confirm says irreversible', adm.slice(adm.indexOf('function resetBuildingFull')).includes('בלתי-הפיכה'), true);
   t.eq('admin 🧨 tooltip describes full wipe', /resetBuildingFull\([^\n]*title="ניקוי מלא של הבניין/.test(adm), true);
 
+  // v2.14.52 — manual bank import + tenant edit reload server-computed fields (no F5).
+  {
+    const cb = app2.slice(app2.indexOf('function commitBankImport(){'), app2.indexOf('// ── v2.14.39 — FIX 2: closed-month payment approval panel'));
+    t.eq('commitBankImport keeps the save promise (not fire-and-forget)', /var _bankSaveP = fetch\(API\+'\/data'/.test(cb), true);
+    t.eq('commitBankImport reloads AFTER the save lands', /_bankSaveP\.then\(function\(\)\{ return loadData\(\); \}\)\.then\(function\(\)\{ render\(\); \}\)/.test(cb), true);
+    t.eq('commitBankImport surfaces a failed save', cb.includes('שמירת הייבוא נכשלה'), true);
+    const _rs = app2.indexOf('\nfunction render()'); const _rBody = app2.slice(_rs, app2.indexOf('\nfunction ', _rs + 10));
+    t.eq('render() body located', _rBody.length > 2000, true);
+    t.eq('render() does not touch the import receipt (#bankResult)', _rBody.includes("'bankResult'"), false);
+    const se = app2.slice(app2.indexOf('async function saveEdit('), app2.indexOf('function extractApartmentNumber('));
+    t.eq('saveEdit reloads before render', /await loadData\(\);\s*render\(\);\s*\}\s*$/.test(se.trim()), true);
+  }
+
   // GUIDE (v2.14.51): support-only full wipe + the tenants-file-after-payments pitfall.
   const guide2 = readSource('public/vaadpro-guide.js');
   t.eq('guide: full wipe is support-only', guide2.includes('ניקוי מלא של הבניין (כולל חוב התחלתי ותעריפים) מתבצע רק דרך התמיכה'), true);
