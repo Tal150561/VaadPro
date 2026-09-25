@@ -2515,4 +2515,191 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   t.eq('2 stale + 2 fresh → still below min → not suspect', ev([stale,stale,fresh,fresh], 0).suspect, false);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.53 — UNDO LAST BANK IMPORT (real buildImportUndo / planImportUndo / route)
+// ════════════════════════════════════════════════════════════════
+{
+  const { loadImportUndo, loadUndoRoute } = require('./test-lib');
+  const U = loadImportUndo();
+  const J = v => JSON.parse(JSON.stringify(v));
+  // Building BEFORE the import: A paid June earlier (manual); B, C nothing yet.
+  const base = () => ({
+    config: { amount: 200 },
+    defaultTariffs: [{ rate: 200, startDate: '2000-01-01', endDate: null }],
+    tenants: [
+      { id: 'A', name: 'אלף', customAmount: 200, openingDebt: 0 },
+      { id: 'B', name: 'בית', customAmount: 200, openingDebt: 1000 },
+      { id: 'C', name: 'גימל', customAmount: 200, openingDebt: 0,
+        extraAccounts: [{ id: 'x1', label: 'ביטוח', amount: 40, openingDebt: 0 }] }
+    ],
+    sentLog: { 'A_יוני': 'manual_paid_2026-06-02_amount_200', 'B_ספטמבר': 'wa_sent_2026-09-01' },
+    paymentHistory: { 'A': [{ month: '2026-06', paid: true, amount: 200, paidAmount: 200, date: '2026-06-02', type: 'manual', name: 'אלף', payerName: '' }] },
+    importedBankFingerprints: ['old1', 'old2'],
+    lastBankSyncImport: { timestamp: 'prev', month: 'אוגוסט' },
+    closedMonths: ['2026-08'], closedMonthsExtra: ['2026-08']
+  });
+  // The import: B pays 700 for September (overwrites B's wa_sent), C pays 200 +
+  // extra account 40, A's June record is merely RE-DATED by the sync (no money change),
+  // 2 new fingerprints, a queued ambiguous row, and a new receipt.
+  const importPatch = (prev) => {
+    const ph = J(prev.paymentHistory);
+    ph.A[0].date = '2026-09-25';                                        // re-date only
+    ph.B = [{ month: '2026-09', paid: true, amount: 200, paidAmount: 700, date: '2026-09-25', type: 'bank', name: 'בית', payerName: 'בית' }];
+    ph.C = [{ month: '2026-09', paid: true, amount: 200, paidAmount: 200, date: '2026-09-25', type: 'bank', name: 'גימל', payerName: 'גימל' }];
+    ph['C__acc__x1'] = [{ month: '2026-09', paid: true, amount: 40, paidAmount: 40, date: '2026-09-25', type: 'bank' }];
+    return {
+      sentLog: Object.assign(J(prev.sentLog), {
+        'B_ספטמבר': 'bank_import_2026-09-25T10:00_700_payer_בית',
+        'C_ספטמבר': 'bank_import_2026-09-25T10:00_200_payer_גימל',
+        'C__acc__x1_ספטמבר': 'bank_import_2026-09-25T10:00_40_payer_גימל'
+      }),
+      paymentHistory: ph,
+      importedBankFingerprints: prev.importedBankFingerprints.concat(['new1', 'new2']),
+      pendingAmbiguousMatches: [{ rowIdx: 7, amount: 300 }],
+      lastBankSyncImport: { timestamp: 'now', month: 'ספטמבר' }
+    };
+  };
+  const imported = () => {           // prev + import applied + undo record stored
+    const b = base(); const prev = J(b); const patch = importPatch(prev);
+    const rec = U.buildImportUndo(prev, patch, { source: 'agent', month: '2026-09' });
+    Object.assign(b, patch, { lastImportUndo: rec });
+    return { b, rec, prev };
+  };
+
+  t.section('Undo import — buildImportUndo records exactly what the import changed');
+  {
+    const { rec } = imported();
+    t.eq('record built', !!rec, true);
+    t.eq('source/month kept', rec.source + '|' + rec.month, 'agent|2026-09');
+    t.eq('sentLog keys touched = 3 (B, C, C__acc__)', Object.keys(rec.sentLogAfter).sort().join(','), ['B_ספטמבר', 'C_ספטמבר', 'C__acc__x1_ספטמבר'].sort().join(','));
+    t.eq('overwritten key remembers its previous value', rec.sentLogBefore['B_ספטמבר'], 'wa_sent_2026-09-01');
+    t.eq('new key remembers it was absent (null)', rec.sentLogBefore['C_ספטמבר'], null);
+    t.eq('extra-account key recorded (main == extra)', rec.sentLogBefore['C__acc__x1_ספטמבר'], null);
+    t.eq('paymentHistory: re-date-only tenant A NOT recorded', Object.prototype.hasOwnProperty.call(rec.phAfter, 'A'), false);
+    t.eq('paymentHistory: B, C, C__acc__x1 recorded', Object.keys(rec.phAfter).sort().join(','), ['B', 'C', 'C__acc__x1'].sort().join(','));
+    t.eq('fingerprints added', rec.fingerprintsAdded.join(','), 'new1,new2');
+    t.eq('queue before/after captured', rec.queues.pendingAmbiguousMatches.before === null && rec.queues.pendingAmbiguousMatches.after.length === 1, true);
+    t.eq('previous receipt kept', rec.lastBankSyncImportBefore.timestamp, 'prev');
+    t.eq('closed months at import time', rec.closedMonthsAt.join(','), '2026-08');
+    t.eq('touched tenants = B, C (A excluded)', rec.tenantIds.slice().sort().join(','), 'B,C');
+  }
+
+  t.section('Undo import — idle run (nothing changed) produces NO record');
+  {
+    const prev = base();
+    const idle = { sentLog: J(prev.sentLog), paymentHistory: J(prev.paymentHistory), importedBankFingerprints: prev.importedBankFingerprints.slice(), lastBankSyncImport: { timestamp: 'idle' } };
+    idle.paymentHistory.A[0].date = '2026-09-25';   // even a re-date is not a change
+    t.eq('buildImportUndo → null', U.buildImportUndo(prev, idle, { source: 'agent' }), null);
+  }
+
+  t.section('Undo import — plan restores the pre-import state exactly');
+  {
+    const { b, prev } = imported();
+    const plan = U.planImportUndo(b);
+    t.eq('plan ok', plan.ok, true);
+    const after = Object.assign(J(b), plan.patch);
+    t.eq('sentLog back to pre-import', JSON.stringify(after.sentLog), JSON.stringify(prev.sentLog));
+    t.eq('B paymentHistory removed', after.paymentHistory.B, undefined);
+    t.eq('C__acc__x1 paymentHistory removed', after.paymentHistory['C__acc__x1'], undefined);
+    t.eq('A paymentHistory money unchanged', JSON.stringify(U.phMoneyView(after.paymentHistory.A)), JSON.stringify(U.phMoneyView(prev.paymentHistory.A)));
+    t.eq('fingerprints back to pre-import', after.importedBankFingerprints.join(','), 'old1,old2');
+    t.eq('queue restored (was absent → [])', after.pendingAmbiguousMatches.length, 0);
+    t.eq('previous receipt restored', after.lastBankSyncImport.timestamp, 'prev');
+    t.eq('undo record consumed (one level only)', after.lastImportUndo, null);
+    t.eq('openingDebt never in the patch', plan.patch.tenants, undefined);
+    t.eq('summary: 2 tenants', plan.summary.tenants, 2);
+    t.eq('summary names', plan.summary.names.slice().sort().join(','), ['בית', 'גימל'].sort().join(','));
+    t.eq('second undo → none', U.planImportUndo(after).reason, 'none');
+  }
+
+  t.section('Undo import — money view: debt returns to the pre-import figure');
+  {
+    const { b, prev } = imported();
+    const debtBefore = S.calcTotalDebt(prev, 'B', '2026-09');
+    const debtImported = S.calcTotalDebt(b, 'B', '2026-09');
+    const after = Object.assign(J(b), U.planImportUndo(b).patch);
+    t.eq('import changed B\'s debt', debtImported !== debtBefore, true);
+    t.eq('after undo B\'s debt == pre-import', S.calcTotalDebt(after, 'B', '2026-09'), debtBefore);
+    t.eq('after undo B has no credit from the undone payment', S.getCreditBalance(after, 'B'), S.getCreditBalance(prev, 'B'));
+  }
+
+  t.section('Undo import — BLOCKED when a month was closed after the import (2A)');
+  {
+    const { b } = imported();
+    b.closedMonths = ['2026-08', '2026-09'];
+    const plan = U.planImportUndo(b);
+    t.eq('blocked: closed', plan.ok === false && plan.reason === 'closed', true);
+    t.eq('names the closed month', plan.months.join(','), '2026-09');
+    const b2 = imported().b; b2.closedMonthsExtra = ['2026-08', '2026-09'];
+    t.eq('extra-account close also blocks (main == extra)', U.planImportUndo(b2).reason, 'closed');
+  }
+
+  t.section('Undo import — BLOCKED when something the import wrote was changed (conflict A)');
+  {
+    const { b } = imported();
+    delete b.sentLog['C_ספטמבר'];                    // operator pressed "בטל" for גימל
+    const plan = U.planImportUndo(b);
+    t.eq('blocked: changed', plan.ok === false && plan.reason === 'changed', true);
+    t.eq('names the changed tenant', plan.names.join(','), 'גימל');
+    const b2 = imported().b;
+    b2.paymentHistory['C__acc__x1'][0].paidAmount = 10; // extra-account history changed
+    t.eq('extra-account change blocks + names the tenant', U.planImportUndo(b2).names.join(','), 'גימל');
+    const b3 = imported().b;
+    b3.pendingAmbiguousMatches = [];                  // queued row resolved afterwards
+    const p3 = U.planImportUndo(b3);
+    t.eq('queue resolved afterwards blocks', p3.reason === 'changed' && p3.queueConflict === true, true);
+  }
+
+  t.section('Undo import — later re-date or unrelated tenant change does NOT block');
+  {
+    const { b } = imported();
+    b.paymentHistory.B[0].date = '2026-09-30';        // recordPayment re-ran on another day
+    b.sentLog['A_ספטמבר'] = 'manual_paid_2026-09-26_amount_200'; // unrelated tenant marked
+    b.paymentHistory.A.push({ month: '2026-09', paid: true, amount: 200, paidAmount: 200, date: '2026-09-26', type: 'manual' });
+    const plan = U.planImportUndo(b);
+    t.eq('still undoable', plan.ok, true);
+    const after = Object.assign(J(b), plan.patch);
+    t.eq('unrelated manual mark survives the undo', after.sentLog['A_ספטמבר'], 'manual_paid_2026-09-26_amount_200');
+    t.eq('B import removed', after.sentLog['B_ספטמבר'], 'wa_sent_2026-09-01');
+  }
+
+  t.section('Undo import — fingerprints dropped by the 5000 cap come back');
+  {
+    const prev = base();
+    const patch = { sentLog: Object.assign(J(prev.sentLog), { 'C_ספטמבר': 'bank_import_x_200_payer_ג' }), importedBankFingerprints: ['old2', 'new1'] };
+    const b = Object.assign(J(prev), patch, { lastImportUndo: U.buildImportUndo(prev, patch, { source: 'manual' }) });
+    const after = Object.assign(J(b), U.planImportUndo(b).patch);
+    t.eq('dropped + kept, new removed', after.importedBankFingerprints.slice().sort().join(','), 'old1,old2');
+    t.eq('manual record has no receipt key → receipt untouched', Object.prototype.hasOwnProperty.call(U.planImportUndo(b).patch, 'lastBankSyncImport'), false);
+  }
+
+  t.section('Undo import — route: dryRun previews, real run backs up then writes');
+  {
+    const { b } = imported();
+    const r = loadUndoRoute(b, { dryRun: true });
+    t.eq('dryRun ok', r.result.ok === true && r.result.dryRun === true, true);
+    t.eq('dryRun wrote nothing', r.saved.length + r.backupCalled, 0);
+    const r2 = loadUndoRoute(b, { dryRun: false });
+    t.eq('real run: backup taken', r2.backupCalled, 1);
+    t.eq('real run: one write', r2.saved.length, 1);
+    t.eq('real run: record consumed', b.lastImportUndo, null);
+    const r3 = loadUndoRoute(b, { dryRun: false });
+    t.eq('second run: blocked none, nothing written', r3.result.blocked === true && r3.result.reason === 'none' && r3.saved.length === 0 && r3.backupCalled === 0, true);
+    const { b: bc } = imported(); bc.closedMonths.push('2026-09');
+    const r4 = loadUndoRoute(bc, { dryRun: false });
+    t.eq('closed: blocked, no backup, no write', r4.result.reason === 'closed' && r4.saved.length === 0 && r4.backupCalled === 0, true);
+  }
+
+  t.section('Undo import — both resets forget the undo record');
+  {
+    const { loadResetPayments, loadResetBuildingFull } = require('./test-lib');
+    const { b } = imported();
+    const r = loadResetPayments(b, { dryRun: false });
+    t.eq('client 🧹 clears lastImportUndo', r.saved[0].patch.lastImportUndo, null);
+    const { b: b2 } = imported();
+    const r2 = loadResetBuildingFull(b2, { tenantId: 'T1', dryRun: false });
+    t.eq('admin 🧨 clears lastImportUndo', r2.saved[0].patch.lastImportUndo, null);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

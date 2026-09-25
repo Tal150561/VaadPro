@@ -258,6 +258,41 @@ function loadResetBuildingFull(building, reqBody, users) {
 }
 
 
+// ── v2.14.53 — undo-last-import pure helpers ─────────────────────────────
+// Extracts the REAL buildImportUndo / planImportUndo / phMoneyView from server.js.
+function loadImportUndo() {
+  const src = readSource('server.js');
+  const code = extractFunctions(src, ['phMoneyView', 'buildImportUndo', 'planImportUndo'])
+    + 'module.exports = { phMoneyView, buildImportUndo, planImportUndo };';
+  return runInSandbox(code, { Set });
+}
+
+// Runs the REAL /api/undo-last-import route body against stubs (like the reset loaders).
+function loadUndoRoute(building, reqBody) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/undo-last-import'");
+  if (start < 0) throw new Error('test-lib: /api/undo-last-import route not found');
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) { const ch = src[i]; if (ch === '{') depth++; else if (ch === '}') depth--; i++; }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const saved = []; let backupCalled = 0; const captured = {};
+  const stubs = {
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
+    createBackup: () => { backupCalled++; return '/x/backup-pre-restore-test.zip'; },
+    path: { basename: (p) => String(p).split('/').pop() },
+    Set, console,
+    req: { user: { tenantId: 'T1' }, body: reqBody || {} },
+    res: { json: (o) => { captured.result = o; } }
+  };
+  const code = extractFunctions(src, ['phMoneyView', 'planImportUndo'])
+    + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  runInSandbox(code, stubs).handler(stubs.req, stubs.res);
+  return { result: captured.result, saved, backupCalled, building };
+}
+
+
 // ── Load the /api/apply-closed-month-payment handler (v2.14.39) ──────
 // FIX 2: the sanctioned reverse-accrual for a late payment to an ALREADY-CLOSED
 // month. Lifts the REAL route body and runs it against stubbed load/save so the
@@ -440,6 +475,6 @@ function loadDeliverySuspect() {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };

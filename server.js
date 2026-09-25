@@ -2003,6 +2003,11 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (req.body.defaultTariffs == null) req.body.defaultTariffs = dt;
     } catch (e) { console.error('[default-tariff-maint]', e.message); }
   }
+  // v2.14.53 — manual bank import commit: snapshot the pre-import state so the
+  // import can be undone. Read fresh from disk BEFORE the paymentHistory sync.
+  const _undoPrev = req.body.bankImportCommit ? loadTenantData(req.user.tenantId) : null;
+  const _undoMonth = req.body.bankMonthOverride || null;
+  delete req.body.bankImportCommit; // never persisted
   // If sentLog is being updated, sync manual/bank payments to paymentHistory
   if (req.body.sentLog) {
     const current = loadTenantData(req.user.tenantId);
@@ -2068,6 +2073,12 @@ app.post('/api/data', authMiddleware, (req, res) => {
     }
     delete req.body.bankMonthOverride; // don't save this field to tenant data
   }
+  if (_undoPrev) {
+    try {
+      const rec = buildImportUndo(_undoPrev, req.body, { source: 'manual', month: _undoMonth });
+      if (rec) req.body.lastImportUndo = rec;   // null → keep the previous record
+    } catch (e) { console.error('[undo-snapshot manual]', e.message); } // never block a save
+  }
   const merged = saveTenantData(req.user.tenantId, req.body);
   res.json({ ok: true, effectiveMonth: getEffectiveMonth(merged.config), data: merged });
 });
@@ -2123,6 +2134,152 @@ app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
   }
   console.log(`[repair-tariffs] tenant=${req.user.tenantId} dryRun=${dryRun} fixed=${changes.length}`);
   res.json({ ok: true, dryRun, count: changes.length, changes, monthNow: mkNow });
+});
+
+// ====================================================================
+// v2.14.53 — UNDO LAST BANK IMPORT (both paths: manual UI + BankSync agent)
+// Design locked with Tal 2026-09-25: 1B (both paths), 2A (blocked once a month
+// was closed after the import), 3A (last import only, one level), conflicts = A
+// (if anything the import wrote was changed afterwards → BLOCK, list who).
+//
+// buildImportUndo(prev, patch, meta) — called right BEFORE an import's save.
+//   Diffs the pre-import state against the save patch and records, per touched
+//   key, the value BEFORE and AFTER (sentLog + paymentHistory, main AND __acc__
+//   keys alike — main == extra), the fingerprints added/dropped, the pending
+//   queues, the previous lastBankSyncImport receipt, and the closed-month lists
+//   at import time. Returns null when the import changed nothing money-related,
+//   so an idle agent run can never overwrite a real undo record.
+// planImportUndo(d) — pure. Validates the record against the CURRENT state and
+//   returns { ok, patch, summary } or { ok:false, reason, ... }. Never writes.
+//   Reasons: 'none' | 'closed' (a month closed after import) | 'changed'
+//   (a touched key no longer equals what the import wrote).
+// Debt-core untouched: openingDebt is never read or written here.
+// ====================================================================
+// paymentHistory records carry `date` = the day recordPayment last ran, and the
+// manual path re-runs recordPayment for EVERY sentLog entry on each save — so an
+// unrelated tenant's record gets re-dated with no real change. Money identity
+// therefore ignores `date` (otherwise every earlier payer would look "touched").
+function phMoneyView(arr) {
+  if (!Array.isArray(arr)) return arr === undefined ? null : arr;
+  return arr.map(r => { if (!r || typeof r !== 'object') return r; const c = Object.assign({}, r); delete c.date; return c; });
+}
+
+function buildImportUndo(prev, patch, meta) {
+  const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+  const clone = v => (v === undefined || v === null) ? null : JSON.parse(JSON.stringify(v));
+  const rec = {
+    id: String(Date.now()),
+    timestamp: new Date().toISOString(),
+    source: (meta && meta.source) || 'manual',
+    month: (meta && meta.month) || null,
+    sentLogBefore: {}, sentLogAfter: {},
+    phBefore: {}, phAfter: {},
+    fingerprintsAdded: [], fingerprintsDropped: [],
+    queues: {},
+    closedMonthsAt: Array.isArray(prev.closedMonths) ? prev.closedMonths.slice() : [],
+    closedMonthsExtraAt: Array.isArray(prev.closedMonthsExtra) ? prev.closedMonthsExtra.slice() : []
+  };
+  let changed = false;
+  if (patch.sentLog) {
+    const pS = prev.sentLog || {}, nS = patch.sentLog;
+    for (const k of new Set([...Object.keys(pS), ...Object.keys(nS)])) {
+      if (!same(pS[k], nS[k])) { rec.sentLogBefore[k] = clone(pS[k]); rec.sentLogAfter[k] = clone(nS[k]); changed = true; }
+    }
+  }
+  if (patch.paymentHistory) {
+    const pP = prev.paymentHistory || {}, nP = patch.paymentHistory;
+    for (const k of new Set([...Object.keys(pP), ...Object.keys(nP)])) {
+      if (!same(phMoneyView(pP[k]), phMoneyView(nP[k]))) { rec.phBefore[k] = clone(pP[k]); rec.phAfter[k] = clone(nP[k]); changed = true; }
+    }
+  }
+  if (Array.isArray(patch.importedBankFingerprints)) {
+    const before = Array.isArray(prev.importedBankFingerprints) ? prev.importedBankFingerprints : [];
+    const bSet = new Set(before), aSet = new Set(patch.importedBankFingerprints);
+    rec.fingerprintsAdded   = patch.importedBankFingerprints.filter(f => !bSet.has(f));
+    rec.fingerprintsDropped = before.filter(f => !aSet.has(f));
+    if (rec.fingerprintsAdded.length || rec.fingerprintsDropped.length) changed = true;
+  }
+  for (const q of ['pendingClosedMonthPayments', 'pendingAmbiguousMatches']) {
+    if (patch[q] !== undefined && !same(prev[q], patch[q])) {
+      rec.queues[q] = { before: clone(prev[q]), after: clone(patch[q]) };
+      changed = true;
+    }
+  }
+  if (!changed) return null;
+  if (patch.lastBankSyncImport !== undefined) rec.lastBankSyncImportBefore = clone(prev.lastBankSyncImport);
+  // Tenants the import touched (for the UI summary) — key prefix before the
+  // first '__acc__' / last '_<hebMonth>' (sentLog) or the whole key (history).
+  const ids = new Set();
+  Object.keys(rec.sentLogAfter).forEach(k => { const b = k.split('__acc__')[0]; ids.add(b.includes('_') && !k.includes('__acc__') ? b.slice(0, b.lastIndexOf('_')) : b); });
+  Object.keys(rec.phAfter).forEach(k => ids.add(k.split('__acc__')[0]));
+  rec.tenantIds = Array.from(ids);
+  return rec;
+}
+
+function planImportUndo(d) {
+  const u = d && d.lastImportUndo;
+  if (!u) return { ok: false, reason: 'none' };
+  const same = (a, b) => JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b);
+  const nameOf = id => ((d.tenants || []).find(t => String(t.id) === String(id)) || {}).name || String(id);
+  // 2A — a month closed AFTER the import already baked it into openingDebt.
+  const atM = new Set(u.closedMonthsAt || []), atE = new Set(u.closedMonthsExtraAt || []);
+  const newlyClosed = (d.closedMonths || []).filter(m => !atM.has(m))
+    .concat((d.closedMonthsExtra || []).filter(m => !atE.has(m)));
+  if (newlyClosed.length) return { ok: false, reason: 'closed', months: Array.from(new Set(newlyClosed)).sort() };
+  // Conflicts (A) — every key the import wrote must still hold exactly what it wrote.
+  const conflictIds = new Set();
+  const sl = d.sentLog || {}, ph = d.paymentHistory || {};
+  for (const k of Object.keys(u.sentLogAfter || {})) {
+    if (!same(sl[k], u.sentLogAfter[k])) conflictIds.add(k.includes('__acc__') ? k.split('__acc__')[0] : k.slice(0, k.lastIndexOf('_')));
+  }
+  for (const k of Object.keys(u.phAfter || {})) {
+    if (!same(phMoneyView(ph[k]), phMoneyView(u.phAfter[k]))) conflictIds.add(k.split('__acc__')[0]);
+  }
+  let queueConflict = false;
+  for (const q of Object.keys(u.queues || {})) {
+    if (!same(d[q], u.queues[q].after)) queueConflict = true;
+  }
+  if (conflictIds.size || queueConflict) {
+    return { ok: false, reason: 'changed', names: Array.from(conflictIds).map(nameOf), queueConflict };
+  }
+  // Build the restore patch.
+  const sentLog = Object.assign({}, sl);
+  for (const [k, v] of Object.entries(u.sentLogBefore || {})) { if (v === null) delete sentLog[k]; else sentLog[k] = v; }
+  const paymentHistory = Object.assign({}, ph);
+  for (const [k, v] of Object.entries(u.phBefore || {})) { if (v === null) delete paymentHistory[k]; else paymentHistory[k] = v; }
+  const added = new Set(u.fingerprintsAdded || []);
+  const fps = (u.fingerprintsDropped || []).concat((d.importedBankFingerprints || []).filter(f => !added.has(f)));
+  const patch = { sentLog, paymentHistory, importedBankFingerprints: fps, lastImportUndo: null };
+  for (const q of Object.keys(u.queues || {})) patch[q] = u.queues[q].before === null ? [] : u.queues[q].before;
+  if (Object.prototype.hasOwnProperty.call(u, 'lastBankSyncImportBefore')) patch.lastBankSyncImport = u.lastBankSyncImportBefore;
+  const summary = {
+    timestamp: u.timestamp, source: u.source, month: u.month,
+    tenants: (u.tenantIds || []).length,
+    names: (u.tenantIds || []).map(nameOf),
+    sentLogKeys: Object.keys(u.sentLogAfter || {}).length,
+    fingerprints: (u.fingerprintsAdded || []).length
+  };
+  return { ok: true, patch, summary };
+}
+
+// ── POST /api/undo-last-import — v2.14.53 ─────────────────────────────────────
+// Reverts ONLY the most recent bank import (manual or agent) of THIS building,
+// using the lastImportUndo record written at import time. {dryRun} previews.
+// Blocked (nothing written) when: no record / a month was closed after the
+// import / something the import wrote was changed afterwards. Backs up first.
+app.post('/api/undo-last-import', authMiddleware, (req, res) => {
+  const dryRun = !!(req.body && req.body.dryRun);
+  const d = loadTenantData(req.user.tenantId);
+  const plan = planImportUndo(d);
+  if (!plan.ok) {
+    console.log(`[undo-last-import] tenant=${req.user.tenantId} BLOCKED reason=${plan.reason}`);
+    return res.json(Object.assign({ ok: false, blocked: true }, plan));
+  }
+  if (dryRun) return res.json({ ok: true, dryRun: true, summary: plan.summary });
+  const backupFile = createBackup('pre-restore');
+  saveTenantData(req.user.tenantId, plan.patch);
+  console.log(`[undo-last-import] tenant=${req.user.tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, plan.summary);
+  res.json({ ok: true, dryRun: false, summary: plan.summary, backupFile: backupFile ? path.basename(backupFile) : null });
 });
 
 // ── POST /api/reset-building-payments — clean slate for bank-import data ────
@@ -2209,7 +2366,9 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
     // and the building shows ₪0 debt where real debt is due. Reset = "no month
     // has been closed yet", symmetric main + extra.
     closedMonths: [],
-    closedMonthsExtra: []
+    closedMonthsExtra: [],
+    // v2.14.53 — an undo record would point at data that no longer exists.
+    lastImportUndo: null
   });
 
   console.log(`[reset-building-payments] tenant=${req.user.tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
@@ -2315,7 +2474,8 @@ app.post('/api/admin/reset-building-full', superAdminMiddleware, (req, res) => {
     closedMonths: [],
     closedMonthsExtra: [],
     pendingClosedMonthPayments: [],
-    pendingAmbiguousMatches: []
+    pendingAmbiguousMatches: [],
+    lastImportUndo: null            // v2.14.53
   };
   if (!hadDefaultTariffs) patch.defaultTariffs = seedHolder.defaultTariffs;
   saveTenantData(tenantId, patch);
@@ -7921,6 +8081,16 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // Re-importing the same file (or an overlapping month file) will skip any row
     // whose fingerprint is already here, so nothing is counted twice.
     const importedFp = new Set(Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : []);
+    // v2.14.53 — pre-import snapshot for "undo last import" (deep copy: the
+    // analysis below may mutate d's objects in place).
+    const _undoPrev = JSON.parse(JSON.stringify({
+      sentLog: d.sentLog || {}, paymentHistory: d.paymentHistory || {},
+      importedBankFingerprints: d.importedBankFingerprints || [],
+      pendingClosedMonthPayments: d.pendingClosedMonthPayments === undefined ? null : d.pendingClosedMonthPayments,
+      pendingAmbiguousMatches: d.pendingAmbiguousMatches === undefined ? null : d.pendingAmbiguousMatches,
+      lastBankSyncImport: d.lastBankSyncImport === undefined ? null : d.lastBankSyncImport,
+      closedMonths: d.closedMonths || [], closedMonthsExtra: d.closedMonthsExtra || []
+    }));
 
     const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits, ambiguousMatchHits } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs,
@@ -8043,6 +8213,13 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
       }
       importSave.pendingAmbiguousMatches = mergedA;
     }
+    // v2.14.53 — undo record. null when this run changed nothing money-related
+    // (e.g. a scheduled re-run where every row was already imported) → the
+    // previous undo record is kept, so an idle run never erases it.
+    try {
+      const _undoRec = buildImportUndo(_undoPrev, importSave, { source: 'agent', month: month || monthKey || null });
+      if (_undoRec) importSave.lastImportUndo = _undoRec;
+    } catch (e) { console.error('[undo-snapshot agent]', e.message); } // never block an import
     saveTenantData(req.user.tenantId, importSave);
 
     res.json({ ok: true, month, matched: matched.length, unmatched: unmatched.length, matchedTenants: matched, unmatchedTenants: unmatched, alreadyImported: (alreadyImportedSkips || []).length, alreadyImportedTenants: alreadyImportedSkips || [], duplicateWarnings: duplicateWarnings || [], closedMonthHits: closedMonthHits || [], ambiguousMatchHits: ambiguousMatchHits || [] });

@@ -1105,6 +1105,33 @@ function vpLogout() {
       </div>
     </div>
 
+    <!-- v2.14.53 — undo the LAST bank import only (manual or BankSync agent) -->
+    <div class="card" style="border:1px solid rgba(227,179,65,.35);background:rgba(227,179,65,.05);">
+      <div class="card-header" style="cursor:pointer;user-select:none;color:#e3b341;" onclick="toggleSection('secUndoImport')">↩️ ביטול ייבוא הבנק האחרון
+        <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-undo')" style="margin-right:8px;">?</button>
+        <span id="secUndoImportIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secUndoImportBody" style="display:none;">
+        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;line-height:1.7;">
+          מחזיר את הבניין <strong>למצב שהיה רגע לפני ייבוא קובץ הבנק האחרון</strong> — ידני או אוטומטי (BankSync).
+          מבוטלים רק התשלומים שהייבוא הזה רשם, סטטוסי התשלום שלו וזיכרון הייבוא שלו. כל השאר נשאר בדיוק כמו שהוא.<br>
+          <strong>מתי להשתמש:</strong> ייבאת קובץ שגוי, בחרת חודש לא נכון, או שתשלומים שויכו לדיירים הלא נכונים — ורוצים לחזור צעד אחד אחורה ולייבא שוב נכון.<br>
+          <strong>רק הייבוא האחרון, ורק פעם אחת.</strong> אחרי ביטול אין "ביטול נוסף" לייבוא שלפניו.<br>
+          ⛔ <strong>הביטול ייחסם</strong> אם:
+          (1) <strong>נסגר חודש</strong> אחרי הייבוא — התשלומים כבר נכנסו ליתרות הדיירים;
+          (2) <strong>שינית ידנית</strong> אחרי הייבוא משהו שהוא רשם (למשל "בטל" או סימון תשלום לאחד הדיירים) — יוצגו שמות הדיירים שהשתנו.
+          <strong>מה עושים כשחסום:</strong> במקרה (2) — להחזיר את השינוי הידני ולנסות שוב, <strong>או</strong> להשתמש ב-🧹 "התחלה נקייה" למטה ואז לייבא מחדש את קבצי הבנק הנכונים. במקרה (1) — לפנות לתמיכה.<br>
+          🧹 לעומת "התחלה נקייה" למטה — שמוחקת <strong>את כל</strong> הייבואים — כאן מבוטל <strong>רק האחרון</strong>.
+        </p>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button class="btn btn-secondary" onclick="undoLastImport(true)" title="בדיקה בלבד — מציג איזה ייבוא יבוטל (תאריך, מקור, חודש ודיירים), או למה הביטול חסום. לא משנה שום נתון.">🔍 בדוק מה יבוטל</button>
+          <button class="btn" style="background:#e3b341;color:#1a1a1a;" onclick="undoLastImport(false)" title="מבטל את ייבוא הבנק האחרון בלבד ומחזיר את הסטטוסים, ההיסטוריה וזיכרון הייבוא למצב שלפניו. גיבוי אוטומטי נשמר לפני הביטול.">↩️ בטל ייבוא אחרון</button>
+        </div>
+        <div id="undoImportResult" style="margin-top:12px;"></div>
+        <div class="hint" style="margin-top:10px;">💡 גיבוי אוטומטי נשמר לפני הביטול. מומלץ ללחוץ קודם "בדוק מה יבוטל".</div>
+      </div>
+    </div>
+
     <!-- v2.14.3 — clean slate: wipe all bank-import payment data (settings kept) -->
     <div class="card" style="border:1px solid rgba(229,72,77,.35);background:rgba(229,72,77,.05);">
       <div class="card-header" style="cursor:pointer;user-select:none;color:#e5484d;" onclick="toggleSection('secResetPayments')">🧹 התחלה נקייה — מחיקת כל התשלומים שנקלטו
@@ -1117,7 +1144,8 @@ function vpLogout() {
           וזיכרון הייבוא — כולל חשבונות נוספים, ומתחיל מדף חלק.<br>
           <strong>לא נמחק:</strong> רשימת הדיירים, הטלפונים, מילות החיפוש, התשלום החודשי המותאם, החוב ההתחלתי (יתרת פתיחה), והגדרות הבניין.<br>
           ♻️ <strong>ניתן לשחזור:</strong> כל מה שנמחק כאן חוזר בייבוא מחדש של קובץ הבנק — לכן זו פעולה בטוחה יחסית.<br>
-          💡 טעית ב<strong>חוב התחלתי</strong> של דייר? אל תשתמש בכלי הזה — פשוט <strong>ערוך את הדייר</strong> (שדה "יתרת פתיחה") או <strong>ייבא קובץ דיירים מעודכן</strong>. איפוס גורף של החוב ההתחלתי לכל הבניין מתבצע רק דרך התמיכה.
+          💡 טעית ב<strong>חוב התחלתי</strong> של דייר? אל תשתמש בכלי הזה — פשוט <strong>ערוך את הדייר</strong> (שדה "יתרת פתיחה") או <strong>ייבא קובץ דיירים מעודכן</strong>. ניקוי מלא של הבניין (כולל חוב התחלתי) מתבצע רק דרך התמיכה.<br>
+          ↩️ רוצה לבטל רק את <strong>הייבוא האחרון</strong>? השתמש ב"ביטול ייבוא הבנק האחרון" למעלה.
         </p>
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
           <button class="btn btn-secondary" onclick="resetBuildingPayments(true)">🔍 בדוק מה יימחק</button>
@@ -1792,7 +1820,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.52';
+const HTML_VERSION = '2.14.53';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -5357,7 +5385,9 @@ function commitBankImport(){
   if (allFp.length > 5000) allFp = allFp.slice(allFp.length - 5000);
   data.importedBankFingerprints = allFp;
 
-  const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp };
+  // v2.14.53 — bankImportCommit tells the server to snapshot the pre-import state
+  // so this import can be undone (↩️ בטל ייבוא אחרון, settings). Never persisted.
+  const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp, bankImportCommit: true };
   if (P.selectedMonthKey) payload.bankMonthOverride = P.selectedMonthKey;
   // v2.14.52 — keep the save promise so we can RELOAD after it lands (see the end
   // of this function). Previously fire-and-forget + render() of LOCAL data: the
@@ -6765,6 +6795,51 @@ async function repairTariffs(dryRun) {
     if (!dryRun) { await loadData(); render(); toast('🛠️ תוקנו ' + d.count + ' רשומות', 'success'); }
   } catch(e) {
     if (out) out.innerHTML = '<span style="color:var(--danger);font-size:0.83rem;">❌ שגיאת רשת: ' + e.message + '</span>';
+  }
+}
+
+// ── v2.14.53 — undo the LAST bank import (manual or agent) ───────────────
+// POST /api/undo-last-import. dryRun=true previews; false reverts (server backs
+// up first). Server refuses (blocked) when: no import to undo / a month closed
+// after the import / something the import wrote was changed afterwards.
+async function undoLastImport(dryRun) {
+  const out = document.getElementById('undoImportResult');
+  const box = function(color, html){ return '<div style="font-size:0.83rem;background:var(--surface2);border:1px solid var(--border);border-right:3px solid ' + color + ';border-radius:6px;padding:9px 12px;line-height:1.7;">' + html + '</div>'; };
+  const blockedHtml = function(d){
+    if (d.reason === 'none') return box('var(--text3)', 'ℹ️ אין ייבוא בנק לביטול — או שכבר בוטל, או שבוצעה "התחלה נקייה" מאז.');
+    if (d.reason === 'closed') return box('#e5484d', '⛔ <strong>הביטול חסום:</strong> אחרי הייבוא נסגר חודש (' + (d.months || []).join(', ') + '), והתשלומים כבר נכנסו ליתרות הדיירים.<br>לתיקון דייר בודד — ערוך את "יתרת הפתיחה" שלו. לתיקון כללי — פנה לתמיכה.');
+    return box('#e5484d', '⛔ <strong>הביטול חסום:</strong> אחרי הייבוא בוצע שינוי ידני בנתונים שהייבוא רשם' +
+      ((d.names || []).length ? ' — אצל: <strong>' + d.names.join(', ') + '</strong>' : '') +
+      (d.queueConflict ? ' (וגם ברשימת התשלומים הממתינים להכרעה)' : '') +
+      '.<br><strong>מה עושים:</strong> החזר את השינוי הידני ונסה שוב — <strong>או</strong> השתמש ב-🧹 "התחלה נקייה" (למטה) ואז ייבא מחדש את קבצי הבנק הנכונים.');
+  };
+  const infoHtml = function(sm, done){
+    const when = sm.timestamp ? new Date(sm.timestamp).toLocaleString('he-IL') : '';
+    const src = sm.source === 'agent' ? '🤖 אוטומטי (BankSync)' : '🖱️ ידני';
+    return box(done ? 'var(--accent)' : '#e3b341',
+      (done ? '✅ <strong>הייבוא בוטל.</strong>' : '🔍 <strong>ייבוא שיבוטל:</strong>') + '<br>' +
+      'מתי: ' + when + ' · מקור: ' + src + (sm.month ? ' · חודש: ' + sm.month : '') + '<br>' +
+      'דיירים: <strong>' + (sm.tenants || 0) + '</strong>' + ((sm.names || []).length ? ' — ' + sm.names.join(', ') : '') + '<br>' +
+      'רישומי תשלום: ' + (sm.sentLogKeys || 0) + ' · זיכרון ייבוא: ' + (sm.fingerprints || 0));
+  };
+  if (!dryRun) {
+    if (!confirm('לבטל את ייבוא הבנק האחרון?\n\n• יבוטלו: התשלומים, הסטטוסים וזיכרון הייבוא שנרשמו בייבוא האחרון בלבד\n• לא ישתנה: כל מה שהיה לפני הייבוא, רשימת הדיירים, החוב ההתחלתי וההגדרות\n\nאפשר לבטל רק את הייבוא האחרון, ורק פעם אחת.\nגיבוי אוטומטי יישמר לפני הביטול.\nלהמשיך?')) return;
+  }
+  if (out) out.innerHTML = '<span style="font-size:0.83rem;color:var(--text2);">⏳ ' + (dryRun ? 'בודק…' : 'מבטל…') + '</span>';
+  try {
+    const r = await fetch(API + '/undo-last-import', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ dryRun: !!dryRun })
+    });
+    const d = await r.json();
+    if (d.blocked) { if (out) out.innerHTML = blockedHtml(d); return; }
+    if (!d.ok) { if (out) out.innerHTML = box('#e5484d', '❌ ' + (d.error || 'שגיאה')); return; }
+    let h = infoHtml(d.summary || {}, !dryRun);
+    if (!dryRun && d.backupFile) h += '<div class="hint" style="margin-top:8px;">💾 גיבוי נשמר: ' + d.backupFile + '</div>';
+    if (out) out.innerHTML = h;
+    if (!dryRun) { await loadData(); render(); toast('↩️ ייבוא הבנק האחרון בוטל', 'success'); }
+  } catch(e) {
+    if (out) out.innerHTML = box('#e5484d', '❌ שגיאת רשת: ' + e.message);
   }
 }
 

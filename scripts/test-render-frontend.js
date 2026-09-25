@@ -1805,6 +1805,44 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
     t.eq('saveEdit reloads before render', /await loadData\(\);\s*render\(\);\s*\}\s*$/.test(se.trim()), true);
   }
 
+  // v2.14.53 — undo last bank import: wiring in BOTH import paths + settings card + guide.
+  {
+    const dStart = srv2.indexOf("app.post('/api/data'"); const dRoute = srv2.slice(dStart, srv2.indexOf('\napp.', dStart + 10));
+    t.eq('manual path: snapshot taken from disk when bankImportCommit', /const _undoPrev = req\.body\.bankImportCommit \? loadTenantData\(/.test(dRoute), true);
+    t.eq('manual path: bankImportCommit never persisted', dRoute.includes('delete req.body.bankImportCommit'), true);
+    t.eq('manual path: snapshot taken BEFORE the paymentHistory sync', dRoute.indexOf('_undoPrev =') < dRoute.indexOf('if (req.body.sentLog)'), true);
+    t.eq('manual path: record built before the save', dRoute.indexOf("buildImportUndo(_undoPrev, req.body, { source: 'manual'") < dRoute.indexOf('saveTenantData(req.user.tenantId, req.body)'), true);
+    const iStart = srv2.indexOf("app.post('/api/import-bank'"); const iRoute = srv2.slice(iStart, srv2.indexOf('\napp.', iStart + 10));
+    t.eq('agent path: deep snapshot before analysis', iRoute.indexOf('const _undoPrev = JSON.parse(JSON.stringify(') < iRoute.indexOf('analyzeBankRowsServer('), true);
+    t.eq('agent path: record attached to importSave before save', iRoute.indexOf("buildImportUndo(_undoPrev, importSave, { source: 'agent'") < iRoute.indexOf('saveTenantData(req.user.tenantId, importSave)'), true);
+    t.eq('agent path: null record keeps the previous one (idle run)', /if \(_undoRec\) importSave\.lastImportUndo = _undoRec;/.test(iRoute), true);
+    t.eq('undo endpoint is authMiddleware (client tool)', /app\.post\('\/api\/undo-last-import', authMiddleware/.test(srv2), true);
+    const uStart = srv2.indexOf("app.post('/api/undo-last-import'"); const uRoute = srv2.slice(uStart, srv2.indexOf('\napp.', uStart + 10));
+    t.eq('undo endpoint backs up before writing', uRoute.indexOf("createBackup('pre-restore')") > 0 && uRoute.indexOf("createBackup('pre-restore')") < uRoute.indexOf('saveTenantData('), true);
+    t.eq('commitBankImport flags bankImportCommit', /bankImportCommit: true/.test(app2.slice(app2.indexOf('function commitBankImport(){'))), true);
+    // Settings card
+    t.eq('settings card present', app2.includes("toggleSection('secUndoImport')") && app2.includes('id="secUndoImportBody"'), true);
+    t.eq('card help button → guide anchor', app2.includes("showHelp('settings#set-undo')"), true);
+    t.eq('dry-run button with tooltip', /onclick="undoLastImport\(true\)" title="בדיקה בלבד/.test(app2), true);
+    t.eq('undo button with tooltip', /onclick="undoLastImport\(false\)" title="מבטל את ייבוא הבנק האחרון בלבד/.test(app2), true);
+    t.eq('card explains: last only, once', app2.includes('רק הייבוא האחרון, ורק פעם אחת.'), true);
+    t.eq('card explains: blocked after month close', app2.includes('<strong>נסגר חודש</strong> אחרי הייבוא'), true);
+    t.eq('card explains: blocked after manual change', app2.includes('<strong>שינית ידנית</strong> אחרי הייבוא'), true);
+    t.eq('handler defined + calls endpoint', /async function undoLastImport\(dryRun\)/.test(app2) && app2.includes("API + '/undo-last-import'"), true);
+    t.eq('handler confirms before the real run', /if \(!dryRun\) \{\s*if \(!confirm\('לבטל את ייבוא הבנק האחרון/.test(app2), true);
+    t.eq('handler reloads after undo', /toast\('↩️ ייבוא הבנק האחרון בוטל'/.test(app2) && /if \(!dryRun\) \{ await loadData\(\); render\(\); toast\('↩️/.test(app2), true);
+    t.eq('🧹 card points to undo for last-import-only', app2.includes('הייבוא האחרון</strong>? השתמש ב"ביטול ייבוא הבנק האחרון"'), true);
+    t.eq('blocked (changed) message offers 🧹 as self-service fallback', /ייבא מחדש את קבצי הבנק הנכונים\.'\);/.test(app2) && app2.slice(app2.indexOf('const blockedHtml')).includes('השתמש ב-🧹 "התחלה נקייה"'), true);
+    t.eq('closed-month block still routes to support', app2.slice(app2.indexOf('const blockedHtml')).includes('לתיקון כללי — פנה לתמיכה'), true);
+    t.eq('card: what to do when blocked (🧹 for case 2, support for case 1)', app2.includes('<strong>מה עושים כשחסום:</strong>') && app2.includes('במקרה (1) — לפנות לתמיכה'), true);
+    const g = readSource('public/vaadpro-guide.js');
+    t.eq('guide: set-undo anchor', g.includes('id="vpg-a-set-undo"'), true);
+    t.eq('guide: covers agent (BankSync)', g.slice(g.indexOf('vpg-a-set-undo'), g.indexOf('vpg-a-set-reset')).includes('BankSync'), true);
+    t.eq('guide: both block reasons', g.includes('(1) נסגר חודש אחרי הייבוא') && g.includes('(2) שיניתם ידנית אחרי הייבוא'), true);
+    t.eq('guide: 🧹 fallback for a manual-change block', g.includes('ייבאו מחדש את קבצי הבנק הנכונים — בלי צורך בתמיכה'), true);
+    t.eq('guide: idle agent run does not erase undo', g.includes('לא</strong> נחשבת ייבוא'), true);
+  }
+
   // GUIDE (v2.14.51): support-only full wipe + the tenants-file-after-payments pitfall.
   const guide2 = readSource('public/vaadpro-guide.js');
   t.eq('guide: full wipe is support-only', guide2.includes('ניקוי מלא של הבניין (כולל חוב התחלתי ותעריפים) מתבצע רק דרך התמיכה'), true);
