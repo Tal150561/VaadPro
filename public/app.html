@@ -6806,7 +6806,7 @@ async function undoLastImport(dryRun) {
   const out = document.getElementById('undoImportResult');
   const box = function(color, html){ return '<div style="font-size:0.83rem;background:var(--surface2);border:1px solid var(--border);border-right:3px solid ' + color + ';border-radius:6px;padding:9px 12px;line-height:1.7;">' + html + '</div>'; };
   const blockedHtml = function(d){
-    if (d.reason === 'none') return box('var(--text3)', 'ℹ️ אין ייבוא בנק לביטול — או שכבר בוטל, או שבוצעה "התחלה נקייה" מאז.');
+    if (d.reason === 'none') return box('var(--text3)', 'ℹ️ <strong>אין ייבוא לביטול.</strong> ביטול אפשרי רק לייבוא האחרון שרשם תשלומים חדשים מאז עדכון המערכת (גרסה 2.14.53). ייבוא שכל התנועות בו כבר יובאו בעבר אינו נחשב.<br>אם הייבוא האחרון כבר בוטל, או שבוצעה "התחלה נקייה" מאז — גם אז אין מה לבטל.');
     if (d.reason === 'closed') return box('#e5484d', '⛔ <strong>הביטול חסום:</strong> אחרי הייבוא נסגר חודש (' + (d.months || []).join(', ') + '), והתשלומים כבר נכנסו ליתרות הדיירים.<br>לתיקון דייר בודד — ערוך את "יתרת הפתיחה" שלו. לתיקון כללי — פנה לתמיכה.');
     return box('#e5484d', '⛔ <strong>הביטול חסום:</strong> אחרי הייבוא בוצע שינוי ידני בנתונים שהייבוא רשם' +
       ((d.names || []).length ? ' — אצל: <strong>' + d.names.join(', ') + '</strong>' : '') +

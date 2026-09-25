@@ -1833,6 +1833,8 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
     t.eq('handler reloads after undo', /toast\('↩️ ייבוא הבנק האחרון בוטל'/.test(app2) && /if \(!dryRun\) \{ await loadData\(\); render\(\); toast\('↩️/.test(app2), true);
     t.eq('🧹 card points to undo for last-import-only', app2.includes('הייבוא האחרון</strong>? השתמש ב"ביטול ייבוא הבנק האחרון"'), true);
     t.eq('blocked (changed) message offers 🧹 as self-service fallback', /ייבא מחדש את קבצי הבנק הנכונים\.'\);/.test(app2) && app2.slice(app2.indexOf('const blockedHtml')).includes('השתמש ב-🧹 "התחלה נקייה"'), true);
+    t.eq("'none' message explains pre-update + already-imported cases", app2.includes('ביטול אפשרי רק לייבוא האחרון שרשם תשלומים חדשים מאז עדכון המערכת') && app2.includes('ייבוא שכל התנועות בו כבר יובאו בעבר אינו נחשב'), true);
+    t.eq("guide: 'no import to undo' explained", readSource('public/vaadpro-guide.js').includes('"אין ייבוא לביטול" למרות שיש תשלומים?'), true);
     t.eq('closed-month block still routes to support', app2.slice(app2.indexOf('const blockedHtml')).includes('לתיקון כללי — פנה לתמיכה'), true);
     t.eq('card: what to do when blocked (🧹 for case 2, support for case 1)', app2.includes('<strong>מה עושים כשחסום:</strong>') && app2.includes('במקרה (1) — לפנות לתמיכה'), true);
     const g = readSource('public/vaadpro-guide.js');
