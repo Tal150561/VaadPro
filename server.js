@@ -2149,7 +2149,7 @@ app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
 // mix of the original hand-entry AND accrual from bad imports (not separable after
 // closeMonthUnpaid), zeroing it is IRREVERSIBLE — the genuine opening debts are
 // gone. That irreversible action moved to the admin-only
-// /api/admin/reset-building-opening-debt (per-building, human-gated). A client
+// /api/admin/reset-building-full (v2.14.51 — full wipe, per-building, human-gated). A client
 // who entered a wrong opening debt fixes it the safe way: edit the tenant, or
 // re-import a tenants file with corrected חוב_התחלתי — both surgical & recoverable.
 //
@@ -2198,7 +2198,7 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
   const backupFile = createBackup('pre-restore');
 
   // v2.14.43 — openingDebt is intentionally NOT touched here (moved to the
-  // admin-only endpoint). tenants/extraAccounts definitions stay byte-untouched.
+  // admin-only endpoint, since v2.14.51 /api/admin/reset-building-full). tenants/extraAccounts definitions stay byte-untouched.
   saveTenantData(req.user.tenantId, {
     sentLog: {},
     paymentHistory: {},
@@ -2216,20 +2216,34 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
   res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
 });
 
-// ── POST /api/admin/reset-building-opening-debt — ADMIN-only, per building ─────
-// v2.14.43 — the IRREVERSIBLE half of the old "clean slate". Zeroes openingDebt on
-// every tenant AND every extra account of ONE building (tenantId from the body,
-// validated against the users list — same guard as /api/admin/reset-building-wa).
+// ── POST /api/admin/reset-building-full — ADMIN-only FULL wipe, per building ────
+// v2.14.51 — REPLACES v2.14.43's /api/admin/reset-building-opening-debt, which
+// zeroed ONLY openingDebt. That left sentLog/paymentHistory behind, so after the
+// admin "reset" the rows still read "שילם (בנק)" with a credit, and re-importing
+// a tenants file NETTED the new חוב_התחלתי against the stale bank payments
+// (נווה ים: file 7,200 − leftover 500 credit = 6,700 shown). Verified live
+// 2026-09-25: client 🧹 + re-import gave the exact file values → the gap was the
+// admin endpoint's scope, not the money math.
 //
-// WHY ADMIN-ONLY: the on-disk openingDebt is a mix of the original hand-entry and
-// accrual from bad imports, not separable after closeMonthUnpaid — so zeroing it
-// destroys the genuine opening debts with no automatic way back. Moving it behind
-// the operator (Tal) adds a human review step: the client asks, Tal confirms a
-// backup exists and that the building really wants a full reset, then runs it.
+// Decision (Tal, 2026-09-25): the admin tool is the IRREVERSIBLE "start over" —
+// wipe every money RESULT of the building, keep the tenant list + settings, then
+// the operator re-imports the tenants file to set the opening balances.
 //
-// SAFETY: always backs up first (createBackup('pre-restore')); supports {dryRun}.
-// SCOPE: exactly the one tenantId — no fan-out.
-app.post('/api/admin/reset-building-opening-debt', superAdminMiddleware, (req, res) => {
+// WIPES (main + __acc__ symmetric — main == extra rule):
+//   • openingDebt → 0 on every tenant AND every extra account
+//   • personalTariffs → removed, then RE-SEEDED from customAmount via the same
+//     seedTariffsIfMissing() the lazy path uses (open interval from 2000-01-01)
+//   • sentLog, paymentHistory, importedBankFingerprints, lastBankSyncImport
+//   • closedMonths / closedMonthsExtra (a fresh close must accrue again)
+//   • pendingClosedMonthPayments / pendingAmbiguousMatches (orphans otherwise)
+// KEEPS: tenants list (names, phones, keywords, customAmount, suspension,
+//   propertyLabel, extraAccounts DEFINITIONS), config, defaultTariffs,
+//   templates, bankMapping, WhatsApp, maintenance.
+//
+// SAFETY: validates tenantId against loadUsers(); createBackup('pre-restore')
+// BEFORE writing; {dryRun} returns the exact counts. SCOPE: one tenantId, no fan-out.
+// Debt-core untouched — this route only writes a patch through saveTenantData.
+app.post('/api/admin/reset-building-full', superAdminMiddleware, (req, res) => {
   const { tenantId, dryRun } = req.body || {};
   const users = loadUsers();
   const validIds = new Set(users.map(u => u.tenantId));
@@ -2239,31 +2253,73 @@ app.post('/api/admin/reset-building-opening-debt', superAdminMiddleware, (req, r
 
   const d = loadTenantData(tenantId);
   const tenants = d.tenants || [];
-  const tenantsWithOpeningDebt = tenants.filter(t => (parseFloat(t.openingDebt) || 0) !== 0).length;
+  const sentLogKeys = Object.keys(d.sentLog || {});
+  let phRecordsMain = 0, phRecordsExtra = 0;
+  for (const [key, arr] of Object.entries(d.paymentHistory || {})) {
+    const n = Array.isArray(arr) ? arr.length : 0;
+    if (key.includes('__acc__')) phRecordsExtra += n; else phRecordsMain += n;
+  }
   let extraAccountsWithOpeningDebt = 0;
   for (const t of tenants) {
     for (const acc of (t.extraAccounts || [])) {
       if ((parseFloat(acc.openingDebt) || 0) !== 0) extraAccountsWithOpeningDebt++;
     }
   }
+  const pendingCount = (Array.isArray(d.pendingClosedMonthPayments) ? d.pendingClosedMonthPayments.length : 0)
+                     + (Array.isArray(d.pendingAmbiguousMatches)    ? d.pendingAmbiguousMatches.length    : 0);
   const buildingName = (users.find(u => u.tenantId === tenantId) || {}).buildingName || tenantId;
-  const summary = { tenantsWithOpeningDebt, extraAccountsWithOpeningDebt, tenantsTotal: tenants.length, buildingName };
+  const summary = {
+    buildingName,
+    tenantsTotal: tenants.length,
+    tenantsWithOpeningDebt: tenants.filter(t => (parseFloat(t.openingDebt) || 0) !== 0).length,
+    extraAccountsWithOpeningDebt,
+    tenantsWithPersonalTariffs: tenants.filter(t => Array.isArray(t.personalTariffs) && t.personalTariffs.length).length,
+    sentLogMain:  sentLogKeys.filter(k => !k.includes('__acc__')).length,
+    sentLogExtra: sentLogKeys.filter(k =>  k.includes('__acc__')).length,
+    paymentHistoryRecordsMain: phRecordsMain,
+    paymentHistoryRecordsExtra: phRecordsExtra,
+    importedFingerprints: Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints.length : 0,
+    closedMonths: (Array.isArray(d.closedMonths) ? d.closedMonths.length : 0)
+                + (Array.isArray(d.closedMonthsExtra) ? d.closedMonthsExtra.length : 0),
+    pendingQueued: pendingCount,
+    hadLastBankSyncImport: !!d.lastBankSyncImport
+  };
 
   if (dryRun) {
-    console.log(`[admin/reset-opening-debt] tenant=${tenantId} DRY RUN`, summary);
+    console.log(`[admin/reset-building-full] tenant=${tenantId} DRY RUN`, summary);
     return res.json({ ok: true, dryRun: true, summary });
   }
 
   const backupFile = createBackup('pre-restore');
+
   const cleanedTenants = tenants.map(t => {
     const copy = Object.assign({}, t, { openingDebt: 0 });
+    delete copy.personalTariffs;
     if (Array.isArray(t.extraAccounts)) {
       copy.extraAccounts = t.extraAccounts.map(acc => Object.assign({}, acc, { openingDebt: 0 }));
     }
     return copy;
   });
-  saveTenantData(tenantId, { tenants: cleanedTenants });
-  console.log(`[admin/reset-opening-debt] tenant=${tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
+  // Re-seed tariff history from customAmount — the SAME rule as the lazy seed,
+  // on a holder object so the real `d` is not mutated before the save.
+  const hadDefaultTariffs = Array.isArray(d.defaultTariffs) && d.defaultTariffs.length > 0;
+  const seedHolder = { config: d.config, defaultTariffs: d.defaultTariffs, tenants: cleanedTenants };
+  seedTariffsIfMissing(seedHolder);
+
+  const patch = {
+    tenants: seedHolder.tenants,
+    sentLog: {},
+    paymentHistory: {},
+    importedBankFingerprints: [],
+    lastBankSyncImport: null,
+    closedMonths: [],
+    closedMonthsExtra: [],
+    pendingClosedMonthPayments: [],
+    pendingAmbiguousMatches: []
+  };
+  if (!hadDefaultTariffs) patch.defaultTariffs = seedHolder.defaultTariffs;
+  saveTenantData(tenantId, patch);
+  console.log(`[admin/reset-building-full] tenant=${tenantId} DONE. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`, summary);
   res.json({ ok: true, dryRun: false, summary, backupFile: backupFile ? path.basename(backupFile) : null });
 });
 

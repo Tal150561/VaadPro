@@ -1756,7 +1756,7 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
 
   // CLIENT: the reset endpoint no longer zeroes openingDebt / sends tenants.
   const cStart = srv2.indexOf("app.post('/api/reset-building-payments'");
-  const cEnd = srv2.indexOf("app.post('/api/admin/reset-building-opening-debt'");
+  const cEnd = srv2.indexOf("app.post('/api/admin/reset-building-full'");
   const clientRoute = srv2.slice(cStart, cEnd);
   t.eq('client reset does NOT send tenants in the save patch', /tenants:\s*cleanedTenants/.test(clientRoute), false);
   t.eq('client reset still empties sentLog', /sentLog:\s*\{\}/.test(clientRoute), true);
@@ -1767,20 +1767,36 @@ t.section('v2.14.43 — reset split (client) + admin openingDebt reset');
   t.eq('client card points to edit/import for opening debt', app2.includes('ייבא קובץ דיירים מעודכן'), true);
   t.eq('client confirm no longer claims openingDebt reset', /יאופס: החוב ההתחלתי \(openingDebt\) של כל דייר/.test(app2), false);
 
-  // ADMIN endpoint exists, super-admin gated, validates tenantId, backs up.
-  const aStart = srv2.indexOf("app.post('/api/admin/reset-building-opening-debt'");
-  const aRoute = srv2.slice(aStart, aStart + 1400);
-  t.eq('admin endpoint is superAdmin-gated', /reset-building-opening-debt',\s*superAdminMiddleware/.test(srv2), true);
+  // ADMIN endpoint (v2.14.51 full wipe) exists, super-admin gated, validates, backs up.
+  const aStart = srv2.indexOf("app.post('/api/admin/reset-building-full'");
+  const aEnd = srv2.indexOf('// ── POST /api/clear-import-fingerprints', aStart);
+  const aRoute = srv2.slice(aStart, aEnd);
+  t.eq('admin full-reset endpoint exists', aStart > 0, true);
+  t.eq('old openingDebt-only endpoint removed', srv2.includes("app.post('/api/admin/reset-building-opening-debt'"), false);
+  t.eq('admin endpoint is superAdmin-gated', /reset-building-full',\s*superAdminMiddleware/.test(srv2), true);
   t.eq('admin endpoint validates tenantId against users', aRoute.includes('validIds.has(tenantId)'), true);
-  t.eq('admin endpoint backs up before wiping', aRoute.includes("createBackup('pre-restore')"), true);
+  t.eq('admin endpoint backs up before wiping', aRoute.indexOf("createBackup('pre-restore')") < aRoute.indexOf('saveTenantData('), true);
   t.eq('admin endpoint zeroes openingDebt', /openingDebt:\s*0/.test(aRoute), true);
+  t.eq('admin endpoint wipes sentLog', /sentLog:\s*\{\}/.test(aRoute), true);
+  t.eq('admin endpoint wipes paymentHistory', /paymentHistory:\s*\{\}/.test(aRoute), true);
+  t.eq('admin endpoint clears pending queues', /pendingClosedMonthPayments:\s*\[\]/.test(aRoute) && /pendingAmbiguousMatches:\s*\[\]/.test(aRoute), true);
+  t.eq('admin endpoint re-seeds tariffs via the real seed', aRoute.includes('seedTariffsIfMissing('), true);
   t.eq('admin endpoint supports dryRun', aRoute.includes('dryRun'), true);
 
   // ADMIN UI: the per-row button + handler + dry-run-then-confirm flow.
-  t.eq('admin row has reset-opening-debt button', adm.includes('resetOpeningDebt('), true);
-  t.eq('admin resetOpeningDebt handler defined', /async function resetOpeningDebt\s*\(/.test(adm), true);
-  t.eq('admin handler previews with dryRun first', /dryRun:\s*true/.test(adm.slice(adm.indexOf('function resetOpeningDebt'))), true);
-  t.eq('admin handler calls the endpoint', adm.includes("'/api/admin/reset-building-opening-debt'"), true);
+  t.eq('admin row has full-reset button', adm.includes('resetBuildingFull('), true);
+  t.eq('old resetOpeningDebt handler removed', adm.includes('resetOpeningDebt('), false);
+  t.eq('admin resetBuildingFull handler defined', /async function resetBuildingFull\s*\(/.test(adm), true);
+  t.eq('admin handler previews with dryRun first', /dryRun:\s*true/.test(adm.slice(adm.indexOf('function resetBuildingFull'))), true);
+  t.eq('admin handler calls the endpoint', adm.includes("'/api/admin/reset-building-full'"), true);
+  t.eq('admin handler confirm says irreversible', adm.slice(adm.indexOf('function resetBuildingFull')).includes('בלתי-הפיכה'), true);
+  t.eq('admin 🧨 tooltip describes full wipe', /resetBuildingFull\([^\n]*title="ניקוי מלא של הבניין/.test(adm), true);
+
+  // GUIDE (v2.14.51): support-only full wipe + the tenants-file-after-payments pitfall.
+  const guide2 = readSource('public/vaadpro-guide.js');
+  t.eq('guide: full wipe is support-only', guide2.includes('ניקוי מלא של הבניין (כולל חוב התחלתי ותעריפים) מתבצע רק דרך התמיכה'), true);
+  t.eq('guide: tenants-file import does not delete payments', guide2.includes('לא מוחק תשלומים שכבר נקלטו'), true);
+  t.eq('guide: clean slate BEFORE tenants import', guide2.includes('קודם 🧹 התחלה נקייה, ורק אחר כך ייבוא קובץ החברים'), true);
 
   // TOOLTIPS: every customer-row action button has a title=.
   const rowStart = adm.indexOf('<button class="btn btn-sm btn-blue" onclick=\'openPlanModal');

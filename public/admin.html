@@ -1355,7 +1355,7 @@ function renderCustomers(users) {
           <button class="btn btn-sm btn-ghost" onclick='openLabelsModal("${u.email}","${(u.buildingName||u.email).replace(/"/g,"&quot;")}")' title="מונחים / סוג ארגון — התאם את שמות הכינויים (ועד בית / חברה / עמותה) והמונחים שהלקוח רואה">🏷️</button>
           <button class="btn btn-sm btn-ghost" onclick='msgCustomer("${u.email}","${u.buildingName||''}")' title="שלח הודעה — פותח את מסך ההודעות עם הלקוח כנמען (WhatsApp / מייל)">📨</button>
           <button class="btn btn-sm btn-ghost" onclick='openCRM("${u.tenantId}","${u.fullName||u.buildingName||u.email}","customer")' title="כרטיס CRM — היסטוריית קשר, שיחות, משימות ותמונת מצב של הבניין">📋</button>
-          <button class="btn btn-sm btn-ghost" onclick='resetOpeningDebt("${u.tenantId}","${(u.buildingName||u.fullName||u.email).replace(/"/g,"&quot;")}")' title="איפוס חוב התחלתי — מאפס את יתרת הפתיחה (openingDebt) של כל הדיירים בבניין. פעולה בלתי-הפיכה, לתמיכה בלבד. מציג קודם 'מה יאופס'">🧨</button>
+          <button class="btn btn-sm btn-ghost" onclick='resetBuildingFull("${u.tenantId}","${(u.buildingName||u.fullName||u.email).replace(/"/g,"&quot;")}")' title="ניקוי מלא של הבניין — מוחק חוב התחלתי, סטטוסי תשלום, היסטוריה, זיכרון ייבוא, חודשים סגורים ותעריפים אישיים (נבנים מחדש מהתשלום החודשי). רשימת הדיירים וההגדרות נשמרות. בלתי-הפיך — אחריו מייבאים קובץ חברים. מציג קודם 'מה יימחק'">🧨</button>
           <button class="btn btn-sm btn-red" onclick='deleteCustomer("${u.email}")' title="מחיקת לקוח — מוחק את הלקוח ואת כל הנתונים שלו לצמיתות">🗑</button>
         </div>
       </td>
@@ -2074,15 +2074,15 @@ async function deleteCustomer(email) {
   }
 }
 
-// ── v2.14.43 — איפוס חוב התחלתי (openingDebt) לבניין בודד — Super Admin בלבד ──
-// חצי הבלתי-הפיך של "התחלה נקייה", שהועבר מרמת הלקוח לכאן. תמיד מציג dry-run
-// ("מה יאופס") לפני הביצוע, ומאשר עם שם הבניין. השרת מגבה לפני האיפוס.
-async function resetOpeningDebt(tenantId, buildingName) {
+// ── v2.14.51 — ניקוי מלא של בניין בודד — Super Admin בלבד ──
+// מחליף את "איפוס חוב התחלתי בלבד" של v2.14.43 (שהשאיר תשלומים וקרדיט מאחור).
+// תמיד מציג dry-run ("מה יימחק") לפני הביצוע, ומאשר עם שם הבניין. השרת מגבה לפני.
+async function resetBuildingFull(tenantId, buildingName) {
   if (!tenantId) { toast('אין tenantId לבניין זה', 'err'); return; }
-  // שלב 1 — dry-run: מה יאופס
+  // שלב 1 — dry-run: מה יימחק
   let dry;
   try {
-    const r = await fetch('/api/admin/reset-building-opening-debt', {
+    const r = await fetch('/api/admin/reset-building-full', {
       method: 'POST', headers: adminHeaders(),
       body: JSON.stringify({ tenantId, dryRun: true })
     });
@@ -2090,29 +2090,36 @@ async function resetOpeningDebt(tenantId, buildingName) {
   } catch(e) { toast('שגיאת רשת: ' + e.message, 'err'); return; }
   if (!dry.ok) { toast(dry.error || 'שגיאה', 'err'); return; }
   const s = dry.summary || {};
-  const nT = s.tenantsWithOpeningDebt || 0;
-  const nE = s.extraAccountsWithOpeningDebt || 0;
-  if (nT === 0 && nE === 0) {
-    toast('✅ אין חוב התחלתי לאיפוס — הבניין כבר נקי', 'ok');
-    return;
-  }
-  // שלב 2 — אישור עם שם הבניין + פירוט מה יאופס
-  const msg = '🧨 איפוס חוב התחלתי — ' + (s.buildingName || buildingName || tenantId) + '\n\n'
-            + '• דיירים עם חוב התחלתי שיאופס: ' + nT + ' מתוך ' + (s.tenantsTotal || 0) + '\n'
-            + (nE ? '• חשבונות נוספים שיאופסו: ' + nE + '\n' : '')
-            + '\n⚠️ פעולה בלתי-הפיכה — יתרות הפתיחה המקוריות לא ניתנות לשחזור אוטומטי.\n'
-            + 'גיבוי אוטומטי יישמר לפני האיפוס.\n\nלבצע?';
+  const sl = (s.sentLogMain || 0) + (s.sentLogExtra || 0);
+  const ph = (s.paymentHistoryRecordsMain || 0) + (s.paymentHistoryRecordsExtra || 0);
+  const nothing = !sl && !ph && !(s.tenantsWithOpeningDebt || 0) && !(s.extraAccountsWithOpeningDebt || 0)
+               && !(s.importedFingerprints || 0) && !(s.closedMonths || 0) && !(s.pendingQueued || 0)
+               && !(s.tenantsWithPersonalTariffs || 0) && !s.hadLastBankSyncImport;
+  if (nothing) { toast('✅ אין מה לנקות — הבניין כבר נקי', 'ok'); return; }
+  // שלב 2 — אישור עם שם הבניין + פירוט מה יימחק
+  const msg = '🧨 ניקוי מלא — ' + (s.buildingName || buildingName || tenantId) + '\n\n'
+            + 'יימחק:\n'
+            + '• חוב התחלתי: ' + (s.tenantsWithOpeningDebt || 0) + ' דיירים'
+            + ((s.extraAccountsWithOpeningDebt || 0) ? ' + ' + s.extraAccountsWithOpeningDebt + ' חשבונות נוספים' : '') + '\n'
+            + '• סטטוסי תשלום: ' + sl + '\n'
+            + '• רשומות היסטוריה: ' + ph + '\n'
+            + '• זיכרון ייבוא: ' + (s.importedFingerprints || 0) + '\n'
+            + '• חודשים סגורים: ' + (s.closedMonths || 0) + '\n'
+            + '• פריטים ממתינים לאישור: ' + (s.pendingQueued || 0) + '\n'
+            + '• תעריפים אישיים: ' + (s.tenantsWithPersonalTariffs || 0) + ' (ייבנו מחדש מהתשלום החודשי)\n\n'
+            + 'יישמר: רשימת ' + (s.tenantsTotal || 0) + ' הדיירים, טלפונים, מילות חיפוש, תשלום חודשי והגדרות הבניין.\n\n'
+            + '⚠️ פעולה בלתי-הפיכה. אחריה — לייבא קובץ חברים עם החוב ההתחלתי הנכון.\n'
+            + 'גיבוי אוטומטי יישמר לפני הניקוי.\n\nלבצע?';
   if (!confirm(msg)) return;
   // שלב 3 — ביצוע
   try {
-    const r2 = await fetch('/api/admin/reset-building-opening-debt', {
+    const r2 = await fetch('/api/admin/reset-building-full', {
       method: 'POST', headers: adminHeaders(),
       body: JSON.stringify({ tenantId, dryRun: false })
     });
     const d2 = await r2.json();
     if (d2.ok) {
-      const s2 = d2.summary || {};
-      toast('🧨 אופס חוב התחלתי ל-' + (s2.tenantsWithOpeningDebt || nT) + ' דיירים ✓'
+      toast('🧨 הבניין נוקה ✓ — כעת לייבא קובץ חברים'
             + (d2.backupFile ? ' · גיבוי: ' + d2.backupFile : ''), 'ok');
     } else {
       toast(d2.error || 'שגיאה', 'err');

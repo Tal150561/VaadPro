@@ -1792,7 +1792,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.50';
+const HTML_VERSION = '2.14.51';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -6756,8 +6756,10 @@ async function repairTariffs(dryRun) {
 // ── v2.14.3 — clean slate: wipe all bank-import payment data ──────
 // Calls POST /api/reset-building-payments. dryRun=true previews the counts,
 // false performs the wipe (server takes an automatic pre-reset backup first).
-// Deletes sentLog + paymentHistory + fingerprints + lastBankSyncImport and zeros
-// openingDebt (main + extra accounts). Never touches tenants/customAmount/config.
+// Deletes sentLog + paymentHistory + fingerprints + lastBankSyncImport + closedMonths
+// (main + extra accounts). Since v2.14.43 it does NOT touch openingDebt; the full
+// wipe incl. openingDebt is admin-only (/api/admin/reset-building-full, v2.14.51).
+// Never touches tenants/customAmount/config.
 async function resetBuildingPayments(dryRun) {
   const out = document.getElementById('resetPaymentsResult');
   if (!dryRun) {

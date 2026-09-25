@@ -724,56 +724,116 @@ t.section('Fix #0 — Agent import does not net openingDebt');
     t.eq('building openingDebt survived (extra)', b.tenants[0].extraAccounts[0].openingDebt, 30);
   }
 
-  // ── v2.14.43 — admin-only openingDebt reset (the moved irreversible half) ──
-  t.section('Admin reset openingDebt — dryRun previews without writing');
+  // ── v2.14.51 — admin-only FULL building wipe (replaces openingDebt-only) ──
+  const withQueues = () => Object.assign(makeBuilding(), {
+    pendingClosedMonthPayments: [{ tenantId: 'Z', month: '2026-05' }],
+    pendingAmbiguousMatches: [{ row: 'x' }, { row: 'y' }]
+  });
+
+  t.section('Admin full reset — dryRun previews without writing');
   {
-    const { loadResetOpeningDebt } = require('./test-lib');
-    const b = makeBuilding();
+    const { loadResetBuildingFull } = require('./test-lib');
+    const b = withQueues();
     const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
-    const r = loadResetOpeningDebt(b, { tenantId: 'T1', dryRun: true }, users);
+    const r = loadResetBuildingFull(b, { tenantId: 'T1', dryRun: true }, users);
+    const s = r.result.summary;
     t.eq('dryRun ok', r.result.ok === true && r.result.dryRun === true, true);
-    t.eq('counts tenants with openingDebt', r.result.summary.tenantsWithOpeningDebt, 1);
-    t.eq('counts extra accounts with openingDebt', r.result.summary.extraAccountsWithOpeningDebt, 1);
-    t.eq('returns building name for the confirm dialog', r.result.summary.buildingName, 'בניין הבדיקה');
+    t.eq('returns building name for the confirm dialog', s.buildingName, 'בניין הבדיקה');
+    t.eq('counts tenants with openingDebt', s.tenantsWithOpeningDebt, 1);
+    t.eq('counts extra accounts with openingDebt', s.extraAccountsWithOpeningDebt, 1);
+    t.eq('counts tenants with personalTariffs', s.tenantsWithPersonalTariffs, 1);
+    t.eq('counts sentLog main', s.sentLogMain, 2);
+    t.eq('counts sentLog extra', s.sentLogExtra, 1);
+    t.eq('counts paymentHistory main', s.paymentHistoryRecordsMain, 1);
+    t.eq('counts paymentHistory extra', s.paymentHistoryRecordsExtra, 1);
+    t.eq('counts fingerprints', s.importedFingerprints, 2);
+    t.eq('counts closed months (main+extra)', s.closedMonths, 4);
+    t.eq('counts pending queue items', s.pendingQueued, 3);
     t.eq('dryRun wrote nothing', r.saved.length, 0);
     t.eq('dryRun took no backup', r.backupCalled, 0);
     t.eq('dryRun left openingDebt intact', b.tenants[0].openingDebt, 217);
+    t.eq('dryRun left sentLog intact', Object.keys(b.sentLog).length, 3);
   }
 
-  t.section('Admin reset openingDebt — real run zeroes debt, keeps everything else');
+  t.section('Admin full reset — real run wipes all money results, keeps tenants + settings');
   {
-    const { loadResetOpeningDebt } = require('./test-lib');
-    const b = makeBuilding();
+    const { loadResetBuildingFull } = require('./test-lib');
+    const b = withQueues();
+    const cfgBefore = JSON.stringify(b.config), dtBefore = JSON.stringify(b.defaultTariffs);
     const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
-    const r = loadResetOpeningDebt(b, { tenantId: 'T1', dryRun: false }, users);
+    const r = loadResetBuildingFull(b, { tenantId: 'T1', dryRun: false }, users);
     t.eq('took a backup FIRST', r.backupCalled, 1);
     t.eq('wrote exactly once', r.saved.length, 1);
     const patch = r.saved[0].patch;
-    // ONLY tenants is in the patch — nothing else touched.
+    // Wiped — main AND extra (main == extra).
     t.eq('tenant openingDebt zeroed', patch.tenants[0].openingDebt, 0);
     t.eq('extra account openingDebt zeroed', patch.tenants[0].extraAccounts[0].openingDebt, 0);
-    // Settings preserved.
+    t.eq('sentLog emptied (main + __acc__)', Object.keys(patch.sentLog).length, 0);
+    t.eq('paymentHistory emptied (main + __acc__)', Object.keys(patch.paymentHistory).length, 0);
+    t.eq('fingerprints emptied', patch.importedBankFingerprints.length, 0);
+    t.eq('lastBankSyncImport cleared', patch.lastBankSyncImport, null);
+    t.eq('closedMonths cleared', patch.closedMonths.length, 0);
+    t.eq('closedMonthsExtra cleared', patch.closedMonthsExtra.length, 0);
+    t.eq('pendingClosedMonthPayments cleared', patch.pendingClosedMonthPayments.length, 0);
+    t.eq('pendingAmbiguousMatches cleared', patch.pendingAmbiguousMatches.length, 0);
+    // personalTariffs dropped + re-seeded from customAmount by the REAL seed rule:
+    // Z (217 == default 217) rides the default → no personal interval;
+    // R (239 != 217) gets ONE open interval from 2000-01-01 at 239.
+    t.eq('Z old personal interval (2026-01-01) removed, rides default', patch.tenants[0].personalTariffs, undefined);
+    t.eq('R re-seeded: one interval', (patch.tenants[1].personalTariffs || []).length, 1);
+    t.eq('R re-seeded rate = customAmount', patch.tenants[1].personalTariffs[0].rate, 239);
+    t.eq('R re-seeded from 2000-01-01', patch.tenants[1].personalTariffs[0].startDate, '2000-01-01');
+    // Kept.
+    t.eq('tenant count kept', patch.tenants.length, 2);
     t.eq('tenant name kept', patch.tenants[0].name, 'צבי אלתר');
     t.eq('tenant phone kept', patch.tenants[0].phone, '0528064806');
+    t.eq('keywords kept', patch.tenants[0].keywords, 'אלתר');
     t.eq('customAmount kept', patch.tenants[0].customAmount, 217);
     t.eq('extraAccount definition kept (label)', patch.tenants[0].extraAccounts[0].label, 'ביטוח');
     t.eq('extraAccount amount kept', patch.tenants[0].extraAccounts[0].amount, 50);
-    t.eq('second tenant kept', patch.tenants[1].name, 'רוני מרחבי');
-    // Payment data is NOT part of this patch (this endpoint only zeroes debt).
-    t.eq('sentLog not in patch', patch.sentLog, undefined);
-    t.eq('paymentHistory not in patch', patch.paymentHistory, undefined);
+    t.eq('config not in patch', patch.config, undefined);
+    t.eq('defaultTariffs not in patch (already existed)', patch.defaultTariffs, undefined);
+    t.eq('config byte-unchanged', JSON.stringify(b.config), cfgBefore);
+    t.eq('defaultTariffs byte-unchanged', JSON.stringify(b.defaultTariffs), dtBefore);
     t.eq('receipt returns backup filename', r.result.backupFile, 'backup-pre-restore-test.zip');
   }
 
-  t.section('Admin reset openingDebt — rejects an unknown tenantId');
+  t.section('Admin full reset — rejects an unknown tenantId');
   {
-    const { loadResetOpeningDebt } = require('./test-lib');
+    const { loadResetBuildingFull } = require('./test-lib');
     const b = makeBuilding();
     const users = [{ tenantId: 'T1', buildingName: 'בניין הבדיקה' }];
-    const r = loadResetOpeningDebt(b, { tenantId: 'GHOST', dryRun: false }, users);
+    const r = loadResetBuildingFull(b, { tenantId: 'GHOST', dryRun: false }, users);
     t.eq('rejected unknown tenantId', r.result.ok, false);
     t.eq('nothing written for bad id', r.saved.length, 0);
     t.eq('no backup for bad id', r.backupCalled, 0);
+  }
+
+  // REGRESSION (נווה ים, 2026-09-25): after the admin reset, importing a tenants
+  // file with חוב_התחלתי 7,200 showed 6,700 — a leftover ₪500 overpayment in
+  // sentLog was netted against the new opening balance. After a FULL reset the
+  // displayed debt must equal the file value exactly, with zero credit.
+  t.section('Admin full reset — re-imported opening debt is shown exactly (נווה ים)');
+  {
+    const { loadResetBuildingFull } = require('./test-lib');
+    const mk = () => ({
+      config: { amount: 200 },
+      defaultTariffs: [{ rate: 200, startDate: '2000-01-01', endDate: null }],
+      tenants: [{ id: 'OR', name: 'משפחת אור', phone: '0528333131', customAmount: 200, openingDebt: 0 }],
+      sentLog: { 'OR_יוני': 'bank_import_x_700_payer_אור' },
+      paymentHistory: { 'OR': [{ month: '2026-06', paid: true, amount: 200, paidAmount: 700 }] }
+    });
+    // Baseline — documents the bug: without wiping sentLog the leftover credit nets.
+    const before = mk();
+    before.tenants[0].openingDebt = 7200;              // tenants-file import
+    const leaked = S.calcTotalDebt(before, 'OR', '2026-06');
+    t.eq('without full reset: leftover credit nets the file value (< 7200)', leaked < 7200, true);
+    // Fixed path: full reset → tenants-file import → exact file value.
+    const b = mk();
+    loadResetBuildingFull(b, { tenantId: 'T1', dryRun: false });
+    b.tenants[0].openingDebt = 7200;                   // tenants-file import
+    t.eq('after full reset + import: debt == file value', S.calcTotalDebt(b, 'OR', '2026-06'), 7200);
+    t.eq('after full reset + import: no phantom credit', S.getCreditBalance(b, 'OR'), 0);
   }
 }
 

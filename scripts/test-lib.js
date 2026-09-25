@@ -216,15 +216,16 @@ function loadResetPayments(building, reqBody) {
 }
 
 
-// ── Load the /api/admin/reset-building-opening-debt handler (v2.14.43) ──────
-// ADMIN-only zeroing of openingDebt for ONE building (the irreversible half of the
-// old clean-slate, moved out of the client). Extracts the REAL route body and runs
-// it against stubbed loadUsers/loadTenantData/saveTenantData/createBackup. Body
-// carries { tenantId, dryRun }. saveTenantData captures the patch for assertions.
-function loadResetOpeningDebt(building, reqBody, users) {
+// ── Load the /api/admin/reset-building-full handler (v2.14.51) ──────────────
+// ADMIN-only FULL wipe of ONE building (replaces v2.14.43's openingDebt-only
+// reset). Extracts the REAL route body and runs it against stubbed loadUsers /
+// loadTenantData / saveTenantData / createBackup. The REAL seedTariffsIfMissing +
+// pickRateFromIntervals are extracted from server.js and prepended, so the
+// personalTariffs re-seed is exercised against production code, not a copy.
+function loadResetBuildingFull(building, reqBody, users) {
   const src = readSource('server.js');
-  const start = src.indexOf("app.post('/api/admin/reset-building-opening-debt'");
-  if (start < 0) throw new Error('test-lib: /api/admin/reset-building-opening-debt route not found');
+  const start = src.indexOf("app.post('/api/admin/reset-building-full'");
+  if (start < 0) throw new Error('test-lib: /api/admin/reset-building-full route not found');
   const bodyStart = src.indexOf('=> {', start) + 4;
   let depth = 1, i = bodyStart;
   while (i < src.length && depth > 0) {
@@ -244,11 +245,13 @@ function loadResetOpeningDebt(building, reqBody, users) {
     saveTenantData: (id, patch) => { saved.push({ id, patch }); Object.assign(building, patch); },
     createBackup: () => { backupCalled++; return '/x/backup-pre-restore-test.zip'; },
     path: { basename: (p) => String(p).split('/').pop() },
+    Set,
     console,
     req: { body: reqBody || {} },
     res: { json: (o) => { captured.result = o; } }
   };
-  const code = 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const code = extractFunctions(src, ['pickRateFromIntervals', 'monthInInterval', 'seedTariffsIfMissing'])
+    + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);
   return { result: captured.result, saved, backupCalled, building };
@@ -437,6 +440,6 @@ function loadDeliverySuspect() {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetOpeningDebt, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
   extractHtmlRegion, makeRunner
 };
