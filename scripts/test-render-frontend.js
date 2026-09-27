@@ -1918,4 +1918,53 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     guide54.includes('ועד בית 0 ₪, חוב קודם 230 ₪, סה"כ 230 ₪'), true);
 }
 
+
+// v2.14.55 — חייבים חריגים consume the shared split
+{
+  const fs = require('fs'), path = require('path');
+  const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  t.section('v2.14.55 — buildExcessDebtRows / buildDebtDetail wiring');
+  const i = srv.indexOf('function buildExcessDebtRows(d)'); const ex = srv.slice(i, srv.indexOf('\n}\n', i));
+  t.eq('buildExcessDebtRows located', i > 0 && ex.length > 200, true);
+  t.eq('buildExcessDebtRows calls splitCurrentMonthDebt', ex.includes('splitCurrentMonthDebt(d, tenant, mkNow, emNow)'), true);
+  t.eq('no inline curInTotal / calcTotalDebt copy left', /curInTotal|calcTotalDebt\(/.test(ex), false);
+  const j = srv.indexOf('function buildDebtDetail(d, tenant, mkNow)'); const dd = srv.slice(j, srv.indexOf('\n}\n', j));
+  t.eq('buildDebtDetail: suspended flag read', dd.includes("const suspendedNow = (tenant.suspended === true);"), true);
+  t.eq('buildDebtDetail: (a) skips active month when suspended', dd.includes('if (suspendedNow && mKey === mkNow) return;'), true);
+  t.eq('guide: suspended exempt in חייבים חריגים', fs.readFileSync(path.join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8').includes('פטור מהחודש הנוכחי: החודש לא נספר בסכום'), true);
+  t.eq('buildDebtDetail: (c) skipped when suspended', dd.includes('if (!suspendedNow && !months.some(m => m.monthKey === mkNow))'), true);
+}
+
+
+// v2.14.56 — portal route + page wiring
+{
+  const fs = require('fs'), path = require('path');
+  const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const pg = fs.readFileSync(path.join(__dirname, '..', 'public', 'tenant-portal.html'), 'utf8');
+  const gd = fs.readFileSync(path.join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8');
+  const lib = fs.readFileSync(path.join(__dirname, 'test-lib.js'), 'utf8');
+  t.section('v2.14.56 — portal route consumes the shared helpers');
+  const st = srv.indexOf("app.get('/api/portal/:token'"); const rt = srv.slice(st, srv.indexOf('\n});\n', st));
+  t.eq('route located', st > 0 && rt.length > 1000, true);
+  t.eq('tariff via resolveTariffRate', rt.includes('resolveTariffRate(tenant, d.defaultTariffs, currentMonthKey,'), true);
+  t.eq('history uses shallow copies (display-only)', /\[entry\.tenantId\] \|\| \[\]\)\s*\n\s*\.map\(r => Object\.assign\(\{\}, r\)\)/.test(rt), true);
+  t.eq('extra-account history uses copies', /\[phKey\] \|\| \[\]\)\s*\n\s*\.map\(r => Object\.assign\(\{\}, r\)\)/.test(rt), true);
+  t.eq('money via buildReminderFigures', rt.includes('buildReminderFigures(d, tenant, currentMonthKey, currentMonthName, amount)'), true);
+  t.eq('no inline split copy left (currentInTotal / calcTotalDebt)', /currentInTotal|calcTotalDebt\(/.test(rt), false);
+  t.eq('suspended → exempt status', rt.includes("if (tenant.suspended === true && currentStatus !== 'paid') { currentStatus = 'exempt';"), true);
+  t.eq('stale paid → review flag', rt.includes('r.paid = false; r.review = true;'), true);
+  t.eq('payload ships review + monthDue', rt.includes('review:     r.review === true') && rt.includes('monthDue:     fig.monthDue'), true);
+  t.eq('test-lib runs the REAL route (no amountDue copy)', lib.includes('function loadPortalRoute(') && !/currentInTotal/.test(lib), true);
+
+  t.section('v2.14.56 — tenant-portal.html renders the new states');
+  t.eq('current card: exempt badge', (pg.match(/⏸ פטור החודש/g) || []).length >= 2, true);
+  t.eq('switchMonth: review from hist.review', pg.includes("status = hist.review ? 'review' : (hist.paid ? 'paid' : 'unpaid');"), true);
+  t.eq('history list: review icon + text', pg.includes("const isReview = r.review === true;") && pg.includes("meta = 'בבירור מול הוועד';"), true);
+  t.eq('bank notice hidden for exempt', pg.includes("if (c.status !== 'paid' && c.status !== 'exempt' && bankNotice)"), true);
+  t.eq('breakdown consumes monthDue', pg.includes('mainCurrent: (c.monthDue !== undefined && c.monthDue !== null) ? c.monthDue : c.amount'), true);
+  t.eq('breakdown: exempt row', pg.includes("'⏸ פטור'"), true);
+  t.eq('neutral CSS present', pg.includes('.current-card.neutral') && pg.includes('.status-badge.neutral') && pg.includes('.hi-icon.review'), true);
+  t.eq('guide: portal statuses table (בבירור + פטור)', gd.includes('<td>⏳ בבירור</td>') && gd.includes('<td>⏸ פטור החודש</td>'), true);
+}
+
 process.exit(t.done() ? 1 : 0);

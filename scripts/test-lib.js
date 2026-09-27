@@ -409,20 +409,37 @@ function enrichTenants(S, d) {
   });
 }
 
-// Reproduces the portal's server-side amountDue block.
-function portalCurrent(S, d, tid, amount, monthKey, sentKey) {
-  const hist = (d.paymentHistory || {})[tid] || [];
-  const bal = S.calcMonthBalance((d.sentLog || {})[sentKey], S.getExpectedAmount(hist, monthKey, amount));
-  const credit = S.getCreditBalance(d, tid);
-  const total = S.calcTotalDebt(d, tid, monthKey);
-  const rec = hist.find(r => r.month === monthKey && !r.paid && r.type !== 'wa_sent');
-  const currentInTotal = (bal.status === 'partial' ? bal.shortfall : 0)
-    + (rec ? (parseFloat(rec.amount) || 0) : 0);
-  const priorDebt = Math.max(0, total - currentInTotal);
-  const currentCharge = (bal.status === 'paid') ? 0
-    : (bal.status === 'partial') ? bal.shortfall : amount;
-  const amountDue = Math.max(0, currentCharge + priorDebt - credit);
-  return { balance: bal, amountDue, priorDebt, creditBalance: credit };
+// ── Run the REAL GET /api/portal/:token handler (v2.14.56) ─────────
+// Replaces the old `portalCurrent` COPY of the amountDue block (a copy cannot
+// catch a regression in the route). The handler body is extracted verbatim from
+// server.js and run against the real server functions; only I/O is stubbed.
+// Returns the JSON payload the portal page receives.
+function loadPortalRoute(d, tenantId) {
+  const src = readSource('server.js');
+  const head = "app.get('/api/portal/:token', (req, res) => {";
+  const st = src.indexOf(head);
+  if (st < 0) throw new Error('test-lib: portal route not found in server.js');
+  const en = src.indexOf('\n});\n', st);
+  const body = src.slice(st + head.length, en);
+  const S = loadServer();
+  const g = Object.assign({}, S, {
+    loadPortalTokens: () => ({ tk: { tenantId: String(tenantId), tenantDataId: 'B', expires: Date.now() + 1e9 } }),
+    savePortalTokens() {}, loadTenantData: () => d, loadUsers: () => [],
+    getLabels: () => ({}), t: () => 'x'
+  });
+  const names = Object.keys(g);
+  const fn = new Function(...names, 'req', 'res', body);
+  let out;
+  fn(...names.map(n => g[n]), { params: { token: 'tk' } },
+     { json: o => { out = o; }, status() { return this; } });
+  return out;
+}
+
+// Back-compat wrapper for the contract tests: the portal's `current` block, now
+// produced by the REAL route (amount/monthKey/sentKey args are derived by the
+// route itself and ignored here).
+function portalCurrent(S, d, tid) {
+  return loadPortalRoute(d, tid).current;
 }
 
 // ── Extract a JS region from an HTML page and make it runnable ─────
@@ -477,6 +494,6 @@ function loadDeliverySuspect() {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute,
   extractHtmlRegion, makeRunner
 };

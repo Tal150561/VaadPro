@@ -109,8 +109,10 @@ t.eq('credit is real-time (no wait for closeMonthUnpaid)', cur.creditBalance, 20
 // ── The route must still attach the fields ────────────────────────
 t.section('server.js — the enrichment is actually wired into the routes');
 const server = readSource('server.js');
-t.eq('GET /api/data computes totalDebt via calcTotalDebt',
-  /const totalNow = calcTotalDebt\(d, tid, mkNow\)/.test(server), true);
+// v2.14.54/55 — /api/data takes totalDebt from splitCurrentMonthDebt, which is
+// the ONE place that calls calcTotalDebt for the active-month split.
+t.eq('GET /api/data computes totalDebt via splitCurrentMonthDebt → calcTotalDebt',
+  /const totalNow = _split\.totalDebt/.test(server) && /const totalDebt = calcTotalDebt\(d, tid, mkNow\)/.test(server), true);
 t.eq('GET /api/data attaches totalDebt', /totalDebt:\s*totalNow/.test(server), true);
 // v2.13.32 — priorDebt must be shipped too, or app.html re-derives it and
 // double-counts an unpaid current-month history row (₪230 reported as ₪460).

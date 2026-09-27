@@ -2777,4 +2777,175 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.55 — חייבים חריגים consume splitCurrentMonthDebt; suspended tenant's
+// ACTIVE month is exempt in the list AND in the itemised detail (design 3A).
+// Bug: a suspended tenant with no debt was listed with owed = full tariff.
+// ════════════════════════════════════════════════════════════════
+{
+  const SEP = 'ספטמבר';
+  const mkS = S.getMonthKey({ manualMonth: SEP });
+  const B = (tenants, sl, ph) => ({ config: { amount: 230, manualMonth: SEP, excessDebtThreshold: 100 },
+    tenants, sentLog: sl || {}, paymentHistory: ph || {} });
+  const row = (d, id) => S.buildExcessDebtRows(d).rows.find(r => r.id === String(id));
+
+  t.section('v2.14.55 — excess-debt list: suspended active month is exempt');
+  t.eq('THE BUG: suspended, no debt → NOT listed (was owed 230)',
+    row(B([{ id: 1, name: 'A', openingDebt: 0, suspended: true }]), 1), undefined);
+  {
+    const r = row(B([{ id: 1, name: 'A', openingDebt: 300, suspended: true }]), 1);
+    t.eq('suspended + prior 300 → owed 300 (was 530)', r && r.owed, 300);
+    t.eq('suspended + prior 300 → current 0 / prior 300', r && (r.currentMonthDebt + '/' + r.priorDebt), '0/300');
+  }
+  t.eq('suspended, reminded (sent_) → still exempt, not listed',
+    row(B([{ id: 1, name: 'A', openingDebt: 0, suspended: true }], { '1_ספטמבר': 'sent_' + TS }), 1), undefined);
+  t.eq('suspended, paid during suspension → not listed',
+    row(B([{ id: 1, name: 'A', openingDebt: 0, suspended: true }], { '1_ספטמבר': bank(230) }), 1), undefined);
+  {
+    const r = row(B([{ id: 1, name: 'A', openingDebt: 300 }]), 1);
+    t.eq('ACTIVE tenant unchanged: unpaid + prior 300 → owed 530', r && r.owed, 530);
+    t.eq('ACTIVE tenant unchanged: current 230 / prior 300', r && (r.currentMonthDebt + '/' + r.priorDebt), '230/300');
+  }
+  {
+    const r = row(B([{ id: 1, name: 'A', openingDebt: 230 }], { '1_ספטמבר': bank(100) }), 1);
+    t.eq('ACTIVE partial 100/230 + prior 230 → 130 / 230 / 360', r && [r.currentMonthDebt, r.priorDebt, r.owed].join('/'), '130/230/360');
+  }
+
+  t.section('v2.14.55 — buildDebtDetail: suspended active month not itemised');
+  {
+    const tn = { id: 1, name: 'A', openingDebt: 300, suspended: true };
+    const det = S.buildDebtDetail(B([tn], { '1_ספטמבר': 'sent_' + TS }), tn, mkS);
+    t.eq('no active-month line (sentLog path a)', det.months.length, 0);
+    t.eq('openingDebt still itemised', det.openingDebt, 300);
+    t.eq('monthsTotal = 300 (letter adds up to the row)', det.monthsTotal, 300);
+    const det2 = S.buildDebtDetail(B([tn]), tn, mkS);
+    t.eq('no active-month line (synthetic path c)', det2.months.length, 0);
+  }
+  {
+    const tn = { id: 1, name: 'A', openingDebt: 0, suspended: true };
+    const ph = { '1': [{ month: '2026-08', paid: false, amount: 230, type: 'bank' }] };
+    const det = S.buildDebtDetail(B([tn], {}, ph), tn, mkS);
+    t.eq('suspended: PRIOR unpaid month (אוגוסט) still itemised', det.months.map(m => m.monthKey).join(','), '2026-08');
+  }
+  {
+    const tn = { id: 1, name: 'A', openingDebt: 0 };
+    const det = S.buildDebtDetail(B([tn]), tn, mkS);
+    t.eq('ACTIVE tenant: active month still itemised (unchanged)', det.months.map(m => m.hebMonth).join(','), SEP);
+  }
+
+  t.section('v2.14.55 — parity: list row == split + extras for every tenant');
+  {
+    const d = B([
+      { id: 1, name: 'A', openingDebt: 300, suspended: true },
+      { id: 2, name: 'B', openingDebt: 230 },
+      { id: 3, name: 'C', openingDebt: 500 },
+      { id: 4, name: 'D', openingDebt: 0 }
+    ], { '2_ספטמבר': bank(100), '3_ספטמבר': bank(230), '4_ספטמבר': 'sent_' + TS });
+    const rows = S.buildExcessDebtRows(d).rows;
+    const ok = rows.every(r => {
+      const tn = d.tenants.find(x => String(x.id) === r.id);
+      const sp = S.splitCurrentMonthDebt(d, tn, mkS, SEP);
+      const want = Math.round((Math.max(0, sp.emBal.shortfall) + sp.priorDebt + r.extrasTotal) * 100) / 100;
+      return r.owed === want;
+    });
+    t.eq('every listed row matches splitCurrentMonthDebt', ok && rows.length === 4, true);
+    t.eq('every row: detail total (months+openingDebt+extras) == owed',
+      rows.every(r => Math.round((r.months.reduce((a, m) => a + m.shortfall, 0) + r.openingDebt + r.extrasTotal) * 100) / 100 === r.owed), true);
+  }
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.56 — portal runs the REAL route; consumes buildReminderFigures;
+// suspended = exempt; tariff via resolveTariffRate; history reconciliation is
+// display-only for real (copies) and stale "paid" → review (design B, Tal).
+// ════════════════════════════════════════════════════════════════
+{
+  const { loadPortalRoute } = require('./test-lib');
+  const SEP = 'ספטמבר';
+  const mkS = S.getMonthKey({ manualMonth: SEP });
+  const P = (tn, sl, ph, extra) => Object.assign({ config: { amount: 230, manualMonth: SEP },
+    tenants: [Object.assign({ id: 9, name: 'תמי', openingDebt: 0 }, tn)], sentLog: sl || {}, paymentHistory: ph || {} }, extra || {});
+  const run = d => loadPortalRoute(d, 9);
+  const cur = d => run(d).current;
+
+  t.section('v2.14.56 — portal: the verified divergences');
+  {
+    const c = cur(P({ openingDebt: 230 }, { '9_ספטמבר': bank(230) }));
+    t.eq('תמי (paid + prior 230) → due 230 / monthDue 0 / prior 230', [c.amountDue, c.monthDue, c.priorDebt].join('/'), '230/0/230');
+  }
+  {
+    const c = cur(P({ suspended: true }));
+    t.eq('THE BUG: suspended, no debt → due 0 (was 230)', c.amountDue, 0);
+    t.eq('suspended → status exempt', c.status, 'exempt');
+    t.eq('suspended → balance.status exempt', c.balance.status, 'exempt');
+    const c2 = cur(P({ suspended: true, openingDebt: 120 }));
+    t.eq('suspended + prior 120 → due 120 (was 350)', c2.amountDue, 120);
+    const c3 = cur(P({ suspended: true }, { '9_ספטמבר': bank(230) }));
+    t.eq('paid during suspension → status paid, due 0', c3.status + '/' + c3.amountDue, 'paid/0');
+  }
+  {
+    const d = P({}, { '9_ספטמבר': bank(230) }, { '9': [{ month: '2026-07', paid: true, amount: 230, type: 'bank' }] });
+    const out = run(d);
+    t.eq('THE BUG: stale paid:true (July, no sentLog) → prior 0 (was 230)', out.current.priorDebt, 0);
+    const jul = out.history.find(r => r.monthKey === '2026-07');
+    t.eq('…July shown as review, not paid', jul && (jul.review + '/' + jul.paid), 'true/false');
+    t.eq('…stored record NOT mutated (display-only for real)', d.paymentHistory['9'][0].paid, true);
+    t.eq('…portal prior == dashboard split prior',
+      out.current.priorDebt, S.splitCurrentMonthDebt(d, d.tenants[0], mkS, SEP).priorDebt);
+  }
+  {
+    const d = P({ customAmount: 230, personalTariffs: [{ rate: 250, startDate: '2026-01-01', endDate: null }] });
+    const c = cur(d);
+    t.eq('THE BUG: personal tariff 250 → due 250 (was 230)', c.amountDue, 250);
+    t.eq('…current.amount = resolved tariff', c.amount, 250);
+  }
+
+  t.section('v2.14.56 — portal: unchanged behaviour & review scope');
+  {
+    const out = run(P({}, { '9_ספטמבר': bank(230) }, { '9': [{ month: '2026-07', paid: true, amount: 230, type: 'bank' }] },
+      { sentLog: { '9_ספטמבר': bank(230), '9_יולי': bank(230) } }));
+    const jul = out.history.find(r => r.monthKey === '2026-07');
+    t.eq('July WITH sentLog payment → paid, no review', jul && (jul.paid + '/' + jul.review), 'true/false');
+  }
+  {
+    const out = run(P({}, {}, { '9': [{ month: mkS, paid: true, amount: 230, type: 'bank' }] }));
+    const cm = out.history.find(r => r.monthKey === mkS);
+    t.eq('current month paid:true but no sentLog → unpaid (not review), due 230',
+      cm && (cm.paid + '/' + cm.review + '/' + out.current.amountDue), 'false/false/230');
+  }
+  {
+    const c = cur(P({ openingDebt: -100 }));
+    t.eq('credit 100 still netted in the portal → due 130', c.amountDue, 130);
+    const c2 = cur(P({}, { '9_ספטמבר': bank(100) }));
+    t.eq('partial 100/230 → monthDue 130 / due 130', c2.monthDue + '/' + c2.amountDue, '130/130');
+  }
+  {
+    const d = P({ extraAccounts: [{ id: 'a1', label: 'חניה', amount: 50 }] }, {},
+      { '9__acc__a1': [{ month: '2026-07', paid: false, amount: 50 }, { month: '2026-08', paid: true, amount: 50 }] });
+    const before = JSON.stringify(d);
+    run(d);
+    t.eq('route leaves the whole building data untouched (main + __acc__)', JSON.stringify(d), before);
+  }
+
+  t.section('v2.14.56 — parity: portal due == WA total − credit, prior == dashboard');
+  {
+    const cases = [
+      P({ openingDebt: 230 }, { '9_ספטמבר': bank(100) }),
+      P({ openingDebt: 500 }, { '9_ספטמבר': 'sent_' + TS }),
+      P({ suspended: true, openingDebt: 80 }),
+      P({}, { '9_ספטמבר': manual(230) })
+    ];
+    const ok = cases.every(d => {
+      const c = cur(d);
+      const f = S.buildReminderFigures(d, d.tenants[0], mkS, SEP, 230);
+      const cr = S.getCreditBalance(d, '9');
+      return c.amountDue === Math.max(0, Math.round((f.total - cr) * 100) / 100)
+        && c.priorDebt === S.splitCurrentMonthDebt(d, d.tenants[0], mkS, SEP).priorDebt;
+    });
+    t.eq('4 mixed cases agree with the shared helpers', ok, true);
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

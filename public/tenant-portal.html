@@ -96,6 +96,11 @@
     background: rgba(88,166,255,.05);
     border-color: rgba(88,166,255,.2);
   }
+  /* v2.14.56 — neutral states: suspended month (exempt) / payment under review */
+  .current-card.neutral {
+    background: rgba(139,148,158,.06);
+    border-color: rgba(139,148,158,.3);
+  }
 
   .current-header {
     display: flex;
@@ -122,6 +127,7 @@
   .status-badge.paid   { background: rgba(37,211,102,.15); color: var(--accent); }
   .status-badge.unpaid { background: rgba(248,81,73,.12); color: var(--danger); }
   .status-badge.reminded { background: rgba(88,166,255,.12); color: var(--info); }
+  .status-badge.neutral  { background: rgba(139,148,158,.15); color: var(--text2); }
 
   .current-month {
     font-size: 1.5rem;
@@ -177,6 +183,7 @@
   }
   .hi-icon.paid    { background: rgba(37,211,102,.12); }
   .hi-icon.unpaid  { background: rgba(248,81,73,.08); }
+  .hi-icon.review  { background: rgba(139,148,158,.12); }
 
   .hi-content { flex: 1; min-width: 0; }
   .hi-month {
@@ -197,6 +204,7 @@
   }
   .hi-amount.paid   { color: var(--accent); }
   .hi-amount.unpaid { color: var(--text3); }
+  .hi-amount.review { color: var(--text3); }
 
   .empty-history {
     padding: 32px 20px;
@@ -427,7 +435,9 @@ function switchMonth(monthKey) {
     amount = allData.current.amount;
     monthLabel = allData.current.monthLabel;
   } else if (hist) {
-    status = hist.paid ? 'paid' : 'unpaid';
+    // v2.14.56 — 'review' = server flagged a stale "paid" record with no sentLog
+    // confirmation; not counted as debt, shown neutral (never as "לא שולם").
+    status = hist.review ? 'review' : (hist.paid ? 'paid' : 'unpaid');
     type = hist.type;
     typeLabel = hist.typeLabel;
     amount = hist.amount;
@@ -445,6 +455,14 @@ function switchMonth(monthKey) {
     card.className = 'current-card reminded';
     badge.className = 'status-badge reminded';
     badge.textContent = '📱 נשלחה תזכורת';
+  } else if (status === 'exempt') {
+    card.className = 'current-card neutral';
+    badge.className = 'status-badge neutral';
+    badge.textContent = '⏸ פטור החודש';
+  } else if (status === 'review') {
+    card.className = 'current-card neutral';
+    badge.className = 'status-badge neutral';
+    badge.textContent = '⏳ בבירור';
   } else {
     card.className = 'current-card unpaid';
     badge.className = 'status-badge unpaid';
@@ -461,6 +479,10 @@ function switchMonth(monthKey) {
     if (payer) meta += ' · שם המשלם: ' + payer;
   } else if (status === 'reminded') {
     meta = 'נשלחה אליך תזכורת לתשלום';
+  } else if (status === 'exempt') {
+    meta = 'החשבון מושהה — אין חיוב לחודש זה';
+  } else if (status === 'review') {
+    meta = 'התשלום לחודש זה בבירור מול הוועד';
   } else {
     meta = isCurrent ? 'טרם בוצע תשלום לחודש זה' : 'לא בוצע תשלום לחודש זה';
   }
@@ -531,6 +553,11 @@ function render(d) {
     card.className = 'current-card reminded';
     badge.className = 'status-badge reminded';
     badge.textContent = '📱 נשלחה תזכורת';
+  } else if (c.status === 'exempt') {
+    // v2.14.56 — suspended main account: the month is exempt (server decides)
+    card.className = 'current-card neutral';
+    badge.className = 'status-badge neutral';
+    badge.textContent = '⏸ פטור החודש';
   } else {
     card.className = 'current-card unpaid';
     badge.className = 'status-badge unpaid';
@@ -611,6 +638,8 @@ function render(d) {
     if (c.payerName) meta += ' · שם המשלם: ' + c.payerName;
   } else if (c.status === 'reminded') {
     meta = 'נשלחה אליך תזכורת לתשלום';
+  } else if (c.status === 'exempt') {
+    meta = 'החשבון מושהה — אין חיוב לחודש זה';
   } else {
     meta = 'טרם בוצע תשלום לחודש זה';
   }
@@ -618,7 +647,7 @@ function render(d) {
 
   // Bank import notice — מוצג כשהסטטוס "לא שולם" כדי למנוע בלבול
   const bankNotice = document.getElementById('bankNotice');
-  if (c.status !== 'paid' && bankNotice) {
+  if (c.status !== 'paid' && c.status !== 'exempt' && bankNotice) {
     const bi = d.lastBankImport;
     if (bi && bi.timestamp) {
       const importDate = new Date(bi.timestamp);
@@ -647,8 +676,10 @@ function render(d) {
     // v2.14.40 — the account-TYPE label (ועד בית / ערבות הדדית) for the subtitle,
     // independent of the building name shown as the headline.
     mainAccountLabel: (d.building && d.building.mainAccount) ? d.building.mainAccount : 'חשבון ראשי',
-    mainCurrent: c.amount,
+    // v2.14.56 — still owed for THIS month (server: 0 paid/exempt, shortfall if partial)
+    mainCurrent: (c.monthDue !== undefined && c.monthDue !== null) ? c.monthDue : c.amount,
     mainPaid: currentPaid,               // from server balance.status, not raw c.status
+    mainExempt: (bal.status === 'exempt'),
     mainPriorDebt: historyDebt,          // = c.priorDebt from the server (already ≥0)
     mainAmountDue: amountDue             // current + prior debt after credit
   });
@@ -662,12 +693,15 @@ function render(d) {
   }
   list.innerHTML = historyRows.map(function(r) {
     const isPaid = r.paid;
-    const iconClass = isPaid ? 'paid' : 'unpaid';
-    const icon = isPaid ? '✅' : '❌';
-    const amountClass = isPaid ? 'paid' : 'unpaid';
+    const isReview = r.review === true;   // v2.14.56 — neutral "בבירור", not "לא שולם"
+    const iconClass = isReview ? 'review' : (isPaid ? 'paid' : 'unpaid');
+    const icon = isReview ? '⏳' : (isPaid ? '✅' : '❌');
+    const amountClass = iconClass;
     const amountText = isPaid ? r.amount + ' ₪' : '—';
     let meta = '';
-    if (isPaid) {
+    if (isReview) {
+      meta = 'בבירור מול הוועד';
+    } else if (isPaid) {
       if (r.date) meta += r.date.split('T')[0];
       if (r.typeLabel) meta += (meta ? ' · ' : '') + r.typeLabel;
       if (r.payerName) meta += ' · ' + r.payerName;
@@ -998,8 +1032,14 @@ function renderUnifiedBreakdown(d, main) {
   var _mainTypeLabel = main.mainAccountLabel || 'חשבון ראשי';
   if (main.mainPaid && main.mainPriorDebt <= 0) {
     html += lineHtml(main.mainLabel, _mainTypeLabel + ' · החודש', '✅ שולם', 'var(--accent)', false);
+  } else if (main.mainExempt && main.mainPriorDebt <= 0) {
+    html += lineHtml(main.mainLabel, _mainTypeLabel + ' · החודש', '⏸ פטור', 'var(--text2)', false);
   } else {
-    var mainSub = _mainTypeLabel + ' · ' + money(main.mainCurrent) + ' ₪ החודש' +
+    // v2.14.56 — wording only; every number comes from the server.
+    var _monthPart = main.mainPaid ? 'החודש שולם'
+                   : main.mainExempt ? 'החודש: פטור'
+                   : money(main.mainCurrent) + ' ₪ החודש';
+    var mainSub = _mainTypeLabel + ' · ' + _monthPart +
       (main.mainPriorDebt > 0 ? ' + חוב קודם ' + money(main.mainPriorDebt) + ' ₪' : '');
     html += lineHtml(main.mainLabel, mainSub, money(main.mainAmountDue) + ' ₪', 'var(--text)', false);
     grandTotal += money(main.mainAmountDue);

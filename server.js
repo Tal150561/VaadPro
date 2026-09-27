@@ -2761,7 +2761,7 @@ function buildReminderFigures(d, tenant, mkNow, emNow, amount) {
   else monthDue = parseFloat(amount) || 0;             // unpaid / reminded
   monthDue = Math.round(monthDue * 100) / 100;
   const priorDebt = Math.round(sp.priorDebt * 100) / 100;
-  return { monthDue, priorDebt, total: Math.round((monthDue + priorDebt) * 100) / 100, status: st };
+  return { monthDue, priorDebt, total: Math.round((monthDue + priorDebt) * 100) / 100, status: st, balance: sp.emBal };
 }
 
 // ── {שורת_חוב_קודם} placeholder (v2.14.18) ────────────────────────
@@ -2936,6 +2936,10 @@ function buildDebtDetail(d, tenant, mkNow) {
   const live    = tenant.customAmount || ((d.config || {}).amount) || 300;
   const year    = parseInt(String(mkNow).split('-')[0]);
   const months  = [];
+  // ⏸ v2.14.55 — suspended main account: the ACTIVE month is exempt (same rule as
+  // splitCurrentMonthDebt / design 3A), so it must not be itemised in (a) or (c).
+  // Prior months and openingDebt are still listed — they are real debt.
+  const suspendedNow = (tenant.suspended === true);
 
   // (a) months that HAVE a sentLog entry but are unpaid / short-paid.
   Object.keys(sentLog).forEach(key => {
@@ -2946,6 +2950,7 @@ function buildDebtDetail(d, tenant, mkNow) {
     const idx = HEBREW_MONTHS.indexOf(heb);
     if (idx < 0) return;                                  // legacy/ISO key — skip
     const mKey = year + '-' + String(idx + 1).padStart(2, '0');
+    if (suspendedNow && mKey === mkNow) return;            // ⏸ active month exempt
     const expected = getExpectedAmount(history, mKey, live);
     const bal = calcMonthBalance(sentLog[key], expected);
     if (bal.status === 'paid' || bal.credit > 0) return;   // nothing owed for this month
@@ -2977,7 +2982,7 @@ function buildDebtDetail(d, tenant, mkNow) {
   //     currentBalance.shortfall on top — see the v2.13.31 rule. Without this
   //     the itemised list would silently under-report the very month being
   //     chased (₪230 present in the total, absent from the letter).
-  if (!months.some(m => m.monthKey === mkNow)) {
+  if (!suspendedNow && !months.some(m => m.monthKey === mkNow)) {
     const expNow = getExpectedAmount(history, mkNow, live);
     const balNow = calcMonthBalance(sentLog[tid + '_' + getEffectiveMonth(d.config || {})], expNow);
     if (balNow.status !== 'paid' && balNow.credit <= 0) {
@@ -3051,17 +3056,13 @@ function buildExcessDebtRows(d) {
   const rows = [];
   for (const tenant of (d.tenants || [])) {
     const tid  = String(tenant.id);
-    const hist = (d.paymentHistory || {})[tid] || [];
-    const live = tenant.customAmount || ((d.config || {}).amount) || 300;
-    const emBal = calcMonthBalance(d.sentLog[tid + '_' + emNow], getExpectedAmount(hist, mkNow, live));
-    const totalNow = calcTotalDebt(d, tid, mkNow);
-    // Identical to the /api/data enrichment — see the priorDebt comment there.
-    const curInTotal =
-      (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
-      (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
-        ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0);
-    const priorDebt = Math.max(0, totalNow - curInTotal);
-    const currentMonthDebt = Math.max(0, parseFloat(emBal.shortfall) || 0);
+    // v2.14.55 — consumes the SAME split as /api/data and the WA send paths
+    // (splitCurrentMonthDebt). The old inline copy had no suspension handling, so
+    // a suspended (exempt) tenant was listed with the full active-month tariff as
+    // "current" debt and could be chased for a month they do not owe.
+    const split = splitCurrentMonthDebt(d, tenant, mkNow, emNow);
+    const priorDebt = split.priorDebt;
+    const currentMonthDebt = Math.max(0, parseFloat(split.emBal.shortfall) || 0);   // exempt → 0
 
     const detail = buildDebtDetail(d, tenant, mkNow);
     const owed = Math.round((currentMonthDebt + priorDebt + detail.accountsTotal) * 100) / 100;
@@ -6750,13 +6751,20 @@ app.get('/api/portal/:token', (req, res) => {
     ? portalUser.buildingName
     : (config.buildingName || '');
   const globalAmount = config.amount || 300;
-  const amount = tenant.customAmount || globalAmount;
   const currentMonthKey = getMonthKey(config);
   const currentMonthName = getEffectiveMonth(config);
+  // v2.14.56 — the month's tariff via resolveTariffRate (same as the WA reminder),
+  // not raw customAmount: after a tariff change the portal showed the OLD fee.
+  const amount = resolveTariffRate(tenant, d.defaultTariffs, currentMonthKey, tenant.customAmount || globalAmount);
 
   // Get payment history for this tenant (last 12 months)
   // סנן wa_sent — תזכורות אינן תשלומים ואין להציגן כחוב בפורטל
+  // ⚠️ v2.14.56 — SHALLOW COPIES. The reconciliation below rewrites `paid` for
+  // display; on the original objects that leaked into calcTotalDebt (called later
+  // in this handler) and the tenant saw debt the ועד does not see on the
+  // dashboard. Copies keep the display fix display-only, for real.
   const history = ((d.paymentHistory || {})[entry.tenantId] || [])
+    .map(r => Object.assign({}, r))
     .filter(r => r.type !== 'wa_sent')
     .sort((a, b) => b.month.localeCompare(a.month))
     .slice(0, 12);
@@ -6771,6 +6779,10 @@ app.get('/api/portal/:token', (req, res) => {
     else if (String(sentVal).startsWith('bank_import')) { currentStatus = 'paid'; currentType = 'bank'; }
     else if (String(sentVal).startsWith('sent_')) { currentStatus = 'reminded'; currentType = 'wa_sent'; }
   }
+  // ⏸ v2.14.56 — suspended main account: the active month is exempt (design 3A,
+  // same as splitCurrentMonthDebt). A payment made during suspension still shows
+  // as paid.
+  if (tenant.suspended === true && currentStatus !== 'paid') { currentStatus = 'exempt'; currentType = null; }
 
   // ⚠️ Reconcile the current month between the two stores. sentLog is the
   // documented source of truth for the portal's current-month status, but the
@@ -6806,7 +6818,12 @@ app.get('/api/portal/:token', (req, res) => {
       const rHeb = HEBREW_MONTHS[rm - 1];
       const rSlVal = String((d.sentLog || {})[entry.tenantId + '_' + rHeb] || '');
       const rPaidBySl = rSlVal.startsWith('bank_import') || rSlVal.startsWith('manual_paid');
-      if (!rPaidBySl) r.paid = false;
+      // v2.14.56 (design B, Tal): NOT "unpaid" — the money calc does not count this
+      // month as debt (calcTotalDebt reads paid:true; closeMonthUnpaid only warns).
+      // Show a neutral "⏳ בבירור" instead, so the portal never lists a month as
+      // unpaid while leaving it out of the amount due. Resolves itself once the
+      // ועד fixes the data ("תקן נתונים").
+      if (!rPaidBySl) { r.paid = false; r.review = true; }
     }
   }
 
@@ -6843,26 +6860,16 @@ app.get('/api/portal/:token', (req, res) => {
       // itself and produced "שולם ✅" together with "לתשלום 30 ₪": the surplus
       // was born from THIS month's payment and was then subtracted from this
       // month's own charge again. One source of truth prevents that class of bug.
-      const hist   = (d.paymentHistory || {})[entry.tenantId] || [];
-      const bal    = calcMonthBalance((d.sentLog || {})[sentKey], getExpectedAmount(hist, currentMonthKey, amount));
+      // v2.14.56 — consumes buildReminderFigures → splitCurrentMonthDebt, the SAME
+      // split as the dashboard (/api/data), the WA reminder and חייבים חריגים. The
+      // previous inline copy had no suspension handling and read the display-
+      // mutated history. Reads the ORIGINAL d.paymentHistory (see copies above).
+      const fig    = buildReminderFigures(d, tenant, currentMonthKey, currentMonthName, amount);
+      const bal    = fig.balance;                 // {status,paidAmount,expected,shortfall,credit}; 'exempt' when suspended
       const credit = getCreditBalance(d, entry.tenantId);
       const od     = parseFloat(tenant.openingDebt) || 0;
-      // ⚠️ Prior debt = everything owed BEFORE this month. calcTotalDebt already
-      // folds in the current month IF it is short-paid (sentLog partial) or IF an
-      // unpaid paymentHistory record exists for it — but NOT when the month simply
-      // has no record yet. Subtract only what was actually included, or an unpaid
-      // month with openingDebt yields priorDebt=0 (caught by test: od=200 → 430).
-      const total = calcTotalDebt(d, entry.tenantId, currentMonthKey);
-      const currentInTotal =
-        (bal.status === 'partial' ? bal.shortfall : 0) +
-        (hist.some(r => r.month === currentMonthKey && !r.paid && r.type !== 'wa_sent')
-          ? (parseFloat(hist.find(r => r.month === currentMonthKey).amount) || 0) : 0);
-      const priorDebt = Math.max(0, total - currentInTotal);
-      // The current month is only due if sentLog says it was not fully paid.
-      const currentCharge = (bal.status === 'paid') ? 0
-                          : (bal.status === 'partial') ? bal.shortfall
-                          : amount;
-      const amountDue = Math.max(0, currentCharge + priorDebt - credit);
+      const priorDebt = fig.priorDebt;
+      const amountDue = Math.max(0, Math.round((fig.total - credit) * 100) / 100);
       return {
         monthKey:   currentMonthKey,
         monthLabel: currentMonthName,
@@ -6874,6 +6881,7 @@ app.get('/api/portal/:token', (req, res) => {
         // ── computed, consume-only ──
         balance:      bal,            // {status,paidAmount,expected,shortfall,credit}
         amountDue:    amountDue,      // what the tenant actually owes right now
+        monthDue:     fig.monthDue,   // v2.14.56 — still owed for THIS month (0 paid/exempt, shortfall if partial)
         priorDebt:    priorDebt,
         creditBalance: credit,
         openingDebt:  od
@@ -6883,6 +6891,7 @@ app.get('/api/portal/:token', (req, res) => {
       monthKey:   r.month,
       monthLabel: monthLabel(r.month),
       paid:       r.paid,
+      review:     r.review === true,  // v2.14.56 — "⏳ בבירור" (see reconciliation)
       amount:     r.amount,
       date:       r.date,
       type:       r.type,
@@ -6895,6 +6904,7 @@ app.get('/api/portal/:token', (req, res) => {
       for (const acc of (tenant.extraAccounts || [])) {
         const phKey = String(entry.tenantId) + '__acc__' + acc.id;
         const recs = ((d.paymentHistory || {})[phKey] || [])
+          .map(r => Object.assign({}, r))       // v2.14.56 — copies: never mutate/sort the stored array
           .sort((a, b) => b.month.localeCompare(a.month)).slice(0, 12);
         // ⚠️ Same reconciliation as the main account (see comment above): the
         // per-account sentLog key is the source of truth for the current month.
