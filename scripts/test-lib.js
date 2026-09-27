@@ -66,7 +66,7 @@ const SERVER_FNS = [
   // v2.14.54 — active-month split + reminder figures (design A)
   'splitCurrentMonthDebt', 'buildReminderFigures',
   // v2.14.19 — {שורת_זכות} whole-line credit placeholder
-  'buildCreditLine',
+  'buildCreditLine', 'buildCreditLinesFig',
   // v2.13.23 — year-boundary-safe Hebrew-month → monthKey
   'hebMonthToMonthKey',
   // v2.14.0 — חייבים חריגים (excessive debt)
@@ -435,6 +435,30 @@ function loadPortalRoute(d, tenantId) {
   return out;
 }
 
+// ── Run the REAL POST /api/send/:id handler (v2.14.57) ─────────────
+// Returns the WhatsApp text that would be sent (sendWaMsg captured; save/
+// recordPayment stubbed). End-to-end guard for the reminder placeholders.
+async function loadSendOneRoute(d, tenantId) {
+  const src = readSource('server.js');
+  const head = "app.post('/api/send/:id', authMiddleware, async (req, res) => {";
+  const st = src.indexOf(head);
+  if (st < 0) throw new Error('test-lib: send-one route not found in server.js');
+  const body = src.slice(st + head.length, src.indexOf('\n});\n', st));
+  const S = loadServer();
+  const X = runInSandbox(extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock'])
+    + 'module.exports={resolvePayerPhone,buildAccountsBlock};');
+  let msg = null;
+  const g = Object.assign({}, S, X, {
+    loadTenantData: () => d, sendWaMsg: async (a, b, m) => { msg = m; },
+    saveTenantData() {}, recordPayment() {}, getOrCreatePortalUrl: () => 'URL'
+  });
+  const names = Object.keys(g);
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  const fn = new AF(...names, 'req', 'res', body);
+  await fn(...names.map(n => g[n]), { params: { id: String(tenantId) }, user: { tenantId: 'B' } }, { json() {} });
+  return msg;
+}
+
 // Back-compat wrapper for the contract tests: the portal's `current` block, now
 // produced by the REAL route (amount/monthKey/sentKey args are derived by the
 // route itself and ignored here).
@@ -494,6 +518,6 @@ function loadDeliverySuspect() {
 
 module.exports = {
   readSource, extractFunctions, runInSandbox,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute, loadSendOneRoute,
   extractHtmlRegion, makeRunner
 };

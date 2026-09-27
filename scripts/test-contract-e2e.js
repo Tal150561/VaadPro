@@ -119,7 +119,9 @@ t.eq('GET /api/data attaches totalDebt', /totalDebt:\s*totalNow/.test(server), t
 // v2.14.54 — the split moved into splitCurrentMonthDebt (shared with the send
 // paths); /api/data attaches its priorDebt, the helper holds the formula.
 t.eq('GET /api/data attaches priorDebt (from splitCurrentMonthDebt)', /priorDebt:\s*_split\.priorDebt/.test(server), true);
-t.eq('splitCurrentMonthDebt computes priorDebt = totalDebt − curInTotal', /priorDebt: Math\.max\(0, totalDebt - curInTotal\)/.test(server), true);
+t.eq('splitCurrentMonthDebt computes priorDebt = totalDebt − curInTotal', /const priorDebt = Math\.max\(0, r2\(totalDebt - curInTotal\)\)/.test(server), true);
+// v2.14.57 — credit netted immediately (design A): one owedNow formula.
+t.eq('splitCurrentMonthDebt nets credit in owedNow', /const owedNow = Math\.max\(0, r2\(totalDebt - curInTotal \+ monthDue - credit\)\)/.test(server), true);
 t.eq('priorDebt subtracts the partial shortfall',
   /emBal\.status === 'partial' \? \(parseFloat\(emBal\.shortfall\)/.test(server), true);
 t.eq('priorDebt subtracts an unpaid current-month history row',
@@ -199,16 +201,24 @@ t.section('v2.14.19 — credit placeholder wiring (server.js)');
 t.eq('buildCreditLine defined exactly once',
   (server.match(/function buildCreditLine\(/g) || []).length, 1);
 // All 4 send/excess paths call the whole-line credit helper
-t.eq('4 paths call buildCreditLine',
-  (server.match(/\{שורת_זכות\}\/g, buildCreditLine\(/g) || []).length, 4);
+// v2.14.57 — the 3 reminder paths use the credit-aware buildCreditLinesFig(fig)
+// (offset line + remaining line); the excess letter keeps buildCreditLine.
+t.eq('3 reminder paths call buildCreditLinesFig(fig)',
+  (server.match(/\{שורת_זכות\}\/g, buildCreditLinesFig\(fig\)\)/g) || []).length, 3);
+t.eq('excess letter still calls buildCreditLine',
+  (server.match(/\{שורת_זכות\}\/g, buildCreditLine\(/g) || []).length, 1);
 // All 4 paths wire the bare {יתרת_זכות} with a 0 fallback (never '')
 t.eq('4 paths wire bare {יתרת_זכות} with 0 fallback',
-  (server.match(/\{יתרת_זכות\}\/g, \w+ > 0 \? \w+ : 0\)/g) || []).length, 4);
+  (server.match(/\{יתרת_זכות\}\/g, [\w.]+ > 0 \? [\w.]+ : 0\)/g) || []).length, 4);
 t.eq('no path uses empty-string fallback for credit',
   /\{יתרת_זכות\}\/g, [^)]*: ''\)/.test(server), false);
 // credit is sourced from getCreditBalance in each send path (the single source)
-t.eq('credit sourced from getCreditBalance',
-  (server.match(/getCreditBalance\(d, tenant\.id\)/g) || []).length >= 4, true);
+// v2.14.57 — credit comes from getCreditBalance inside splitCurrentMonthDebt
+// (single source); reminder paths read fig.creditLeft / fig.creditApplied.
+t.eq('credit sourced from getCreditBalance (in the shared split)',
+  /const credit = getCreditBalance\(d, tid\);/.test(server), true);
+t.eq('reminder paths: bare {יתרת_זכות} ← fig.creditLeft',
+  (server.match(/\{יתרת_זכות\}\/g, fig\.creditLeft > 0 \? fig\.creditLeft : 0\)/g) || []).length, 3);
 
 // ── v2.14.20 — BankSync agent "already imported" reporting ─────────
 // The agent path (analyzeBankRowsServer → /api/import-bank) must classify rows that

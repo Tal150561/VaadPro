@@ -1967,4 +1967,73 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: portal statuses table (בבירור + פטור)', gd.includes('<td>⏳ בבירור</td>') && gd.includes('<td>⏸ פטור החודש</td>'), true);
 }
 
+
+// v2.14.57 — credit netted immediately: executed app.html regions fed with
+// REAL server figures (splitCurrentMonthDebt), plus wiring for portal + guide.
+{
+  const fs = require('fs'), path = require('path');
+  const { loadServer, extractFunctions: xf, readSource: rs } = require('./test-lib');
+  const S57 = loadServer();
+  const app57 = rs('public/app.html');
+  const pg57 = rs('public/tenant-portal.html');
+  const gd57 = rs('public/vaadpro-guide.js');
+  const SEPx = 'ספטמבר', mkx = S57.getMonthKey({ manualMonth: SEPx });
+  const bankx = a => 'bank_import_2026-09-10T00:00:00Z_' + a + '_payer_x';
+  // Build a tenant row EXACTLY as /api/data ships it (fields from the real split)
+  const row = (id, od, sl) => {
+    const d = { config: { amount: 230, manualMonth: SEPx }, tenants: [{ id, name: 'T' + id, openingDebt: od }], sentLog: sl || {}, paymentHistory: {} };
+    const sp = S57.splitCurrentMonthDebt(d, d.tenants[0], mkx, SEPx);
+    return { id, name: 'T' + id, openingDebt: od, totalDebt: sp.totalDebt, priorDebt: sp.priorDebt,
+      creditBalance: S57.getCreditBalance(d, String(id)), currentBalance: sp.emBal,
+      owedNow: sp.owedNow, owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior,
+      creditApplied: sp.creditApplied, creditLeft: sp.creditLeft,
+      shouldRemind: S57.autoSendShouldRemind(d, d.tenants[0], mkx) };
+  };
+  const tenants = [row(1, -100), row(2, -400), row(3, 0, { ['3_' + SEPx]: bankx(300) }), row(4, -100, { ['4_' + SEPx]: bankx(100) })];
+
+  t.section('v2.14.57 — computeCollectionBreakdown nets credit (executed)');
+  const cfns = xf(app57, ['computeCollectionBreakdown']);
+  const b = new Function('data', 'accountsStatus', 'getEffectiveMonth', cfns + '\n; return computeCollectionBreakdown;')(
+    { tenants, sentLog: {}, config: { amount: 230 } }, {}, () => SEPx)(230);
+  t.eq('current = 130 + 0 + 0 + 30 (was 230+230+0+130)', b.mainCurrent, 160);
+  t.eq('prior = 0', b.mainDebt, 0);
+  t.eq('credit shown = what is LEFT (170 + 70)', b.mainCredit, 240);
+  t.eq('grand total 160', b.grandTotal, 160);
+
+  t.section('v2.14.57 — buildTenantStatusRows nets credit (executed)');
+  const sfns = 'const VP_MONTHS=[];\n' + xf(app57, ['tenantOffsetNote', 'buildTenantStatusRows']);
+  const rows = new Function('document', 'data', 'accountsStatus', 'getEffectiveMonth',
+    sfns + '\n; return buildTenantStatusRows;')({ getElementById: () => ({}) }, { tenants }, {}, () => SEPx)();
+  const by = id => rows.find(r => String(r.id) === String(id));
+  t.eq('T1 owes 130, applied 100, pending', [by(1).owed, by(1).creditApplied, by(1).bucket].join('/'), '130/100/pending');
+  t.eq('T2 owes 0, credit left 170, paid bucket', [by(2).owed, by(2).credit, by(2).bucket].join('/'), '0/170/paid');
+  t.eq('T4 owes 30 (was 130)', by(4).owed, 30);
+  t.eq('list sum == card total', rows.reduce((a, r) => a + r.owed, 0), b.grandTotal);
+
+  t.section('v2.14.57 — manual send warns when nothing is owed (executed)');
+  const owesNothing = new Function(xf(app57, ['t1OwesNothing']) + '\n; return t1OwesNothing;')();
+  t.eq('credit covers the month → warn', owesNothing(by2(tenants, 2)), true);
+  t.eq('credit 100, owes 130 → no warn', owesNothing(by2(tenants, 1)), false);
+  t.eq('paid in full, no debt → warn', owesNothing(row(5, 0, { ['5_' + SEPx]: bankx(230) })), true);
+  t.eq('Tami (paid, prior 230) → no warn', owesNothing(row(6, 230, { ['6_' + SEPx]: bankx(230) })), false);
+  t.eq('older server (no owedNow) → never warn', owesNothing({ shouldRemind: false }), false);
+  function by2(arr, id) { return arr.find(x => x.id === id); }
+  t.eq('sendOne calls the warning before POST', /async function sendOne\(id\) \{\n  if\(!confirmManualSend\(\)\) return;[\s\S]{0,400}t1OwesNothing\(_t1\)[\s\S]{0,300}fetch\(API\+'\/send\/'\+id/.test(app57), true);
+
+  t.section('v2.14.57 — payments-tab debt cell + status list wiring');
+  t.eq('debt cell: owed after credit branch', app57.includes("אחרי קיזוז קרדיט '+creditApplied+'₪"), true);
+  t.eq('debt cell: credit covers the month branch', app57.includes('✅ הקרדיט מכסה את החודש'), true);
+  t.eq('status list shows credit applied', app57.includes("parts.push('<span style=\"color:#22c55e;\">קוזז קרדיט: ' + nis(r.creditApplied)"), true);
+
+  t.section('v2.14.57 — portal page consumes the credit split');
+  t.eq('leftover from server creditLeft (no client re-derivation)', pg57.includes('const leftover = creditLeft;') && !pg57.includes('creditBalance - c.amount'), true);
+  t.eq('partial banner shows credit offset', pg57.includes("קוזזה יתרת זכות: ' + creditApplied + '₪"), true);
+  t.eq('breakdown row shows − קרדיט', pg57.includes("' − קרדיט ' + money(main.mainCreditApplied)"), true);
+
+  t.section('v2.14.57 — guide');
+  t.eq('guide: credit netted everywhere box', gd57.includes('יתרת זכות מקוזזת מיד — בכל המסכים'), true);
+  t.eq('guide: {שורת_זכות} explained', gd57.includes('קוזזה יתרת זכות: X ₪'), true);
+  t.eq('guide: send warning', gd57.includes('שליחה לדייר שאין לו מה לשלם'), true);
+}
+
 process.exit(t.done() ? 1 : 0);

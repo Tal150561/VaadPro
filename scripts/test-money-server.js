@@ -2846,7 +2846,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     const ok = rows.every(r => {
       const tn = d.tenants.find(x => String(x.id) === r.id);
       const sp = S.splitCurrentMonthDebt(d, tn, mkS, SEP);
-      const want = Math.round((Math.max(0, sp.emBal.shortfall) + sp.priorDebt + r.extrasTotal) * 100) / 100;
+      const want = Math.round((sp.owedNow + r.extrasTotal) * 100) / 100;   // v2.14.57 — credit-aware
       return r.owed === want;
     });
     t.eq('every listed row matches splitCurrentMonthDebt', ok && rows.length === 4, true);
@@ -2948,4 +2948,91 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
-process.exit(t.done() ? 1 : 0);
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.57 — CREDIT NETTED IMMEDIATELY (design A, Tal 2026-09-27).
+// Verified bug: credit 100 + unpaid → portal 130 but WA "סה"כ 230" and the
+// dashboard card 230; credit 400 covering the month → WA "סה"כ 230"; credit 100
+// + partial 100/230 → really 30, but portal/WA/dashboard all said 130 (the
+// clamped priorDebt dropped the absorbed credit).
+// ════════════════════════════════════════════════════════════════
+const SEP57 = 'ספטמבר';
+const mk57 = S.getMonthKey({ manualMonth: SEP57 });
+const C57 = (od, sl, extra) => Object.assign({
+  config: { amount: 230, manualMonth: SEP57, excessDebtThreshold: 10,
+            template: 'ועד בית: {סכום} | {שורת_חוב_קודם} | {שורת_זכות} | זכות {יתרת_זכות} | סה"כ {סה"כ}' },
+  tenants: [{ id: 9, name: 'X', phone: '1', openingDebt: od }], sentLog: sl || {}, paymentHistory: {}
+}, extra || {});
+const sp57 = d => S.splitCurrentMonthDebt(d, d.tenants[0], mk57, SEP57);
+const k57 = o => [o.owedNow, o.owedCurrent, o.owedPrior, o.creditApplied, o.creditLeft].join('/');
+
+t.section('v2.14.57 — splitCurrentMonthDebt: owedNow/owedCurrent/owedPrior/creditApplied/creditLeft');
+t.eq('THE BUG: credit 100, unpaid → 130 (applied 100, left 0)', k57(sp57(C57(-100))), '130/130/0/100/0');
+t.eq('THE BUG: credit 400 covers the month → 0 (applied 230, left 170)', k57(sp57(C57(-400))), '0/0/0/230/170');
+t.eq('overpay 300/230 this month → 0, credit 70 LEFT (not applied)', k57(sp57(C57(0, { '9_ספטמבר': bank(300) }))), '0/0/0/0/70');
+t.eq('THE BUG: credit 100 + partial 100/230 → 30 (was 130)', k57(sp57(C57(-100, { '9_ספטמבר': bank(100) }))), '30/30/0/100/0');
+t.eq('credit exactly the fee (−230), unpaid → 0 / applied 230 / left 0', k57(sp57(C57(-230))), '0/0/0/230/0');
+t.eq('no credit: Tami (prior 230, paid) → 230 / 0 / 230', k57(sp57(C57(230, { '9_ספטמבר': bank(230) }))), '230/0/230/0/0');
+t.eq('no credit: unpaid + prior 230 → 460 / 230 / 230', k57(sp57(C57(230))), '460/230/230/0/0');
+t.eq('no credit: partial 100 + prior 230 → 360 / 130 / 230', k57(sp57(C57(230, { '9_ספטמבר': bank(100) }))), '360/130/230/0/0');
+{
+  const d = C57(-100); d.tenants[0].suspended = true;
+  t.eq('suspended + credit 100 → 0 due, credit 100 left', k57(sp57(d)), '0/0/0/0/100');
+}
+t.eq('owedNow == calcTotalDebt when the month is already inside it (partial, no credit)',
+  sp57(C57(0, { '9_ספטמבר': bank(100) })).owedNow, S.calcTotalDebt(C57(0, { '9_ספטמבר': bank(100) }), '9', mk57));
+t.eq('chargeOverride (resolved tariff 250) drives an unpaid month',
+  S.splitCurrentMonthDebt(C57(-100), C57(-100).tenants[0], mk57, SEP57, undefined, 250).owedNow, 150);
+
+t.section('v2.14.57 — buildReminderFigures.total is net of credit');
+t.eq('credit 100, unpaid → total 130', S.buildReminderFigures(C57(-100), C57(-100).tenants[0], mk57, SEP57, 230).total, 130);
+t.eq('credit 400 → total 0', S.buildReminderFigures(C57(-400), C57(-400).tenants[0], mk57, SEP57, 230).total, 0);
+
+t.section('v2.14.57 — buildCreditLinesFig');
+t.eq('applied only', S.buildCreditLinesFig({ creditApplied: 100, creditLeft: 0 }), 'קוזזה יתרת זכות: *100 ₪*');
+t.eq('applied + left', S.buildCreditLinesFig({ creditApplied: 230, creditLeft: 170 }), 'קוזזה יתרת זכות: *230 ₪*\nיתרת זכות: *170 ₪*');
+t.eq('left only', S.buildCreditLinesFig({ creditApplied: 0, creditLeft: 70 }), 'יתרת זכות: *70 ₪*');
+t.eq('none → empty', S.buildCreditLinesFig({ creditApplied: 0, creditLeft: 0 }), '');
+
+t.section('v2.14.57 — portal (REAL route) nets credit, ships the split');
+{
+  const { loadPortalRoute } = require('./test-lib');
+  const pc = d => loadPortalRoute(d, 9).current;
+  const f = c => [c.amountDue, c.creditApplied, c.creditLeft].join('/');
+  t.eq('credit 100, unpaid → 130 / 100 / 0', f(pc(C57(-100))), '130/100/0');
+  t.eq('credit 400 → 0 / 230 / 170', f(pc(C57(-400))), '0/230/170');
+  t.eq('overpay 70 → 0 / 0 / 70', f(pc(C57(0, { '9_ספטמבר': bank(300) }))), '0/0/70');
+  t.eq('THE BUG: credit 100 + partial 100 → 30 (was 130)', f(pc(C57(-100, { '9_ספטמבר': bank(100) }))), '30/100/0');
+}
+
+t.section('v2.14.57 — חייבים חריגים: row + letter net the credit');
+{
+  const d = C57(-100, { '9_ספטמבר': bank(100) });
+  const r = S.buildExcessDebtRows(d).rows[0];
+  t.eq('row owed 30 (current 30, prior 0, applied 100)', r && [r.owed, r.currentMonthDebt, r.priorDebt, r.creditApplied].join('/'), '30/30/0/100');
+  const itemised = Math.round((r.months.reduce((a, m) => a + m.shortfall, 0) + r.openingDebt - r.creditApplied + r.extrasTotal) * 100) / 100;
+  t.eq('itemised lines − credit == owed', itemised, r.owed);
+  const letter = S.buildExcessDebtMessage(d, d.tenants[0], r, 'סה"כ {סה"כ_חוב}\n{פירוט_חוב}', null);
+  t.eq('letter shows the credit offset line', letter.includes('• קוזזה יתרת זכות: *-100 ₪*'), true);
+  t.eq('letter total 30', letter.startsWith('סה"כ 30'), true);
+}
+
+async function v2_14_57_async() {
+  t.section('v2.14.57 — WA send-one (REAL route) text');
+  const { loadSendOneRoute } = require('./test-lib');
+  const m = async d => loadSendOneRoute(d, 9);
+  t.eq('THE BUG: credit 100, unpaid',
+    await m(C57(-100)), 'ועד בית: 230 |  | קוזזה יתרת זכות: *100 ₪* | זכות 0 | סה"כ 130');
+  t.eq('THE BUG: credit 400 covers the month',
+    await m(C57(-400)), 'ועד בית: 230 |  | קוזזה יתרת זכות: *230 ₪*\nיתרת זכות: *170 ₪* | זכות 170 | סה"כ 0');
+  t.eq('overpay 70 (unchanged shape)',
+    await m(C57(0, { '9_ספטמבר': bank(300) })), 'ועד בית: 0 |  | יתרת זכות: *70 ₪* | זכות 70 | סה"כ 0');
+  t.eq('THE BUG: credit 100 + partial 100',
+    await m(C57(-100, { '9_ספטמבר': bank(100) })), 'ועד בית: 130 |  | קוזזה יתרת זכות: *100 ₪* | זכות 0 | סה"כ 30');
+  t.eq('no credit — Tami unchanged',
+    await m(C57(230, { '9_ספטמבר': bank(230) })), 'ועד בית: 0 | חוב קודם: *230 ₪* |  | זכות 0 | סה"כ 230');
+  t.eq('no credit — unpaid + prior unchanged',
+    await m(C57(230)), 'ועד בית: 230 | חוב קודם: *230 ₪* |  | זכות 0 | סה"כ 460');
+}
+
+(async () => { await v2_14_57_async(); process.exit(t.done() ? 1 : 0); })();

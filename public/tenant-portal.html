@@ -580,7 +580,10 @@ function render(d) {
    const bal           = c.balance || { status: c.status, shortfall: 0, credit: 0 };
    const currentPaid   = (bal.status === 'paid');
    const isPartial     = (bal.status === 'partial');
-   const creditShown   = creditBalance;
+   // 💳 v2.14.57 — server-computed credit split (amountDue is already net of it)
+   const creditApplied = parseFloat(c.creditApplied) || 0;
+   const creditLeft    = (c.creditLeft !== undefined) ? (parseFloat(c.creditLeft) || 0) : creditBalance;
+   const creditShown   = creditApplied > 0 ? creditApplied : creditBalance;
    // Branch order matters: most specific state first. All values come from the
    // server — this block only chooses wording.
    if (isPartial) {
@@ -591,6 +594,7 @@ function render(d) {
      debtBanner.style.color = '#f5a623';
      debtBanner.innerHTML = '⚠️ שולם חלקית: <strong>' + bal.paidAmount + ' ₪</strong> מתוך ' + bal.expected + ' ₪' +
        (historyDebt > 0 ? '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">חוב קודם: ' + historyDebt + '₪</span>' : '') +
+       (creditApplied > 0 ? '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">קוזזה יתרת זכות: ' + creditApplied + '₪</span>' : '') +
        '<br><span style="font-size:0.78rem;font-weight:400;">נותר לתשלום: <strong>' + amountDue + ' ₪</strong></span>';
    } else if (currentPaid && creditBalance > 0) {
      // Paid, with surplus carried forward. The credit was born from THIS month's
@@ -607,11 +611,11 @@ function render(d) {
      debtBanner.style.background = 'rgba(52,209,122,.1)';
      debtBanner.style.borderColor = 'rgba(52,209,122,.3)';
      debtBanner.style.color = '#34d17a';
-     const leftover = Math.round((creditBalance - c.amount) * 100) / 100;
+     const leftover = creditLeft;   // v2.14.57 — from the server, not re-derived here
      debtBanner.innerHTML = '✅ יתרה לזכותך מכסה את החודש' +
        (leftover > 0 ? ' — נותרת יתרה של <strong>' + leftover + ' ₪</strong>' : ' במלואו') +
        '<br><span style="font-size:0.78rem;font-weight:400;opacity:0.8;">סה״כ לתשלום החודש: <strong>0 ₪</strong></span>';
-   } else if (!currentPaid && creditBalance > 0 && amountDue > 0) {
+   } else if (!currentPaid && (creditApplied > 0 || creditBalance > 0) && amountDue > 0) {
      // Credit partially reduces this month.
      debtBanner.style.display = 'block';
      debtBanner.style.background = 'rgba(245,166,35,.1)';
@@ -680,6 +684,7 @@ function render(d) {
     mainCurrent: (c.monthDue !== undefined && c.monthDue !== null) ? c.monthDue : c.amount,
     mainPaid: currentPaid,               // from server balance.status, not raw c.status
     mainExempt: (bal.status === 'exempt'),
+    mainCreditApplied: creditApplied,     // v2.14.57 — shown as minus-credit in the row
     mainPriorDebt: historyDebt,          // = c.priorDebt from the server (already ≥0)
     mainAmountDue: amountDue             // current + prior debt after credit
   });
@@ -1040,7 +1045,8 @@ function renderUnifiedBreakdown(d, main) {
                    : main.mainExempt ? 'החודש: פטור'
                    : money(main.mainCurrent) + ' ₪ החודש';
     var mainSub = _mainTypeLabel + ' · ' + _monthPart +
-      (main.mainPriorDebt > 0 ? ' + חוב קודם ' + money(main.mainPriorDebt) + ' ₪' : '');
+      (main.mainPriorDebt > 0 ? ' + חוב קודם ' + money(main.mainPriorDebt) + ' ₪' : '') +
+      (main.mainCreditApplied > 0 ? ' − קרדיט ' + money(main.mainCreditApplied) + ' ₪' : '');
     html += lineHtml(main.mainLabel, mainSub, money(main.mainAmountDue) + ' ₪', 'var(--text)', false);
     grandTotal += money(main.mainAmountDue);
   }

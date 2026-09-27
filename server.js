@@ -1790,6 +1790,13 @@ app.get('/api/data', authMiddleware, (req, res) => {
         creditBalance: getCreditBalance(d, tid),
         totalDebt:     totalNow,
         priorDebt:     _split.priorDebt, // accrued debt BEFORE the active month
+        // 💳 v2.14.57 — credit-aware "owed right now" (design A). Screens use
+        // these instead of shortfall + priorDebt so a credit is netted everywhere.
+        owedNow:       _split.owedNow,
+        owedCurrent:   _split.owedCurrent,   // part of owedNow that is THIS month
+        owedPrior:     _split.owedPrior,     // part of owedNow carried from before
+        creditApplied: _split.creditApplied, // credit that reduced this month's bill
+        creditLeft:    _split.creditLeft,    // credit still standing after that
         effectiveAmount: live,        // resolved customAmount || config.amount || 300
         monthBalances,                // { hebMonth: {status, paidAmount, expected, shortfall, credit} }
         currentBalance: emBal,        // balance for the ACTIVE month (em)
@@ -2724,7 +2731,23 @@ function buildBalanceLine(d, tenant, mk) {
 // `monthBalances` is optional (the /api/data map); when absent the active
 // month's balance is derived from its sentLog value directly — same result.
 // Read-only: no money written, debt-core untouched.
-function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances) {
+//
+// 💳 v2.14.57 — CREDIT IS NETTED IMMEDIATELY (design A, Tal 2026-09-27).
+// Before: priorDebt was clamped at 0, so a credit that the partial-shortfall
+// absorbed (openingDebt −100, paid 100 of 230 → really owes 30) vanished and
+// every screen said 130; and an unpaid month with credit 100 read 230 on the
+// dashboard / WA while the portal said 130. One formula now:
+//   owedNow = max(0, totalDebt − curInTotal + monthDue − credit)
+// where curInTotal = what calcTotalDebt already counted for the active month,
+// monthDue = what the active month still owes (chargeOverride for an unpaid
+// month when the caller resolved the tariff; else emBal.shortfall), and
+// credit = getCreditBalance (≥0; mutually exclusive with totalDebt>0).
+// Derived display splits (all ≥0):
+//   creditApplied = monthDue + priorDebt − owedNow   (credit that reduced this bill)
+//   creditLeft    = credit − (monthDue + priorDebt)  (credit still on the books)
+//   owedCurrent   = min(monthDue, owedNow), owedPrior = owedNow − owedCurrent
+// Month-close still owns every write — nothing here touches openingDebt.
+function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances, chargeOverride) {
   const tid  = String(t.id);
   const hist = (d.paymentHistory || {})[tid] || [];
   const live = t.customAmount || (d.config && d.config.amount) || 300;
@@ -2739,7 +2762,22 @@ function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances) {
     (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
     (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
       ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0));
-  return { emBal, totalDebt, priorDebt: Math.max(0, totalDebt - curInTotal) };
+  const r2 = n => Math.round(n * 100) / 100;
+  const priorDebt = Math.max(0, r2(totalDebt - curInTotal));
+  const st = emBal.status;
+  let monthDue;
+  if (st === 'paid' || st === 'exempt') monthDue = 0;
+  else if (st === 'partial') monthDue = parseFloat(emBal.shortfall) || 0;
+  else monthDue = (chargeOverride !== undefined && chargeOverride !== null)
+    ? (parseFloat(chargeOverride) || 0) : (parseFloat(emBal.shortfall) || 0);   // unpaid / reminded
+  monthDue = r2(monthDue);
+  const credit = getCreditBalance(d, tid);
+  const owedNow = Math.max(0, r2(totalDebt - curInTotal + monthDue - credit));
+  const creditApplied = Math.max(0, r2(monthDue + priorDebt - owedNow));
+  const creditLeft = Math.max(0, r2(credit - (monthDue + priorDebt)));
+  const owedCurrent = Math.min(monthDue, owedNow);
+  const owedPrior = r2(owedNow - owedCurrent);
+  return { emBal, totalDebt, priorDebt, monthDue, credit, owedNow, creditApplied, creditLeft, owedCurrent, owedPrior };
 }
 
 // ── Reminder figures (v2.14.54) — feeds the amount, prior-debt and total placeholders
@@ -2753,15 +2791,14 @@ function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances) {
 // total = monthDue + priorDebt. Shared by send-one / send-all / AutoSend — never
 // copied. Consumes splitCurrentMonthDebt; no new money math.
 function buildReminderFigures(d, tenant, mkNow, emNow, amount) {
-  const sp = splitCurrentMonthDebt(d, tenant, mkNow, emNow);
-  const st = sp.emBal.status;
-  let monthDue;
-  if (st === 'partial') monthDue = parseFloat(sp.emBal.shortfall) || 0;
-  else if (st === 'paid' || st === 'exempt') monthDue = 0;
-  else monthDue = parseFloat(amount) || 0;             // unpaid / reminded
-  monthDue = Math.round(monthDue * 100) / 100;
-  const priorDebt = Math.round(sp.priorDebt * 100) / 100;
-  return { monthDue, priorDebt, total: Math.round((monthDue + priorDebt) * 100) / 100, status: st, balance: sp.emBal };
+  // v2.14.57 — thin view over splitCurrentMonthDebt (credit-aware). `total` is
+  // what the tenant owes RIGHT NOW, after any credit (was monthDue + priorDebt).
+  const sp = splitCurrentMonthDebt(d, tenant, mkNow, emNow, undefined, amount);
+  return {
+    monthDue: sp.monthDue, priorDebt: sp.priorDebt, total: sp.owedNow,
+    creditApplied: sp.creditApplied, creditLeft: sp.creditLeft,
+    status: sp.emBal.status, balance: sp.emBal
+  };
 }
 
 // ── {שורת_חוב_קודם} placeholder (v2.14.18) ────────────────────────
@@ -2792,6 +2829,19 @@ function buildCreditLine(credit) {
   const n = Number(credit) || 0;
   if (n <= 0) return '';
   return 'יתרת זכות: *' + n + ' ₪*';
+}
+
+// 💳 v2.14.57 — {שורת_זכות} for the reminder paths, fed by buildReminderFigures.
+// Up to two lines: the credit that was OFFSET against this bill (so the tenant
+// sees why {סה"כ} is lower than {סכום} + חוב קודם), then any credit still left.
+// Empty when neither applies. Formatting only — figures come from the helper.
+function buildCreditLinesFig(fig) {
+  const out = [];
+  const applied = Number(fig && fig.creditApplied) || 0;
+  if (applied > 0) out.push('קוזזה יתרת זכות: *' + applied + ' ₪*');
+  const left = buildCreditLine(fig && fig.creditLeft);
+  if (left) out.push(left);
+  return out.join('\n');
 }
 
 // ── {פירוט_קיזוז} placeholder (v2.14.12) ──────────────────────────
@@ -3061,8 +3111,10 @@ function buildExcessDebtRows(d) {
     // a suspended (exempt) tenant was listed with the full active-month tariff as
     // "current" debt and could be chased for a month they do not owe.
     const split = splitCurrentMonthDebt(d, tenant, mkNow, emNow);
-    const priorDebt = split.priorDebt;
-    const currentMonthDebt = Math.max(0, parseFloat(split.emBal.shortfall) || 0);   // exempt → 0
+    // 💳 v2.14.57 — credit-aware parts (sum == split.owedNow).
+    const priorDebt = split.owedPrior;
+    const currentMonthDebt = split.owedCurrent;                                      // exempt → 0
+    const creditApplied = split.creditApplied;
 
     const detail = buildDebtDetail(d, tenant, mkNow);
     const owed = Math.round((currentMonthDebt + priorDebt + detail.accountsTotal) * 100) / 100;
@@ -3071,7 +3123,7 @@ function buildExcessDebtRows(d) {
       id: tid, name: tenant.name || '(ללא שם)',
       phone: tenant.phone || '', email: tenant.email || '',
       apartment: tenant.apartment || '',
-      currentMonthDebt, priorDebt,
+      currentMonthDebt, priorDebt, creditApplied,
       extrasTotal: detail.accountsTotal,
       owed,
       // ⚠️ v2.14.1 — openingDebt MUST ride on the row, not only inside `detail`.
@@ -3104,6 +3156,10 @@ function buildDebtDetailBlock(detail) {
   if ((detail.openingDebt || 0) > 0) {
     lines.push(`• חוב התחלתי / פתוח: *${detail.openingDebt} ₪*`);
   }
+  // 💳 v2.14.57 — credit offset, so the itemised lines add up to the total.
+  if ((detail.creditApplied || 0) > 0) {
+    lines.push(`• קוזזה יתרת זכות: *-${detail.creditApplied} ₪*`);
+  }
   for (const a of (detail.accounts || [])) {
     lines.push(`• ${a.label}:`);
     for (const m of a.months) lines.push(`   ◦ ${m.hebMonth}: *${m.amount} ₪*`);
@@ -3134,7 +3190,8 @@ function buildExcessDebtMessage(d, tenant, row, tmpl, tenantDataId) {
   // buildDebtDetailBlock directly and never saw this hand-built literal.
   // Prefer spreading the row over enumerating fields.
   const detailBlock = buildDebtDetailBlock({
-    months: row.months, accounts: row.accounts, openingDebt: row.openingDebt
+    months: row.months, accounts: row.accounts, openingDebt: row.openingDebt,
+    creditApplied: row.creditApplied
   });
   const portalUrl = (template.includes('{לינק_פורטל}') && tenantDataId)
     ? getOrCreatePortalUrl(tenantDataId, tenant.id, tenant.name)
@@ -3246,15 +3303,14 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
     ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
     : '';
   const balanceLine1 = buildBalanceLine(d, tenant, mk);
-  const credit1 = getCreditBalance(d, tenant.id);
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
     .replace(/{סכום}/g, fig.monthDue)
     .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
     .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-    .replace(/{שורת_זכות}/g, buildCreditLine(credit1))
-    .replace(/{יתרת_זכות}/g, credit1 > 0 ? credit1 : 0)
+    .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
+    .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
     .replace(/{סה"כ}/g, fig.total)
     .replace(/{חשבונות}/g, accountsBlock)
     .replace(/{יתרה}/g, balanceLine1)
@@ -3293,15 +3349,14 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
       ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
       : '';
     const balanceLineSA = buildBalanceLine(d, tenant, mk);
-    const creditSA = getCreditBalance(d, tenant.id);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, fig.monthDue)
       .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
       .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-      .replace(/{שורת_זכות}/g, buildCreditLine(creditSA))
-      .replace(/{יתרת_זכות}/g, creditSA > 0 ? creditSA : 0)
+      .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
+      .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
       .replace(/{סה"כ}/g, fig.total)
       .replace(/{חשבונות}/g, accountsBlock)
       .replace(/{יתרה}/g, balanceLineSA)
@@ -5497,15 +5552,14 @@ async function doAutoSend(user) {
     // extra accounts block (helper יחיד — מקור אמת אחד)
     const { block: accountsBlockAuto } = buildAccountsBlock(d, tenant, month);
     const balanceLineAuto = buildBalanceLine(d, tenant, mk);
-    const creditAuto = getCreditBalance(d, tenant.id);
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
       .replace(/{סכום}/g, fig.monthDue)
       .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
       .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-      .replace(/{שורת_זכות}/g, buildCreditLine(creditAuto))
-      .replace(/{יתרת_זכות}/g, creditAuto > 0 ? creditAuto : 0)
+      .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
+      .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
       .replace(/{סה"כ}/g, fig.total)
       .replace(/{חשבונות}/g, accountsBlockAuto)
       .replace(/{יתרה}/g, balanceLineAuto)
@@ -6869,7 +6923,8 @@ app.get('/api/portal/:token', (req, res) => {
       const credit = getCreditBalance(d, entry.tenantId);
       const od     = parseFloat(tenant.openingDebt) || 0;
       const priorDebt = fig.priorDebt;
-      const amountDue = Math.max(0, Math.round((fig.total - credit) * 100) / 100);
+      // 💳 v2.14.57 — fig.total is already net of credit (splitCurrentMonthDebt).
+      const amountDue = fig.total;
       return {
         monthKey:   currentMonthKey,
         monthLabel: currentMonthName,
@@ -6882,6 +6937,8 @@ app.get('/api/portal/:token', (req, res) => {
         balance:      bal,            // {status,paidAmount,expected,shortfall,credit}
         amountDue:    amountDue,      // what the tenant actually owes right now
         monthDue:     fig.monthDue,   // v2.14.56 — still owed for THIS month (0 paid/exempt, shortfall if partial)
+        creditApplied: fig.creditApplied, // v2.14.57 — credit that reduced amountDue
+        creditLeft:   fig.creditLeft,     // v2.14.57 — credit still standing after that
         priorDebt:    priorDebt,
         creditBalance: credit,
         openingDebt:  od

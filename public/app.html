@@ -1820,7 +1820,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.56';
+const HTML_VERSION = '2.14.57';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3336,6 +3336,11 @@ async function confirmImport() {
 
 async function sendOne(id) {
   if(!confirmManualSend()) return;
+  // 💳 v2.14.57 — nothing to collect? (server figures: owedNow is net of credit,
+  // shouldRemind covers extra accounts). Warn, don't block.
+  const _t1 = (data.tenants || []).find(function(x){ return String(x.id) === String(id); });
+  if (_t1 && t1OwesNothing(_t1)
+      && !confirm('לדייר ' + (_t1.name || '') + ' אין כרגע סכום לתשלום (החודש שולם או מכוסה ביתרת זכות).\nלשלוח תזכורת בכל זאת?')) return;
   const btn=document.getElementById('send-btn-'+id);
   if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span>';}
   try{
@@ -3345,6 +3350,12 @@ async function sendOne(id) {
       await loadData(); render(); toast('✅ הודעה נשלחה!','success');
     } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
   }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
+}
+
+// 💳 v2.14.57 — consume-only: owedNow (net of credit) + shouldRemind (extras).
+function t1OwesNothing(t) {
+  if (t.owedNow === undefined || t.owedNow === null) return false;   // older server → never warn
+  return (parseFloat(t.owedNow) || 0) === 0 && t.shouldRemind === false;
 }
 
 async function sendEmailToTenants(unpaidOnly) {
@@ -4301,7 +4312,19 @@ function render() {
          : Math.max(0, totalDebt - Math.max(0, openingDebt));
        const historyDebt = Math.max(0, totalDebt - Math.max(0, openingDebt) - currentMonthDebt);
        let debtCell;
-      if (creditBalance > 0 && totalDebt === 0) {
+      // 💳 v2.14.57 — credit netted immediately (server: owedNow / creditApplied /
+      // creditLeft). A credit that reduced THIS bill is shown as such, instead of
+      // "קרדיט X — יקוזז בחודש הבא" next to a month the tenant still owes.
+      const owedNow = parseFloat(t.owedNow) || 0;
+      const creditApplied = parseFloat(t.creditApplied) || 0;
+      const creditLeft = parseFloat(t.creditLeft) || 0;
+      if (creditApplied > 0 && owedNow > 0) {
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+owedNow+'₪</span>'
+          + '<span style="font-size:0.7rem;color:var(--text3);display:block;">אחרי קיזוז קרדיט '+creditApplied+'₪</span>';
+      } else if (creditApplied > 0) {
+        debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ הקרדיט מכסה את החודש</span>'
+          + (creditLeft > 0 ? '<span style="font-size:0.7rem;color:var(--text3);display:block;">נותר קרדיט ₪'+creditLeft+'</span>' : '');
+      } else if (creditBalance > 0 && totalDebt === 0) {
         debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ קרדיט: ₪'+creditBalance+'</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">יתרה תקוזז בחודש הבא</span>';
       } else if (paidThisMonth && totalDebt === 0) {
@@ -8898,14 +8921,19 @@ function computeCollectionBreakdown(globalAmount) {
     // current month when that month has a partial payment OR an unpaid history
     // row, and getting that subtraction wrong is exactly what reported ₪460 for
     // a tenant who owed ₪230 (v2.13.31).
-    const currentMonthDebt = Math.max(0, parseFloat(bal.shortfall) || 0);
-    const priorDebt = Math.max(0, parseFloat(t.priorDebt) || 0);
+    // 💳 v2.14.57 — owedCurrent / owedPrior are the credit-netted parts of owedNow
+    // (server). Fallback keeps an older server payload working.
+    const currentMonthDebt = (t.owedCurrent !== undefined) ? Math.max(0, parseFloat(t.owedCurrent) || 0)
+                                                           : Math.max(0, parseFloat(bal.shortfall) || 0);
+    const priorDebt = (t.owedPrior !== undefined) ? Math.max(0, parseFloat(t.owedPrior) || 0)
+                                                  : Math.max(0, parseFloat(t.priorDebt) || 0);
 
     res.mainCurrent += currentMonthDebt;
     res.mainDebt    += priorDebt;
     if (currentMonthDebt > 0) res.mainCurrentCount++;
     if (priorDebt > 0)        res.mainDebtCount++;
-    if (credit > 0 && totalDebt === 0) res.mainCredit += credit;
+    if (t.creditLeft !== undefined) res.mainCredit += Math.max(0, parseFloat(t.creditLeft) || 0);
+    else if (credit > 0 && totalDebt === 0) res.mainCredit += credit;
 
     // Extra accounts for this tenant
     // accountsStatus is a hoisted `var` (see its declaration) — it is {} until the
@@ -8955,8 +8983,11 @@ function buildTenantStatusRows() {
   for (const t of tenants) {
     const tid = String(t.id);
     const bal = t.currentBalance || { status: 'unpaid', shortfall: 0, expected: 0, paidAmount: 0 };
-    const currentMonthDebt = Math.max(0, parseFloat(bal.shortfall) || 0);
-    const priorDebt        = Math.max(0, parseFloat(t.priorDebt) || 0);
+    // 💳 v2.14.57 — credit-netted parts from the server (same as computeCollectionBreakdown)
+    const currentMonthDebt = (t.owedCurrent !== undefined) ? Math.max(0, parseFloat(t.owedCurrent) || 0)
+                                                           : Math.max(0, parseFloat(bal.shortfall) || 0);
+    const priorDebt        = (t.owedPrior !== undefined) ? Math.max(0, parseFloat(t.owedPrior) || 0)
+                                                         : Math.max(0, parseFloat(t.priorDebt) || 0);
     const credit           = parseFloat(t.creditBalance) || 0;
     const totalDebt        = parseFloat(t.totalDebt) || 0;
 
@@ -8983,7 +9014,9 @@ function buildTenantStatusRows() {
       priorDebt: priorDebt,
       extras: extras,
       extrasTotal: Math.round(extrasTotal * 100) / 100,
-      credit: (credit > 0 && totalDebt === 0) ? credit : 0,
+      credit: (t.creditLeft !== undefined) ? Math.max(0, parseFloat(t.creditLeft) || 0)
+                                           : ((credit > 0 && totalDebt === 0) ? credit : 0),
+      creditApplied: Math.max(0, parseFloat(t.creditApplied) || 0),
       owed: owed,
       bucket: owed > 0 ? 'pending' : 'paid'
     });
@@ -9487,6 +9520,8 @@ function showTenantStatusList(bucket) {
         if (e.debt > 0)    eb.push('חוב ' + nis(e.debt));
         parts.push(e.label + ': ' + nis(e.total) + ' <span style="color:var(--text3);">(' + eb.join(' · ') + ')</span>');
       }
+      // 💳 v2.14.57 — credit that already reduced this bill (server creditApplied)
+      if (r.creditApplied > 0) parts.push('<span style="color:#22c55e;">קוזז קרדיט: ' + nis(r.creditApplied) + '</span>');
       if (!isPending && r.credit > 0) parts.push('<span style="color:#22c55e;">קרדיט לזכותו: ' + nis(r.credit) + '</span>');
       // v2.14.12 (option A) — inline debt-offset note when a close surplus offset prior debt
       const _off = tenantOffsetNote(r.id);
