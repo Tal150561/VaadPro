@@ -1883,4 +1883,39 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide still documents clean-slate', guide.includes('התחלה נקייה — מחיקת כל התשלומים שנקלטו'), true);
 }
 
+
+// v2.14.54 — reminder figures: every WA send path consumes buildReminderFigures
+{
+  const fs = require('fs'), path = require('path');
+  const srv = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const app54 = fs.readFileSync(path.join(__dirname, '..', 'public', 'app.html'), 'utf8');
+  const guide54 = fs.readFileSync(path.join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8');
+  t.section('v2.14.54 — send paths consume buildReminderFigures (design A)');
+  const body = (start, end) => { const i = srv.indexOf(start); const j = srv.indexOf(end, i + 1); return i >= 0 && j > i ? srv.slice(i, j) : ''; };
+  const paths = {
+    'send-one':  body("app.post('/api/send/:id'", "app.post('/api/send-all'"),
+    'send-all':  body("app.post('/api/send-all'", "app.post('/api/resend-auto'"),
+    'AutoSend':  body('async function doAutoSend(user)', 'sendWaMsg(user.tenantId, tenant.phone, msg)')
+  };
+  Object.keys(paths).forEach(k => {
+    const b = paths[k];
+    t.eq(k + ': body located', b.length > 200, true);
+    t.eq(k + ': calls buildReminderFigures', /buildReminderFigures\(d, tenant, mk, month, amount\)/.test(b), true);
+    t.eq(k + ': {סכום} ← fig.monthDue', b.includes('.replace(/{סכום}/g, fig.monthDue)'), true);
+    t.eq(k + ': {סה"כ} ← fig.total', b.includes('.replace(/{סה"כ}/g, fig.total)'), true);
+    t.eq(k + ': prior-debt line ← fig.priorDebt', b.includes('buildPriorDebtLine(fig.priorDebt)'), true);
+    t.eq(k + ': no local amount + debt arithmetic', /amount \+ debt|calcTotalDebt\(/.test(b), false);
+  });
+  t.eq('GET /api/data uses the shared splitCurrentMonthDebt',
+    body("app.get('/api/data'", 'res.json(d);').includes('splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances)'), true);
+  t.eq('no second inline curInTotal copy in /api/data',
+    body("app.get('/api/data'", 'res.json(d);').includes('curInTotal'), false);
+  t.eq('template hint explains {סכום} = remaining this month',
+    app54.includes('{סכום} = מה שנותר לשלם על החודש הנוכחי'), true);
+  t.eq('guide explains {סכום} semantics',
+    guide54.includes('מה שנותר לשלם על החודש הנוכחי'), true);
+  t.eq('guide gives the paid-month example',
+    guide54.includes('ועד בית 0 ₪, חוב קודם 230 ₪, סה"כ 230 ₪'), true);
+}
+
 process.exit(t.done() ? 1 : 0);

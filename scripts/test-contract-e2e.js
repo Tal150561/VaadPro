@@ -114,7 +114,10 @@ t.eq('GET /api/data computes totalDebt via calcTotalDebt',
 t.eq('GET /api/data attaches totalDebt', /totalDebt:\s*totalNow/.test(server), true);
 // v2.13.32 — priorDebt must be shipped too, or app.html re-derives it and
 // double-counts an unpaid current-month history row (₪230 reported as ₪460).
-t.eq('GET /api/data attaches priorDebt', /priorDebt:\s*Math\.max\(0, totalNow - curInTotal\)/.test(server), true);
+// v2.14.54 — the split moved into splitCurrentMonthDebt (shared with the send
+// paths); /api/data attaches its priorDebt, the helper holds the formula.
+t.eq('GET /api/data attaches priorDebt (from splitCurrentMonthDebt)', /priorDebt:\s*_split\.priorDebt/.test(server), true);
+t.eq('splitCurrentMonthDebt computes priorDebt = totalDebt − curInTotal', /priorDebt: Math\.max\(0, totalDebt - curInTotal\)/.test(server), true);
 t.eq('priorDebt subtracts the partial shortfall',
   /emBal\.status === 'partial' \? \(parseFloat\(emBal\.shortfall\)/.test(server), true);
 t.eq('priorDebt subtracts an unpaid current-month history row',
@@ -204,5 +207,64 @@ t.eq('no path uses empty-string fallback for credit',
 // credit is sourced from getCreditBalance in each send path (the single source)
 t.eq('credit sourced from getCreditBalance',
   (server.match(/getCreditBalance\(d, tenant\.id\)/g) || []).length >= 4, true);
+
+// ── v2.14.20 — BankSync agent "already imported" reporting ─────────
+// The agent path (analyzeBankRowsServer → /api/import-bank) must classify rows that
+// were imported in a PRIOR run as "already imported", NOT as "unmatched". Before this,
+// a re-run over the same file reported "0 matched, N unmatched" and looked broken.
+// This tests the REAL function behaviorally (via loadBankAnalyzer), plus asserts the
+// endpoint actually exposes the field the banner reads.
+t.section('v2.14.20 — agent already-imported classification (analyzeBankRowsServer)');
+
+{
+  const { analyzeBankRowsServer } = require('./test-lib').loadBankAnalyzer();
+
+  // Minimal file: 2 rows for 2 tenants (name col=0, amount col=1, date col=2).
+  const rows = [
+    ['שם', 'סכום', 'תאריך'],
+    ['ברקן טל', 230, '46218'],
+    ['וזנה ירין', 230, '46213'],
+  ];
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, bankAmount: 230, bankTolerance: 5 };
+  const tenants = [
+    { id: 't1', name: 'טל', phone: '0500000001', keywords: 'טל, ברקן', customAmount: 230 },
+    { id: 't2', name: 'ירין', phone: '0500000002', keywords: 'ירין, וזנה', customAmount: 230 },
+    { id: 't3', name: 'לא־שילם', phone: '0500000003', keywords: 'איןהתאמה', customAmount: 230 },
+  ];
+  const cfg = { amount: 230 };
+  const mkey = '2026-07';
+
+  // Run 1 — fresh: both match, nothing already-imported, the non-payer is unmatched.
+  const fresh = new Set();
+  const r1 = analyzeBankRowsServer(rows, mapping, tenants, {}, mkey, cfg, fresh);
+  t.eq('fresh run returns alreadyImportedSkips array', Array.isArray(r1.alreadyImportedSkips), true);
+  t.eq('fresh run: 2 matched', r1.matched.length, 2);
+  t.eq('fresh run: 0 already imported', r1.alreadyImportedSkips.length, 0);
+  t.eq('fresh run: 1 unmatched (the non-payer)', r1.unmatched.length, 1);
+
+  // Run 2 — re-import the SAME file with run-1 fingerprints seeded.
+  const seeded = new Set(r1.newFingerprints);
+  const r2 = analyzeBankRowsServer(rows, mapping, tenants, {}, mkey, cfg, seeded);
+  t.eq('re-import: 0 matched (dedup)', r2.matched.length, 0);
+  t.eq('re-import: 2 already imported (not lost)', r2.alreadyImportedSkips.length, 2);
+  // THE KEY REGRESSION: prior-import-only tenants must NOT be reported as unmatched.
+  // Only the genuine non-payer stays unmatched — the 2 paid tenants move to "already".
+  t.eq('re-import: unmatched excludes prior-import tenants (only the non-payer)', r2.unmatched.length, 1);
+  t.eq('re-import: unmatched is the non-payer, not a paid tenant',
+    r2.unmatched.every(u => u.name === 'לא־שילם'), true);
+  // Skip records carry enough to display (name + scope).
+  t.eq('already-imported records carry name + scope',
+    r2.alreadyImportedSkips.every(s => s.name && s.scope === 'main'), true);
+}
+
+// The endpoint must surface the field (both in the JSON response AND the saved receipt),
+// or the banner reads undefined and silently shows nothing.
+t.section('v2.14.20 — /api/import-bank exposes alreadyImported (server.js)');
+t.eq('import-bank destructures alreadyImportedSkips from the analyzer',
+  /const \{[^}]*alreadyImportedSkips[^}]*\} = analyzeBankRowsServer\(/.test(server), true);
+t.eq('response includes alreadyImported count',
+  /res\.json\(\{[^}]*alreadyImported:\s*\(alreadyImportedSkips \|\| \[\]\)\.length/.test(server), true);
+t.eq('receipt (lastBankSyncImport) includes alreadyImported',
+  /alreadyImported:\s*\(alreadyImportedSkips \|\| \[\]\)\.length,\s*\n\s*alreadyImportedTenants:/.test(server), true);
 
 process.exit(t.done() ? 1 : 0);

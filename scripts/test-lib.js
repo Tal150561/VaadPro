@@ -63,6 +63,8 @@ const SERVER_FNS = [
   'buildBalanceLine', 'buildOffsetBlock', 'tenantOwesActiveExtra', 'autoSendShouldRemind',
   // v2.14.18 — {שורת_חוב_קודם} whole-line prior-debt placeholder
   'buildPriorDebtLine',
+  // v2.14.54 — active-month split + reminder figures (design A)
+  'splitCurrentMonthDebt', 'buildReminderFigures',
   // v2.14.19 — {שורת_זכות} whole-line credit placeholder
   'buildCreditLine',
   // v2.13.23 — year-boundary-safe Hebrew-month → monthKey

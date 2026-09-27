@@ -2702,4 +2702,79 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.54 — reminder figures (design A): {סכום} = still owed THIS month,
+// {חוב_קודם} = carried-over only, {סה"כ} = sum. Bug (Tal, תמי דירה 9): debt
+// 230 + paid September 230 → reminder read 230 + 230 = 460. Partial payers were
+// double-counted (shortfall inside calcTotalDebt AND the full tariff on top).
+// ════════════════════════════════════════════════════════════════
+{
+  const SEP = 'ספטמבר';
+  const bld = (sl, od, extra) => Object.assign({
+    config: { amount: 230, manualMonth: SEP },
+    tenants: [{ id: 9, name: 'תמי', openingDebt: od }],
+    sentLog: sl, paymentHistory: {}
+  }, extra || {});
+  const mkS = S.getMonthKey({ manualMonth: SEP });
+  const F = d => S.buildReminderFigures(d, d.tenants[0], mkS, SEP, 230);
+  const fig = f => [f.monthDue, f.priorDebt, f.total].join('/');
+
+  t.section('v2.14.54 — buildReminderFigures: the 4 reported cases');
+  t.eq('THE BUG (תמי): prior 230, paid Sept in full → 0 / 230 / 230',
+    fig(F(bld({ '9_ספטמבר': bank(230) }, 230))), '0/230/230');
+  t.eq('partial, no prior debt: paid 100 of 230 → 130 / 0 / 130 (was 360)',
+    fig(F(bld({ '9_ספטמבר': bank(100) }, 0))), '130/0/130');
+  t.eq('partial + prior 230: paid 100 → 130 / 230 / 360 (was 590)',
+    fig(F(bld({ '9_ספטמבר': bank(100) }, 230))), '130/230/360');
+  t.eq('unpaid + prior 230 → 230 / 230 / 460 (unchanged)',
+    fig(F(bld({}, 230))), '230/230/460');
+
+  t.section('v2.14.54 — buildReminderFigures: edges');
+  t.eq('reminded-only (sent_) counts as unpaid → full tariff',
+    fig(F(bld({ '9_ספטמבר': 'sent_' + TS }, 0))), '230/0/230');
+  t.eq('manual_paid full, no debt → 0 / 0 / 0',
+    fig(F(bld({ '9_ספטמבר': manual(230) }, 0))), '0/0/0');
+  t.eq('overpaid (300 on 230) with prior 230 → 0 / 160 / 160 (surplus nets prior)',
+    fig(F(bld({ '9_ספטמבר': bank(300) }, 230))), '0/160/160');
+  t.eq('legacy payment value (no amount) → treated as paid → 0 due',
+    fig(F(bld({ '9_ספטמבר': 'bank_import_' + TS }, 230))), '0/230/230');
+  {
+    const d = bld({}, 0); d.tenants[0].suspended = true;
+    t.eq('suspended main, unpaid → exempt, 0 due', fig(F(d)), '0/0/0');
+    const d2 = bld({}, 120); d2.tenants[0].suspended = true;
+    t.eq('suspended with prior 120 → 0 / 120 / 120', fig(F(d2)), '0/120/120');
+  }
+  {
+    // current month already carries an UNPAID history row (e.g. a closed
+    // month re-opened): calcTotalDebt counts it — priorDebt must not.
+    const d = bld({}, 0, { paymentHistory: { '9': [{ month: mkS, paid: false, amount: 230, type: 'bank' }] } });
+    t.eq('unpaid current-month history row → 230 / 0 / 230 (no double count)', fig(F(d)), '230/0/230');
+  }
+  t.eq('monthDue uses the CALLER-resolved tariff when unpaid',
+    S.buildReminderFigures(bld({}, 0), bld({}, 0).tenants[0], mkS, SEP, 250).monthDue, 250);
+  t.eq('status surfaced for the caller', F(bld({ '9_ספטמבר': bank(100) }, 0)).status, 'partial');
+
+  t.section('v2.14.54 — splitCurrentMonthDebt: /api/data shape, map optional');
+  {
+    const d = bld({ '9_ספטמבר': bank(100) }, 230);
+    const a = S.splitCurrentMonthDebt(d, d.tenants[0], mkS, SEP);
+    const mb = { [SEP]: S.calcMonthBalance(bank(100), 230) };
+    const b = S.splitCurrentMonthDebt(d, d.tenants[0], mkS, SEP, mb);
+    t.eq('totalDebt == calcTotalDebt', a.totalDebt, S.calcTotalDebt(d, '9', mkS));
+    t.eq('priorDebt excludes current shortfall', a.priorDebt, 230);
+    t.eq('with / without monthBalances map → identical', JSON.stringify(a), JSON.stringify(b));
+    t.eq('reads only — data untouched', JSON.stringify(d), JSON.stringify(bld({ '9_ספטמבר': bank(100) }, 230)));
+  }
+  t.section('v2.14.54 — rendered reminder (real placeholder helpers)');
+  {
+    const f = F(bld({ '9_ספטמבר': bank(230) }, 230));
+    const msg = 'ועד בית: *{סכום} ₪*\n{שורת_חוב_קודם}\nסה"כ: {סה"כ}'
+      .replace(/{סכום}/g, f.monthDue)
+      .replace(/{שורת_חוב_קודם}/g, S.buildPriorDebtLine(f.priorDebt))
+      .replace(/{סה"כ}/g, f.total);
+    t.eq('תמי message', msg, 'ועד בית: *0 ₪*\nחוב קודם: *230 ₪*\nסה"כ: 230');
+  }
+}
+
 process.exit(t.done() ? 1 : 0);

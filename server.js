@@ -1762,10 +1762,10 @@ app.get('/api/data', authMiddleware, (req, res) => {
       const hist = (d.paymentHistory || {})[tid] || [];
       const live = t.customAmount || (d.config && d.config.amount) || 300;
       // ⏸ v2.14.31 — suspended tenant: the ACTIVE month is exempt (expected=0,
-      // no shortfall). Prior debt (openingDebt/history) is still surfaced via
-      // totalDebt/priorDebt below (design 3A). A suspended main account does not
-      // affect its extra accounts (design 2C — those carry their own flag).
-      const suspended = (t.suspended === true);
+      // no shortfall) — handled inside splitCurrentMonthDebt (v2.14.54). Prior
+      // debt (openingDebt/history) is still surfaced via totalDebt/priorDebt
+      // (design 3A). A suspended main account does not affect its extra
+      // accounts (design 2C — those carry their own flag).
       // Per-month balance map for every month present in sentLog (main account).
       const monthBalances = {};
       Object.keys(d.sentLog || {}).forEach(key => {
@@ -1778,35 +1778,18 @@ app.get('/api/data', authMiddleware, (req, res) => {
         const mKey = String(mkNow).split('-')[0] + '-' + String(idx + 1).padStart(2, '0');
         monthBalances[heb] = calcMonthBalance(d.sentLog[key], getExpectedAmount(hist, mKey, live));
       });
-      // Balance for a month with NO sentLog entry (unpaid) — still needed by views.
-      // ⏸ suspended → active month is exempt (unless already actually paid, which
-      // we preserve so a payment during suspension still shows as paid).
-      let emBal = monthBalances[emNow] || calcMonthBalance(null, getExpectedAmount(hist, mkNow, live));
-      if (suspended && emBal.status !== 'paid') {
-        emBal = { status: 'exempt', paidAmount: 0, expected: 0, shortfall: 0, credit: 0 };
-      }
-      // ⚠️ v2.13.32 — priorDebt shipped from the server (SAME logic as the portal,
-      // GET /api/portal/:token). calcTotalDebt is ACCRUED debt: it folds in the
-      // current month ONLY when that month is short-paid (partial) OR already has
-      // an unpaid paymentHistory row. It does NOT include a current month that
-      // simply has no record yet. So "what is owed right now" =
-      //     currentBalance.shortfall  +  priorDebt
-      // and priorDebt must subtract exactly what calcTotalDebt already counted for
-      // the current month — otherwise an unpaid current-month ROW is counted twice
-      // (₪230 owed reported as ₪460). app.html previously subtracted only the
-      // partial case and hit exactly that bug. One definition, two call sites.
-      const totalNow = calcTotalDebt(d, tid, mkNow);
-      // ⏸ suspended: the active month contributes nothing to debt (exempt), so it
-      // is fully excluded from priorDebt's current-month subtraction too.
-      const curInTotal = suspended ? 0 : (
-        (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
-        (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
-          ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0));
+      // v2.14.54 — the active-month split (emBal / totalNow / priorDebt) now lives in
+      // ONE helper, splitCurrentMonthDebt(), shared with every reminder send path
+      // (send-one / send-all / AutoSend). Behaviour here is byte-for-byte the same
+      // as the previous inline code; see the helper for the full rationale.
+      const _split = splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances);
+      const emBal = _split.emBal;
+      const totalNow = _split.totalDebt;
       return {
         ...t,
         creditBalance: getCreditBalance(d, tid),
         totalDebt:     totalNow,
-        priorDebt:     Math.max(0, totalNow - curInTotal), // accrued debt BEFORE the active month
+        priorDebt:     _split.priorDebt, // accrued debt BEFORE the active month
         effectiveAmount: live,        // resolved customAmount || config.amount || 300
         monthBalances,                // { hebMonth: {status, paidAmount, expected, shortfall, credit} }
         currentBalance: emBal,        // balance for the ACTIVE month (em)
@@ -2727,6 +2710,60 @@ function buildBalanceLine(d, tenant, mk) {
   return 'שילמת ' + bal.paidAmount + ' ₪, נותר לתשלום: *' + bal.shortfall + ' ₪*';
 }
 
+// ── Active-month debt split (v2.14.54) ─────────────────────────────
+// SINGLE SOURCE OF TRUTH for "how much of the tenant's debt is THIS month, and
+// how much is carried over". Extracted verbatim from GET /api/data (v2.13.32
+// priorDebt logic, same as the portal) so the reminder send paths stop doing
+// their own `amount + calcTotalDebt` arithmetic.
+//
+// calcTotalDebt is ACCRUED debt: it folds in the current month ONLY when that
+// month is short-paid (partial) OR already has an unpaid paymentHistory row. It
+// does NOT include a current month that simply has no record yet. So
+//     priorDebt = calcTotalDebt − (what calcTotalDebt already counted for now)
+// ⏸ suspended → the active month is exempt (unless actually paid).
+// `monthBalances` is optional (the /api/data map); when absent the active
+// month's balance is derived from its sentLog value directly — same result.
+// Read-only: no money written, debt-core untouched.
+function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances) {
+  const tid  = String(t.id);
+  const hist = (d.paymentHistory || {})[tid] || [];
+  const live = t.customAmount || (d.config && d.config.amount) || 300;
+  const suspended = (t.suspended === true);
+  let emBal = (monthBalances && monthBalances[emNow])
+    || calcMonthBalance((d.sentLog || {})[tid + '_' + emNow], getExpectedAmount(hist, mkNow, live));
+  if (suspended && emBal.status !== 'paid') {
+    emBal = { status: 'exempt', paidAmount: 0, expected: 0, shortfall: 0, credit: 0 };
+  }
+  const totalDebt = calcTotalDebt(d, tid, mkNow);
+  const curInTotal = suspended ? 0 : (
+    (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0) +
+    (hist.some(r => r.month === mkNow && !r.paid && r.type !== 'wa_sent')
+      ? (parseFloat((hist.find(r => r.month === mkNow) || {}).amount) || 0) : 0));
+  return { emBal, totalDebt, priorDebt: Math.max(0, totalDebt - curInTotal) };
+}
+
+// ── Reminder figures (v2.14.54) — feeds the amount, prior-debt and total placeholders
+// Design A (Tal, 2026-09-27): {סכום} = what is STILL OWED for the active month.
+//   unpaid / reminded → the full tariff (`amount`, resolved by the caller)
+//   partial           → the shortfall            (e.g. paid 100 of 230 → 130)
+//   paid in full      → 0
+//   suspended/exempt  → 0
+// priorDebt = carried-over debt only (never the current month's shortfall — that
+// was the double count: "חלקי 100/230" used to read 230 + חוב קודם 130 = 360).
+// total = monthDue + priorDebt. Shared by send-one / send-all / AutoSend — never
+// copied. Consumes splitCurrentMonthDebt; no new money math.
+function buildReminderFigures(d, tenant, mkNow, emNow, amount) {
+  const sp = splitCurrentMonthDebt(d, tenant, mkNow, emNow);
+  const st = sp.emBal.status;
+  let monthDue;
+  if (st === 'partial') monthDue = parseFloat(sp.emBal.shortfall) || 0;
+  else if (st === 'paid' || st === 'exempt') monthDue = 0;
+  else monthDue = parseFloat(amount) || 0;             // unpaid / reminded
+  monthDue = Math.round(monthDue * 100) / 100;
+  const priorDebt = Math.round(sp.priorDebt * 100) / 100;
+  return { monthDue, priorDebt, total: Math.round((monthDue + priorDebt) * 100) / 100, status: st };
+}
+
 // ── {שורת_חוב_קודם} placeholder (v2.14.18) ────────────────────────
 // A WHOLE prior-debt LINE ("חוב קודם: *478 ₪*"), or '' when there is no
 // prior debt. Unlike the bare {חוב_קודם} (the NUMBER only), this carries its
@@ -3197,8 +3234,11 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   // fall back to customAmount, preserving pre-v2.13.16 behavior exactly.
   const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
-  const debt   = calcTotalDebt(d, tenant.id, mk);
-  const total  = amount + debt;
+  // v2.14.54 — figures consume buildReminderFigures (design A): {סכום} = what is
+  // still owed THIS month, prior debt excludes the current month. Was
+  // `amount + calcTotalDebt` → a tenant who paid the month + had prior debt got
+  // 230 + 230 = 460 instead of 230; a partial payer was double-counted.
+  const fig    = buildReminderFigures(d, tenant, mk, month, amount);
   // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
   const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
   const portalUrl1 = tmpl.includes('{לינק_פורטל}')
@@ -3209,12 +3249,12 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const msg    = tmpl
     .replace(/{שם}/g, tenant.name)
     .replace(/{חודש}/g, month)
-    .replace(/{סכום}/g, amount)
-    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
-    .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+    .replace(/{סכום}/g, fig.monthDue)
+    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
+    .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
     .replace(/{שורת_זכות}/g, buildCreditLine(credit1))
     .replace(/{יתרת_זכות}/g, credit1 > 0 ? credit1 : 0)
-    .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+    .replace(/{סה"כ}/g, fig.total)
     .replace(/{חשבונות}/g, accountsBlock)
     .replace(/{יתרה}/g, balanceLine1)
     .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
@@ -3245,8 +3285,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   let sent = 0;
   for (const tenant of d.tenants) {
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
-    const debt   = calcTotalDebt(d, tenant.id, mk);
-    const total  = amount + debt;
+    const fig    = buildReminderFigures(d, tenant, mk, month, amount);   // v2.14.54 — design A
     // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
     const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
     const portalUrlSA = tmpl.includes('{לינק_פורטל}')
@@ -3257,12 +3296,12 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
-      .replace(/{סכום}/g, amount)
-      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
-      .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+      .replace(/{סכום}/g, fig.monthDue)
+      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
+      .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
       .replace(/{שורת_זכות}/g, buildCreditLine(creditSA))
       .replace(/{יתרת_זכות}/g, creditSA > 0 ? creditSA : 0)
-      .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+      .replace(/{סה"כ}/g, fig.total)
       .replace(/{חשבונות}/g, accountsBlock)
       .replace(/{יתרה}/g, balanceLineSA)
       .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
@@ -5450,8 +5489,7 @@ async function doAutoSend(user) {
     // decision source: paid→skip, everyone else→remind.
     if (!autoSendShouldRemind(d, tenant, mk)) continue;
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
-    const debt   = calcTotalDebt(d, tenant.id, mk);
-    const total  = amount + debt;
+    const fig    = buildReminderFigures(d, tenant, mk, month, amount);   // v2.14.54 — design A
     const portalUrlAuto = tmpl.includes('{לינק_פורטל}')
       ? getOrCreatePortalUrl(user.tenantId, tenant.id, tenant.name)
       : '';
@@ -5462,12 +5500,12 @@ async function doAutoSend(user) {
     const msg = tmpl
       .replace(/{שם}/g, tenant.name)
       .replace(/{חודש}/g, month)
-      .replace(/{סכום}/g, amount)
-      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(debt))
-      .replace(/{חוב_קודם}/g, debt > 0 ? debt : 0)
+      .replace(/{סכום}/g, fig.monthDue)
+      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
+      .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
       .replace(/{שורת_זכות}/g, buildCreditLine(creditAuto))
       .replace(/{יתרת_זכות}/g, creditAuto > 0 ? creditAuto : 0)
-      .replace(/{סה"כ}/g, debt > 0 ? total : amount)
+      .replace(/{סה"כ}/g, fig.total)
       .replace(/{חשבונות}/g, accountsBlockAuto)
       .replace(/{יתרה}/g, balanceLineAuto)
       .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
