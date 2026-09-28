@@ -101,8 +101,8 @@ function loadBankAnalyzer() {
   const splitMonths = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
     + (splitMonths ? splitMonths[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'analyzeBankRowsServer'])
-    + 'module.exports={getMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,analyzeBankRowsServer};';
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer'])
+    + 'module.exports={getMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,parseSentLogAmount,accumulatePaidAmount,mergeExtraPaymentHistory,analyzeBankRowsServer};';
   return runInSandbox(code);
 }
 
@@ -370,7 +370,7 @@ function loadApplyAmbiguous(building, reqBody) {
     }
   };
   const code = months + '\n'
-    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'applyPaymentToDebt', 'recordPayment'])
+    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'applyPaymentToDebt', 'recordPayment', 'parseSentLogAmount', 'accumulatePaidAmount'])
     + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);

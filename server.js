@@ -1138,6 +1138,43 @@ function parseSentLogAmount(val) {
   return null;
 }
 
+// v2.14.58 — ACCUMULATE a newly-imported bank amount onto whatever the SAME
+// tenant-month already holds (bank_import or manual_paid). sentLog has ONE key per
+// tenant-month, so a plain `=` OVERWRITES: Tami paid 230 on 2.9 (import #1) and 230
+// on 27.9 (import #2) → the second write replaced the first → paidAmount 230, the
+// June debt never cleared at month-close. Safe against double counting because a
+// row that was already imported is skipped by its fingerprint BEFORE any write.
+// A reminder (sent_) or empty value contributes 0. Uses parseSentLogAmount (the
+// correct manual_paid parser — `manual_paid_([\d.]+)` grabbed the ISO year 2026).
+function accumulatePaidAmount(prevVal, addAmount) {
+  const prev = parseSentLogAmount(prevVal) || 0;
+  return Math.round((prev + (parseFloat(addAmount) || 0)) * 100) / 100;
+}
+
+// v2.14.58 — merge the agent's extra-account paymentHistory additions into the
+// stored history. ONE record per account-month (UPSERT), same rule as the main
+// account whose recordPayment replaces the month record. Required because
+// closeExtraAccountsUnpaid reads the month with find() — i.e. only the FIRST
+// record — so appending a second record for the same month (the accumulated
+// total) would be ignored at close. An identical record (re-import echo) is a
+// no-op, exactly as before. Mutates and returns `merged`.
+function mergeExtraPaymentHistory(merged, additions) {
+  for (const [key, records] of Object.entries(additions || {})) {
+    if (!merged[key]) merged[key] = [];
+    for (const rec of records) {
+      const dup = merged[key].some(r =>
+        r.month === rec.month && r.type === rec.type &&
+        (parseFloat(r.paidAmount) || 0) === (parseFloat(rec.paidAmount) || 0) &&
+        r.date === rec.date);
+      if (dup) continue;
+      const idx = merged[key].findIndex(r => r.month === rec.month);
+      if (idx >= 0) merged[key][idx] = rec;   // accumulated total replaces the month record
+      else merged[key].push(rec);
+    }
+  }
+  return merged;
+}
+
 // Does sentLog say a payment (of any size) arrived? Same predicate the rest of
 // the codebase already uses — kept identical on purpose.
 function sentLogIsPayment(val) {
@@ -5197,17 +5234,18 @@ app.post('/api/apply-ambiguous-match', authMiddleware, (req, res) => {
       // ACCUMULATE onto any existing amount for this tenant-month (same rule as the
       // manual ambiguous-apply: two rows to one member, or agent-on-top-of-existing,
       // must sum — never overwrite).
-      const cur = String((d.sentLog || {})[slKey] || '');
-      const m = cur.match(/bank_import_[^_]+_([\d.]+)_/) || cur.match(/manual_paid_([\d.]+)/);
-      const prev = m ? (parseFloat(m[1]) || 0) : 0;
-      const accrued = Math.round((prev + (parseFloat(row.amount) || 0)) * 100) / 100;
+      // v2.14.58: shared helper — the old inline `manual_paid_([\d.]+)` parse read the
+      // ISO YEAR (2026) out of a manual_paid value and added it to the payment.
+      const accrued = accumulatePaidAmount((d.sentLog || {})[slKey], row.amount);
       if (!d.sentLog) d.sentLog = {};
       d.sentLog[slKey] = `bank_import_${new Date().toISOString()}_${accrued}_payer_${row.payerName || ''}`;
 
       // paymentHistory record for the resolved tenant + month.
       const tdForHistory = { paymentHistory: d.paymentHistory || (d.paymentHistory = {}) };
       const rate = resolveTariffRate(tenant, d.defaultTariffs, mk, (tenant.customAmount) || (d.config && d.config.amount) || 300);
-      recordPayment(tdForHistory, tid, mk, 'bank', rate, tenant.name, row.payerName || '', row.amount);
+      // v2.14.58: the month record carries the ACCUMULATED total (recordPayment
+      // replaces the month record; closeMonthUnpaid reads its paidAmount).
+      recordPayment(tdForHistory, tid, mk, 'bank', rate, tenant.name, row.payerName || '', accrued);
 
       // Persist the fingerprint so a later manual/agent run won't re-import this row.
       if (!fpList.includes(fp)) fpList.push(fp);
@@ -8012,7 +8050,12 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       }
       for (const [mk, b] of buckets) {
         const hebMk = hebOfMk(mk);
-        newSentLog[tenant.id + '_' + hebMk] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
+        const slKeyMain = tenant.id + '_' + hebMk;
+        // v2.14.58: ACCUMULATE onto an earlier import of the same OPEN month (Tami:
+        // 230 on 2.9 + 230 on 27.9 = 460). A CLOSED month keeps the old single-value
+        // write — its money is resolved through the closed-month queue above.
+        const amtMain = _closedMain.has(mk) ? b.sum : accumulatePaidAmount(newSentLog[slKeyMain], b.sum);
+        newSentLog[slKeyMain] = `bank_import_${new Date().toISOString()}_${amtMain}_payer_${b.payerName}`;
       }
       matched.push({ tenantId: tenant.id, name: tenant.name, amount: totalAmount, matchType: tenantMatches[0].matchType, debtReduced: false, monthsSplit: buckets.size, splitMonths: Array.from(buckets.keys()) });
     } else if (!tenantHadPriorImport) {
@@ -8091,14 +8134,21 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
             const hebMk = hebOfMk(mk);
             const slKeyM = phKey + '_' + hebMk;
             const prev = newSentLog[slKeyM];
-            if (prev && (String(prev).startsWith('manual_paid') || String(prev).startsWith('bank_import'))) continue; // כבר שולם לחודש הזה
-            newSentLog[slKeyM] = `bank_import_${new Date().toISOString()}_${b.sum}_payer_${b.payerName}`;
+            const prevPaid = prev && (String(prev).startsWith('manual_paid') || String(prev).startsWith('bank_import'));
+            // v2.14.58: a CLOSED month that is already paid keeps the old skip (the
+            // money goes through the closed-month queue). An OPEN month that is
+            // already paid now ACCUMULATES — previously `continue` dropped the second
+            // payment SILENTLY while its fingerprint was still saved, so it was lost
+            // for good (never written, never reported, never re-importable).
+            if (prevPaid && _closedExtra.has(mk)) continue; // כבר שולם לחודש סגור
+            const accPaid = accumulatePaidAmount(prev, b.sum);
+            newSentLog[slKeyM] = `bank_import_${new Date().toISOString()}_${accPaid}_payer_${b.payerName}`;
             if (!newPaymentHistory[phKey]) newPaymentHistory[phKey] = [];
             newPaymentHistory[phKey].push({
               month: mk,
               paid: true,
               amount: acc.amount || 0,
-              paidAmount: b.sum,
+              paidAmount: accPaid,   // v2.14.58: the month's TOTAL (upserted by mergeExtraPaymentHistory)
               date: new Date().toISOString().split('T')[0],
               type: 'bank_import',
               name: tenant.name,
@@ -8245,16 +8295,8 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     // exists for that account+month+paidAmount+date. Same rule as the main account,
     // whose recordPayment REPLACES the month record rather than appending.
     const mergedPaymentHistory = tenantDataForHistory.paymentHistory;
-    for (const [key, records] of Object.entries(newPaymentHistory)) {
-      if (!mergedPaymentHistory[key]) mergedPaymentHistory[key] = [];
-      for (const rec of records) {
-        const dup = mergedPaymentHistory[key].some(r =>
-          r.month === rec.month && r.type === rec.type &&
-          (parseFloat(r.paidAmount) || 0) === (parseFloat(rec.paidAmount) || 0) &&
-          r.date === rec.date);
-        if (!dup) mergedPaymentHistory[key].push(rec);
-      }
-    }
+    // v2.14.58: UPSERT per account-month (see mergeExtraPaymentHistory).
+    mergeExtraPaymentHistory(mergedPaymentHistory, newPaymentHistory);
 
     const importResult = {
       timestamp: new Date().toISOString(),

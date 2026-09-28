@@ -3017,6 +3017,152 @@ t.section('v2.14.57 — חייבים חריגים: row + letter net the credit')
   t.eq('letter total 30', letter.startsWith('סה"כ 30'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.58 — ACCUMULATE a second payment of the same month across SEPARATE imports
+// (Tami, דירה 9): prior debt 230; paid 230 on 2.9 (import #1) and 230 on 27.9
+// (import #2). sentLog holds ONE key per tenant-month and every import path wrote
+// it with `=` → the second import OVERWROTE the first → paidAmount 230 → the June
+// debt survived month-close. Extra accounts were worse: `continue` dropped the
+// second payment while its fingerprint was saved (lost for good).
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.58 — accumulate across separate imports (Tami)');
+  const { loadBankAnalyzer, loadServer, loadCloseMonth, loadApplyAmbiguous } = require('./test-lib');
+  const B = loadBankAnalyzer();
+  const S58 = loadServer();
+  const amtOf = v => { const m = String(v || '').match(/^bank_import_[^_]+_([\d.]+)_payer_/); return m ? parseFloat(m[1]) : null; };
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+  const tamiT = () => [{ id: 9, name: 'זהבי תמר', phone: '0500000009', keywords: '', customAmount: 230, openingDebt: 230 }];
+  const row2  = ['זהבי תמר', '230', '02/09/2026', '75790'];
+  const row27 = ['זהבי תמר', '230', '27/09/2026', '650918'];
+  const hdr = ['שם', 'סכום', 'תאריך', 'אסמכתא'];
+
+  // helpers: the parser + accumulator
+  t.eq('parseSentLogAmount reads manual_paid amount, NOT the ISO year', B.parseSentLogAmount('manual_paid_2026-09-28T10:00:00.000Z_amount_230'), 230);
+  t.eq('accumulate onto bank_import 230 + 230 = 460', B.accumulatePaidAmount('bank_import_2026-09-02T10:00:00.000Z_230_payer_x', 230), 460);
+  t.eq('accumulate onto manual_paid 100 + 130 = 230', B.accumulatePaidAmount('manual_paid_2026-09-03T10:00:00.000Z_amount_100', 130), 230);
+  t.eq('reminder (sent_) contributes 0', B.accumulatePaidAmount('sent_2026-09-01T10:00:00.000Z', 230), 230);
+  t.eq('empty contributes 0', B.accumulatePaidAmount(undefined, 230), 230);
+  t.eq('cents are rounded', B.accumulatePaidAmount('bank_import_X_0.1_payer_x', 0.2), 0.3);
+
+  // AGENT, main: import #1 (only the 2.9 row), then import #2 (whole file)
+  const r1 = B.analyzeBankRowsServer([hdr, row2], mapping, tamiT(), {}, '2026-09', { amount: 230 }, new Set(), {}, {}, ['2026-08'], []);
+  t.eq('import #1 → 230', amtOf(r1.newSentLog['9_ספטמבר']), 230);
+  const prior = new Set(r1.newFingerprints);
+  const r2 = B.analyzeBankRowsServer([hdr, row27, row2], mapping, tamiT(), r1.newSentLog, '2026-09', { amount: 230 }, prior, {}, {}, ['2026-08'], []);
+  t.eq('THE BUG: import #2 ACCUMULATES → 460 (was 230)', amtOf(r2.newSentLog['9_ספטמבר']), 460);
+  t.eq('the 2.9 row is skipped as already imported', (r2.alreadyImportedSkips || []).length, 1);
+  t.eq('only the new row is fingerprinted', r2.newFingerprints.length, 1);
+  // re-import the same file a third time → nothing new, stays 460
+  const prior3 = new Set([...prior, ...r2.newFingerprints]);
+  const r3 = B.analyzeBankRowsServer([hdr, row27, row2], mapping, tamiT(), r2.newSentLog, '2026-09', { amount: 230 }, prior3, {}, {}, ['2026-08'], []);
+  t.eq('re-import of the same file → still 460 (no double count)', amtOf(r3.newSentLog['9_ספטמבר']), 460);
+  t.eq('re-import → no tenant matched', r3.matched.length, 0);
+  // both rows in ONE import were already summed before the fix — unchanged
+  const rBoth = B.analyzeBankRowsServer([hdr, row27, row2], mapping, tamiT(), {}, '2026-09', { amount: 230 }, new Set(), {}, {}, ['2026-08'], []);
+  t.eq('both rows in one import → 460 (unchanged)', amtOf(rBoth.newSentLog['9_ספטמבר']), 460);
+  // on top of a MANUAL mark
+  const rMan = B.analyzeBankRowsServer([hdr, row27], mapping, tamiT(), { '9_ספטמבר': 'manual_paid_2026-09-05T10:00:00.000Z_amount_100' }, '2026-09', { amount: 230 }, new Set(), {}, {}, ['2026-08'], []);
+  t.eq('bank row on top of manual 100 → 330', amtOf(rMan.newSentLog['9_ספטמבר']), 330);
+  // a CLOSED month keeps the single-value write (money goes via the closed-month queue)
+  const rClosed = B.analyzeBankRowsServer([hdr, ['זהבי תמר', '230', '20/08/2026', '1']], mapping, tamiT(), { '9_אוגוסט': 'bank_import_2026-08-02T10:00:00.000Z_230_payer_x' }, '2026-09', { amount: 230 }, new Set(), {}, {}, ['2026-08'], []);
+  t.eq('closed month → NOT accumulated (230, queued instead)', amtOf(rClosed.newSentLog['9_אוגוסט']), 230);
+  t.eq('closed month → queued for approval', (rClosed.closedMonthHits || []).length, 1);
+
+  // END TO END: sentLog → recordPayment (as /api/import-bank does) → month-close
+  const closeWith = (slVal) => {
+    const b = { config: { amount: 230 }, tenants: tamiT(), sentLog: { '9_ספטמבר': slVal }, paymentHistory: {}, closedMonths: ['2026-08'] };
+    S58.recordPayment(b, '9', '2026-09', 'bank', 230, 'זהבי תמר', 'x', amtOf(slVal));
+    const C = loadCloseMonth(b, new Date('2026-10-01T06:00:00Z'));
+    const ow = console.log; console.log = () => {};
+    try { C.runForBuilding(b, '2026-09', 'ספטמבר'); } finally { console.log = ow; }
+    return b.tenants[0].openingDebt;
+  };
+  t.eq('END-TO-END: accumulated 460 → openingDebt 0 after close', closeWith(r2.newSentLog['9_ספטמבר']), 0);
+  t.eq('END-TO-END contrast: overwritten 230 → debt stays 230', closeWith(r1.newSentLog['9_ספטמבר']), 230);
+
+  t.section('v2.14.58 — extra accounts: second payment accumulates (was silently lost)');
+  const extraT = () => [{ id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+    extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }] }];
+  const e1 = ['ביטוח מבנה', '50', '05/09/2026', '11'];
+  const e2 = ['ביטוח מבנה', '50', '25/09/2026', '12'];
+  const x1 = B.analyzeBankRowsServer([hdr, e1], mapping, extraT(), {}, '2026-09', { amount: 217 }, new Set(), {}, {}, [], ['2026-08']);
+  t.eq('extra import #1 → 50', amtOf(x1.newSentLog['Z__acc__a1_ספטמבר']), 50);
+  const x2 = B.analyzeBankRowsServer([hdr, e1, e2], mapping, extraT(), x1.newSentLog, '2026-09', { amount: 217 }, new Set(x1.newFingerprints), {}, {}, [], ['2026-08']);
+  t.eq('THE BUG (extra): import #2 ACCUMULATES → 100', amtOf(x2.newSentLog['Z__acc__a1_ספטמבר']), 100);
+  t.eq('extra: second payment is REPORTED as matched (was silent)', x2.matched.filter(m => m.matchType === 'extra_account').length, 1);
+  t.eq('extra: reported amount = the NEW money (50)', x2.matched.filter(m => m.matchType === 'extra_account')[0].amount, 50);
+  t.eq('extra: history record carries the month TOTAL (100)', x2.newPaymentHistory['Z__acc__a1'][0].paidAmount, 100);
+  // extra CLOSED month already paid → still skipped (unchanged)
+  const xC = B.analyzeBankRowsServer([hdr, ['ביטוח מבנה', '50', '25/08/2026', '13']], mapping, extraT(), { 'Z__acc__a1_אוגוסט': 'bank_import_X_50_payer_x' }, '2026-09', { amount: 217 }, new Set(), {}, {}, [], ['2026-08']);
+  t.eq('extra closed+paid month → not written (unchanged)', amtOf(xC.newSentLog['Z__acc__a1_אוגוסט']), 50);
+
+  // merge: UPSERT per account-month (close reads the FIRST record via find())
+  const merged = { 'Z__acc__a1': [{ month: '2026-09', paid: true, amount: 50, paidAmount: 50, date: '2026-09-05', type: 'bank_import' }] };
+  B.mergeExtraPaymentHistory(merged, x2.newPaymentHistory);
+  t.eq('merge: still ONE record for the month', merged['Z__acc__a1'].filter(r => r.month === '2026-09').length, 1);
+  t.eq('merge: that record holds the total (100)', merged['Z__acc__a1'][0].paidAmount, 100);
+  const merged2 = { k: [{ month: '2026-07', paid: true, paidAmount: 50, date: 'd', type: 'bank_import' }] };
+  B.mergeExtraPaymentHistory(merged2, { k: [{ month: '2026-09', paid: true, paidAmount: 50, date: 'd', type: 'bank_import' }] });
+  t.eq('merge: a new month is appended', merged2.k.length, 2);
+  const merged3 = { k: [{ month: '2026-09', paid: true, paidAmount: 50, date: 'd', type: 'bank_import' }] };
+  B.mergeExtraPaymentHistory(merged3, { k: [{ month: '2026-09', paid: true, paidAmount: 50, date: 'd', type: 'bank_import' }] });
+  t.eq('merge: identical record → no-op', merged3.k.length, 1);
+  // end to end through the REAL extra close
+  {
+    const { loadCloseExtra } = require('./test-lib');
+    const closeExtra = loadCloseExtra();
+    const tn = extraT()[0];
+    const d = { paymentHistory: merged };
+    closeExtra(d, tn, '2026-09');
+    t.eq('END-TO-END extra: paid 100 vs 50 → credit 50 (openingDebt -50)', tn.extraAccounts[0].openingDebt, -50);
+  }
+
+  t.section('v2.14.58 — undo of an ACCUMULATED import restores the earlier 230 (Tal\'s live test path)');
+  {
+    const { loadImportUndo } = require('./test-lib');
+    const U = loadImportUndo();
+    const J = o => JSON.parse(JSON.stringify(o));
+    const before = { tenants: tamiT(), closedMonths: ['2026-08'], closedMonthsExtra: [],
+      sentLog: { '9_ספטמבר': 'bank_import_2026-09-02T10:00:00.000Z_230_payer_זהבי תמר' },
+      paymentHistory: { '9': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 230, date: '2026-09-02', type: 'bank', name: 'תמי', payerName: 'x' }] },
+      importedBankFingerprints: ['fp-2.9'] };
+    const patch = { sentLog: { '9_ספטמבר': r2.newSentLog['9_ספטמבר'] },
+      paymentHistory: { '9': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 460, date: '2026-09-28', type: 'bank', name: 'תמי', payerName: 'x' }] },
+      importedBankFingerprints: ['fp-2.9', 'fp-27.9'] };
+    const rec = U.buildImportUndo(before, patch, { source: 'manual', month: '2026-09' });
+    const after = Object.assign(J(before), J(patch), { lastImportUndo: rec });
+    const plan = U.planImportUndo(after);
+    t.eq('undo allowed (no close since)', plan.ok, true);
+    const undone = Object.assign(J(after), plan.patch);
+    t.eq('undo → sentLog back to 230', amtOf(undone.sentLog['9_ספטמבר']), 230);
+    t.eq('undo → history back to 230', undone.paymentHistory['9'][0].paidAmount, 230);
+    t.eq('undo → 27.9 fingerprint removed (re-import sees it as new)', undone.importedBankFingerprints.includes('fp-27.9'), false);
+    t.eq('undo → 2.9 fingerprint kept', undone.importedBankFingerprints.includes('fp-2.9'), true);
+  }
+
+  t.section('v2.14.58 — apply-ambiguous-match: manual_paid parse + history total');
+  const rowKeyOf = h => [h.rowIdx, h.amount, h.date||'', h.payerName||'', h.scope||'main'].join('|');
+  const mkB = (sl) => ({
+    config: { amount: 300 }, closedMonths: [], closedMonthsExtra: [], defaultTariffs: {},
+    tenants: [{ id: 'A', name: 'כהן א', customAmount: 300, openingDebt: 0 }, { id: 'B', name: 'כהן ב', customAmount: 300, openingDebt: 0 }],
+    paymentHistory: {}, sentLog: sl || {}, importedBankFingerprints: [],
+    pendingAmbiguousMatches: [{ rowIdx: 2, amount: 300, date: '10/08/2026', payerName: 'כהן', rawText: 'כהן', scope: 'main',
+      candidates: [{ id: 'A', name: 'כהן א' }, { id: 'B', name: 'כהן ב' }] }]
+  });
+  {
+    const b = mkB({ 'A_אוגוסט': 'manual_paid_2026-08-03T10:00:00.000Z_amount_100' });
+    loadApplyAmbiguous(b, { rowKey: rowKeyOf(b.pendingAmbiguousMatches[0]), tenantId: 'A', decision: 'assign' });
+    t.eq('THE BUG: manual 100 + 300 = 400 (was 2026+300)', amtOf(b.sentLog['A_אוגוסט']), 400);
+    t.eq('history record carries the TOTAL (400, not 300)', b.paymentHistory.A.find(r => r.month === '2026-08').paidAmount, 400);
+  }
+  {
+    const b = mkB({ 'A_אוגוסט': 'bank_import_2026-08-02T10:00:00.000Z_230_payer_x' });
+    loadApplyAmbiguous(b, { rowKey: rowKeyOf(b.pendingAmbiguousMatches[0]), tenantId: 'A', decision: 'assign' });
+    t.eq('bank 230 + 300 → history total 530', b.paymentHistory.A.find(r => r.month === '2026-08').paidAmount, 530);
+  }
+}
+
 async function v2_14_57_async() {
   t.section('v2.14.57 — WA send-one (REAL route) text');
   const { loadSendOneRoute } = require('./test-lib');

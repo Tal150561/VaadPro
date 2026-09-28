@@ -855,9 +855,9 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   // Guards on the write/confirm wiring (these can't be executed without DOM/confirm).
   t.eq('split write is gated behind a confirm', /confirm\(\s*\n?\s*'הקובץ מכיל תשלומים מ-'/.test(app), true);
   t.eq('declining the split writes into the chosen month (em)',
-    /data\.sentLog\[m\.tenant\.id \+ '_' \+ em\]/.test(app), true);
+    /var _sKey = m\.tenant\.id \+ '_' \+ em;\s*[\s\S]{0,200}?data\.sentLog\[_sKey\] =/.test(app), true);
   t.eq('accepting the split writes per-month keys',
-    /data\.sentLog\[m\.tenant\.id \+ '_' \+ hebMk\]/.test(app), true);
+    /var _bKey = m\.tenant\.id \+ '_' \+ hebMk;\s*[\s\S]{0,120}?data\.sentLog\[_bKey\] =/.test(app), true);
   t.eq('the Map is not shipped to showBankResult', /delete m\._buckets;/.test(app), true);
 
   // v2.14.16 — TWO-STEP manual import: detect/preview must NOT commit.
@@ -870,7 +870,7 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('analyzeBankRows does NOT write sentLog itself', /data\.sentLog\[m\.tenant\.id/.test(detect), false);
   t.eq('commitBankImport POSTs /data', /fetch\(API\+'\/data'/.test(commit), true);
   t.eq('commitBankImport persists fingerprints', /data\.importedBankFingerprints\s*=\s*allFp/.test(commit), true);
-  t.eq('commitBankImport writes sentLog', /data\.sentLog\[m\.tenant\.id/.test(commit), true);
+  t.eq('commitBankImport writes sentLog', /data\.sentLog\[(_sKey|_bKey)\] =/.test(commit), true);
   t.eq('commitBankImport clears the pending import', /_pendingBankImport\s*=\s*null/.test(commit), true);
   t.eq('cancelBankImport saves nothing', /function cancelBankImport\(\)\{[\s\S]*?_pendingBankImport\s*=\s*null/.test(app), true);
   t.eq('preview wires אשר ורשום → commit', /onclick="commitBankImport\(\)"/.test(app), true);
@@ -880,7 +880,8 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   // MONTH_NAMES_HE that only exist inside analyzeBankRows) throws ReferenceError here,
   // exactly as it did in the browser. Static regex missed this twice; execution won't.
   {
-    var commitSrc = extractFunctions(app, ['commitBankImport']);
+    // v2.14.58: the commit calls the GLOBAL accumulate helpers (top-level in app.html).
+    var commitSrc = extractFunctions(app, ['sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'commitBankImport']);
     // Capture the approval-panel call args.
     var captured = { approvals: null, toastMsg: null, threw: null };
     var mkTenant = function(id,name,amount){ return { tenant:{id:id,name:name}, amount:amount, count:1, payments:[{payerName:name}], _buckets:new Map([['2026-08',{sum:amount,payerName:name,count:1}]]), _lumpSplit:true }; };
@@ -1711,7 +1712,7 @@ t.section('app.html — v2.14.41 ambiguous-apply ACCUMULATES (no overwrite)');
   // execute the accumulation logic
   function body(name){var re=new RegExp('function '+name+'\\s*\\(','g');var m=re.exec(app);if(!m)return '';var i=app.indexOf('{',m.index);var d=0,j=i;for(;j<app.length;j++){if(app[j]==='{')d++;else if(app[j]==='}'){d--;if(d===0){j++;break;}}}return app.slice(m.index,j);}
   const data = { sentLog: { '3_אוגוסט': 'bank_import_ISO_230_payer_נועה' } };
-  const read = new Function('data', body('_readSentLogAmount') + '\nreturn _readSentLogAmount;')(data);
+  const read = new Function('data', body('sentLogPaidAmountGlobal') + '\n' + body('_readSentLogAmount') + '\nreturn _readSentLogAmount;')(data);
   t.eq('reads existing matched amount (230)', read('3_אוגוסט'), 230);
   t.eq('missing key reads 0', read('99_אוגוסט'), 0);
   // full accumulation: 230 existing + 500 = 730
@@ -2034,6 +2035,101 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: credit netted everywhere box', gd57.includes('יתרת זכות מקוזזת מיד — בכל המסכים'), true);
   t.eq('guide: {שורת_זכות} explained', gd57.includes('קוזזה יתרת זכות: X ₪'), true);
   t.eq('guide: send warning', gd57.includes('שליחה לדייר שאין לו מה לשלם'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.58 — manual import ACCUMULATES onto an earlier import of the same month
+// (Tami: 230 on 2.9 + 230 on 27.9 in two imports must read 460, not 230).
+// ════════════════════════════════════════════════════════════════
+{
+  const { extractFunctions: xf58, readSource: rs58, loadServer: ls58 } = require('./test-lib');
+  const app58 = rs58('public/app.html');
+  const gd58 = rs58('public/vaadpro-guide.js');
+  const S58 = ls58();
+  const G = new Function(xf58(app58, ['sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal'])
+    + '\nreturn { sentLogPaidAmountGlobal, accumulatePaidAmountGlobal };')();
+  const amt = v => { const m = String(v || '').match(/^bank_import_[^_]+_([\d.]+)_payer_/); return m ? parseFloat(m[1]) : null; };
+
+  t.section('v2.14.58 — client parser == server parseSentLogAmount (parity)');
+  [
+    'bank_import_2026-09-02T10:00:00.000Z_230_payer_זהבי תמר',
+    'manual_paid_2026-09-28T10:00:00.000Z_amount_460',
+    'manual_paid_2026-09-28T10:00:00.000Z_amount_99.5',
+    'bank_import_X_0.1_payer_x',
+    'sent_2026-09-01T10:00:00.000Z',
+    '', undefined
+  ].forEach(v => t.eq('parity: ' + String(v).slice(0, 40), G.sentLogPaidAmountGlobal(v), S58.parseSentLogAmount(v) || 0));
+  t.eq('manual_paid is NOT read as the ISO year', G.sentLogPaidAmountGlobal('manual_paid_2026-09-28T10:00:00.000Z_amount_230'), 230);
+  t.eq('accumulate 230 + 230 = 460', G.accumulatePaidAmountGlobal('bank_import_X_230_payer_x', 230), 460);
+
+  // EXECUTE the real commitBankImport on an OPEN month
+  const runCommit = (P, sentLog, closed) => {
+    const src = xf58(app58, ['sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'commitBankImport']);
+    const scope = {
+      window: { _pendingBankImport: P, _closedMonthApprovals: null },
+      data: { closedMonths: closed || [], sentLog: sentLog, importedBankFingerprints: [] },
+      VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+      API: '', fetch: function(){ return Promise.resolve({ json:function(){ return Promise.resolve({ok:true}); } }); },
+      toast: function(){}, render: function(){}, showBankResult: function(){}, resetDropZone: function(){},
+      renderClosedMonthApprovals: function(){}, loadData: function(){ return Promise.resolve(); },
+      localStorage: { getItem:function(){return 't';} },
+      document: { getElementById:function(){return null;}, querySelector:function(){return null;}, createElement:function(){return {style:{},appendChild:function(){}}; }, body:{appendChild:function(){}} },
+      confirm: function(){ return true; },
+      console: console
+    };
+    const fn = new Function(Object.keys(scope).join(','), src + '\n; return commitBankImport;')
+      .apply(null, Object.keys(scope).map(k => scope[k]));
+    fn();
+    return scope.data.sentLog;
+  };
+  const hebOfMk = mk => ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'][parseInt(mk.split('-')[1]) - 1];
+  const basePending = (matched, splitMonths) => ({
+    matched, unmatched: [], alreadyImportedSkips: [], dupWarnings: [], newFp: [], priorFp: [],
+    em: 'ספטמבר', selectedMonthKey: '2026-09', hebOfMk, splitMonths: splitMonths || null,
+    total: 1, ta: 0, fileName: 'x.xls', filterByAmount: false, ambiguousRows: []
+  });
+
+  t.section('v2.14.58 — commitBankImport ACCUMULATES (executed)');
+  {
+    const sl = { '9_ספטמבר': 'bank_import_2026-09-02T10:00:00.000Z_230_payer_זהבי תמר' };
+    const m = { tenant: { id: 9, name: 'תמי' }, amount: 230, count: 1, payments: [{ payerName: 'זהבי תמר' }],
+                _buckets: new Map([['2026-09', { sum: 230, payerName: 'זהבי תמר', count: 1 }]]), _lumpSplit: false };
+    const out = runCommit(basePending([m]), sl, ['2026-08']);
+    t.eq('THE BUG (Tami): single-month write 230 + 230 = 460', amt(out['9_ספטמבר']), 460);
+  }
+  {
+    const out = runCommit(basePending([{ tenant: { id: 5, name: 'חדש' }, amount: 230, count: 1, payments: [{ payerName: 'x' }],
+      _buckets: new Map([['2026-09', { sum: 230, payerName: 'x', count: 1 }]]), _lumpSplit: false }]), {}, []);
+    t.eq('no earlier payment → 230 (unchanged)', amt(out['5_ספטמבר']), 230);
+  }
+  {
+    const out = runCommit(basePending([{ tenant: { id: 5, name: 'r' }, amount: 230, count: 1, payments: [{ payerName: 'x' }],
+      _buckets: new Map([['2026-09', { sum: 230, payerName: 'x', count: 1 }]]), _lumpSplit: false }]),
+      { '5_ספטמבר': 'sent_2026-09-01T10:00:00.000Z' }, []);
+    t.eq('on top of a reminder (sent_) → 230', amt(out['5_ספטמבר']), 230);
+  }
+  {
+    // lump split over two OPEN months: Aug empty, Sep already 230
+    const m = { tenant: { id: 7, name: 'ל' }, amount: 460, count: 1, payments: [{ payerName: 'x' }],
+                _buckets: new Map([['2026-08', { sum: 230, payerName: 'x', count: 1 }], ['2026-09', { sum: 230, payerName: 'x', count: 1 }]]), _lumpSplit: true };
+    const out = runCommit(basePending([m], ['2026-08', '2026-09']), { '7_ספטמבר': 'bank_import_X_230_payer_x' }, []);
+    t.eq('bucket write: empty month → 230', amt(out['7_אוגוסט']), 230);
+    t.eq('bucket write: month with 230 → 460', amt(out['7_ספטמבר']), 460);
+  }
+
+  t.section('v2.14.58 — wiring, preview hint, guide');
+  const commit58 = app58.slice(app58.indexOf('function commitBankImport(){'), app58.indexOf('function cancelBankImport'));
+  t.eq('commit: no bare overwrite with m.amount', /'_' \+ m\.amount \+ '_payer_'/.test(commit58), false);
+  t.eq('commit: no bare overwrite with b.sum', /'_' \+ b\.sum \+ '_payer_'/.test(commit58), false);
+  t.eq('commit: single write uses accumulatePaidAmountGlobal', /accumulatePaidAmountGlobal\(data\.sentLog\[_sKey\], m\.amount\)/.test(commit58), true);
+  t.eq('commit: bucket write uses accumulatePaidAmountGlobal', /accumulatePaidAmountGlobal\(data\.sentLog\[_bKey\], b\.sum\)/.test(commit58), true);
+  t.eq('_readSentLogAmount uses the shared parser', /function _readSentLogAmount\(key\)\{[\s\S]{0,120}?sentLogPaidAmountGlobal/.test(app58), true);
+  t.eq('old manual_paid year-grabbing regex is gone', app58.includes('manual_paid_([\\d.]+)'), false);
+  t.eq('analyze: matched carries priorPaid', /priorPaid:_priorPaid/.test(app58), true);
+  t.eq('preview: shows "+X קיים = Y" hint', app58.includes("(+'+m.priorPaid.toLocaleString()+'₪ קיים = '"), true);
+  t.eq('guide: accumulate box present', gd58.includes('➕ דייר ששילם כמה פעמים באותו חודש'), true);
+  t.eq('guide: explains the preview hint', gd58.includes('(+230₪ קיים = 460₪)'), true);
+  t.eq('guide: legacy fix path (undo + re-import)', gd58.includes('ביטול ייבוא אחרון וקליטה חוזרת'), true);
 }
 
 process.exit(t.done() ? 1 : 0);

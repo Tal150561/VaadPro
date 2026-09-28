@@ -1820,7 +1820,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.57';
+const HTML_VERSION = '2.14.58';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3671,6 +3671,23 @@ function bankRowFingerprintGlobal(dateVal, amount, nameOrDesc, ref) {
   return rr ? (dd+'|'+aa+'|'+nn+'|'+rr) : (dd+'|'+aa+'|'+nn);
 }
 
+// v2.14.58 — how much a sentLog VALUE already records as paid (bank_import /
+// manual_paid); reminders (sent_) and empty → 0. MUST match server
+// parseSentLogAmount. (The old inline manual_paid regex read the ISO year, not the amount.)
+function sentLogPaidAmountGlobal(val){
+  var s = String(val||'');
+  var m = s.indexOf('bank_import')===0 ? s.match(/^bank_import_[^_]+_([\d.]+)_payer_/)
+        : s.indexOf('manual_paid')===0 ? s.match(/_amount_([\d.]+)/) : null;
+  return m ? (parseFloat(m[1])||0) : 0;
+}
+// v2.14.58 — ACCUMULATE a new bank amount onto the same tenant-month (sentLog has
+// ONE key per tenant-month; `=` overwrote — Tami 230 on 2.9 + 230 on 27.9 in two
+// imports ended as 230). Mirrors server accumulatePaidAmount. Rows already imported
+// never reach the write (fingerprint skip), so nothing is counted twice.
+function accumulatePaidAmountGlobal(prevVal, addAmount){
+  return Math.round((sentLogPaidAmountGlobal(prevVal) + (parseFloat(addAmount)||0)) * 100) / 100;
+}
+
 // ── סגירת חודש קודם ידנית (v2.14.8) ─────────────────────────────
 // מפעיל את צבירת החוב של החודש הקודם על פי דרישה, במקום לחכות ל-cron של
 // ה-1 לחודש. השרת מוגן idempotency (closedMonths/closedMonthsExtra), כך
@@ -5205,9 +5222,24 @@ function splitOverpayAcrossMonths(buckets, opts) {
       // the month charge instead of the bucket sum, which disagree in the
       // split+closed edge (e.g. Elad: July open→written 100, August closed→panel
       // 100). One source of truth avoids that ambiguity.
+      // v2.14.58: what this month ALREADY holds from an earlier import/manual mark —
+      // the commit ADDS to it. Preview-only hint ("+230 קיים = 460"). Closed months
+      // go to the approval panel, so they contribute nothing here.
+      var _priorPaid = 0;
+      if (!_closedMain.has(selectedMonthKey)) {
+        if (grouped.buckets.size > 1) {
+          grouped.buckets.forEach(function(_b, mk){
+            if (!_closedMain.has(mk)) _priorPaid += sentLogPaidAmountGlobal((data.sentLog||{})[tenant.id + '_' + hebOfMk(mk)]);
+          });
+        } else {
+          _priorPaid = sentLogPaidAmountGlobal((data.sentLog||{})[tenant.id + '_' + em]);
+        }
+      }
+      _priorPaid = Math.round(_priorPaid * 100) / 100;
       matched.push({
         tenant:tenant,
         amount:totalAmount,
+        priorPaid:_priorPaid,
         count:tenantMatches.length,
         matchType:tenantMatches[0].matchType,
         payments:tenantMatches,  // כל התשלומים עם תאריך וסכום
@@ -5342,8 +5374,10 @@ function commitBankImport(){
           return;
         }
         var hebMk = hebOfMk(mk);
-        data.sentLog[m.tenant.id + '_' + hebMk] =
-          'bank_import_' + new Date().toISOString() + '_' + b.sum + '_payer_' + (b.payerName || payerName);
+        var _bKey = m.tenant.id + '_' + hebMk;
+        // v2.14.58: ADD to an earlier import of the same month (never overwrite).
+        data.sentLog[_bKey] =
+          'bank_import_' + new Date().toISOString() + '_' + accumulatePaidAmountGlobal(data.sentLog[_bKey], b.sum) + '_payer_' + (b.payerName || payerName);
       });
     } else {
       // Single-month write. If that single month is closed, route to approval.
@@ -5353,8 +5387,11 @@ function commitBankImport(){
         _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: singleMk, scope: 'main',
                                 charge: m.amount, payerName: payerName, note: _bankNote, prevDebt: _prevDebt });
       } else {
-        data.sentLog[m.tenant.id + '_' + em] =
-          'bank_import_' + new Date().toISOString() + '_' + m.amount + '_payer_' + payerName;
+        var _sKey = m.tenant.id + '_' + em;
+        // v2.14.58: ADD to an earlier import of the same month (never overwrite) —
+        // the Tami bug: 230 (2.9) + 230 (27.9) in two imports must read 460.
+        data.sentLog[_sKey] =
+          'bank_import_' + new Date().toISOString() + '_' + accumulatePaidAmountGlobal(data.sentLog[_sKey], m.amount) + '_payer_' + payerName;
       }
     }
     delete m._buckets;
@@ -5374,9 +5411,8 @@ function commitBankImport(){
   // the last amount. We must ACCUMULATE: read the current amount at the key (from a
   // matched write or a prior ambiguous row) and ADD this row's amount before writing.
   function _readSentLogAmount(key){
-    var v = String((data.sentLog||{})[key] || '');
-    var mm = v.match(/bank_import_[^_]+_([\d.]+)_/) || v.match(/manual_paid_([\d.]+)/);
-    return mm ? (parseFloat(mm[1]) || 0) : 0;
+    // v2.14.58: shared parser (the old manual_paid regex read the ISO year).
+    return sentLogPaidAmountGlobal((data.sentLog||{})[key]);
   }
   (P.ambiguousRows || []).forEach(function(r){
     if (r._decision === 'assign' && r._assignTo != null) {
@@ -5819,7 +5855,10 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
         : '';
       h+='<div class="match-row">'
         +'<span>👤 '+m.tenant.name+multiInfo+'</span>'
-        +'<span style="color:var(--accent);font-weight:700;">'+m.amount.toLocaleString()+'₪ ✓ '+icon+'</span>'
+        +'<span style="color:var(--accent);font-weight:700;">'+m.amount.toLocaleString()+'₪ ✓ '+icon
+        // v2.14.58: an earlier payment for the same month is ADDED to, not replaced.
+        +(m.priorPaid>0 ? ' <span class="bank-prior-paid" title="כבר נרשם תשלום לחודש זה בקליטה קודמת — הסכום החדש מתווסף אליו" style="color:var(--text2);font-weight:400;font-size:0.8rem;">(+'+m.priorPaid.toLocaleString()+'₪ קיים = '+(Math.round((m.priorPaid+m.amount)*100)/100).toLocaleString()+'₪)</span>' : '')
+        +'</span>'
         +'</div>';
     });
   }
