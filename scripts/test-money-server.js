@@ -3398,4 +3398,155 @@ async function v2_14_57_async() {
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.62 — month-close CONSUMES a credit instead of wiping it
+// (Tal, 2026-09-30: a member who prepaid a year became a debtor at the
+// first close without a payment). REAL closeMonthUnpaidForBuilding +
+// closeExtraAccountsUnpaid + /api/apply-closed-month-payment.
+// ════════════════════════════════════════════════════════════════
+{
+  const { loadCloseMonth, loadCloseExtra, loadApplyClosedMonth } = require('./test-lib');
+  const closeExtra = loadCloseExtra();
+  const BIa = a => 'bank_import_2026-09-03T10:00:00.000Z_' + a + '_payer_x';
+  const mk = over => Object.assign({
+    config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: ['2026-08'], closedMonthsExtra: ['2026-08'], sentLog: {}, paymentHistory: {}
+  }, over);
+  const close = (d, key, heb) => { loadCloseMonth(d).runForBuilding(d, key, heb); d.tenants.forEach(tn => closeExtra(d, tn, key)); };
+
+  t.section('v2.14.62 — THE BUG: prepaid a year (12×230) in September');
+  {
+    const d = mk({
+      tenants: [{ id: 1, name: 'מראש', openingDebt: 0 }],
+      paymentHistory: { '1': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 2760, type: 'bank' }] },
+      sentLog: { '1_ספטמבר': BIa(2760) }
+    });
+    close(d, '2026-09', 'ספטמבר');
+    t.eq('after Sep close: credit 2530 (overpay branch, unchanged)', d.tenants[0].openingDebt, -2530);
+    close(d, '2026-10', 'אוקטובר');
+    t.eq('after Oct close (nothing paid): credit 2300 — was: DEBT 230', d.tenants[0].openingDebt, -2300);
+    close(d, '2026-11', 'נובמבר');
+    t.eq('after Nov close: credit 2070 — was: debt 460', d.tenants[0].openingDebt, -2070);
+    t.eq('getCreditBalance = 2070', S.getCreditBalance(d, '1'), 2070);
+    t.eq('calcTotalDebt = 0', S.calcTotalDebt(d, '1', '2026-12'), 0);
+    for (let m = 12; m <= 20; m++) {
+      const y = m <= 12 ? 2026 : 2027, mm = m <= 12 ? m : m - 12;
+      close(d, y + '-' + String(mm).padStart(2, '0'), S.HEBREW_MONTHS[mm - 1]);
+    }
+    t.eq('after 11 more closes (Oct..Aug): credit fully used → 0', d.tenants[0].openingDebt, 0);
+    close(d, '2027-09', 'ספטמבר');
+    t.eq('13th month unpaid → normal debt 230', d.tenants[0].openingDebt, 230);
+  }
+  t.section('v2.14.62 — main account: every branch');
+  {
+    const d = mk({ tenants: [{ id: 1, openingDebt: -100 }] });
+    close(d, '2026-09', 'ספטמבר');
+    t.eq('credit 100 < charge 230 → debt 130', d.tenants[0].openingDebt, 130);
+    const d2 = mk({ tenants: [{ id: 1, openingDebt: 230 }] });
+    close(d2, '2026-09', 'ספטמבר');
+    t.eq('REGRESSION: debtor 230 unpaid → 460 (unchanged)', d2.tenants[0].openingDebt, 460);
+    const d3 = mk({ tenants: [{ id: 1, openingDebt: 0 }] });
+    close(d3, '2026-09', 'ספטמבר');
+    t.eq('REGRESSION: clean 0 unpaid → 230 (unchanged)', d3.tenants[0].openingDebt, 230);
+    const d4 = mk({ tenants: [{ id: 1, openingDebt: -500 }],
+      paymentHistory: { '1': [{ month: '2026-09', paid: false, amount: 230, paidAmount: 230, type: 'wa_sent' }] } });
+    close(d4, '2026-09', 'ספטמבר');
+    t.eq('unpaid-RECORD branch: credit 500 → 270', d4.tenants[0].openingDebt, -270);
+    t.eq('unpaid-record branch still deletes the record', d4.paymentHistory['1'].length, 0);
+    const d5 = mk({ tenants: [{ id: 1, openingDebt: -500, customAmount: 350 }] });
+    close(d5, '2026-09', 'ספטמבר');
+    t.eq('personal fee 350: credit 500 → 150', d5.tenants[0].openingDebt, -150);
+    const d6 = mk({ tenants: [{ id: 1, openingDebt: -500, suspended: true }] });
+    close(d6, '2026-09', 'ספטמבר');
+    t.eq('suspended: credit untouched', d6.tenants[0].openingDebt, -500);
+    const d7 = mk({ tenants: [{ id: 1, openingDebt: -500 }], closedMonths: ['2026-08', '2026-09'] });
+    close(d7, '2026-09', 'ספטמבר');
+    t.eq('idempotent: already-closed month → credit untouched', d7.tenants[0].openingDebt, -500);
+    const d8 = mk({ tenants: [{ id: 1, openingDebt: -500 }],
+      paymentHistory: { '1': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 100, type: 'manual' }] },
+      sentLog: { '1_ספטמבר': 'manual_paid_2026-09-05T10:00:00.000Z_amount_100' } });
+    close(d8, '2026-09', 'ספטמבר');
+    t.eq('partial 100/230 on credit 500 → 370 (branch never clamped)', d8.tenants[0].openingDebt, -370);
+  }
+  t.section('v2.14.62 — extra accounts (main == extra)');
+  {
+    const d = mk({ tenants: [{ id: 1, openingDebt: 0, extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, openingDebt: -1100 }] }] });
+    close(d, '2026-09', 'ספטמבר');
+    t.eq('no record: credit 1100 → 1000 — was: DEBT 100', d.tenants[0].extraAccounts[0].openingDebt, -1000);
+    d.paymentHistory['1__acc__e1'] = [{ month: '2026-10', paid: false, amount: 100, type: 'wa_sent' }];
+    close(d, '2026-10', 'אוקטובר');
+    t.eq('unpaid-record branch: 1000 → 900', d.tenants[0].extraAccounts[0].openingDebt, -900);
+    const d2 = mk({ tenants: [{ id: 1, openingDebt: 0, extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, openingDebt: 50 }] }] });
+    close(d2, '2026-09', 'ספטמבר');
+    t.eq('REGRESSION: extra debtor 50 → 150 (unchanged)', d2.tenants[0].extraAccounts[0].openingDebt, 150);
+    const d3 = mk({ tenants: [{ id: 1, openingDebt: 0, extraAccounts: [{ id: 'e1', label: 'מים', amount: 90, frequency: 'quarterly', openingDebt: -200 }] }] });
+    close(d3, '2026-10', 'אוקטובר');
+    t.eq('quarterly, non-billing month: credit untouched', d3.tenants[0].extraAccounts[0].openingDebt, -200);
+    const d4 = mk({ tenants: [{ id: 1, openingDebt: 0, extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, openingDebt: -300, suspended: true }] }] });
+    close(d4, '2026-09', 'ספטמבר');
+    t.eq('suspended extra: credit untouched', d4.tenants[0].extraAccounts[0].openingDebt, -300);
+  }
+  t.section('v2.14.62 — a late payment for a month closed on top of a credit restores it');
+  {
+    const d = mk({ tenants: [{ id: 'R', name: 'ר', customAmount: 230, openingDebt: -2530 }], paymentHistory: { R: [] } });
+    close(d, '2026-09', 'ספטמבר');
+    t.eq('Sep closed unpaid on credit 2530 → 2300', d.tenants[0].openingDebt, -2300);
+    const r = loadApplyClosedMonth(d, { tenantId: 'R', month: '2026-09', scope: 'main', paidAmount: 230, payerName: 'ר' });
+    t.eq('late Sep payment applied', r.result && r.result.applied, true);
+    t.eq('credit back to 2530 (no floor, no double count)', d.tenants[0].openingDebt, -2530);
+    const r2 = loadApplyClosedMonth(d, { tenantId: 'R', month: '2026-09', scope: 'main', paidAmount: 230 });
+    t.eq('second approval is a NO-OP (receipt)', [r2.result.applied, d.tenants[0].openingDebt], [false, -2530]);
+  }
+  t.section('v2.14.62 — screens agree after the close (consume path)');
+  {
+    const d = mk({
+      tenants: [{ id: 1, name: 'מראש', openingDebt: 0 }],
+      paymentHistory: { '1': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 2760, type: 'bank' }] },
+      sentLog: { '1_ספטמבר': BIa(2760) }
+    });
+    close(d, '2026-09', 'ספטמבר'); close(d, '2026-10', 'אוקטובר');
+    const sp = S.splitCurrentMonthDebt(d, d.tenants[0], '2026-11', 'נובמבר', null);
+    t.eq('November open: owedNow 0 (credit covers)', sp.owedNow, 0);
+    t.eq('November open: creditLeft 2070 after this month', sp.creditLeft, 2070);
+  }
+}
+
+
+// v2.14.62 — scripts/check-credit-at-risk.js (read-only) — EXECUTED on a temp DATA_DIR
+{
+  const cp = require('child_process'), fs = require('fs'), os = require('os'), path = require('path');
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'vpcr-'));
+  const b = { config: { amount: 230, buildingName: 'בדיקה' }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: ['2026-07', '2026-08'],
+    tenants: [
+      { id: 1, name: 'רוני', openingDebt: -239 },
+      { id: 2, name: 'שילם', openingDebt: -500 },
+      { id: 3, name: 'חייב', openingDebt: 230 },
+      { id: 4, name: 'מושהה', openingDebt: -300, suspended: true },
+      { id: 5, name: 'עבר', openingDebt: 230, extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, openingDebt: -400 }] }],
+    paymentHistory: { '2': [{ month: '2026-09', paid: true, amount: 230, paidAmount: 230, type: 'bank' }],
+      '5': [{ month: '2026-07', paid: true, amount: 230, paidAmount: 690, type: 'bank', creditBanked: true, debtOffset: { newCredit: 460 } }] },
+    sentLog: { '2_ספטמבר': 'bank_import_2026-09-03T10:00:00.000Z_230_payer_x' } };
+  const file = path.join(dir, 'B1.json');
+  fs.writeFileSync(file, JSON.stringify(b));
+  fs.writeFileSync(path.join(dir, 'users.json'), '[]');
+  const before = fs.readFileSync(file, 'utf8');
+  const out = cp.execFileSync('node', [path.join(__dirname, 'check-credit-at-risk.js'), 'B1', '--month', '2026-09'],
+    { env: Object.assign({}, process.env, { DATA_DIR: dir }), encoding: 'utf8' });
+  t.section('v2.14.62 — check-credit-at-risk.js');
+  t.eq('READ-ONLY: data file unchanged', fs.readFileSync(file, 'utf8'), before);
+  t.eq('רוני: old wipes to debt 230, fixed keeps credit 9', out.includes('רוני · ראשי: היום זכות 239 → בקוד הישן חוב 230 | בקוד המתוקן זכות 9'), true);
+  t.eq('extra account listed (credit 400 → old debt 100 / fixed credit 300)', out.includes('עבר · חשמל: היום זכות 400 → בקוד הישן חוב 100 | בקוד המתוקן זכות 300'), true);
+  t.eq('member who paid Sep NOT listed', out.includes('שילם ·'), false);
+  t.eq('plain debtor NOT listed', out.includes('חייב ·'), false);
+  t.eq('suspended NOT listed', out.includes('מושהה ·'), false);
+  t.eq('past-wipe heuristic flags "עבר"', out.includes('🔎 עבר: נצברה זכות 460 בסגירת 2026-07'), true);
+  t.eq('summary counts', out.includes('סיכום: 1 בניינים · 2 חשבונות שהסגירה הבאה משפיעה עליהם · 1 חשדות מהעבר.'), true);
+  const all = cp.execFileSync('node', [path.join(__dirname, 'check-credit-at-risk.js'), '--all', '--month', '2026-09'],
+    { env: Object.assign({}, process.env, { DATA_DIR: dir }), encoding: 'utf8' });
+  t.eq('--all skips non-building files (users.json)', all.includes('סיכום: 1 בניינים'), true);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 (async () => { await v2_14_57_async(); process.exit(t.done() ? 1 : 0); })();

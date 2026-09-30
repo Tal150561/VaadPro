@@ -5586,8 +5586,13 @@ function closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth) {
         if (existing) {
           // רשומה קיימת — אם לא שולמה, צבור ל-openingDebt ומחק את הרשומה
           if (!existing.paid) {
+            // ⭐ v2.14.62 — CREDIT IS CONSUMED, NOT WIPED. The old `Math.max(0, openingDebt)`
+            // erased an existing credit (negative openingDebt) the first time a month closed
+            // unpaid, and opened a debt instead (prepaid member: credit 2530 → debt 230).
+            // The charge is now deducted from the credit; for openingDebt >= 0 the result is
+            // byte-for-byte the old one. Partial/overpay branches never clamped.
             tenant.openingDebt = Math.round(
-              (Math.max(0, parseFloat(tenant.openingDebt) || 0) + amount) * 100
+              ((parseFloat(tenant.openingDebt) || 0) + amount) * 100
             ) / 100;
             d.paymentHistory[tid] = d.paymentHistory[tid].filter(r => r.month !== prevKey);
             changed = true;
@@ -5659,8 +5664,13 @@ function closeMonthUnpaidForBuilding(d, prevKey, prevHebMonth) {
           }
         } else {
           // אין רשומה כלל — הדייר לא שילם ולא נרשם → צבור ל-openingDebt
+          // ⭐ v2.14.62 — CREDIT IS CONSUMED, NOT WIPED. The old `Math.max(0, openingDebt)`
+          // erased an existing credit (negative openingDebt) the first time a month closed
+          // unpaid, and opened a debt instead (prepaid member: credit 2530 → debt 230).
+          // The charge is now deducted from the credit; for openingDebt >= 0 the result is
+          // byte-for-byte the old one. Partial/overpay branches never clamped.
           tenant.openingDebt = Math.round(
-            (Math.max(0, parseFloat(tenant.openingDebt) || 0) + amount) * 100
+            ((parseFloat(tenant.openingDebt) || 0) + amount) * 100
           ) / 100;
           changed = true;
           closed++;
@@ -8860,8 +8870,9 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
     if (existing) {
       if (!existing.paid) {
         // Unpaid — accumulate to account's openingDebt
+        // ⭐ v2.14.62 — credit consumed, not wiped (main == extra). See closeMonthUnpaidForBuilding.
         acc.openingDebt = Math.round(
-          (Math.max(0, parseFloat(acc.openingDebt) || 0) + amount) * 100
+          ((parseFloat(acc.openingDebt) || 0) + amount) * 100
         ) / 100;
         d.paymentHistory[phKey] = d.paymentHistory[phKey].filter(r => r.month !== prevKey);
         closed++;
@@ -8877,8 +8888,9 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
       }
     } else {
       // No record — unpaid, accumulate
+      // ⭐ v2.14.62 — credit consumed, not wiped (main == extra). See closeMonthUnpaidForBuilding.
       acc.openingDebt = Math.round(
-        (Math.max(0, parseFloat(acc.openingDebt) || 0) + amount) * 100
+        ((parseFloat(acc.openingDebt) || 0) + amount) * 100
       ) / 100;
       closed++;
     }

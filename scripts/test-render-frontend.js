@@ -2551,4 +2551,14 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: popup blocker hint', gd61.includes('חלון קופץ'), true);
 }
 
+// v2.14.62 — guide explains credit consumption at month-close
+{
+  const gd62 = readSource('public/vaadpro-guide.js');
+  t.section('v2.14.62 — guide: credit at month-close');
+  t.eq('guide: credit-at-close box', gd62.includes('🗓️ מה קורה ליתרת זכות בסגירת החודש'), true);
+  t.eq('guide: prepaid example 2,760 → 2,530 → 2,300 → 2,070', gd62.includes('זכות 2,530, אחרי אוקטובר 2,300, אחרי נובמבר 2,070'), true);
+  t.eq('guide: extra accounts too', gd62.includes('אותו כלל חל על <strong>חשבונות נוספים</strong>'), true);
+  t.eq('guide: fixed-in-2.14.62 note', gd62.includes('🛠️ תוקן בגרסה 2.14.62'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
