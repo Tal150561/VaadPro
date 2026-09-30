@@ -2277,8 +2277,8 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
 {
   const app60 = readSource('public/app.html');
   const gd60  = readSource('public/vaadpro-guide.js');
-  const cs = app60.indexOf('const CR_HEB'), ce = app60.indexOf('let crEntered');
-  if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crEntered) — fix, do NOT delete'); process.exit(1); }
+  const cs = app60.indexOf('const CR_HEB'), ce = app60.indexOf('let crMembersOpen');   // v2.14.61: slice now ends at crMembersOpen
+  if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crMembersOpen) — fix, do NOT delete'); process.exit(1); }
   const head60 = app60.slice(cs, app60.indexOf('\n', ce) + 1);
   const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel',
     'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc']);
@@ -2395,6 +2395,160 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: similar labels box', gd60.includes('⚠️ חשבונות בשמות דומים'), true);
   t.eq('guide: collection "בבנייה" box gone from reports section', gd60.slice(gd60.indexOf('vpg-a-reports-collection'), gd60.indexOf('vpg-a-reports-expenses')).includes('🛠️ בבנייה'), false);
   global.__crRuns = runs;
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.61 — month-picker icon, members collapse, print / Excel (EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const app61 = readSource('public/app.html');
+  const gd61  = readSource('public/vaadpro-guide.js');
+  const head61 = app61.slice(app61.indexOf('const CR_HEB'), app61.indexOf('\n', app61.indexOf('let crMembersOpen')) + 1);
+  const fns61 = extractFunctions(app61, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crRangeText',
+    'crRender', 'crMemberHtml', 'crToggleMembers', 'crFetchFull', 'crBuildPrintHtml', 'crPrint', 'crBuildSheets', 'crExportExcel', 'esc']);
+  const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה', org: 'קיבוץ' };
+  const mkReport = n => {
+    const members = [];
+    for (let i = 0; i < n; i++) members.push({ id: i + 1, name: 'חבר ' + i, unit: String(i), suspended: false, charged: 230, paid: 230, covered: 230, excess: 0, gap: 0, startMonth: '2026-07',
+      rows: [{ month: '2026-09', account: 'main', label: null, charged: 230, paid: 230, covered: 230, gap: 0, source: 'bank', status: 'paid' }] });
+    members[0].name = '<b>x</b>';
+    members[0].rows.push({ month: '2026-09', account: 'x:חשמל', label: 'חשמל', charged: 100, paid: 40, covered: 40, gap: 60, source: 'manual', status: 'partial' });
+    return {
+      range: { from: '2026-07', to: '2026-09', requestedFrom: '2026-07', requestedTo: '2026-09', months: ['2026-07', '2026-08', '2026-09'] },
+      buildingStart: '2026-07', openMonth: '2026-09', closedInRange: [],
+      accounts: [{ key: 'main', label: null, charged: 999, paid: 888, covered: 777, excess: 0, gap: 222, pct: 77.8, bank: 500, manual: 388, members: n, payers: n, debtors: 0, exempt: 0 }],
+      totals: { charged: 999, paid: 888, covered: 777, excess: 0, gap: 222, pct: 77.8 }, monthly: [], warnings: [], members, member: null
+    };
+  };
+  function load61(opts) {
+    opts = opts || {};
+    const els = {
+      crOutput: { innerHTML: '' }, crStatus: { textContent: '' },
+      crPrintDetail: { checked: !!opts.detail }
+    };
+    const order = [], written = [], files = [], toasts = [];
+    const win = opts.blocked ? null : { closed: false, document: { write: h => written.push(h), open() {}, close() {} }, close() { this.closed = true; } };
+    const ctx = {
+      document: { getElementById: id => els[id] || null, querySelectorAll: () => [] },
+      t: k => LBL[k] || k, API: '/api', toast: (m, ty) => toasts.push(m),
+      getBuildingInfo: () => ({ buildingName: opts.building || 'נווה ים' }),
+      window: { open: () => { order.push('open'); return win; } },
+      fetch: async url => { order.push('fetch:' + url); const r = opts.response || { status: 200, body: mkReport(3) };
+        return { status: r.status, ok: r.status < 300, json: async () => r.body }; },
+      XLSX: opts.noXlsx ? undefined : {
+        utils: { book_new: () => ({ Sheets: {}, SheetNames: [] }), aoa_to_sheet: a => ({ aoa: a }),
+                 book_append_sheet: (wb, ws, n) => { wb.SheetNames.push(n); wb.Sheets[n] = ws; } },
+        writeFile: (wb, name) => files.push({ wb, name })
+      },
+      encodeURIComponent, Promise
+    };
+    const setLast = opts.last === undefined ? mkReport(3) : opts.last;
+    const mod = runInSandbox(head61 + fns61 + '\ncrLast = __last;\nmodule.exports={crRender,crToggleMembers,crBuildPrintHtml,crPrint,crBuildSheets,crExportExcel,crMoney,getOpen:()=>crMembersOpen,setOpen:v=>{crMembersOpen=v;}};',
+      Object.assign(ctx, { __last: setLast }));
+    return { mod, els, order, written, files, toasts, win };
+  }
+
+  t.section('v2.14.61 — month/date picker icon visible on the dark theme');
+  t.eq('CSS inverts the calendar icon (month + date)', app61.includes('input[type=month]::-webkit-calendar-picker-indicator,input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);'), true);
+
+  t.section('v2.14.61 — members table collapse / expand');
+  {
+    const A = load61(); A.mod.crRender(mkReport(5));
+    t.eq('≤ 15 members → open by default', A.els.crOutput.innerHTML.includes('id="crMembersBody" style="display:block;"'), true);
+    t.eq('button says "▼ כווץ" when open', A.els.crOutput.innerHTML.includes('>▼ כווץ</button>'), true);
+    t.eq('header shows the member count', A.els.crOutput.innerHTML.includes('👥 לפי חבר (5)'), true);
+    const B = load61(); B.mod.crRender(mkReport(40));
+    t.eq('> 15 members → collapsed by default', B.els.crOutput.innerHTML.includes('id="crMembersBody" style="display:none;"'), true);
+    t.eq('collapsed button says "▶ הרחב" + aria-expanded=false', B.els.crOutput.innerHTML.includes('aria-expanded="false">▶ הרחב</button>'), true);
+    // toggle on a fake DOM: body + button
+    const body = { style: { display: 'none' } }, btn = { textContent: '▶ הרחב', attrs: {}, setAttribute(k, v) { this.attrs[k] = v; } };
+    B.els.crMembersBody = body; B.els.crMembersToggle = btn;
+    B.mod.crToggleMembers();
+    t.eq('toggle opens body', body.style.display, 'block');
+    t.eq('toggle relabels button + aria', [btn.textContent, btn.attrs['aria-expanded']], ['▼ כווץ', 'true']);
+    t.eq('choice remembered', B.mod.getOpen(), true);
+    B.mod.crRender(mkReport(40));
+    t.eq('re-render keeps the user choice (open even with 40)', B.els.crOutput.innerHTML.includes('id="crMembersBody" style="display:block;"'), true);
+    B.mod.setOpen(false); B.mod.crRender(mkReport(3));
+    t.eq('user closed → stays closed even for a small list', B.els.crOutput.innerHTML.includes('id="crMembersBody" style="display:none;"'), true);
+    t.eq('filter input lives INSIDE the collapsible body', /id="crMembersBody"[\s\S]*id="crMemberFilter"/.test(B.els.crOutput.innerHTML), true);
+    t.eq('export bar rendered', ['id="crPrintBtn"', 'id="crExcelBtn"', 'id="crPrintDetail"'].every(x => A.els.crOutput.innerHTML.includes(x)), true);
+  }
+
+  t.section('v2.14.61 — print HTML (pure formatting of the server payload)');
+  {
+    const P = load61();
+    const r = mkReport(3);
+    const h = P.mod.crBuildPrintHtml(r, { building: 'נווה <ים>', printedAt: '30.9.2026', detail: false });
+    t.eq('standalone RTL document', h.startsWith('<!DOCTYPE html><html dir="rtl" lang="he">'), true);
+    t.eq('building name escaped in title + h1', h.includes('דוח גבייה — נווה &lt;ים&gt;') && !h.includes('<ים>'), true);
+    t.eq('range + printed date', h.includes('תקופה: יולי 2026 – ספטמבר 2026') && h.includes('הופק: 30.9.2026'), true);
+    t.eq('totals exactly as given (999 / 777 / 888 / 77.8%)', [999, 777, 888].every(n => h.includes('<b>' + P.mod.crMoney(n) + '</b>')) && h.includes('<b>77.8%</b>'), true);
+    t.eq('open-month note', h.includes('ספטמבר 2026 עדיין פתוח'), true);
+    t.eq('member name escaped', h.includes('&lt;b&gt;x&lt;/b&gt;') && !h.includes('<b>x</b>'), true);
+    t.eq('print CSS hides the button', h.includes('@media print{') && h.includes('.noprint{display:none;}'), true);
+    t.eq('detail off → no monthly section', h.includes('פירוט חודשי לפי'), false);
+    const hd = P.mod.crBuildPrintHtml(r, { building: 'x', detail: true });
+    t.eq('detail on → monthly section with per-member blocks', hd.includes('פירוט חודשי לפי חבר') && (hd.match(/class="mb"/g) || []).length, 3);
+    t.eq('detail rows: extra account + partial status', hd.includes('<td>חשמל</td>') && hd.includes('🟡 חלקי'), true);
+    t.eq('blocks do not split across pages', hd.includes('.mb{page-break-inside:avoid;'), true);
+    const rm = mkReport(2); rm.member = { id: 1, name: 'בתיה', unit: '2', charged: 1000, paid: 450, covered: 450, gap: 550, owedNow: 850, credit: 0,
+      rows: [{ month: '2026-09', account: 'main', label: null, charged: 350, paid: 100, covered: 100, gap: 250, source: 'manual', status: 'partial' }] };
+    const hm = P.mod.crBuildPrintHtml(rm, { building: 'x' });
+    t.eq('open drill-down member printed first with owedNow', hm.indexOf('<h2>בתיה · 2</h2>') > 0 && hm.indexOf('<h2>בתיה · 2</h2>') < hm.indexOf('סיכום לפי חשבון') && hm.includes(P.mod.crMoney(850)), true);
+    t.eq('kibbutz labels (unit column, main account)', h.includes('<th>גוש/חלקה</th>') && h.includes('<td>ערבות הדדית</td>'), true);
+  }
+
+  t.section('v2.14.61 — Excel sheets (numbers stay numbers)');
+  {
+    const X = load61();
+    const sh = X.mod.crBuildSheets(mkReport(3), 'נווה ים');
+    t.eq('summary header', sh.summary[0], ['דוח גבייה', 'נווה ים']);
+    t.eq('summary account row: numeric money', sh.summary[5].slice(0, 6), ['ערבות הדדית', 999, 777, 888, 77.8, 222]);
+    t.eq('summary total row', sh.summary[6].slice(0, 2), ['סה"כ', 999]);
+    t.eq('members sheet: header + 3 rows', sh.members.length, 4);
+    t.eq('members sheet row is numeric', sh.members[2].slice(3, 7), [230, 230, 230, 0]);
+    t.eq('detail sheet: 1 header + 4 rows', sh.detail.length, 5);
+    t.eq('detail row: extra account, numbers, plain status text', sh.detail[2], ['<b>x</b>', '0', '2026-09', 'חשמל', 100, 40, 40, 60, 'ידני', 'חלקי']);
+    t.eq('status emoji stripped for Excel', sh.detail.slice(1).every(r => /^[\u0590-\u05FF]/.test(r[9])), true);
+  }
+
+  t.section('v2.14.61 — crPrint / crExportExcel (flow)');
+  const runs61 = [];
+  runs61.push((async () => {
+    const P = load61({ detail: true });
+    await P.mod.crPrint();
+    t.eq('print: window opened BEFORE the fetch (popup-safe)', P.order[0], 'open');
+    t.eq('print: fetch uses the on-screen range + rows=all', P.order[1], 'fetch:/api/collection-report?from=2026-07&to=2026-09&rows=all');
+    t.eq('print: document written with detail', P.written[P.written.length - 1].includes('פירוט חודשי לפי חבר'), true);
+    const lm = mkReport(2); lm.member = { id: 7 };
+    const M = load61({ last: lm }); await M.mod.crPrint();
+    t.eq('print: keeps the opened member (tenantId)', M.order[1], 'fetch:/api/collection-report?from=2026-07&to=2026-09&rows=all&tenantId=7');
+    const Bk = load61({ blocked: true }); await Bk.mod.crPrint();
+    t.eq('popup blocked → toast, no fetch', [Bk.order.length, Bk.toasts.length], [1, 1]);
+    const E = load61({ response: { status: 500, body: { error: 'x' } } }); await E.mod.crPrint();
+    t.eq('fetch error → window closed', E.win.closed, true);
+    const N = load61({ last: null }); await N.mod.crPrint();
+    t.eq('no report yet → message, window closed', [N.toasts[0], N.win.closed], ['הפיקו דוח קודם', true]);
+    const X = load61(); await X.mod.crExportExcel();
+    t.eq('excel: one file, named by range', X.files.map(f => f.name), ['דוח-גבייה-2026-07_2026-09.xlsx']);
+    t.eq('excel: three sheets', X.files[0].wb.SheetNames, ['סיכום', 'לפי חברים', 'פירוט חודשי']);
+    t.eq('excel: RTL workbook', X.files[0].wb.Workbook, { Views: [{ RTL: true }] });
+    t.eq('excel: fetch rows=all', X.order[0], 'fetch:/api/collection-report?from=2026-07&to=2026-09&rows=all');
+    const NX = load61({ noXlsx: true }); await NX.mod.crExportExcel();
+    t.eq('excel lib missing → message, no fetch', [NX.order.length, NX.files.length, NX.toasts.length], [0, 0, 1]);
+  })());
+  global.__crRuns = (global.__crRuns || []).concat(runs61);
+
+  t.section('v2.14.61 — wiring and guide');
+  const pure61 = extractFunctions(app61, ['crBuildPrintHtml', 'crBuildSheets']);
+  t.eq('no money arithmetic in print / Excel builders', /\.(charged|paid|covered|gap|excess)\s*[-+*\/]|[-+*\/]\s*[\w.]*\.(charged|paid|covered|gap|excess)\b|Math\.(min|max)\(|\.reduce\(/.test(pure61), false);
+  t.eq('buttons wired in the delegated listener', ["closest('#crMembersToggle')) { crToggleMembers();", "closest('#crPrintBtn')) { crPrint();", "closest('#crExcelBtn')) { crExportExcel();"].every(x => app61.includes(x)), true);
+  t.eq('server route passes rows=all', readSource('server.js').includes("allRows: req.query.rows === 'all'"), true);
+  t.eq('guide: collapse explained', gd61.includes('"▶ הרחב" / "▼ כווץ"'), true);
+  t.eq('guide: print + PDF', gd61.includes('<strong>🖨️ הדפס / PDF</strong>') && gd61.includes('שמירה כ-PDF'), true);
+  t.eq('guide: Excel three sheets', gd61.includes('<strong>📥 Excel</strong>') && gd61.includes('<strong>פירוט חודשי</strong>'), true);
+  t.eq('guide: popup blocker hint', gd61.includes('חלון קופץ'), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

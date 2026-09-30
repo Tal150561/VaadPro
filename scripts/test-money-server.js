@@ -3336,6 +3336,24 @@ async function v2_14_57_async() {
     const d3 = fixture(); d3.tenants[4].extraAccounts[0].active = false;
     t.eq('inactive extra account skipped', acc(R(d3, { from: '2026-07', to: '2026-09' }), 'x:חשמל').members, 1);
   }
+  t.section('v2.14.61 — allRows (print / Excel detail)');
+  {
+    const plain = R(fixture(), { from: '2026-07', to: '2026-09' });
+    t.eq('default: members carry NO rows (light payload)', plain.members.some(m => 'rows' in m), false);
+    const full = R(fixture(), { from: '2026-07', to: '2026-09', allRows: true });
+    t.eq('allRows: every member carries rows', full.members.every(m => Array.isArray(m.rows)), true);
+    const r2 = n => Math.round(n * 100) / 100;
+    t.eq('allRows: Σ rows == member figures (every member)', full.members.every(m =>
+      ['charged', 'paid', 'covered', 'gap'].every(k => r2(m.rows.reduce((s, x) => s + x[k], 0)) === m[k])), true);
+    t.eq('allRows: totals unchanged', full.totals, plain.totals);
+    t.eq('allRows: הדס rows = 3 main + 3 חשמל + 1 מים', full.members.find(m => m.id === 5).rows.length, 7);
+    t.eq('allRows: member created later has no rows before its start', (() => {
+      const d = fixture(); const id = new Date(2026, 7, 10, 12).getTime(); d.tenants.push({ id, name: 'חדש' });
+      return R(d, { from: '2026-07', to: '2026-09', allRows: true }).members.find(m => m.id === id).rows.map(x => x.month);
+    })(), ['2026-08', '2026-09']);
+    const withM = R(fixture(), { from: '2026-07', to: '2026-09', allRows: true, tenantId: 2 });
+    t.eq('allRows + tenantId: drill-down still returned', withM.member.rows.length, 3);
+  }
   t.section('v2.14.60 — END-TO-END: the same month reports the same before and after the REAL month-close');
   {
     // August still OPEN (mkNow 2026-08). Payments live in sentLog + synced history.

@@ -1786,7 +1786,7 @@ app.get('/api/collection-report', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'טווח חודשים לא תקין' });
     }
     const d = loadTenantData(req.user.tenantId);
-    res.json(buildCollectionReport(d, { from, to, tenantId: req.query.tenantId || null }));
+    res.json(buildCollectionReport(d, { from, to, tenantId: req.query.tenantId || null, allRows: req.query.rows === 'all' }));
   } catch (e) {
     console.error('[collection-report]', e);
     res.status(500).json({ error: 'שגיאה בהפקת הדוח' });
@@ -2975,6 +2975,7 @@ function crAccountKey(label) {
   return String(label || '').trim().replace(/\s+/g, ' ') || 'חשבון נוסף';
 }
 
+// opts.allRows (v2.14.61): every member also carries rows[] — for print / Excel.
 function buildCollectionReport(d, opts) {
   opts = opts || {};
   const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
@@ -3029,7 +3030,7 @@ function buildCollectionReport(d, opts) {
       const mm = monthly.get(M);
       mm.charged += cell.charged; mm.paid += cell.paid; mm.covered += cell.covered;
       m.charged += cell.charged; m.paid += cell.paid; m.covered += cell.covered; m.excess += cell.excess; m.gap += cell.gap;
-      if (wantId === tid) rows.push(Object.assign({ month: M, account: key, label }, cell));
+      if (wantId === tid || opts.allRows) rows.push(Object.assign({ month: M, account: key, label }, cell));
     };
     for (const M of months) {
       if (M < tStart) continue;
@@ -3040,6 +3041,7 @@ function buildCollectionReport(d, opts) {
       }
     }
     ['charged', 'paid', 'covered', 'excess', 'gap'].forEach(k => { m[k] = r2(m[k]); });
+    if (opts.allRows) m.rows = rows;   // v2.14.61 — print/Excel detail (rows=all)
     members.push(m);
     if (wantId === tid) {
       const split = splitCurrentMonthDebt(d, t, mkNow, emNow, null);

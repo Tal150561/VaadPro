@@ -330,6 +330,12 @@ t.eq('receipt (lastBankSyncImport) includes alreadyImported',
   t.eq('bad month format → 400', call('basic', { from: '2026-7', to: '2026-07' }).status, 400);
   t.eq('from > to → 400', call('basic', { from: '2026-08', to: '2026-07' }).status, 400);
   t.eq('month 13 → 400', call('basic', { from: '2026-13', to: '2026-13' }).status, 400);
+  const allR = call('basic', { from: '2026-07', to: '2026-07', rows: 'all' });
+  t.eq('v2.14.61: rows=all → members carry rows', Array.isArray(allR.body.members[0].rows), true);
+  ['month', 'account', 'label', 'charged', 'paid', 'covered', 'gap', 'source', 'status']
+    .forEach(k => t.eq('v2.14.61: detail row has ' + k, Object.prototype.hasOwnProperty.call(allR.body.members[0].rows[0], k), true));
+  t.eq('v2.14.61: without rows=all → no rows', 'rows' in ok.body.members[0], false);
+  t.eq('v2.14.61: rows=anything-else → no rows', 'rows' in call('basic', { from: '2026-07', to: '2026-07', rows: '1' }).body.members[0], false);
   t.eq('route is read-only (no saveTenantData in handler)', /saveTenantData|writeFileSync/.test(body), false);
 }
 
