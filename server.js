@@ -2711,28 +2711,29 @@ function resolvePayerPhone(tenant, acc) {
  * @returns {{block:string, recipients:Map<string,string[]>}} block is '' when no accounts are open
  */
 function buildAccountsBlock(d, tenant, month) {
-  const sentLog = d.sentLog || {};
   // ⏸ v2.14.31 — a suspended extra account (acc.suspended===true) is exempt and
   // must NOT appear in the reminder (design 2C — per-account). active===false
   // already filtered; suspension is a separate, softer state.
   const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false && a.suspended !== true);
   const recipients = {};
   if (!extraAccounts.length) return { block: '', recipients };
+  // v2.14.64 (0c) — CONSUMES extraAccountSplit (was: its own "paid? amount + max(0,openingDebt)").
+  // Byte-identical for the common cases (unpaid month → "• L: *amount ₪*"; with carried
+  // debt → "… + חוב קודם X ₪ = *total ₪*"; paid → no line). Fixed: a credit now reduces or
+  // removes the line; a non-billing month (quarterly/yearly) is not billed; a PARTIAL
+  // payment shows the shortfall (was hidden as "paid"); carried debt of a paid month is shown.
+  const mk = extraMonthKeyFor(d, month);
 
   const lines = extraAccounts.map(acc => {
-    const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + month;
-    const lv = String(sentLog[slKey] || '');
-    const paid = lv.startsWith('manual_paid') || lv.startsWith('bank_import');
-    if (paid) return null;
-
-    const amount = parseFloat(acc.amount) || 0;
-    const openingDebt = Math.max(0, parseFloat(acc.openingDebt) || 0);
+    const sp = extraAccountSplit(d, tenant, acc, mk, month);
+    if (!sp || !(sp.owedNow > 0)) return null;
     let line;
-    if (openingDebt > 0) {
-      const total = Math.round((amount + openingDebt) * 100) / 100;
-      line = `• ${acc.label}: *${amount} ₪* + חוב קודם ${openingDebt} ₪ = *${total} ₪*`;
+    if (sp.owedCurrent > 0 && sp.owedPrior > 0) {
+      line = `• ${acc.label}: *${sp.owedCurrent} ₪* + חוב קודם ${sp.owedPrior} ₪ = *${sp.owedNow} ₪*`;
+    } else if (sp.owedCurrent > 0) {
+      line = `• ${acc.label}: *${sp.owedCurrent} ₪*`;
     } else {
-      line = `• ${acc.label}: *${amount} ₪*`;
+      line = `• ${acc.label}: חוב קודם *${sp.owedPrior} ₪*`;
     }
 
     // track intended recipient (data only — no split-send in שלב 1)
@@ -2975,37 +2976,74 @@ function crAccountKey(label) {
   return String(label || '').trim().replace(/\s+/g, ' ') || 'חשבון נוסף';
 }
 
-// ── v2.14.63 — extra-account balance AS OF NOW (the single source; 0c) ─────────
-// Returns { debt, credit } for ONE extra account, or null when inactive. Mirrors the
-// month-close rules (closeExtraAccountsUnpaid) so "now" == what the next close will
-// bank: carried acc.openingDebt (may be negative = credit, v2.14.62), plus any
-// not-yet-closed unpaid history record, plus the OPEN month (billing months only,
-// frequency-aware; suspended → exempt unless paid in full; a payment above the
-// charge is live credit). Used by the collection report; the dashboard, portal and
-// buildDebtDetail(e) still compute extras their own way — move them here (0c).
-function extraAccountBalance(d, t, acc, mkNow, emNow) {
+// ── v2.14.64 — extra-account split AS OF NOW: THE single source for extras (0c) ──
+// Every screen/message that shows an extra account's money consumes THIS (report,
+// WA {חשבונות}, auto-send decision, חייבים חריגים detail, accounts-status, tenant-
+// accounts modal, tenant portal). Same shape as the main account's
+// splitCurrentMonthDebt. Mirrors the month-close rules (closeExtraAccountsUnpaid):
+//   prior   = acc.openingDebt (negative = credit, v2.14.62) + unpaid non-wa_sent
+//             history records of months other than mkNow (not yet closed)
+//   OPEN month (skipped when mkNow ∈ closedMonthsExtra): charge = acc.amount on
+//             billing months only (quarterly 3/6/9/12, yearly 1); suspended and
+//             not paid in full → exempt (charge 0); paidNow from sentLog (legacy
+//             value without an amount = full); a payment above the charge = live credit
+//   net = prior + charge − paidNow  →  owedNow / creditLeft
+//   owedCurrent = min(monthDue, owedNow)   (this month, after credit)
+//   owedPrior   = owedNow − owedCurrent
+// Returns null for an inactive account.
+function extraAccountSplit(d, t, acc, mkNow, emNow) {
   if (!acc || acc.active === false) return null;
   const r2 = n => Math.round(n * 100) / 100;
   const tid = String(t.id);
   const phKey = tid + '__acc__' + acc.id;
-  let net = parseFloat(acc.openingDebt) || 0;
+  const banked = parseFloat(acc.openingDebt) || 0;
+  let histDebt = 0;
   ((d.paymentHistory || {})[phKey] || []).forEach(r => {
-    if (r && !r.paid && r.type !== 'wa_sent' && r.month !== mkNow) net += parseFloat(r.amount) || 0;
+    if (r && !r.paid && r.type !== 'wa_sent' && r.month !== mkNow) histDebt += parseFloat(r.amount) || 0;
   });
+  const prior = r2(banked + histDebt);
+  const amount = parseFloat(acc.amount) || 0;
+  const mon = Number(String(mkNow).slice(5));
+  const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
   const closedNow = Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(mkNow);
+  let charge = 0, paidNow = 0, paidFlag = false;
   if (!closedNow) {
-    const mon = Number(String(mkNow).slice(5));
-    const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
-    const amount = parseFloat(acc.amount) || 0;
     const v = (d.sentLog || {})[phKey + '_' + emNow];
-    let paid = 0;
-    if (sentLogIsPayment(v)) { const p = parseSentLogAmount(v); paid = p !== null ? p : (billing ? amount : 0); }
-    let charge = (billing && amount > 0) ? amount : 0;
-    if (acc.suspended === true && paid < charge) charge = 0;
-    net += charge - paid;
+    paidFlag = sentLogIsPayment(v);
+    if (paidFlag) { const p = parseSentLogAmount(v); paidNow = p !== null ? p : (billing ? amount : 0); }
+    charge = (billing && amount > 0) ? amount : 0;
   }
-  net = r2(net);
-  return { debt: Math.max(0, net), credit: Math.max(0, r2(-net)) };
+  const suspended = acc.suspended === true;
+  const exempt = suspended && charge > 0 && paidNow < charge;
+  if (exempt) charge = 0;
+  const monthDue = r2(Math.max(0, charge - paidNow));
+  const net = r2(prior + charge - paidNow);
+  const owedNow = Math.max(0, net);
+  const creditLeft = Math.max(0, r2(-net));
+  const owedCurrent = r2(Math.min(monthDue, owedNow));
+  const owedPrior = r2(owedNow - owedCurrent);
+  const creditApplied = r2(Math.max(0, monthDue + Math.max(0, prior) - owedNow));
+  let status;
+  if (exempt) status = 'exempt';
+  else if (charge <= 0) status = paidFlag ? 'paid' : 'notBilling';
+  else if (paidNow >= charge) status = 'paid';
+  else if (paidNow > 0) status = 'partial';
+  else if (owedCurrent === 0) status = 'covered';         // unpaid, but credit covers the month
+  else status = 'unpaid';
+  return { billing, suspended, charge: r2(charge), paidNow: r2(paidNow), paidFlag, monthDue, prior, histDebt: r2(histDebt), banked: r2(banked),
+           owedNow, creditLeft, owedCurrent, owedPrior, creditApplied, status };
+}
+
+// Hebrew display month (sentLog key month) → 'YYYY-MM', year from the active month.
+function extraMonthKeyFor(d, hebMonth) {
+  const mkNow = getMonthKey((d && d.config) || {});
+  return hebMonthToMonthKey(hebMonth, mkNow) || mkNow;
+}
+
+// { debt, credit } as of now — kept for the collection report (v2.14.63 API).
+function extraAccountBalance(d, t, acc, mkNow, emNow) {
+  const s = extraAccountSplit(d, t, acc, mkNow, emNow);
+  return s ? { debt: s.owedNow, credit: s.creditLeft } : null;
 }
 
 // opts.allRows (v2.14.61): every member also carries rows[] — for print / Excel.
@@ -3242,13 +3280,15 @@ function buildOffsetBlock(d, tenant) {
 // (v2.14.36) so the suspended branch AND the new main-account-credit branch share
 // ONE definition instead of two copies (CONSUME, DO NOT COMPUTE).
 function tenantOwesActiveExtra(d, tenant, em) {
-  const sentLog = d.sentLog || {};
+  // v2.14.64 (0c) — CONSUMES extraAccountSplit: "owes this month" = owedCurrent > 0
+  // (after credit). Same rule as the main account (a paid month with only carried
+  // debt does not trigger the auto-reminder). Fixed: credit covering the month and
+  // non-billing months (quarterly/yearly) no longer trigger; a partial payment does.
+  const mk = extraMonthKeyFor(d, em);
   return (tenant.extraAccounts || []).some(acc => {
     if (acc.active === false || acc.suspended === true) return false;
-    if ((parseFloat(acc.amount) || 0) <= 0) return false;
-    const slKey = String(tenant.id) + '__acc__' + acc.id + '_' + em;
-    const lv = String(sentLog[slKey] || '');
-    return !(lv.startsWith('manual_paid') || lv.startsWith('bank_import'));
+    const sp = extraAccountSplit(d, tenant, acc, mk, em);
+    return !!sp && sp.owedCurrent > 0;
   });
 }
 
@@ -3410,32 +3450,34 @@ function buildDebtDetail(d, tenant, mkNow) {
   //     will not add up to the total the tenant is being chased for.
   const openingDebt = Math.max(0, parseFloat(tenant.openingDebt) || 0);
 
-  // (e) extra accounts — unpaid months + the account's own carried openingDebt.
+  // (e) extra accounts — v2.14.64 (0c): CONSUMES extraAccountSplit. total == the
+  // account's owedNow (the same number the report, portal and WA show). Itemised:
+  // unpaid not-yet-closed months + this month's due (billing months only; exempt when
+  // suspended; shortfall when partial) + carried debt, minus a credit offset line when
+  // the account carries credit — so the lines always add up to the total.
   const em = getEffectiveMonth(d.config || {});
   const accounts = [];
+  const r2e = n => Math.round(n * 100) / 100;
   for (const acc of (tenant.extraAccounts || [])) {
-    if (acc.active === false) continue;
+    const sp = extraAccountSplit(d, tenant, acc, mkNow, em);
+    if (!sp || !(sp.owedNow > 0)) continue;
     const phKey = tid + '__acc__' + acc.id;
     const accHist = (d.paymentHistory || {})[phKey] || [];
     const accMonths = accHist
-      .filter(r => !r.paid && r.type !== 'wa_sent')
+      .filter(r => !r.paid && r.type !== 'wa_sent' && r.month !== mkNow)
       .map(r => ({
         monthKey: r.month,
         hebMonth: HEBREW_MONTHS[parseInt(String(r.month).split('-')[1]) - 1] || r.month,
         amount: parseFloat(r.amount) || 0
       }));
-    const slKey = phKey + '_' + em;
-    const lv = String(sentLog[slKey] || '');
-    const paidNow = lv.startsWith('manual_paid') || lv.startsWith('bank_import');
-    if (!paidNow && !accMonths.some(m => m.monthKey === mkNow)) {
-      const amt = parseFloat(acc.amount) || 0;
-      if (amt > 0) accMonths.push({ monthKey: mkNow, hebMonth: em, amount: amt });
-    }
-    const openingDebt = Math.max(0, parseFloat(acc.openingDebt) || 0);
-    const total = Math.round((accMonths.reduce((s, m) => s + m.amount, 0) + openingDebt) * 100) / 100;
-    if (total <= 0) continue;
+    if (sp.monthDue > 0) accMonths.push({ monthKey: mkNow, hebMonth: em, amount: sp.monthDue });
+    const openingDebt = Math.max(0, sp.banked);
+    const listed = r2e(accMonths.reduce((s, m) => s + m.amount, 0) + openingDebt);
+    const creditApplied = r2e(Math.max(0, listed - sp.owedNow));
     accMonths.sort((a, b) => String(a.monthKey).localeCompare(String(b.monthKey)));
-    accounts.push({ label: acc.label || 'חשבון נוסף', months: accMonths, openingDebt, total });
+    const row = { label: acc.label || 'חשבון נוסף', months: accMonths, openingDebt, total: sp.owedNow };
+    if (creditApplied > 0) row.creditApplied = creditApplied;
+    accounts.push(row);
   }
 
   return {
@@ -3522,6 +3564,7 @@ function buildDebtDetailBlock(detail) {
     lines.push(`• ${a.label}:`);
     for (const m of a.months) lines.push(`   ◦ ${m.hebMonth}: *${m.amount} ₪*`);
     if (a.openingDebt > 0) lines.push(`   ◦ חוב קודם: *${a.openingDebt} ₪*`);
+    if ((a.creditApplied || 0) > 0) lines.push(`   ◦ קוזזה יתרת זכות: *-${a.creditApplied} ₪*`);   // v2.14.64
   }
   return lines.length ? lines.join('\n') : '';
 }
@@ -7273,7 +7316,8 @@ app.get('/api/portal/:token', (req, res) => {
     ok: true,
     tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId),
       extraAccounts: (tenant.extraAccounts || []).map(a => ({
-        id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false
+        id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false,
+        suspended: a.suspended === true
       }))
     },
     building: { name: portalBuildingName, org: t(getLabels(d.config), 'org'), mainAccount: t(getLabels(d.config), 'mainAccount') },
@@ -7346,6 +7390,19 @@ app.get('/api/portal/:token', (req, res) => {
         result[acc.id] = recs;
       }
       return result;
+    })(),
+    // v2.14.64 (0c) — the money of each extra account, CONSUMED from extraAccountSplit
+    // (same numbers as the report, the WA reminder and the committee screens). The
+    // portal page renders these verbatim; it no longer re-derives debt client-side.
+    extraBalances: (() => {
+      const out = {};
+      for (const acc of (tenant.extraAccounts || [])) {
+        const sp = extraAccountSplit(d, tenant, acc, currentMonthKey, currentMonthName);
+        if (!sp) continue;
+        out[acc.id] = { status: sp.status, owedNow: sp.owedNow, owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior,
+          creditLeft: sp.creditLeft, creditApplied: sp.creditApplied, charge: sp.charge, paidNow: sp.paidNow };
+      }
+      return out;
     })(),
     // Authoritative current-month paid flag per extra account (from sentLog).
     // The frontend uses THIS — never the raw paymentHistory record — to decide
@@ -8753,14 +8810,18 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
   const tenant = (d.tenants || []).find(t => String(t.id) === String(tid));
   if (!tenant) return res.json({ ok: false, error: 'דייר לא נמצא' });
   const accounts = tenant.extraAccounts || [];
-  // Enrich with current debt per account
+  // v2.14.64 (0c) — CONSUMES extraAccountSplit. totalDebt keeps its meaning (debt from
+  // BEFORE this month, after credit) = owedPrior; the split fields are added for display.
+  const mkA = getMonthKey(d.config || {}), emA = getEffectiveMonth(d.config || {});
   const enriched = accounts.map(acc => {
     const phKey = String(tid) + '__acc__' + acc.id;
     const history = (d.paymentHistory || {})[phKey] || [];
-    const historyDebt = history.filter(r => !r.paid).reduce((s, r) => s + (r.amount || 0), 0);
-    const openingDebt = parseFloat(acc.openingDebt) || 0;
-    const totalDebt = Math.max(0, historyDebt + openingDebt);
-    return { ...acc, totalDebt, historyDebt };
+    const historyDebt = history.filter(r => !r.paid && r.type !== 'wa_sent' && r.month !== mkA).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
+    const sp = extraAccountSplit(d, tenant, acc, mkA, emA);
+    if (!sp) return { ...acc, totalDebt: 0, historyDebt };
+    return { ...acc, totalDebt: sp.owedPrior, historyDebt,
+      owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,
+      creditApplied: sp.creditApplied, monthDue: sp.monthDue, charge: sp.charge, paidNow: sp.paidNow, status: sp.status };
   });
   res.json({ ok: true, accounts: enriched, owner: tenant.owner || {}, tenant: tenant.tenant || {} });
 });
@@ -8880,14 +8941,21 @@ app.get('/api/accounts-status', authMiddleware, (req, res) => {
       const paidThisMonth = history.some(r => r.month === mk && r.paid)
                          || String(d.sentLog[slKey] || '').startsWith('manual_paid')
                          || String(d.sentLog[slKey] || '').startsWith('bank_import');
-      const historyDebt = history.filter(r => !r.paid).reduce((s, r) => s + (r.amount || 0), 0);
+      const historyDebt = history.filter(r => !r.paid && r.type !== 'wa_sent' && r.month !== mk).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
       const openingDebt = parseFloat(acc.openingDebt) || 0;
-      const totalDebt   = Math.max(0, historyDebt + openingDebt);
+      // v2.14.64 (0c) — money CONSUMED from extraAccountSplit. paidThisMonth keeps its
+      // meaning (a payment landed → drives the "בטל"/"סמן ששילם" buttons); totalDebt =
+      // debt from BEFORE this month after credit (owedPrior); pages read owedCurrent /
+      // owedPrior / creditLeft / status instead of re-deriving from amount.
+      const sp = extraAccountSplit(d, tenant, acc, mk, em);
       return {
         id: acc.id, label: acc.label, amount: acc.amount,
         frequency: acc.frequency, active: acc.active !== false,
         suspended: acc.suspended === true,
-        paidThisMonth, totalDebt, historyDebt, openingDebt
+        paidThisMonth, totalDebt: sp ? sp.owedPrior : 0, historyDebt, openingDebt,
+        owedCurrent: sp ? sp.owedCurrent : 0, owedPrior: sp ? sp.owedPrior : 0, owedNow: sp ? sp.owedNow : 0,
+        creditLeft: sp ? sp.creditLeft : 0, creditApplied: sp ? sp.creditApplied : 0,
+        monthDue: sp ? sp.monthDue : 0, paidNow: sp ? sp.paidNow : 0, status: sp ? sp.status : 'inactive'
       };
     });
   }

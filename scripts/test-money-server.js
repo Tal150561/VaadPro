@@ -3608,4 +3608,121 @@ async function v2_14_57_async() {
   fs.rmSync(dir, { recursive: true, force: true });
 }
 
-(async () => { await v2_14_57_async(); process.exit(t.done() ? 1 : 0); })();
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.64 — 0c stage 2: ONE source for extra-account money (extraAccountSplit)
+// consumed by: report, WA {חשבונות}, auto-send, חייבים חריגים detail,
+// /api/accounts-status, /api/tenant-accounts, tenant portal.
+// ════════════════════════════════════════════════════════════════
+const v2_14_64_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const BIx = a => 'bank_import_2026-09-03T10:00:00.000Z_' + a + '_payer_x';
+  const MPx = a => 'manual_paid_2026-09-03T10:00:00.000Z_amount_' + a;
+  // config.manualMonth pins the active month to ספטמבר 2026 (current year) for every consumer.
+  const base = over => Object.assign({ config: { amount: 230, manualMonth: 'ספטמבר' }, closedMonths: [], closedMonthsExtra: [],
+    paymentHistory: {}, sentLog: {}, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }] }, over);
+  const MK = S.getMonthKey({ manualMonth: 'ספטמבר' }), EM = 'ספטמבר';
+  const SP = (d, acc) => S.extraAccountSplit(d, { id: 9 }, acc, MK, EM);
+  const A = o => Object.assign({ id: 'e1', label: 'חשמל', amount: 100 }, o);
+  const slx = (v) => ({ sentLog: { ['9__acc__e1_' + EM]: v } });
+
+  t.section('v2.14.64 — extraAccountSplit: every state');
+  const pick = x => x && [x.status, x.owedCurrent, x.owedPrior, x.owedNow, x.creditLeft, x.creditApplied];
+  t.eq('plain unpaid', pick(SP(base(), A({}))), ['unpaid', 100, 0, 100, 0, 0]);
+  t.eq('unpaid + carried debt 50', pick(SP(base(), A({ openingDebt: 50 }))), ['unpaid', 100, 50, 150, 0, 0]);
+  t.eq('credit 1000 covers the month', pick(SP(base(), A({ openingDebt: -1000 }))), ['covered', 0, 0, 0, 900, 100]);
+  t.eq('credit 30 < month 100 → owes 70', pick(SP(base(), A({ openingDebt: -30 }))), ['unpaid', 70, 0, 70, 0, 30]);
+  t.eq('partial 40 of 100', pick(SP(base(slx(MPx(40))), A({}))), ['partial', 60, 0, 60, 0, 0]);
+  t.eq('overpaid 300 → live credit 200', pick(SP(base(slx(BIx(300))), A({}))), ['paid', 0, 0, 0, 200, 0]);
+  t.eq('paid month + carried debt 50', pick(SP(base(slx(BIx(100))), A({ openingDebt: 50 }))), ['paid', 0, 50, 50, 0, 0]);
+  t.eq('quarterly, Sep IS billing', pick(SP(base(), A({ frequency: 'quarterly' }))), ['unpaid', 100, 0, 100, 0, 0]);
+  t.eq('yearly, Sep not billing', pick(SP(base(), A({ frequency: 'yearly' }))), ['notBilling', 0, 0, 0, 0, 0]);
+  t.eq('yearly, not billing, carried debt 80', pick(SP(base(), A({ frequency: 'yearly', openingDebt: 80 }))), ['notBilling', 0, 80, 80, 0, 0]);
+  t.eq('suspended, unpaid → exempt, carried debt kept (3A)', pick(SP(base(), A({ suspended: true, openingDebt: 50 }))), ['exempt', 0, 50, 50, 0, 0]);
+  t.eq('suspended, paid in full → normal paid', pick(SP(base(slx(BIx(100))), A({ suspended: true }))), ['paid', 0, 0, 0, 0, 0]);
+  t.eq('month already closed → only carried', pick(SP(base({ closedMonthsExtra: [MK] }), A({ openingDebt: -300 }))), ['notBilling', 0, 0, 0, 300, 0]);
+  t.eq('inactive → null', SP(base(), A({ active: false })), null);
+  const states = [A({}), A({ openingDebt: 50 }), A({ openingDebt: -1000 }), A({ openingDebt: -30 }), A({ frequency: 'yearly', openingDebt: 80 })];
+  t.eq('invariant: owedCurrent + owedPrior == owedNow (all states)', states.every(a => { const x = SP(base(), a); return Math.round((x.owedCurrent + x.owedPrior) * 100) === Math.round(x.owedNow * 100); }), true);
+  t.eq('extraAccountBalance == {owedNow, creditLeft} (report API unchanged)', states.every(a => {
+    const x = SP(base(), a), b = S.extraAccountBalance(base(), { id: 9 }, a, MK, EM); return b.debt === x.owedNow && b.credit === x.creditLeft; }), true);
+
+  // WA {חשבונות} block — the REAL buildAccountsBlock with its real dependencies
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const WA = lib.runInSandbox(months + '\n' + lib.extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock', 'extraAccountSplit', 'extraMonthKeyFor',
+    'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount']) + 'module.exports={buildAccountsBlock};');
+  const block = (d, accs) => WA.buildAccountsBlock(d, { id: 9, name: 'x', extraAccounts: accs }, EM).block;
+  t.section('v2.14.64 — WA {חשבונות}: byte-identical where it was right, fixed where it was wrong');
+  t.eq('unpaid → "• חשמל: *100 ₪*" (unchanged)', block(base(), [A({})]), '\n• חשמל: *100 ₪*');
+  t.eq('carried debt → same old format (unchanged)', block(base(), [A({ openingDebt: 50 })]), '\n• חשמל: *100 ₪* + חוב קודם 50 ₪ = *150 ₪*');
+  t.eq('paid, nothing carried → no line (unchanged)', block(base(slx(BIx(100))), [A({})]), '');
+  t.eq('suspended → no line (unchanged)', block(base(), [A({ suspended: true, openingDebt: 50 })]), '');
+  t.eq('FIX: credit covers → no line (was "*100 ₪*")', block(base(), [A({ openingDebt: -1000 })]), '');
+  t.eq('FIX: credit 30 → "*70 ₪*" (was 100)', block(base(), [A({ openingDebt: -30 })]), '\n• חשמל: *70 ₪*');
+  t.eq('FIX: yearly, not billing → no line (was billed monthly)', block(base(), [A({ frequency: 'yearly' })]), '');
+  t.eq('FIX: partial 40 → "*60 ₪*" (was hidden as paid)', block(base(slx(MPx(40))), [A({})]), '\n• חשמל: *60 ₪*');
+  t.eq('FIX: paid month but carried debt → "חוב קודם *50 ₪*" (was hidden)', block(base(slx(BIx(100))), [A({ openingDebt: 50 })]), '\n• חשמל: חוב קודם *50 ₪*');
+
+  t.section('v2.14.64 — auto-send decision (tenantOwesActiveExtra / autoSendShouldRemind)');
+  const owes = (d, accs) => S.tenantOwesActiveExtra(d, { id: 9, extraAccounts: accs }, EM);
+  t.eq('unpaid → owes (unchanged)', owes(base(), [A({})]), true);
+  t.eq('paid → no (unchanged)', owes(base(slx(BIx(100))), [A({})]), false);
+  t.eq('FIX: credit covers → no (was yes: a prepaid member got reminders)', owes(base(), [A({ openingDebt: -1000 })]), false);
+  t.eq('FIX: not a billing month → no', owes(base(), [A({ frequency: 'yearly' })]), false);
+  t.eq('FIX: partial → yes', owes(base(slx(MPx(40))), [A({})]), true);
+  t.eq('paid + only carried debt → no (same rule as the main account)', owes(base(slx(BIx(100))), [A({ openingDebt: 50 })]), false);
+  const tnS = { id: 9, name: 'מושהה', suspended: true, extraAccounts: [A({ openingDebt: -1000 })] };
+  t.eq('suspended main + extra covered by credit → SKIP (was: remind)', S.autoSendShouldRemind(base({ tenants: [tnS] }), tnS, MK), false);
+
+  t.section('v2.14.64 — חייבים חריגים detail: total == owedNow, lines add up');
+  const det = (d, accs) => S.buildDebtDetail(d, { id: 9, name: 'x', openingDebt: 0, extraAccounts: accs }, MK).accounts;
+  { const a = det(base(), [A({ openingDebt: -30 })])[0];
+    t.eq('credit 30: total 70', a.total, 70);
+    t.eq('credit 30: creditApplied line', a.creditApplied, 30);
+    t.eq('credit 30: months 100 − credit 30 == total', a.months.reduce((x, m) => x + m.amount, 0) + a.openingDebt - (a.creditApplied || 0), a.total); }
+  t.eq('credit covers → account not listed', det(base(), [A({ openingDebt: -1000 })]).length, 0);
+  t.eq('partial 40 → current month 60 (was 0: hidden)', det(base(slx(MPx(40))), [A({})])[0].months.map(m => m.amount), [60]);
+  t.eq('yearly not billing, carried 80 → no month line, total 80', (() => { const a = det(base(), [A({ frequency: 'yearly', openingDebt: 80 })])[0]; return [a.months.length, a.openingDebt, a.total]; })(), [0, 80, 80]);
+  t.eq('suspended with carried debt → carried only (0c: month exempt)', (() => { const a = det(base(), [A({ suspended: true, openingDebt: 50 })])[0]; return [a.months.length, a.total]; })(), [0, 50]);
+  t.eq('detail block prints the credit line', S.buildDebtDetailBlock({ months: [], accounts: det(base(), [A({ openingDebt: -30 })]) }).includes('◦ קוזזה יתרת זכות: *-30 ₪*'), true);
+
+  // Route runners (REAL handler bodies)
+  const route = (head, d, params) => {
+    const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head);
+    const body = src.slice(st + head.length, src.indexOf('\n});\n', st));
+    const g = Object.assign({}, S, { loadTenantData: () => d });
+    const names = Object.keys(g); let out;
+    new Function(...names, 'req', 'res', body)(...names.map(n => g[n]), { params: params || {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return out;
+  };
+  const ACC = [A({ id: 'c', label: 'מכוסה', openingDebt: -1000 }), A({ id: 'p', label: 'חלקי' }), A({ id: 'y', label: 'שנתי', frequency: 'yearly', openingDebt: 80 }),
+               A({ id: 'd', label: 'חייב', openingDebt: 50 }), A({ id: 's', label: 'מושהה', suspended: true, openingDebt: 20 }), A({ id: 'k', label: 'זכות30', openingDebt: -30 })];
+  const D = base({ tenants: [{ id: 9, name: 'נ', openingDebt: 0, extraAccounts: ACC }], sentLog: { ['9__acc__p_' + EM]: MPx(40) } });
+  const expected = {}; ACC.forEach(a => { expected[a.id] = SP(D, a).owedNow; });
+
+  t.section('v2.14.64 — ONE NUMBER EVERYWHERE (same fixture through every consumer)');
+  const st = route("app.get('/api/accounts-status', authMiddleware, (req, res) => {", D);
+  t.eq('accounts-status: owedNow == split (all 6)', st.status['9'].map(x => x.owedNow), ACC.map(a => expected[a.id]));
+  t.eq('accounts-status: owedCurrent + owedPrior == owedNow', st.status['9'].every(x => Math.round((x.owedCurrent + x.owedPrior) * 100) === Math.round(x.owedNow * 100)), true);
+  t.eq('accounts-status: paidThisMonth keeps its meaning (partial has a payment)', st.status['9'].find(x => x.id === 'p').paidThisMonth, true);
+  t.eq('accounts-status: statuses', st.status['9'].map(x => x.status), ['covered', 'partial', 'notBilling', 'unpaid', 'exempt', 'unpaid']);
+  const ta = route("app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {", D, { tenantId: '9' });
+  t.eq('tenant-accounts: owedNow == split', ta.accounts.map(x => x.owedNow), ACC.map(a => expected[a.id]));
+  t.eq('tenant-accounts: credit exposed (מכוסה 900)', ta.accounts.find(x => x.id === 'c').creditLeft, 900);
+  const portal = lib.loadPortalRoute(D, 9);
+  t.eq('portal: extraBalances owedNow == split', ACC.map(a => portal.extraBalances[a.id].owedNow), ACC.map(a => expected[a.id]));
+  t.eq('portal: suspended flag passed to the page', portal.tenant.extraAccounts.find(x => x.id === 's').suspended, true);
+  const rep = S.buildCollectionReport(D, { from: MK, to: MK, mkNow: MK, emNow: EM });
+  t.eq('report: Σ extra balance == Σ split', rep.members[0].balance.accounts.filter(b => b.key !== 'main').reduce((x, b) => x + b.debt, 0),
+    ACC.reduce((x, a) => x + expected[a.id], 0));
+  const dd = S.buildDebtDetail(D, D.tenants[0], MK);
+  t.eq('debt detail: Σ account totals == Σ split owedNow', dd.accountsTotal, Math.round(ACC.reduce((x, a) => x + expected[a.id], 0) * 100) / 100);
+  const wa = block(D, ACC);
+  t.eq('WA block: covered + suspended absent; partial 60, yearly carried 80, debtor 150, credit30 70',
+    wa, '\n• חלקי: *60 ₪*\n• שנתי: חוב קודם *80 ₪*\n• חייב: *100 ₪* + חוב קודם 50 ₪ = *150 ₪*\n• זכות30: *70 ₪*');
+  const msg = await lib.loadSendOneRoute(Object.assign({}, D, { config: Object.assign({}, D.config, { template: 'שלום {שם}{חשבונות}' }) }), 9);
+  t.eq('send-one (REAL route): the WhatsApp text carries the same block', msg && msg.includes('• זכות30: *70 ₪*') && !msg.includes('מכוסה'), true);
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();

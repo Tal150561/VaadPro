@@ -2642,4 +2642,78 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: drill-down red/green wording', gd63.includes('>יתרה לתשלום</span> באדום או') && gd63.includes('>יתרת זכות</span> בירוק'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.64 — 0c stage 2: pages CONSUME the server split for extra accounts
+// ════════════════════════════════════════════════════════════════
+{
+  const app64 = readSource('public/app.html');
+  const portal64 = readSource('public/tenant-portal.html');
+  const gd64 = readSource('public/vaadpro-guide.js');
+  const tenants = [{ id: 1, name: 'א', totalDebt: 0, priorDebt: 0, openingDebt: 0, creditBalance: 0, owedCurrent: 0, owedPrior: 0,
+    currentBalance: { status: 'paid', shortfall: 0, expected: 230, paidAmount: 230 } }];
+  const S_COVERED = { id: 'c', label: 'חשמל', amount: 100, active: true, paidThisMonth: false, totalDebt: 0, owedCurrent: 0, owedPrior: 0, owedNow: 0, creditLeft: 900, status: 'covered' };
+  const S_PARTIAL = { id: 'p', label: 'מים', amount: 100, active: true, paidThisMonth: true, paidNow: 40, totalDebt: 0, owedCurrent: 60, owedPrior: 0, owedNow: 60, creditLeft: 0, status: 'partial' };
+  const S_YEARLY  = { id: 'y', label: 'שנתי', amount: 100, active: true, paidThisMonth: false, totalDebt: 80, owedCurrent: 0, owedPrior: 80, owedNow: 80, creditLeft: 0, status: 'notBilling' };
+  const LEGACY    = { id: 'l', label: 'ישן', amount: 100, active: true, paidThisMonth: false, totalDebt: 0 };
+
+  t.section('v2.14.64 — "סה״כ לגבייה" consumes owedCurrent / owedPrior');
+  const cb = extractFunctions(app64, ['computeCollectionBreakdown']);
+  const runCB = accs => new Function('data', 'accountsStatus', 'getEffectiveMonth', cb + '\n; return computeCollectionBreakdown;')
+    ({ tenants, sentLog: {}, config: { amount: 230 } }, { '1': accs }, () => 'ספטמבר')(230);
+  t.eq('covered by credit → 0 (old code: 100)', runCB([S_COVERED]).extrasTotal, 0);
+  t.eq('partial → 60 remaining (old code: 0)', runCB([S_PARTIAL]).extrasTotal, 60);
+  t.eq('yearly not billing, carried 80 → 80 as debt, 0 current', (() => { const r = runCB([S_YEARLY]).extras[0]; return [r.current, r.debt]; })(), [0, 80]);
+  t.eq('legacy payload without split fields → old behaviour (100)', runCB([LEGACY]).extrasTotal, 100);
+
+  t.section('v2.14.64 — debtors list (buildTenantStatusRows) agrees with the card');
+  const ts = 'const VP_MONTHS=["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];\n'
+    + extractFunctions(app64, ['tenantOffsetNote', 'buildTenantStatusRows']);
+  const runTS = accs => new Function('document', 'data', 'accountsStatus', 'getEffectiveMonth', ts + '\n; return buildTenantStatusRows;')
+    ({ getElementById: () => ({ style: {} }) }, { tenants }, { '1': accs }, () => 'ספטמבר')();
+  t.eq('covered by credit → member NOT a debtor (old: pending)', runTS([S_COVERED])[0].bucket, 'paid');
+  t.eq('partial → pending with 60', [runTS([S_PARTIAL])[0].bucket, runTS([S_PARTIAL])[0].owed], ['pending', 60]);
+  t.eq('card total == list total (mixed)', runCB([S_COVERED, S_PARTIAL, S_YEARLY]).extrasTotal, runTS([S_COVERED, S_PARTIAL, S_YEARLY])[0].extrasTotal);
+
+  t.section('v2.14.64 — tenant-list cell shows the server status');
+  const cellFn = extractFunctions(app64, ['renderExtraAccountsCell']);
+  const cell = accs => new Function('accountsStatus', cellFn + '\n; return renderExtraAccountsCell;')({ '1': accs })('1');
+  t.eq('partial → "🟡 … שולם ₪40, נותר ₪60"', cell([S_PARTIAL]).includes('🟡 מים — שולם ₪40, נותר ₪60'), true);
+  t.eq('covered → "✓ … מכוסה מזכות" + green credit, no "סמן ששילם"', (() => { const h = cell([S_COVERED]); return h.includes('✓ חשמל — מכוסה מזכות') && h.includes('זכות: ₪900') && !h.includes('סמן ששילם'); })(), true);
+  t.eq('not billing → "אין חיוב החודש" + carried debt', cell([S_YEARLY]).includes('— שנתי — אין חיוב החודש · חוב: ₪80'), true);
+  t.eq('unpaid shows what is owed after credit (70, not amount 100)', cell([{ id: 'k', label: 'ק', amount: 100, active: true, paidThisMonth: false, totalDebt: 0, owedCurrent: 70, owedPrior: 0, creditLeft: 0, status: 'unpaid' }]).includes('⏳ ק — ₪70'), true);
+  t.eq('legacy payload → old "⏳ … ₪amount" line', cell([LEGACY]).includes('⏳ ישן — ₪100'), true);
+  t.eq('accounts modal shows credit in green', app64.includes('זכות: ₪${acc.creditLeft}</span>` : \'\';') && app64.includes('${(debt || creditTag) ?'), true);
+
+  t.section('v2.14.64 — tenant portal consumes extraBalances');
+  const pf = extractFunctions(portal64, ['renderUnifiedBreakdown']);
+  const runP = d => {
+    const els = { breakdownCard: { style: {} }, breakdownRows: { innerHTML: '' }, breakdownTotalAmount: { textContent: '' } };
+    new Function('document', pf + '\n; return renderUnifiedBreakdown;')({ getElementById: id => els[id] || null })
+      (d, { mainPaid: true, mainPriorDebt: 0, mainLabel: 'ועד', mainAccountLabel: 'ועד בית', mainAmountDue: 0 });
+    return { rows: els.breakdownRows.innerHTML, total: els.breakdownTotalAmount.textContent };
+  };
+  const accs = [{ id: 'c', label: 'חשמל', amount: 100, frequency: 'monthly', openingDebt: -1000 }, { id: 'p', label: 'מים', amount: 100, frequency: 'monthly' },
+                { id: 'y', label: 'שנתי', amount: 100, frequency: 'yearly', openingDebt: 80 }, { id: 's', label: 'חניה', amount: 50, frequency: 'monthly', suspended: true }];
+  const EB = { c: { status: 'covered', owedNow: 0, owedCurrent: 0, owedPrior: 0, creditLeft: 900, creditApplied: 100, charge: 100, paidNow: 0 },
+               p: { status: 'partial', owedNow: 60, owedCurrent: 60, owedPrior: 0, creditLeft: 0, creditApplied: 0, charge: 100, paidNow: 40 },
+               y: { status: 'notBilling', owedNow: 80, owedCurrent: 0, owedPrior: 80, creditLeft: 0, creditApplied: 0, charge: 0, paidNow: 0 },
+               s: { status: 'exempt', owedNow: 0, owedCurrent: 0, owedPrior: 0, creditLeft: 0, creditApplied: 0, charge: 0, paidNow: 0 } };
+  const P = runP({ tenant: { extraAccounts: accs }, current: { monthKey: '2026-09' }, extraBalances: EB, extraPaymentHistory: {}, extraCurrentStatus: {} });
+  t.eq('portal total = 60 + 80 (credit and exemption respected)', P.total, '140 ₪');
+  t.eq('covered → "✅ מכוסה מזכות" + credit text', P.rows.includes('✅ מכוסה מזכות') && P.rows.includes('יתרת זכות 900 ₪'), true);
+  t.eq('partial → "שולם 40 ₪, נותר 60 ₪ החודש"', P.rows.includes('שולם 40 ₪, נותר 60 ₪ החודש'), true);
+  t.eq('yearly → "אין חיוב החודש + חוב קודם 80 ₪"', P.rows.includes('אין חיוב החודש + חוב קודם 80 ₪'), true);
+  t.eq('suspended → "⏸ פטור"', P.rows.includes('⏸ פטור'), true);
+  const L = runP({ tenant: { extraAccounts: [{ id: 'l', label: 'ישן', amount: 100, frequency: 'monthly', openingDebt: 0 }] }, current: { monthKey: '2026-09' },
+                   extraPaymentHistory: {}, extraCurrentStatus: { l: 'unpaid' } });
+  t.eq('older server without extraBalances → legacy path (100)', L.total, '100 ₪');
+  t.eq('portal: no client-side money math on the new path', /var sp = eb \? eb\[acc\.id\] : null;[\s\S]*?\/\/ ── legacy fallback/.test(portal64) &&
+    !/sp\.(owedNow|owedCurrent|owedPrior|creditLeft)\s*[-+*\/]/.test(portal64), true);
+
+  t.section('v2.14.64 — guide');
+  t.eq('guide: extra accounts — one number everywhere', gd64.includes('🧾 חשבונות נוספים — אותו חישוב בכל מקום'), true);
+  t.eq('guide: statuses in the tenant list', gd64.includes('🟡') && gd64.includes('מכוסה מזכות') && gd64.includes('אין חיוב החודש'), true);
+  t.eq('guide: reminder behaviour changes', gd64.includes('תשלום חלקי בחשבון נוסף'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

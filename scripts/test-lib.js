@@ -75,8 +75,8 @@ const SERVER_FNS = [
   // v2.14.60 — collection report (read-only)
   'crMonthAdd', 'crMonthsBetween', 'crTenantCreatedMonth', 'crBuildingStartMonth',
   'crCell', 'crMainMonth', 'crExtraMonth', 'crAccountKey', 'buildCollectionReport',
-  // v2.14.63 — extra-account balance as of now
-  'extraAccountBalance'
+  // v2.14.63/64 — extra-account split / balance as of now (single source for extras)
+  'extraAccountSplit', 'extraAccountBalance', 'extraMonthKeyFor'
 ];
 
 function loadServer() {
@@ -450,7 +450,9 @@ async function loadSendOneRoute(d, tenantId) {
   if (st < 0) throw new Error('test-lib: send-one route not found in server.js');
   const body = src.slice(st + head.length, src.indexOf('\n});\n', st));
   const S = loadServer();
-  const X = runInSandbox(extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock'])
+  const months60 = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const X = runInSandbox(months60 + '\n' + extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock', 'extraAccountSplit', 'extraMonthKeyFor',
+      'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount'])
     + 'module.exports={resolvePayerPhone,buildAccountsBlock};');
   let msg = null;
   const g = Object.assign({}, S, X, {

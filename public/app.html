@@ -1870,7 +1870,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.63';
+const HTML_VERSION = '2.14.64';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -9303,6 +9303,9 @@ function renderTenantAccountsModal() {
     const debt = (acc.totalDebt || 0) > 0
       ? `<span style="color:var(--danger);font-size:0.75rem;">חוב: ₪${acc.totalDebt}</span>`
       : '';
+    // v2.14.64 (0c) — credit from the server split, in green.
+    const creditTag = (acc.creditLeft || 0) > 0
+      ? ` <span style="color:var(--accent);font-size:0.75rem;">זכות: ₪${acc.creditLeft}</span>` : '';
     return `
     <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;">
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;">
@@ -9329,7 +9332,7 @@ function renderTenantAccountsModal() {
         <div><label style="font-size:0.75rem;">מילות חיפוש בנק</label>
           <input type="text" value="${acc.matchKeywords||''}" onchange="taModalAccounts[${i}].matchKeywords=this.value" placeholder="כהן ביטוח, חב׳ ביטוח" style="width:100%;"></div>
       </div>
-      ${debt ? `<div style="margin-top:6px;">${debt}</div>` : ''}
+      ${(debt || creditTag) ? `<div style="margin-top:6px;">${debt}${creditTag}</div>` : ''}
       <div style="margin-top:8px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
         <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="checkbox" ${acc.active!==false?'checked':''} onchange="taModalAccounts[${i}].active=this.checked"> פעיל
@@ -9499,8 +9502,12 @@ function computeCollectionBreakdown(globalAmount) {
     const accs = accountsStatus[tid] || [];
     for (const acc of accs) {
       if (acc.active === false) continue;
-      const accCurrent = acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0);
-      const accDebt    = Math.max(0, parseFloat(acc.totalDebt) || 0);
+      // v2.14.64 (0c) — CONSUME the server split (credit / frequency / suspension /
+      // partial already applied). Fallback keeps an older server payload working.
+      const accCurrent = (acc.owedCurrent !== undefined) ? Math.max(0, parseFloat(acc.owedCurrent) || 0)
+                                                         : (acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0));
+      const accDebt    = (acc.owedPrior !== undefined) ? Math.max(0, parseFloat(acc.owedPrior) || 0)
+                                                       : Math.max(0, parseFloat(acc.totalDebt) || 0);
       if (accCurrent === 0 && accDebt === 0) continue;
       const label = acc.label || 'חשבון נוסף';
       let row = res.extras.find(function(r){ return r.label === label; });
@@ -9553,8 +9560,11 @@ function buildTenantStatusRows() {
     let extrasTotal = 0;
     for (const acc of accs) {
       if (acc.active === false) continue;
-      const accCurrent = acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0);
-      const accDebt    = Math.max(0, parseFloat(acc.totalDebt) || 0);
+      // v2.14.64 (0c) — same consumption as computeCollectionBreakdown (keep them equal).
+      const accCurrent = (acc.owedCurrent !== undefined) ? Math.max(0, parseFloat(acc.owedCurrent) || 0)
+                                                         : (acc.paidThisMonth ? 0 : (parseFloat(acc.amount) || 0));
+      const accDebt    = (acc.owedPrior !== undefined) ? Math.max(0, parseFloat(acc.owedPrior) || 0)
+                                                       : Math.max(0, parseFloat(acc.totalDebt) || 0);
       if (accCurrent === 0 && accDebt === 0) continue;
       extras.push({ label: acc.label || 'חשבון נוסף', current: accCurrent, debt: accDebt, total: accCurrent + accDebt });
       extrasTotal += accCurrent + accDebt;
@@ -9716,6 +9726,7 @@ function buildExcessDebtHtml(rows, threshold, month) {
       var sub = [];
       for (var k = 0; k < (ac.months||[]).length; k++) sub.push(esc(ac.months[k].hebMonth) + ' ' + _exNis(ac.months[k].amount));
       if (ac.openingDebt > 0) sub.push('חוב קודם ' + _exNis(ac.openingDebt));
+      if ((ac.creditApplied || 0) > 0) sub.push('קוזזה זכות −' + _exNis(ac.creditApplied));   // v2.14.64
       lines.push('<strong>' + esc(ac.label) + '</strong>: ' + _exNis(ac.total)
                + ' <span style="color:var(--text3);">(' + sub.join(' · ') + ')</span>');
     }
@@ -9881,6 +9892,11 @@ function buildExcessLetterHtml(row, opts) {
     if ((parseFloat(a.openingDebt) || 0) > 0) {
       lines.push({ label: (a.label || 'חשבון נוסף') + ' — יתרת פתיחה',
                    amount: a.openingDebt, status: 'לא שולם', note: 'חוב קודם בחשבון' });
+    }
+    // v2.14.64 — the account's credit offset, so the itemised rows add up to row.owed.
+    if ((parseFloat(a.creditApplied) || 0) > 0) {
+      lines.push({ label: (a.label || 'חשבון נוסף') + ' — קיזוז יתרת זכות',
+                   amount: -a.creditApplied, status: 'קוזז', note: 'יתרת זכות בחשבון' });
     }
   });
 
@@ -10179,20 +10195,41 @@ function renderExtraAccountsCell(tenantId) {
     if (acc.active === false) continue;
     const paid = acc.paidThisMonth;
     const debt = acc.totalDebt > 0 ? ` · חוב: ₪${acc.totalDebt}` : '';
+    // v2.14.64 (0c) — credit shown in green; status from the server split.
+    const cred = (acc.creditLeft || 0) > 0 ? ` · <span style="color:var(--accent);">זכות: ₪${acc.creditLeft}</span>` : '';
     if (acc.suspended === true) {
       html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
         <span style="color:var(--text2);">⏸ ${acc.label} — מושהה${debt}</span>
       </div>`;
       continue;
     }
+    if (acc.status === 'partial') {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--warn);">🟡 ${acc.label} — שולם ₪${acc.paidNow}, נותר ₪${acc.owedCurrent}${debt}${cred}</span>
+        <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(248,81,73,.1);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markAccountUnpaid('${tenantId}','${acc.id}')">בטל</button>
+      </div>`;
+      continue;
+    }
+    if (!paid && acc.status === 'covered') {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--accent);">✓ ${acc.label} — מכוסה מזכות${cred}</span>
+      </div>`;
+      continue;
+    }
+    if (!paid && acc.status === 'notBilling') {
+      html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
+        <span style="color:var(--text2);">— ${acc.label} — אין חיוב החודש${debt}${cred}</span>
+      </div>`;
+      continue;
+    }
     if (paid) {
       html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
-        <span style="color:var(--accent);">✓ ${acc.label}</span>
+        <span style="color:var(--accent);">✓ ${acc.label}${cred}</span>
         <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:rgba(248,81,73,.1);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markAccountUnpaid('${tenantId}','${acc.id}')">בטל</button>
       </div>`;
     } else {
       html += `<div style="font-size:0.74rem;display:flex;align-items:center;gap:6px;">
-        <span style="color:var(--warn);">⏳ ${acc.label} — ₪${acc.amount}${debt}</span>
+        <span style="color:var(--warn);">⏳ ${acc.label} — ₪${(acc.owedCurrent !== undefined) ? acc.owedCurrent : acc.amount}${debt}${cred}</span>
         <button class="btn btn-sm" style="font-size:0.68rem;padding:1px 6px;background:var(--surface2);color:var(--text2);border:1px solid var(--border);" onclick="promptAccountPaid('${tenantId}','${acc.id}',${acc.amount})">סמן ששילם</button>
       </div>`;
     }

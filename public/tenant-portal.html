@@ -1052,26 +1052,54 @@ function renderUnifiedBreakdown(d, main) {
   }
 
   // ── Extra account rows ──
+  // v2.14.64 (0c) — CONSUMES d.extraBalances (server extraAccountSplit): credit,
+  // billing frequency, suspension and partial payments are already applied there —
+  // the same numbers as the committee's report and the WhatsApp reminder. The old
+  // client-side derivation below runs ONLY for an older server without extraBalances.
+  var eb = d.extraBalances || null;
   accounts.forEach(function(acc) {
+    var freq = freqLabel[acc.frequency] || acc.frequency || '';
+    var sp = eb ? eb[acc.id] : null;
+    if (sp) {
+      var owed = money(sp.owedNow);
+      var creditTxt = sp.creditLeft > 0 ? 'יתרת זכות ' + money(sp.creditLeft) + ' ₪' : '';
+      if (owed <= 0) {
+        var okText, okColor = 'var(--accent)';
+        if (sp.status === 'exempt') { okText = '⏸ פטור'; okColor = 'var(--text2)'; }
+        else if (sp.status === 'notBilling') { okText = 'אין חיוב החודש'; okColor = 'var(--text2)'; }
+        else if (sp.status === 'covered') okText = '✅ מכוסה מזכות';
+        else okText = '✅ שולם';
+        html += lineHtml(acc.label, freq + ' · החודש' + (creditTxt ? ' · ' + creditTxt : ''), okText, okColor, false);
+        return;
+      }
+      var monthPart = sp.status === 'paid' ? 'החודש שולם'
+                    : sp.status === 'exempt' ? 'החודש: פטור'
+                    : sp.status === 'notBilling' ? 'אין חיוב החודש'
+                    : sp.status === 'partial' ? 'שולם ' + money(sp.paidNow) + ' ₪, נותר ' + money(sp.owedCurrent) + ' ₪ החודש'
+                    : money(sp.owedCurrent) + ' ₪ החודש';
+      var sub = freq + ' · ' + monthPart +
+        (sp.owedPrior > 0 ? ' + חוב קודם ' + money(sp.owedPrior) + ' ₪' : '') +
+        (sp.creditApplied > 0 ? ' − קרדיט ' + money(sp.creditApplied) + ' ₪' : '');
+      html += lineHtml(acc.label, sub, owed + ' ₪', 'var(--text)', false);
+      grandTotal += owed;
+      return;
+    }
+    // ── legacy fallback (server without extraBalances) — unchanged ──
     var isPaidNow = ecs[acc.id] === 'paid';
     var current = money(acc.amount);
-    // accrued debt for this account: openingDebt + unpaid history (excluding current month)
     var history = ph[acc.id] || [];
     var unpaidHist = history.filter(function(r){ return !r.paid && r.month !== mk; });
     var histDebt = unpaidHist.reduce(function(s,r){ return s + (parseFloat(r.amount) || current); }, 0);
     var openDebt = money(acc.openingDebt);
     var accruedDebt = Math.max(0, histDebt + openDebt);
-
-    var freq = freqLabel[acc.frequency] || acc.frequency || '';
-
     if (isPaidNow && accruedDebt <= 0) {
       html += lineHtml(acc.label, freq + ' · החודש', '✅ שולם', 'var(--accent)', false);
     } else {
       var due = (isPaidNow ? 0 : current) + accruedDebt;
-      var sub = freq +
+      var sub2 = freq +
         (isPaidNow ? ' · שולם החודש' : ' · ' + current + ' ₪ החודש') +
         (accruedDebt > 0 ? ' + חוב קודם ' + money(accruedDebt) + ' ₪' : '');
-      html += lineHtml(acc.label, sub, money(due) + ' ₪', 'var(--text)', false);
+      html += lineHtml(acc.label, sub2, money(due) + ' ₪', 'var(--text)', false);
       grandTotal += money(due);
     }
   });
