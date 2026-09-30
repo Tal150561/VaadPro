@@ -1772,6 +1772,27 @@ app.get('/api/status', authMiddleware, (req, res) => {
 });
 
 // Data CRUD
+// v2.14.60 — collection report (read-only). Plan feature 'collectionReports' (Basic+).
+app.get('/api/collection-report', authMiddleware, (req, res) => {
+  try {
+    const user = loadUsers().find(u => u.tenantId === req.user.tenantId);
+    if (!user) return res.status(404).json({ error: 'משתמש לא נמצא' });
+    if (!planHasFeature(user.plan, 'collectionReports')) {
+      return res.status(403).json({ error: 'דוח גבייה אינו כלול בחבילה', requiredPlan: 'Basic' });
+    }
+    const re = /^\d{4}-(0[1-9]|1[0-2])$/;
+    const from = String(req.query.from || ''), to = String(req.query.to || '');
+    if (!re.test(from) || !re.test(to) || from > to) {
+      return res.status(400).json({ error: 'טווח חודשים לא תקין' });
+    }
+    const d = loadTenantData(req.user.tenantId);
+    res.json(buildCollectionReport(d, { from, to, tenantId: req.query.tenantId || null }));
+  } catch (e) {
+    console.error('[collection-report]', e);
+    res.status(500).json({ error: 'שגיאה בהפקת הדוח' });
+  }
+});
+
 app.get('/api/data', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
   // v2.14.37 — ship the running server version so the frontend can compare it to
@@ -2815,6 +2836,251 @@ function splitCurrentMonthDebt(d, t, mkNow, emNow, monthBalances, chargeOverride
   const owedCurrent = Math.min(monthDue, owedNow);
   const owedPrior = r2(owedNow - owedCurrent);
   return { emBal, totalDebt, priorDebt, monthDue, credit, owedNow, creditApplied, creditLeft, owedCurrent, owedPrior };
+}
+
+// ════════════════════════════════════════════════════════════════
+// COLLECTION REPORT (דוח גבייה) — v2.14.60 — READ-ONLY
+// ════════════════════════════════════════════════════════════════
+// Design locked with Tal (2026-09-30), see SKILL "📌 COLLECTION REPORT":
+//   • range = BILLING months (YYYY-MM..YYYY-MM). There is no bank value-date per
+//     payment (paymentHistory.date = recording date, sentLog = import timestamp).
+//   • computed HERE, consumed by the page (CONSUME-NOT-COMPUTE). Writes NOTHING.
+//   • two measures: paid ("נגבה בפועל", may exceed the charge) and covered
+//     ("כיסוי חיוב" = min(paid, charged)) → collection % never exceeds 100.
+//   • main == extra: every extra account is reported with the same rules.
+// Per-month source of truth (mirrors the screens and month-close):
+//   • OPEN month (not in closedMonths, within sentLog's 12-month window) →
+//     sentLog via calcMonthBalance; expected = getExpectedAmount (frozen record),
+//     fallback = live amount for the active month, resolveTariffRate for others.
+//   • CLOSED month → paymentHistory. closeMonthUnpaidForBuilding DELETES an unpaid
+//     month's record (and moves the charge into openingDebt), so a closed month
+//     with no paid record = charged & unpaid; its charge is reconstructed with
+//     resolveTariffRate (dated tariffs), falling back to the live amount — the
+//     same `customAmount || config.amount || 300` expression month-close uses.
+//   • Extra accounts: charge = live acc.amount on billing months only
+//     (monthly / quarterly 3,6,9,12 / yearly 1), exactly like closeExtraAccountsUnpaid;
+//     skipped when active===false.
+//   • Suspension is a CURRENT flag (no history exists): a suspended main/extra
+//     account that did not pay in full is "exempt" (charged 0). Cash that did come
+//     in is still counted as "נגבה בפועל".
+//   • A member is reported from max(building start, the month the member was
+//     created — tenant ids are Date.now() at creation) and never later than the
+//     member's first paid record. Building start = earliest closed month or paid
+//     record; months before it are outside the system and are not counted.
+// ⚠️ Touches no debt-core function; calls only read helpers.
+function crMonthAdd(mk, n) {
+  const p = String(mk).split('-').map(Number);
+  const t = p[0] * 12 + (p[1] - 1) + n;
+  return Math.floor(t / 12) + '-' + String((t % 12) + 1).padStart(2, '0');
+}
+
+function crMonthsBetween(from, to) {
+  const out = [];
+  const re = /^\d{4}-(0[1-9]|1[0-2])$/;
+  if (!re.test(String(from)) || !re.test(String(to)) || from > to) return out;
+  let m = from;
+  while (m <= to && out.length < 60) { out.push(m); m = crMonthAdd(m, 1); }
+  return out;
+}
+
+// Month a tenant record was created, from its Date.now() id. null when the id is
+// not a plausible timestamp (legacy / small numeric ids / test fixtures).
+function crTenantCreatedMonth(t) {
+  const n = Number(t && t.id);
+  if (!Number.isFinite(n) || n < 1577836800000 || n > Date.now() + 86400000) return null; // 2020-01-01..tomorrow
+  const dt = new Date(n);
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0');
+}
+
+function crBuildingStartMonth(d, mkNow) {
+  let s = null;
+  const take = m => { m = String(m || ''); if (/^\d{4}-\d{2}$/.test(m) && (s === null || m < s)) s = m; };
+  (d.closedMonths || []).forEach(take);
+  (d.closedMonthsExtra || []).forEach(take);
+  Object.keys(d.paymentHistory || {}).forEach(k => (d.paymentHistory[k] || []).forEach(r => { if (r && r.paid) take(r.month); }));
+  return (s !== null && s <= mkNow) ? s : mkNow;
+}
+
+function crCell(charged, paid, source, status) {
+  const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+  charged = r2(charged); paid = r2(paid);
+  return {
+    charged, paid,
+    covered: r2(Math.min(paid, charged)),
+    excess:  r2(Math.max(0, paid - charged)),
+    gap:     r2(Math.max(0, charged - paid)),
+    source, status
+  };
+}
+
+function crMainMonth(d, t, M, c) {
+  const tid  = String(t.id);
+  const hist = (d.paymentHistory || {})[tid] || [];
+  // Same expression as closeMonthUnpaidForBuilding / /api/data (kept identical on purpose).
+  const live = t.customAmount || (d.config && d.config.amount) || 300;
+  const useSentLog = !c.closed.has(M) && M >= c.sentLogFloor && M <= c.mkNow;
+  let charged, paid, source = null, status;
+  if (useSentLog) {
+    const slVal = (d.sentLog || {})[tid + '_' + HEBREW_MONTHS[Number(M.slice(5)) - 1]];
+    const fallback = (M === c.mkNow) ? live : resolveTariffRate(t, d.defaultTariffs, M, live);
+    const bal = calcMonthBalance(slVal, getExpectedAmount(hist, M, fallback));
+    charged = bal.expected; paid = bal.paidAmount; status = bal.status === 'reminded' ? 'unpaid' : bal.status;
+    if (sentLogIsPayment(slVal)) source = String(slVal).startsWith('bank_import') ? 'bank' : 'manual';
+  } else {
+    const rec = hist.find(r => r.month === M && r.type !== 'wa_sent' && r.paid);
+    if (rec) {
+      charged = (rec.amount != null && !isNaN(parseFloat(rec.amount))) ? parseFloat(rec.amount)
+        : resolveTariffRate(t, d.defaultTariffs, M, live);
+      paid = parseFloat(rec.paidAmount ?? rec.amount ?? charged) || 0;   // same read as month-close
+      source = rec.type === 'bank' ? 'bank' : 'manual';
+      status = paid < charged ? 'partial' : 'paid';
+    } else {
+      charged = resolveTariffRate(t, d.defaultTariffs, M, live); paid = 0; status = 'unpaid';
+    }
+  }
+  if (t.suspended === true && status !== 'paid') { charged = 0; status = 'exempt'; }
+  return crCell(charged, paid, source, status);
+}
+
+// null → the account has nothing to report for M (not a billing month and no money).
+function crExtraMonth(d, t, acc, M, c) {
+  if (!acc || acc.active === false) return null;
+  const tid = String(t.id);
+  const mon = Number(M.slice(5));
+  const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
+  const amount = parseFloat(acc.amount) || 0;
+  const useSentLog = !c.closedExtra.has(M) && M >= c.sentLogFloor && M <= c.mkNow;
+  let paid = 0, source = null;
+  if (useSentLog) {
+    const v = (d.sentLog || {})[tid + '__acc__' + acc.id + '_' + HEBREW_MONTHS[mon - 1]];
+    if (sentLogIsPayment(v)) {
+      const p = parseSentLogAmount(v);
+      paid = p !== null ? p : (billing ? amount : 0);
+      source = String(v).startsWith('bank_import') ? 'bank' : 'manual';
+    }
+  } else {
+    const hist = (d.paymentHistory || {})[tid + '__acc__' + acc.id] || [];
+    const rec = hist.find(r => r.month === M && r.type !== 'wa_sent' && r.paid);
+    if (rec) { paid = parseFloat(rec.paidAmount ?? rec.amount ?? amount) || 0; source = rec.type === 'bank' ? 'bank' : 'manual'; }
+  }
+  let charged = (billing && amount > 0) ? amount : 0;
+  if (charged === 0 && paid <= 0) return null;
+  let status = paid <= 0 ? 'unpaid' : (paid < charged ? 'partial' : 'paid');
+  if (acc.suspended === true && status !== 'paid') { charged = 0; status = 'exempt'; }
+  return crCell(charged, paid, source, status);
+}
+
+// Grouping key for an extra account across members: trimmed, single-spaced label.
+function crAccountKey(label) {
+  return String(label || '').trim().replace(/\s+/g, ' ') || 'חשבון נוסף';
+}
+
+function buildCollectionReport(d, opts) {
+  opts = opts || {};
+  const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+  const mkNow = opts.mkNow || getMonthKey(d.config || {});
+  const emNow = opts.emNow || getEffectiveMonth(d.config || {});
+  const reqFrom = String(opts.from || mkNow), reqTo = String(opts.to || mkNow);
+  const buildingStart = crBuildingStartMonth(d, mkNow);
+  const from = reqFrom < buildingStart ? buildingStart : reqFrom;
+  const to = reqTo > mkNow ? mkNow : reqTo;
+  const months = crMonthsBetween(from, to);
+  const c = {
+    mkNow,
+    sentLogFloor: crMonthAdd(mkNow, -11),
+    closed: new Set(d.closedMonths || []),
+    closedExtra: new Set(d.closedMonthsExtra || [])
+  };
+  const accounts = new Map();   // key → aggregate
+  const monthly = new Map(months.map(M => [M, { month: M, charged: 0, paid: 0, covered: 0 }]));
+  const acc0 = (key, label) => {
+    if (!accounts.has(key)) accounts.set(key, { key, label, charged: 0, paid: 0, covered: 0, excess: 0, gap: 0,
+      bank: 0, manual: 0, _members: new Set(), _payers: new Set(), _debtors: new Set(), _exempt: new Set() });
+    return accounts.get(key);
+  };
+  acc0('main', null);
+  const members = [];
+  let detail = null;
+  const wantId = opts.tenantId != null && opts.tenantId !== '' ? String(opts.tenantId) : null;
+
+  for (const t of (d.tenants || [])) {
+    const tid = String(t.id);
+    let firstPaid = null;
+    Object.keys(d.paymentHistory || {}).forEach(k => {
+      if (k !== tid && k.indexOf(tid + '__acc__') !== 0) return;
+      (d.paymentHistory[k] || []).forEach(r => { if (r && r.paid && /^\d{4}-\d{2}$/.test(String(r.month)) && (!firstPaid || r.month < firstPaid)) firstPaid = r.month; });
+    });
+    let tStart = buildingStart;
+    const created = crTenantCreatedMonth(t);
+    if (created && created > tStart) tStart = created;
+    if (firstPaid && firstPaid < tStart) tStart = firstPaid;
+
+    const m = { id: t.id, name: t.name || '', unit: t.aptNumber || t.gushChelka || t.propertyLabel || '',
+      suspended: t.suspended === true, charged: 0, paid: 0, covered: 0, excess: 0, gap: 0, startMonth: tStart };
+    const rows = [];
+    const add = (key, label, M, cell) => {
+      const a = acc0(key, label);
+      a.charged += cell.charged; a.paid += cell.paid; a.covered += cell.covered; a.excess += cell.excess; a.gap += cell.gap;
+      if (cell.source === 'bank') a.bank += cell.paid; else if (cell.source === 'manual') a.manual += cell.paid;
+      a._members.add(tid);
+      if (cell.paid > 0) a._payers.add(tid);
+      if (cell.gap > 0) a._debtors.add(tid);
+      if (cell.status === 'exempt') a._exempt.add(tid);
+      const mm = monthly.get(M);
+      mm.charged += cell.charged; mm.paid += cell.paid; mm.covered += cell.covered;
+      m.charged += cell.charged; m.paid += cell.paid; m.covered += cell.covered; m.excess += cell.excess; m.gap += cell.gap;
+      if (wantId === tid) rows.push(Object.assign({ month: M, account: key, label }, cell));
+    };
+    for (const M of months) {
+      if (M < tStart) continue;
+      add('main', null, M, crMainMonth(d, t, M, c));
+      for (const acc of (t.extraAccounts || [])) {
+        const cell = crExtraMonth(d, t, acc, M, c);
+        if (cell) add('x:' + crAccountKey(acc.label), crAccountKey(acc.label), M, cell);
+      }
+    }
+    ['charged', 'paid', 'covered', 'excess', 'gap'].forEach(k => { m[k] = r2(m[k]); });
+    members.push(m);
+    if (wantId === tid) {
+      const split = splitCurrentMonthDebt(d, t, mkNow, emNow, null);
+      detail = Object.assign({}, m, { rows, owedNow: split.owedNow, credit: split.creditLeft });
+    }
+  }
+
+  const accList = [...accounts.values()].map(a => {
+    const out = { key: a.key, label: a.label };
+    ['charged', 'paid', 'covered', 'excess', 'gap', 'bank', 'manual'].forEach(k => { out[k] = r2(a[k]); });
+    out.pct = out.charged > 0 ? Math.round(out.covered / out.charged * 1000) / 10 : null;
+    out.members = a._members.size; out.payers = a._payers.size; out.debtors = a._debtors.size; out.exempt = a._exempt.size;
+    return out;
+  }).filter(a => a.key === 'main' || a.members > 0);
+  accList.sort((x, y) => (x.key === 'main' ? -1 : y.key === 'main' ? 1 : String(x.label).localeCompare(String(y.label), 'he')));
+
+  const totals = { charged: 0, paid: 0, covered: 0, excess: 0, gap: 0 };
+  accList.forEach(a => { Object.keys(totals).forEach(k => { totals[k] += a[k]; }); });
+  Object.keys(totals).forEach(k => { totals[k] = r2(totals[k]); });
+  totals.pct = totals.charged > 0 ? Math.round(totals.covered / totals.charged * 1000) / 10 : null;
+
+  // Near-duplicate extra-account labels ("חשמל" / "חשמל-" / "חשמל ") split into two rows.
+  const warnings = [];
+  const loose = new Map();
+  accList.forEach(a => {
+    if (a.key === 'main') return;
+    const k = String(a.label).replace(/[\s"'׳״\-_.]/g, '').toLowerCase();
+    if (!loose.has(k)) loose.set(k, []);
+    loose.get(k).push(a.label);
+  });
+  loose.forEach(list => { if (list.length > 1) warnings.push({ type: 'similarLabels', labels: list }); });
+
+  members.sort((a, b) => (b.gap - a.gap) || String(a.name).localeCompare(String(b.name), 'he'));
+  return {
+    range: { from: months[0] || null, to: months[months.length - 1] || null, requestedFrom: reqFrom, requestedTo: reqTo, months },
+    buildingStart, openMonth: mkNow,
+    closedInRange: months.filter(M => c.closed.has(M)),
+    accounts: accList, totals,
+    monthly: [...monthly.values()].map(x => ({ month: x.month, charged: r2(x.charged), paid: r2(x.paid), covered: r2(x.covered) })),
+    members, member: detail, warnings
+  };
 }
 
 // ── Reminder figures (v2.14.54) — feeds the amount, prior-debt and total placeholders

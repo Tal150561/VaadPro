@@ -71,7 +71,10 @@ const SERVER_FNS = [
   'hebMonthToMonthKey',
   // v2.14.0 — חייבים חריגים (excessive debt)
   'getExcessDebtThreshold', 'buildDebtDetail', 'buildExcessDebtRows',
-  'buildDebtDetailBlock', 'buildExcessDebtMessage'
+  'buildDebtDetailBlock', 'buildExcessDebtMessage',
+  // v2.14.60 — collection report (read-only)
+  'crMonthAdd', 'crMonthsBetween', 'crTenantCreatedMonth', 'crBuildingStartMonth',
+  'crCell', 'crMainMonth', 'crExtraMonth', 'crAccountKey', 'buildCollectionReport'
 ];
 
 function loadServer() {

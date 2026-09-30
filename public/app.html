@@ -788,14 +788,22 @@ function vpLogout() {
       <button id="subRptExpenses" class="tab-btn" data-section-group="reports" data-section-sub="expenses" style="font-size:0.84rem;padding:7px 16px;">🧾 דוחות הוצאות</button>
     </div>
 
-    <!-- collection reports sub-panel (Basic+) — content arrives in the next phase -->
+    <!-- collection reports sub-panel (Basic+) — v2.14.60. Numbers come ONLY from
+         GET /api/collection-report (CONSUME-NOT-COMPUTE); the page formats and filters. -->
     <div id="section-reports-collection">
       <div class="card">
         <div class="card-header">💰 דוח גבייה <button class="help-btn" onclick="showHelp('reports#reports-collection')">?</button></div>
         <div class="card-body">
-          <div class="empty"><div class="empty-icon">🛠️</div><div>דוח הגבייה נמצא בבנייה ויופיע כאן בקרוב — סיכום לפי חשבון בטווח חודשים, בדיקת דייר/חבר פרטני, הדפסה ושמירה.</div></div>
+          <div class="filter-row" style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+            <div><label style="font-size:0.78rem;color:var(--text2);display:block;">מחודש</label><input type="month" id="crFrom"></div>
+            <div><label style="font-size:0.78rem;color:var(--text2);display:block;">עד חודש</label><input type="month" id="crTo"></div>
+            <div style="flex:1;min-width:180px;"><label style="font-size:0.78rem;color:var(--text2);display:block;" id="crMemberLabel">בדיקה פרטנית</label><select id="crMember" style="width:100%;"><option value="">— כולם —</option></select></div>
+            <button class="btn btn-green btn-sm" id="crRunBtn">📊 הפק דוח</button>
+          </div>
+          <div id="crStatus" style="font-size:0.82rem;color:var(--text2);margin-top:8px;"></div>
         </div>
       </div>
+      <div id="crOutput"></div>
     </div>
 
     <!-- expense reports sub-panel (Advanced+) — pre-v2.14.59 content, unchanged -->
@@ -1860,7 +1868,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.59';
+const HTML_VERSION = '2.14.60';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2096,6 +2104,7 @@ function switchSection(group, sub) {
     if (btn) btn.classList.toggle('active', s === sub);
   });
   try { sessionStorage.setItem(sectionStoreKey(group), sub); } catch (e) {}
+  if (group === 'reports' && sub === 'collection' && typeof crOnEnter === 'function') crOnEnter();
 }
 
 function applySectionLocks() {
@@ -2113,6 +2122,176 @@ document.addEventListener('click', function(e) {
   const btn = e.target && e.target.closest ? e.target.closest('[data-section-group]') : null;
   if (!btn) return;
   switchSection(btn.getAttribute('data-section-group'), btn.getAttribute('data-section-sub'));
+});
+
+// ── v2.14.60: collection report (דוח גבייה) — page side ─────────────────────
+// CONSUME-NOT-COMPUTE: every figure below is read from GET /api/collection-report.
+// The page only formats, sorts for display and filters rows by name.
+const CR_HEB = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+let crLast = null;       // last report payload (display only)
+let crEntered = false;   // first entry runs the default report once
+
+function crMonthLabel(mk) {
+  const p = String(mk || '').split('-');
+  const i = parseInt(p[1], 10) - 1;
+  return (CR_HEB[i] || p[1] || '') + ' ' + (p[0] || '');
+}
+function crMoney(n) {
+  const v = Math.round((parseFloat(n) || 0) * 100) / 100;
+  return '₪' + v.toLocaleString('he-IL');
+}
+function crPct(p) { return (p === null || p === undefined) ? '—' : (p + '%'); }
+function crAccLabel(a) { return a.key === 'main' ? t('mainAccount') : a.label; }
+function crStatusLabel(st) {
+  return ({ paid: '✅ שולם', partial: '🟡 חלקי', unpaid: '🔴 לא שולם', exempt: '⏸ מושהה' })[st] || st;
+}
+function crSourceLabel(src) { return src === 'bank' ? 'בנק' : src === 'manual' ? 'ידני' : '—'; }
+
+function crDefaultRange() {
+  const now = new Date();
+  const to = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  const f = new Date(now.getFullYear(), now.getMonth() - 2, 1);
+  const from = f.getFullYear() + '-' + String(f.getMonth() + 1).padStart(2, '0');
+  return { from, to };
+}
+
+function crFillMembers() {
+  const sel = document.getElementById('crMember');
+  if (!sel) return;
+  const keep = sel.value;
+  const list = ((data && data.tenants) || []).slice().sort(function(a, b) { return String(a.name || '').localeCompare(String(b.name || ''), 'he'); });
+  sel.innerHTML = '<option value="">— כל ה' + esc(t('persons')) + ' —</option>' + list.map(function(tn) {
+    const unit = tn.aptNumber || tn.gushChelka || tn.propertyLabel || '';
+    return '<option value="' + esc(tn.id) + '">' + esc(tn.name || '') + (unit ? ' · ' + esc(unit) : '') + '</option>';
+  }).join('');
+  sel.value = keep;
+  const lbl = document.getElementById('crMemberLabel');
+  if (lbl) lbl.textContent = 'בדיקת ' + t('person') + ' פרטני';
+}
+
+function crOnEnter() {
+  crFillMembers();
+  const f = document.getElementById('crFrom'), to = document.getElementById('crTo');
+  if (f && to && !f.value && !to.value) { const r = crDefaultRange(); f.value = r.from; to.value = r.to; }
+  if (!crEntered) { crEntered = true; crRun(); }
+}
+
+async function crRun() {
+  const f = (document.getElementById('crFrom') || {}).value || '';
+  const to = (document.getElementById('crTo') || {}).value || '';
+  const mem = (document.getElementById('crMember') || {}).value || '';
+  const st = document.getElementById('crStatus');
+  if (!/^\d{4}-\d{2}$/.test(f) || !/^\d{4}-\d{2}$/.test(to)) { if (st) st.textContent = 'בחרו חודש התחלה וחודש סיום'; return; }
+  if (f > to) { if (st) st.textContent = 'חודש ההתחלה מאוחר מחודש הסיום'; return; }
+  if (st) st.textContent = '⏳ מפיק דוח...';
+  try {
+    const q = 'from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(to) + (mem ? '&tenantId=' + encodeURIComponent(mem) : '');
+    const res = await fetch(API + '/collection-report?' + q);
+    const body = await res.json().catch(function() { return {}; });
+    if (res.status === 403) { if (st) st.textContent = ''; showPlanUpgradeModal(body.requiredPlan || 'Basic'); return; }
+    if (!res.ok) { if (st) st.textContent = '❌ ' + (body.error || 'שגיאה בהפקת הדוח'); return; }
+    crLast = body;
+    if (st) st.textContent = '';
+    crRender(body);
+  } catch (e) {
+    if (st) st.textContent = '❌ שגיאת תקשורת — נסו שוב';
+  }
+}
+
+function crRender(r) {
+  const out = document.getElementById('crOutput');
+  if (!out) return;
+  if (!r || !r.range || !r.range.months || !r.range.months.length) {
+    out.innerHTML = '<div class="card" style="margin-top:14px;"><div class="card-body"><div class="empty"><div class="empty-icon">📭</div><div>אין חודשי גבייה בטווח שנבחר' +
+      (r && r.buildingStart ? ' — הגבייה במערכת מתחילה ב' + esc(crMonthLabel(r.buildingStart)) : '') + '</div></div></div></div>';
+    return;
+  }
+  let h = '';
+  // notes
+  const notes = [];
+  notes.push('📅 ' + esc(crMonthLabel(r.range.from)) + (r.range.to !== r.range.from ? ' – ' + esc(crMonthLabel(r.range.to)) : ''));
+  if (r.range.requestedFrom < r.range.from) notes.push('הדוח מתחיל ב' + esc(crMonthLabel(r.range.from)) + ' — תחילת הגבייה במערכת');
+  if (r.range.months.indexOf(r.openMonth) !== -1) notes.push('⏳ ' + esc(crMonthLabel(r.openMonth)) + ' עדיין פתוח — הנתונים שלו יתעדכנו עד סגירת החודש');
+  (r.warnings || []).forEach(function(w) {
+    if (w.type === 'similarLabels') notes.push('⚠️ חשבונות בשמות דומים: ' + w.labels.map(function(x) { return '"' + esc(x) + '"'; }).join(', ') + ' — אם זה אותו חשבון, אחדו את השם ב' + esc(t('persons')));
+  });
+  h += '<div style="margin:14px 0 8px;font-size:0.82rem;color:var(--text2);line-height:1.8;">' + notes.join('<br>') + '</div>';
+
+  if (r.member) h += crMemberHtml(r.member);
+
+  const T = r.totals;
+  h += '<div class="stats-row" style="margin-bottom:6px;">' +
+    '<div class="stat-card"><div class="stat-num">' + crMoney(T.charged) + '</div><div class="stat-label">חיוב</div></div>' +
+    '<div class="stat-card"><div class="stat-num">' + crMoney(T.covered) + '</div><div class="stat-label">כיסוי חיוב</div></div>' +
+    '<div class="stat-card"><div class="stat-num">' + crMoney(T.paid) + '</div><div class="stat-label">נגבה בפועל</div></div>' +
+    '<div class="stat-card"><div class="stat-num">' + crPct(T.pct) + '</div><div class="stat-label">אחוז גבייה</div></div>' +
+    '<div class="stat-card"><div class="stat-num' + (T.gap > 0 ? ' warn' : '') + '">' + crMoney(T.gap) + '</div><div class="stat-label">פער</div></div>' +
+    '</div>';
+  h += '<div style="font-size:0.74rem;color:var(--text2);margin-bottom:14px;">כיסוי חיוב = החלק מהחיוב ששולם (לעולם לא יותר מהחיוב). נגבה בפועל = כל הכסף שנכנס, כולל עודפים שקיזזו חוב קודם או נשמרו כזכות.</div>';
+
+  // per account
+  h += '<div class="card"><div class="card-header">📂 סיכום לפי חשבון</div><div style="overflow-x:auto;"><table><thead><tr>' +
+    '<th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק / ידני</th><th>משלמים</th><th>מושהים</th></tr></thead><tbody>';
+  r.accounts.forEach(function(a) {
+    h += '<tr><td><strong>' + esc(crAccLabel(a)) + '</strong></td><td>' + crMoney(a.charged) + '</td><td>' + crMoney(a.covered) + '</td><td>' + crMoney(a.paid) +
+      '</td><td>' + crPct(a.pct) + '</td><td style="color:' + (a.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(a.gap) +
+      '</td><td>' + crMoney(a.bank) + ' / ' + crMoney(a.manual) + '</td><td>' + a.payers + '/' + a.members + '</td><td>' + (a.exempt || 0) + '</td></tr>';
+  });
+  if (r.accounts.length > 1) {
+    h += '<tr style="font-weight:700;"><td>סה"כ</td><td>' + crMoney(T.charged) + '</td><td>' + crMoney(T.covered) + '</td><td>' + crMoney(T.paid) +
+      '</td><td>' + crPct(T.pct) + '</td><td>' + crMoney(T.gap) + '</td><td></td><td></td><td></td></tr>';
+  }
+  h += '</tbody></table></div></div>';
+
+  // per member
+  h += '<div class="card" style="margin-top:14px;"><div class="card-header">👥 לפי ' + esc(t('person')) +
+    '<div class="spacer"></div><input id="crMemberFilter" placeholder="סינון לפי שם" style="max-width:180px;font-size:0.8rem;"></div>' +
+    '<div style="overflow-x:auto;"><table><thead><tr><th>שם</th><th>' + esc(t('unit')) + '</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>פער</th><th></th></tr></thead><tbody id="crMemberRows">';
+  r.members.forEach(function(m) {
+    h += '<tr data-cr-name="' + esc(String(m.name || '').toLowerCase()) + '"><td>' + esc(m.name) + (m.suspended ? ' <span title="מושהה">⏸</span>' : '') +
+      '</td><td>' + esc(m.unit) + '</td><td>' + crMoney(m.charged) + '</td><td>' + crMoney(m.covered) + '</td><td>' + crMoney(m.paid) +
+      '</td><td style="color:' + (m.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(m.gap) +
+      '</td><td><button class="btn btn-secondary btn-sm" data-cr-member="' + esc(m.id) + '">🔎 פירוט</button></td></tr>';
+  });
+  h += '</tbody></table></div></div>';
+  out.innerHTML = h;
+}
+
+function crMemberHtml(m) {
+  let h = '<div class="card" style="margin-bottom:14px;border-color:var(--info);"><div class="card-header">🔎 ' + esc(m.name) + (m.unit ? ' · ' + esc(m.unit) : '') +
+    '<div class="spacer"></div><button class="btn btn-secondary btn-sm" data-cr-member="">✕ סגור</button></div><div style="overflow-x:auto;"><table><thead><tr>' +
+    '<th>חודש</th><th>חשבון</th><th>חיוב</th><th>שולם</th><th>כיסוי חיוב</th><th>מקור</th><th>סטטוס</th></tr></thead><tbody>';
+  if (!m.rows || !m.rows.length) {
+    h += '<tr><td colspan="7" style="color:var(--text2);">אין חודשי חיוב בטווח' + (m.startMonth ? ' (מופיע במערכת מ' + esc(crMonthLabel(m.startMonth)) + ')' : '') + '</td></tr>';
+  }
+  (m.rows || []).forEach(function(row) {
+    h += '<tr><td>' + esc(crMonthLabel(row.month)) + '</td><td>' + esc(row.account === 'main' ? t('mainAccount') : row.label) + '</td><td>' + crMoney(row.charged) +
+      '</td><td>' + crMoney(row.paid) + '</td><td>' + crMoney(row.covered) + '</td><td>' + crSourceLabel(row.source) + '</td><td>' + crStatusLabel(row.status) + '</td></tr>';
+  });
+  h += '</tbody></table></div><div class="card-body" style="font-size:0.85rem;">' +
+    'בטווח: חיוב ' + crMoney(m.charged) + ' · כיסוי ' + crMoney(m.covered) + ' · נגבה בפועל ' + crMoney(m.paid) + ' · פער ' + crMoney(m.gap) +
+    '<br>יתרה לתשלום כעת (' + esc(t('mainAccount')) + '): <strong>' + crMoney(m.owedNow) + '</strong>' +
+    (m.credit > 0 ? ' · יתרת זכות ' + crMoney(m.credit) : '') + '</div></div>';
+  return h;
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target || !e.target.closest) return;
+  if (e.target.closest('#crRunBtn')) { crRun(); return; }
+  const b = e.target.closest('[data-cr-member]');
+  if (!b) return;
+  const sel = document.getElementById('crMember');
+  if (sel) sel.value = b.getAttribute('data-cr-member');
+  crRun();
+  const out = document.getElementById('section-reports-collection');
+  if (out && out.scrollIntoView) out.scrollIntoView({ behavior: 'smooth', block: 'start' });
+});
+document.addEventListener('input', function(e) {
+  if (!e.target || e.target.id !== 'crMemberFilter') return;
+  const q = String(e.target.value || '').trim().toLowerCase();
+  document.querySelectorAll('#crMemberRows tr').forEach(function(tr) {
+    tr.style.display = (!q || (tr.getAttribute('data-cr-name') || '').indexOf(q) !== -1) ? '' : 'none';
+  });
 });
 
 function switchSubTab(sub) {

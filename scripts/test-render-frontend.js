@@ -2270,4 +2270,131 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     (app59.match(/showHelp\('(?:reports|trends)#([a-z-]+)'\)/g) || []).map(x => x.match(/#([a-z-]+)/)[1]).every(a => gd59.includes('id="vpg-a-' + a + '"')), true);
 }
 
-process.exit(t.done() ? 1 : 0);
+// ════════════════════════════════════════════════════════════════
+// v2.14.60 — collection report page: EXECUTES crRender / crMemberHtml /
+// crRun / crOnEnter. The page must only FORMAT server figures (CONSUME).
+// ════════════════════════════════════════════════════════════════
+{
+  const app60 = readSource('public/app.html');
+  const gd60  = readSource('public/vaadpro-guide.js');
+  const cs = app60.indexOf('const CR_HEB'), ce = app60.indexOf('let crEntered');
+  if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crEntered) — fix, do NOT delete'); process.exit(1); }
+  const head60 = app60.slice(cs, app60.indexOf('\n', ce) + 1);
+  const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel',
+    'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc']);
+  const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה' };
+  function load60(opts) {
+    opts = opts || {};
+    const els = {
+      crOutput: { innerHTML: '' }, crStatus: { textContent: '' },
+      crFrom: { value: opts.from == null ? '2026-07' : opts.from }, crTo: { value: opts.to == null ? '2026-09' : opts.to },
+      crMember: { value: opts.member || '', innerHTML: '' }, crMemberLabel: { textContent: '' }
+    };
+    const calls = { fetch: [], modal: [] };
+    const ctx = {
+      document: { getElementById: id => els[id] || null, querySelectorAll: () => [] },
+      data: { tenants: opts.tenants || [{ id: 2, name: 'בתיה', aptNumber: '2' }, { id: 1, name: 'אבי', gushChelka: '12/4' }] },
+      t: k => LBL[k] || k, API: '/api',
+      showPlanUpgradeModal: p => calls.modal.push(p),
+      fetch: async url => { calls.fetch.push(url); const r = opts.response || { status: 200, body: {} };
+        return { status: r.status, ok: r.status >= 200 && r.status < 300, json: async () => r.body }; },
+      encodeURIComponent, Promise, parseInt
+    };
+    const mod = runInSandbox(head60 + fns60 + '\nmodule.exports={crRender,crMemberHtml,crRun,crOnEnter,crFillMembers,crMoney,crMonthLabel,getEntered:()=>crEntered};', ctx);
+    return { mod, els, calls };
+  }
+  const report = () => ({
+    range: { from: '2026-07', to: '2026-09', requestedFrom: '2026-01', requestedTo: '2026-09', months: ['2026-07', '2026-08', '2026-09'] },
+    buildingStart: '2026-07', openMonth: '2026-09', closedInRange: ['2026-07', '2026-08'],
+    accounts: [
+      { key: 'main', label: null, charged: 3760, paid: 2980, covered: 2750, excess: 230, gap: 1010, pct: 73.1, bank: 1840, manual: 1140, members: 6, payers: 5, debtors: 3, exempt: 1 },
+      { key: 'x:חשמל', label: 'חשמל', charged: 600, paid: 500, covered: 500, excess: 0, gap: 100, pct: 83.3, bank: 500, manual: 0, members: 2, payers: 2, debtors: 1, exempt: 0 }
+    ],
+    // deliberately NOT the sum of the accounts: the page must print what it is given
+    totals: { charged: 999, paid: 888, covered: 777, excess: 0, gap: 222, pct: 77.8 },
+    monthly: [], warnings: [{ type: 'similarLabels', labels: ['חשמל', 'חשמל-'] }],
+    members: [{ id: 2, name: '<img src=x onerror=alert(1)>', unit: '2', suspended: true, charged: 1000, paid: 450, covered: 450, excess: 0, gap: 550, startMonth: '2026-07' }],
+    member: null
+  });
+
+  t.section('v2.14.60 — crRender prints the SERVER figures (consume, never compute)');
+  {
+    const L = load60(); L.mod.crRender(report()); const h = L.els.crOutput.innerHTML;
+    t.eq('totals.charged shown as given (999, not a re-sum)', h.includes(L.mod.crMoney(999)), true);
+    t.eq('stat card "חיוב" = totals.charged exactly', h.includes('<div class="stat-num">' + L.mod.crMoney(999) + '</div><div class="stat-label">חיוב</div>'), true);
+    t.eq('stat card "נגבה בפועל" = totals.paid exactly', h.includes('<div class="stat-num">' + L.mod.crMoney(888) + '</div><div class="stat-label">נגבה בפועל</div>'), true);
+    t.eq('stat card "כיסוי חיוב" = totals.covered exactly', h.includes('<div class="stat-num">' + L.mod.crMoney(777) + '</div><div class="stat-label">כיסוי חיוב</div>'), true);
+    t.eq('totals.pct shown as given', h.includes('77.8%'), true);
+    t.eq('covered and paid both shown', h.includes('כיסוי חיוב') && h.includes('נגבה בפועל'), true);
+    t.eq('main account named from org labels (t)', h.includes('ערבות הדדית'), true);
+    t.eq('extra account row', h.includes('<strong>חשמל</strong>'), true);
+    t.eq('bank / manual split shown', h.includes(L.mod.crMoney(1840) + ' / ' + L.mod.crMoney(1140)), true);
+    t.eq('payers/members "5/6"', h.includes('<td>5/6</td>'), true);
+    t.eq('open-month note', h.includes('ספטמבר 2026 עדיין פתוח'), true);
+    t.eq('clamped-start note', h.includes('תחילת הגבייה במערכת'), true);
+    t.eq('similar-labels warning', h.includes('"חשמל-"'), true);
+    t.eq('XSS: member name escaped', h.includes('<img src=x') , false);
+    t.eq('suspended member marked ⏸', h.includes('⏸'), true);
+    t.eq('unit column titled from labels (גוש/חלקה)', h.includes('<th>גוש/חלקה</th>'), true);
+    t.eq('drill-down button carries id via data attribute', h.includes('data-cr-member="2"'), true);
+    t.eq('no member card when member is null', h.includes('יתרה לתשלום כעת'), false);
+  }
+  t.section('v2.14.60 — empty range and member card');
+  {
+    const L = load60(); const r = report(); r.range.months = []; L.mod.crRender(r);
+    t.eq('empty range → empty state naming the building start', L.els.crOutput.innerHTML.includes('יולי 2026'), true);
+    const L2 = load60(); const r2 = report();
+    r2.member = { id: 2, name: 'בתיה', unit: '2', charged: 1000, paid: 450, covered: 450, gap: 550, owedNow: 850, credit: 0, startMonth: '2026-07',
+      rows: [{ month: '2026-07', account: 'main', label: null, charged: 300, paid: 0, covered: 0, source: null, status: 'unpaid' },
+             { month: '2026-09', account: 'x:חשמל', label: 'חשמל', charged: 100, paid: 100, covered: 100, source: 'bank', status: 'paid' }] };
+    L2.mod.crRender(r2); const h = L2.els.crOutput.innerHTML;
+    t.eq('member card shows owedNow from the server', h.includes(L2.mod.crMoney(850)), true);
+    t.eq('member rows: status labels', h.includes('🔴 לא שולם') && h.includes('✅ שולם'), true);
+    t.eq('member rows: source label', h.includes('<td>בנק</td>'), true);
+    t.eq('member rows: extra account label', h.includes('<td>חשמל</td>'), true);
+    t.eq('credit hidden when 0', h.includes('יתרת זכות'), false);
+    r2.member.credit = 120; L2.mod.crRender(r2);
+    t.eq('credit shown when > 0', L2.els.crOutput.innerHTML.includes('יתרת זכות ' + L2.mod.crMoney(120)), true);
+  }
+  t.section('v2.14.60 — crRun / crOnEnter (fetch, plan, errors)');
+  const runs = [];
+  runs.push((async () => {
+    const L = load60({ member: '2', response: { status: 200, body: report() } });
+    await L.mod.crRun();
+    t.eq('query carries from/to/tenantId', L.calls.fetch, ['/api/collection-report?from=2026-07&to=2026-09&tenantId=2']);
+    t.eq('success renders', L.els.crOutput.innerHTML.length > 100, true);
+    const B = load60({ from: '2026-09', to: '2026-07' }); await B.mod.crRun();
+    t.eq('from > to → no request + message', [B.calls.fetch.length, B.els.crStatus.textContent], [0, 'חודש ההתחלה מאוחר מחודש הסיום']);
+    const E = load60({ from: '' }); await E.mod.crRun();
+    t.eq('missing month → no request', E.calls.fetch.length, 0);
+    const P = load60({ response: { status: 403, body: { requiredPlan: 'Basic' } } }); await P.mod.crRun();
+    t.eq('403 → upgrade modal (Basic)', P.calls.modal, ['Basic']);
+    const X = load60({ response: { status: 500, body: { error: 'שגיאה בהפקת הדוח' } } }); await X.mod.crRun();
+    t.eq('server error shown', X.els.crStatus.textContent, '❌ שגיאה בהפקת הדוח');
+    const O = load60({ from: '', to: '', response: { status: 200, body: report() } });
+    O.mod.crOnEnter();
+    t.eq('first entry fills a default 3-month range', /^\d{4}-\d{2}$/.test(O.els.crFrom.value) && O.els.crFrom.value <= O.els.crTo.value, true);
+    t.eq('first entry runs the report once', O.calls.fetch.length, 1);
+    O.mod.crOnEnter();
+    t.eq('second entry does not re-run', O.calls.fetch.length, 1);
+    t.eq('member list sorted by name, with unit', O.els.crMember.innerHTML.indexOf('אבי · 12/4') < O.els.crMember.innerHTML.indexOf('בתיה · 2'), true);
+    t.eq('member label uses org labels', O.els.crMemberLabel.textContent, 'בדיקת חבר פרטני');
+  })());
+
+  t.section('v2.14.60 — wiring and guide');
+  const pageFns = extractFunctions(app60, ['crRender', 'crMemberHtml']);
+  t.eq('no money arithmetic in the page renderers', /\.(charged|paid|covered|gap|excess)\s*[-+*\/]|[-+*\/]\s*[\w.]*\.(charged|paid|covered|gap|excess)\b|Math\.(min|max)\(|\.reduce\(/.test(pageFns), false);
+  t.eq('switchSection enters the collection report', app60.includes("if (group === 'reports' && sub === 'collection' && typeof crOnEnter === 'function') crOnEnter();"), true);
+  t.eq('placeholder text removed', app60.includes('דוח הגבייה נמצא בבנייה'), false);
+  t.eq('report controls present', ['id="crFrom"', 'id="crTo"', 'id="crMember"', 'id="crRunBtn"', 'id="crOutput"'].every(x => app60.includes(x)), true);
+  t.eq('no inline onclick on report buttons', /id="crRunBtn"[^>]*onclick/.test(app60), false);
+  t.eq('guide: two measures explained', gd60.includes('<strong>כיסוי חיוב</strong>') && gd60.includes('<strong>נגבה בפועל</strong>'), true);
+  t.eq('guide: overpay example 230/460', gd60.includes('חיוב 230, שולמו 460'), true);
+  t.eq('guide: closed vs open month', gd60.includes('<strong>חודש סגור</strong>') && gd60.includes('<strong>חודש פתוח</strong>'), true);
+  t.eq('guide: suspension is current-state only', gd60.includes('אין למערכת היסטוריה של מתי הושהה'), true);
+  t.eq('guide: similar labels box', gd60.includes('⚠️ חשבונות בשמות דומים'), true);
+  t.eq('guide: collection "בבנייה" box gone from reports section', gd60.slice(gd60.indexOf('vpg-a-reports-collection'), gd60.indexOf('vpg-a-reports-expenses')).includes('🛠️ בבנייה'), false);
+  global.__crRuns = runs;
+}
+
+Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

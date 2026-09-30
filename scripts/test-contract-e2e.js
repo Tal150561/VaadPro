@@ -279,4 +279,58 @@ t.eq('response includes alreadyImported count',
 t.eq('receipt (lastBankSyncImport) includes alreadyImported',
   /alreadyImported:\s*\(alreadyImportedSkips \|\| \[\]\)\.length,\s*\n\s*alreadyImportedTenants:/.test(server), true);
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.60 — GET /api/collection-report: the REAL handler, REAL PLANS gate
+// ════════════════════════════════════════════════════════════════
+{
+  const { extractFunctions: xf } = require('./test-lib');
+  const src = readSource('server.js');
+  const head = "app.get('/api/collection-report', authMiddleware, (req, res) => {";
+  const st = src.indexOf(head);
+  if (st < 0) { console.error('  ❌ collection-report route not found'); process.exit(1); }
+  const body = src.slice(st + head.length, src.indexOf('\n});\n', st));
+  const plansSrc = src.match(/const PLANS = \{[\s\S]*?\n\};/)[0];
+  const planMod = require('./test-lib').runInSandbox(plansSrc + '\n' + xf(src, ['getPlan', 'planHasFeature']) + 'module.exports={planHasFeature};');
+  const d = {
+    config: { amount: 230 }, closedMonths: ['2026-07'],
+    tenants: [{ id: 1, name: 'א', openingDebt: 0 }],
+    paymentHistory: { '1': [{ month: '2026-07', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] },
+    sentLog: {}
+  };
+  function call(plan, query) {
+    const g = Object.assign({}, S, {
+      planHasFeature: planMod.planHasFeature,
+      loadUsers: () => [{ tenantId: 'B', plan }],
+      loadTenantData: () => d
+    });
+    const names = Object.keys(g);
+    const fn = new Function(...names, 'req', 'res', body);
+    const out = { status: 200 };
+    fn(...names.map(n => g[n]), { user: { tenantId: 'B' }, query },
+       { status(c) { out.status = c; return this; }, json(o) { out.body = o; } });
+    return out;
+  }
+  t.section('v2.14.60 — /api/collection-report contract');
+  const ok = call('basic', { from: '2026-07', to: '2026-07' });
+  t.eq('Basic plan → 200', ok.status, 200);
+  ['range', 'buildingStart', 'openMonth', 'closedInRange', 'accounts', 'totals', 'monthly', 'members', 'member', 'warnings']
+    .forEach(k => t.eq('payload has ' + k, Object.prototype.hasOwnProperty.call(ok.body, k), true));
+  ['key', 'label', 'charged', 'paid', 'covered', 'excess', 'gap', 'pct', 'bank', 'manual', 'members', 'payers', 'debtors', 'exempt']
+    .forEach(k => t.eq('account row has ' + k, Object.prototype.hasOwnProperty.call(ok.body.accounts[0], k), true));
+  ['id', 'name', 'unit', 'suspended', 'charged', 'paid', 'covered', 'excess', 'gap', 'startMonth']
+    .forEach(k => t.eq('member row has ' + k, Object.prototype.hasOwnProperty.call(ok.body.members[0], k), true));
+  t.eq('July figures: charged 230 paid 230', [ok.body.totals.charged, ok.body.totals.paid], [230, 230]);
+  const withM = call('advanced', { from: '2026-07', to: '2026-07', tenantId: '1' });
+  ['rows', 'owedNow', 'credit'].forEach(k => t.eq('member detail has ' + k, Object.prototype.hasOwnProperty.call(withM.body.member, k), true));
+  t.eq('trial ("all") → 200', call('trial', { from: '2026-07', to: '2026-07' }).status, 200);
+  const locked = call('suspended', { from: '2026-07', to: '2026-07' });
+  t.eq('plan without collectionReports → 403', locked.status, 403);
+  t.eq('403 names the required plan', locked.body.requiredPlan, 'Basic');
+  t.eq('bad month format → 400', call('basic', { from: '2026-7', to: '2026-07' }).status, 400);
+  t.eq('from > to → 400', call('basic', { from: '2026-08', to: '2026-07' }).status, 400);
+  t.eq('month 13 → 400', call('basic', { from: '2026-13', to: '2026-13' }).status, 400);
+  t.eq('route is read-only (no saveTenantData in handler)', /saveTenantData|writeFileSync/.test(body), false);
+}
+
 process.exit(t.done() ? 1 : 0);

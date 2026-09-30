@@ -3181,4 +3181,203 @@ async function v2_14_57_async() {
     await m(C57(230)), 'ועד בית: 230 | חוב קודם: *230 ₪* |  | זכות 0 | סה"כ 460');
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.60 — COLLECTION REPORT (buildCollectionReport) — read-only
+// Neve-Yam-shaped fixture: main + extra accounts, dated personal tariff,
+// partial / overpay / suspended / quarterly / near-duplicate labels.
+// ════════════════════════════════════════════════════════════════
+{
+  const { loadCloseMonth, loadCloseExtra } = require('./test-lib');
+  const R = (d, o) => S.buildCollectionReport(d, Object.assign({ mkNow: '2026-09', emNow: 'ספטמבר' }, o || {}));
+  const rec = (month, amount, paidAmount, type, extra) => Object.assign({ month, paid: true, amount, paidAmount, date: '2026-01-01', type, name: '', payerName: '' }, extra || {});
+  const BI = a => 'bank_import_2026-09-05T10:00:00.000Z_' + a + '_payer_x';
+  const MP = a => 'manual_paid_2026-09-05T10:00:00.000Z_amount_' + a;
+  function fixture() {
+    return {
+      config: { amount: 230 },
+      defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+      closedMonths: ['2026-07', '2026-08'], closedMonthsExtra: ['2026-07', '2026-08'],
+      tenants: [
+        { id: 1, name: 'אבי', aptNumber: '1', openingDebt: 230 },
+        { id: 2, name: 'בתיה', aptNumber: '2', customAmount: 350, openingDebt: 300,
+          personalTariffs: [{ rate: 300, startDate: '2000-01-01', endDate: '2026-08-15' }, { rate: 350, startDate: '2026-08-15', endDate: null }] },
+        { id: 3, name: 'גד', aptNumber: '3', openingDebt: -230 },
+        { id: 4, name: 'דנה', aptNumber: '4', suspended: true, openingDebt: 0 },
+        { id: 5, name: 'הדס', gushChelka: '12/4', openingDebt: 0,
+          extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, openingDebt: 100 }, { id: 'e2', label: 'מים', amount: 90, frequency: 'quarterly' }] },
+        { id: 6, name: 'ורד', aptNumber: '6', openingDebt: 0,
+          extraAccounts: [{ id: 'e3', label: ' חשמל', amount: 100 }, { id: 'e4', label: 'חשמל-', amount: 20 }] }
+      ],
+      paymentHistory: {
+        '1': [rec('2026-07', 230, 230, 'bank')],
+        '2': [rec('2026-08', 350, 350, 'manual')],
+        '3': [rec('2026-07', 230, 460, 'bank', { creditBanked: true }), rec('2026-08', 230, 230, 'bank')],
+        '5': [rec('2026-07', 230, 230, 'manual'), rec('2026-08', 230, 230, 'manual')],
+        '6': [rec('2026-07', 230, 230, 'bank'), rec('2026-08', 230, 230, 'bank')],
+        '5__acc__e1': [rec('2026-07', 100, 100, 'bank')],
+        '6__acc__e3': [rec('2026-07', 100, 100, 'bank'), rec('2026-08', 100, 100, 'bank')]
+      },
+      sentLog: {
+        '1_ספטמבר': BI(230), '2_ספטמבר': MP(100), '3_ספטמבר': 'sent_2026-09-01T09:00:00.000Z',
+        '5_ספטמבר': MP(230), '6_ספטמבר': BI(230),
+        '5__acc__e1_ספטמבר': BI(100), '6__acc__e3_ספטמבר': BI(100),
+        // stale last-year key that must NOT be read for a closed month
+        '1_אוגוסט': BI(999)
+      }
+    };
+  }
+  const acc = (r, key) => r.accounts.find(a => a.key === key);
+  const mem = (r, id) => r.members.find(m => String(m.id) === String(id));
+
+  t.section('v2.14.60 — collection report: main account (Jul–Sep, 2 closed + open)');
+  {
+    const d = fixture();
+    const before = JSON.stringify(d);
+    const r = R(d, { from: '2026-07', to: '2026-09' });
+    t.eq('READ-ONLY: building data unchanged', JSON.stringify(d), before);
+    t.eq('range = 3 months', r.range.months, ['2026-07', '2026-08', '2026-09']);
+    t.eq('closed months in range', r.closedInRange, ['2026-07', '2026-08']);
+    t.eq('open month reported', r.openMonth, '2026-09');
+    const m = acc(r, 'main');
+    t.eq('main: charged 3760', m.charged, 3760);
+    t.eq('main: paid (נגבה בפועל) 2980', m.paid, 2980);
+    t.eq('main: covered (כיסוי חיוב) 2750', m.covered, 2750);
+    t.eq('main: excess 230 (גד overpaid July)', m.excess, 230);
+    t.eq('main: gap 1010 = charged − covered', m.gap, 1010);
+    t.eq('main: pct 73.1 (covered/charged, never > 100)', m.pct, 73.1);
+    t.eq('main: bank 1840 / manual 1140', [m.bank, m.manual], [1840, 1140]);
+    t.eq('main: members 6, payers 5, debtors 3, exempt 1', [m.members, m.payers, m.debtors, m.exempt], [6, 5, 3, 1]);
+  }
+  t.section('v2.14.60 — per member (the rules behind the numbers)');
+  {
+    const r = R(fixture(), { from: '2026-07', to: '2026-09' });
+    t.eq('אבי: closed Aug with NO record = charged & unpaid (close deleted it)', [mem(r, 1).charged, mem(r, 1).paid, mem(r, 1).gap], [690, 460, 230]);
+    t.eq('אבי: stale sentLog "_אוגוסט" NOT read for a closed month', mem(r, 1).paid, 460);
+    t.eq('בתיה: Jul charge from DATED tariff 300, Aug frozen 350, Sep live 350', mem(r, 2).charged, 1000);
+    t.eq('בתיה: Sep partial 100 → paid 450, gap 550', [mem(r, 2).paid, mem(r, 2).gap], [450, 550]);
+    t.eq('גד: overpay counted as paid 690, covered 460, excess 230', [mem(r, 3).paid, mem(r, 3).covered, mem(r, 3).excess], [690, 460, 230]);
+    t.eq('גד: a reminder (sent_) is not a payment → gap 230', mem(r, 3).gap, 230);
+    t.eq('דנה (suspended): charged 0, gap 0', [mem(r, 4).charged, mem(r, 4).gap, mem(r, 4).suspended], [0, 0, true]);
+    t.eq('unit: aptNumber, else gushChelka', [mem(r, 1).unit, mem(r, 5).unit], ['1', '12/4']);
+    t.eq('members sorted by gap desc, tie → name (גד 230 before הדס 190)', r.members.slice(0, 4).map(x => x.name + ':' + x.gap), ['בתיה:550', 'אבי:230', 'גד:230', 'הדס:190']);
+  }
+  t.section('v2.14.60 — extra accounts (main == extra)');
+  {
+    const r = R(fixture(), { from: '2026-07', to: '2026-09' });
+    const el = acc(r, 'x:חשמל');
+    t.eq('"חשמל" and " חשמל" grouped into ONE account', !!el && el.members === 2, true);
+    t.eq('חשמל: charged 600, paid 500, gap 100', [el.charged, el.paid, el.gap], [600, 500, 100]);
+    t.eq('חשמל: closed Aug with no record = unpaid 100 (הדס)', mem(r, 5).gap >= 100, true);
+    const w = acc(r, 'x:מים');
+    t.eq('מים quarterly: only Sep billed (90), Jul/Aug skipped', [w.charged, w.members], [90, 1]);
+    const d4 = acc(r, 'x:חשמל-');
+    t.eq('"חשמל-" is its own row (60 unpaid)', [d4.charged, d4.paid], [60, 0]);
+    t.eq('near-duplicate label warning', r.warnings, [{ type: 'similarLabels', labels: ['חשמל', 'חשמל-'] }]);
+    t.eq('main row first', r.accounts[0].key, 'main');
+    t.eq('totals = sum of accounts (4510 charged)', r.totals.charged, 4510);
+    t.eq('totals.covered = main + extras', r.totals.covered, 2750 + 500 + 0 + 0);
+    t.eq('totals.pct', r.totals.pct, Math.round(3250 / 4510 * 1000) / 10);
+  }
+  t.section('v2.14.60 — internal consistency');
+  {
+    const r = R(fixture(), { from: '2026-07', to: '2026-09' });
+    const sum = (arr, k) => Math.round(arr.reduce((s, x) => s + x[k], 0) * 100) / 100;
+    ['charged', 'paid', 'covered', 'gap'].forEach(k => {
+      t.eq('Σ members.' + k + ' == totals.' + k, sum(r.members, k), r.totals[k]);
+    });
+    ['charged', 'paid', 'covered'].forEach(k => {
+      t.eq('Σ monthly.' + k + ' == totals.' + k, sum(r.monthly, k), r.totals[k]);
+    });
+    t.eq('covered never exceeds charged per account', r.accounts.every(a => a.covered <= a.charged), true);
+  }
+  t.section('v2.14.60 — member drill-down');
+  {
+    const r = R(fixture(), { from: '2026-07', to: '2026-09', tenantId: '2' });
+    t.eq('detail returned for the chosen member only', r.member && r.member.name, 'בתיה');
+    t.eq('detail rows: 3 months of main', r.member.rows.map(x => x.month + ':' + x.status), ['2026-07:unpaid', '2026-08:paid', '2026-09:partial']);
+    t.eq('detail row source', r.member.rows.map(x => x.source), [null, 'manual', 'manual']);
+    const S2 = S.splitCurrentMonthDebt(fixture(), fixture().tenants[1], '2026-09', 'ספטמבר', null);
+    t.eq('owedNow CONSUMED from splitCurrentMonthDebt', r.member.owedNow, S2.owedNow);
+    const r5 = R(fixture(), { from: '2026-07', to: '2026-09', tenantId: 5 });
+    t.eq('member with extras: rows include each account', [...new Set(r5.member.rows.map(x => x.account))], ['main', 'x:חשמל', 'x:מים']);
+    t.eq('no tenantId → member null', R(fixture(), { from: '2026-07', to: '2026-09' }).member, null);
+  }
+  t.section('v2.14.60 — range clamping, building start, member start');
+  {
+    const r = R(fixture(), { from: '2025-01', to: '2026-12' });
+    t.eq('from clamped to building start (first closed month)', r.range.from, '2026-07');
+    t.eq('to clamped to the open month', r.range.to, '2026-09');
+    t.eq('requested range echoed', [r.range.requestedFrom, r.range.requestedTo], ['2025-01', '2026-12']);
+    t.eq('invalid range → no months', R(fixture(), { from: '2026-09', to: '2026-07' }).range.months, []);
+    const d = fixture();
+    const newId = new Date(2026, 7, 10, 12).getTime();   // created 10 Aug 2026
+    d.tenants.push({ id: newId, name: 'חדש', openingDebt: 0 });
+    const rn = R(d, { from: '2026-07', to: '2026-09' });
+    t.eq('member created in Aug is NOT charged for Jul', mem(rn, newId).charged, 460);
+    t.eq('member start month exposed', mem(rn, newId).startMonth, '2026-08');
+    d.paymentHistory[String(newId)] = [rec('2026-07', 230, 230, 'bank')];
+    t.eq('…unless they have an earlier paid record (backfilled) → Jul counted', mem(R(d, { from: '2026-07', to: '2026-09' }), newId).charged, 690);
+    t.eq('small legacy ids are not treated as timestamps', S.crTenantCreatedMonth({ id: 5 }), null);
+    t.eq('building with no history → starts at the open month', S.crBuildingStartMonth({}, '2026-09'), '2026-09');
+  }
+  t.section('v2.14.60 — suspended edge cases');
+  {
+    const d = fixture();
+    d.sentLog['4_ספטמבר'] = MP(100);
+    const r = R(d, { from: '2026-09', to: '2026-09' });
+    t.eq('suspended partial payer: charged 0 but cash 100 still "נגבה בפועל"', [mem(r, 4).charged, mem(r, 4).paid], [0, 100]);
+    d.sentLog['4_ספטמבר'] = MP(230);
+    t.eq('suspended who paid in full: charged normally (like /api/data)', mem(R(d, { from: '2026-09', to: '2026-09' }), 4).charged, 230);
+    const d2 = fixture(); d2.tenants[4].extraAccounts[0].suspended = true;
+    const r2 = R(d2, { from: '2026-07', to: '2026-09' });
+    t.eq('suspended EXTRA: unpaid Aug exempt, paid months still charged', acc(r2, 'x:חשמל').charged, 500);
+    t.eq('suspended EXTRA counted in exempt', acc(r2, 'x:חשמל').exempt, 1);
+    const d3 = fixture(); d3.tenants[4].extraAccounts[0].active = false;
+    t.eq('inactive extra account skipped', acc(R(d3, { from: '2026-07', to: '2026-09' }), 'x:חשמל').members, 1);
+  }
+  t.section('v2.14.60 — END-TO-END: the same month reports the same before and after the REAL month-close');
+  {
+    // August still OPEN (mkNow 2026-08). Payments live in sentLog + synced history.
+    const open = {
+      config: { amount: 230 },
+      defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+      closedMonths: ['2026-07'], closedMonthsExtra: ['2026-07'],
+      tenants: [
+        { id: 1, name: 'full', openingDebt: 0 },
+        { id: 2, name: 'none', openingDebt: 0 },
+        { id: 3, name: 'partial', openingDebt: 0 },
+        { id: 4, name: 'over', openingDebt: 230 },
+        { id: 5, name: 'reminded', openingDebt: 0,
+          extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100 }, { id: 'e2', label: 'חניה', amount: 50 }] }
+      ],
+      paymentHistory: {
+        '1': [rec('2026-07', 230, 230, 'bank'), rec('2026-08', 230, 230, 'bank')],
+        '3': [rec('2026-08', 230, 100, 'manual')],
+        '4': [rec('2026-08', 230, 460, 'bank')],
+        '5': [{ month: '2026-08', paid: false, amount: 230, paidAmount: 230, type: 'wa_sent' }],
+        '5__acc__e1': [rec('2026-08', 100, 100, 'bank')]
+      },
+      sentLog: { '1_אוגוסט': BI(230), '3_אוגוסט': MP(100), '4_אוגוסט': BI(460), '5_אוגוסט': 'sent_x',
+                 '5__acc__e1_אוגוסט': BI(100) }
+    };
+    const pre = S.buildCollectionReport(open, { from: '2026-08', to: '2026-08', mkNow: '2026-08', emNow: 'אוגוסט' });
+    const d = JSON.parse(JSON.stringify(open));
+    const cm = loadCloseMonth(d);
+    cm.runForBuilding(d, '2026-08', 'אוגוסט');
+    const closeExtra = loadCloseExtra();
+    d.tenants.forEach(tn => closeExtra(d, tn, '2026-08'));
+    d.closedMonthsExtra.push('2026-08');
+    t.eq('real close ran: Aug now closed', d.closedMonths.includes('2026-08'), true);
+    t.eq('real close deleted the unpaid record (none has no Aug record)', (d.paymentHistory['2'] || []).some(r => r.month === '2026-08'), false);
+    const post = S.buildCollectionReport(d, { from: '2026-08', to: '2026-08', mkNow: '2026-09', emNow: 'ספטמבר' });
+    const pick = r => r.members.map(m => [m.name, m.charged, m.paid, m.covered, m.gap]).sort();
+    t.eq('per-member figures identical before/after close', pick(post), pick(pre));
+    t.eq('account figures identical before/after close', post.accounts.map(a => [a.key, a.charged, a.paid, a.covered, a.gap]),
+      pre.accounts.map(a => [a.key, a.charged, a.paid, a.covered, a.gap]));
+    t.eq('Aug totals: charged 5×230+150, covered 230+0+100+230+0+100', [post.totals.charged, post.totals.covered], [1300, 660]);
+    t.eq('Aug paid (cash) 230+100+460+100', post.totals.paid, 890);
+  }
+}
+
 (async () => { await v2_14_57_async(); process.exit(t.done() ? 1 : 0); })();
