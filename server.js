@@ -2975,6 +2975,39 @@ function crAccountKey(label) {
   return String(label || '').trim().replace(/\s+/g, ' ') || 'חשבון נוסף';
 }
 
+// ── v2.14.63 — extra-account balance AS OF NOW (the single source; 0c) ─────────
+// Returns { debt, credit } for ONE extra account, or null when inactive. Mirrors the
+// month-close rules (closeExtraAccountsUnpaid) so "now" == what the next close will
+// bank: carried acc.openingDebt (may be negative = credit, v2.14.62), plus any
+// not-yet-closed unpaid history record, plus the OPEN month (billing months only,
+// frequency-aware; suspended → exempt unless paid in full; a payment above the
+// charge is live credit). Used by the collection report; the dashboard, portal and
+// buildDebtDetail(e) still compute extras their own way — move them here (0c).
+function extraAccountBalance(d, t, acc, mkNow, emNow) {
+  if (!acc || acc.active === false) return null;
+  const r2 = n => Math.round(n * 100) / 100;
+  const tid = String(t.id);
+  const phKey = tid + '__acc__' + acc.id;
+  let net = parseFloat(acc.openingDebt) || 0;
+  ((d.paymentHistory || {})[phKey] || []).forEach(r => {
+    if (r && !r.paid && r.type !== 'wa_sent' && r.month !== mkNow) net += parseFloat(r.amount) || 0;
+  });
+  const closedNow = Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(mkNow);
+  if (!closedNow) {
+    const mon = Number(String(mkNow).slice(5));
+    const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
+    const amount = parseFloat(acc.amount) || 0;
+    const v = (d.sentLog || {})[phKey + '_' + emNow];
+    let paid = 0;
+    if (sentLogIsPayment(v)) { const p = parseSentLogAmount(v); paid = p !== null ? p : (billing ? amount : 0); }
+    let charge = (billing && amount > 0) ? amount : 0;
+    if (acc.suspended === true && paid < charge) charge = 0;
+    net += charge - paid;
+  }
+  net = r2(net);
+  return { debt: Math.max(0, net), credit: Math.max(0, r2(-net)) };
+}
+
 // opts.allRows (v2.14.61): every member also carries rows[] — for print / Excel.
 function buildCollectionReport(d, opts) {
   opts = opts || {};
@@ -2996,7 +3029,7 @@ function buildCollectionReport(d, opts) {
   const monthly = new Map(months.map(M => [M, { month: M, charged: 0, paid: 0, covered: 0 }]));
   const acc0 = (key, label) => {
     if (!accounts.has(key)) accounts.set(key, { key, label, charged: 0, paid: 0, covered: 0, excess: 0, gap: 0,
-      bank: 0, manual: 0, _members: new Set(), _payers: new Set(), _debtors: new Set(), _exempt: new Set() });
+      bank: 0, manual: 0, openDebt: 0, credit: 0, _members: new Set(), _payers: new Set(), _debtors: new Set(), _exempt: new Set() });
     return accounts.get(key);
   };
   acc0('main', null);
@@ -3042,26 +3075,46 @@ function buildCollectionReport(d, opts) {
     }
     ['charged', 'paid', 'covered', 'excess', 'gap'].forEach(k => { m[k] = r2(m[k]); });
     if (opts.allRows) m.rows = rows;   // v2.14.61 — print/Excel detail (rows=all)
+    // v2.14.63 — balance AS OF NOW (not end of range): main consumed from
+    // splitCurrentMonthDebt (owedNow / creditLeft), extras from extraAccountBalance.
+    const split = splitCurrentMonthDebt(d, t, mkNow, emNow, null);
+    const balAccounts = [{ key: 'main', label: null, debt: r2(split.owedNow), credit: r2(split.creditLeft) }];
+    for (const acc of (t.extraAccounts || [])) {
+      const b = extraAccountBalance(d, t, acc, mkNow, emNow);
+      if (b && (b.debt > 0 || b.credit > 0)) balAccounts.push({ key: 'x:' + crAccountKey(acc.label), label: crAccountKey(acc.label), debt: b.debt, credit: b.credit });
+    }
+    m.balance = {
+      debt: r2(balAccounts.reduce((sum, b) => sum + b.debt, 0)),
+      credit: r2(balAccounts.reduce((sum, b) => sum + b.credit, 0)),
+      accounts: balAccounts
+    };
+    balAccounts.forEach(b => { const a = acc0(b.key, b.label); a.openDebt += b.debt; a.credit += b.credit; });
     members.push(m);
     if (wantId === tid) {
-      const split = splitCurrentMonthDebt(d, t, mkNow, emNow, null);
       detail = Object.assign({}, m, { rows, owedNow: split.owedNow, credit: split.creditLeft });
     }
   }
 
   const accList = [...accounts.values()].map(a => {
     const out = { key: a.key, label: a.label };
-    ['charged', 'paid', 'covered', 'excess', 'gap', 'bank', 'manual'].forEach(k => { out[k] = r2(a[k]); });
+    ['charged', 'paid', 'covered', 'excess', 'gap', 'bank', 'manual', 'openDebt', 'credit'].forEach(k => { out[k] = r2(a[k]); });
     out.pct = out.charged > 0 ? Math.round(out.covered / out.charged * 1000) / 10 : null;
     out.members = a._members.size; out.payers = a._payers.size; out.debtors = a._debtors.size; out.exempt = a._exempt.size;
     return out;
-  }).filter(a => a.key === 'main' || a.members > 0);
+  }).filter(a => a.key === 'main' || a.members > 0 || a.openDebt > 0 || a.credit > 0);
   accList.sort((x, y) => (x.key === 'main' ? -1 : y.key === 'main' ? 1 : String(x.label).localeCompare(String(y.label), 'he')));
 
   const totals = { charged: 0, paid: 0, covered: 0, excess: 0, gap: 0 };
   accList.forEach(a => { Object.keys(totals).forEach(k => { totals[k] += a[k]; }); });
   Object.keys(totals).forEach(k => { totals[k] = r2(totals[k]); });
   totals.pct = totals.charged > 0 ? Math.round(totals.covered / totals.charged * 1000) / 10 : null;
+  // v2.14.63 — building balances AS OF NOW (debts and credits are NOT netted per member
+  // across accounts: credit on electricity does not pay the committee fee).
+  totals.balanceDebt = r2(accList.reduce((sum, a) => sum + a.openDebt, 0));
+  totals.balanceCredit = r2(accList.reduce((sum, a) => sum + a.credit, 0));
+  totals.balanceNet = r2(totals.balanceDebt - totals.balanceCredit);
+  totals.debtors = members.filter(m => m.balance.debt > 0).length;
+  totals.inCredit = members.filter(m => m.balance.credit > 0).length;
 
   // Near-duplicate extra-account labels ("חשמל" / "חשמל-" / "חשמל ") split into two rows.
   const warnings = [];

@@ -74,7 +74,9 @@ const SERVER_FNS = [
   'buildDebtDetailBlock', 'buildExcessDebtMessage',
   // v2.14.60 — collection report (read-only)
   'crMonthAdd', 'crMonthsBetween', 'crTenantCreatedMonth', 'crBuildingStartMonth',
-  'crCell', 'crMainMonth', 'crExtraMonth', 'crAccountKey', 'buildCollectionReport'
+  'crCell', 'crMainMonth', 'crExtraMonth', 'crAccountKey', 'buildCollectionReport',
+  // v2.14.63 — extra-account balance as of now
+  'extraAccountBalance'
 ];
 
 function loadServer() {

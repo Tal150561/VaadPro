@@ -2280,7 +2280,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const cs = app60.indexOf('const CR_HEB'), ce = app60.indexOf('let crMembersOpen');   // v2.14.61: slice now ends at crMembersOpen
   if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crMembersOpen) — fix, do NOT delete'); process.exit(1); }
   const head60 = app60.slice(cs, app60.indexOf('\n', ce) + 1);
-  const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel',
+  const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline',
     'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc']);
   const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה' };
   function load60(opts) {
@@ -2354,7 +2354,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('member rows: extra account label', h.includes('<td>חשמל</td>'), true);
     t.eq('credit hidden when 0', h.includes('יתרת זכות'), false);
     r2.member.credit = 120; L2.mod.crRender(r2);
-    t.eq('credit shown when > 0', L2.els.crOutput.innerHTML.includes('יתרת זכות ' + L2.mod.crMoney(120)), true);
+    t.eq('credit shown when > 0 (v2.14.63 headline format)', L2.els.crOutput.innerHTML.includes('יתרת זכות: ' + L2.mod.crMoney(120)), true);
   }
   t.section('v2.14.60 — crRun / crOnEnter (fetch, plan, errors)');
   const runs = [];
@@ -2404,7 +2404,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const app61 = readSource('public/app.html');
   const gd61  = readSource('public/vaadpro-guide.js');
   const head61 = app61.slice(app61.indexOf('const CR_HEB'), app61.indexOf('\n', app61.indexOf('let crMembersOpen')) + 1);
-  const fns61 = extractFunctions(app61, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crRangeText',
+  const fns61 = extractFunctions(app61, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crRangeText',
     'crRender', 'crMemberHtml', 'crToggleMembers', 'crFetchFull', 'crBuildPrintHtml', 'crPrint', 'crBuildSheets', 'crExportExcel', 'esc']);
   const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה', org: 'קיבוץ' };
   const mkReport = n => {
@@ -2559,6 +2559,87 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: prepaid example 2,760 → 2,530 → 2,300 → 2,070', gd62.includes('זכות 2,530, אחרי אוקטובר 2,300, אחרי נובמבר 2,070'), true);
   t.eq('guide: extra accounts too', gd62.includes('אותו כלל חל על <strong>חשבונות נוספים</strong>'), true);
   t.eq('guide: fixed-in-2.14.62 note', gd62.includes('🛠️ תוקן בגרסה 2.14.62'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.63 — balances as of now: red "לתשלום" / green "זכות" (EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const app63 = readSource('public/app.html');
+  const gd63 = readSource('public/vaadpro-guide.js');
+  const head63 = app63.slice(app63.indexOf('const CR_HEB'), app63.indexOf('\n', app63.indexOf('let crMembersOpen')) + 1);
+  const fns63 = extractFunctions(app63, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel',
+    'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crRangeText', 'crRender', 'crMemberHtml', 'crBuildPrintHtml', 'crBuildSheets', 'esc']);
+  const LBL = { mainAccount: 'ועד בית', persons: 'דיירים', person: 'דייר', unit: 'דירה', org: 'ועד הבית' };
+  const els = { crOutput: { innerHTML: '' } };
+  const mod = runInSandbox(head63 + fns63 + '\nmodule.exports={crRender,crBuildPrintHtml,crBuildSheets,crMoney};',
+    { document: { getElementById: id => els[id] || null }, t: k => LBL[k] || k });
+  const M = (id, name, gap, bal) => ({ id, name, unit: String(id), suspended: false, charged: 230, paid: 230 - gap, covered: 230 - gap, excess: 0, gap, startMonth: '2026-09', balance: bal });
+  const rep = () => ({
+    range: { from: '2026-09', to: '2026-09', requestedFrom: '2026-09', requestedTo: '2026-09', months: ['2026-09'] },
+    buildingStart: '2026-07', openMonth: '2026-09', closedInRange: [], warnings: [], monthly: [],
+    accounts: [{ key: 'main', label: null, charged: 690, paid: 460, covered: 460, excess: 0, gap: 230, pct: 66.7, bank: 460, manual: 0, members: 3, payers: 2, debtors: 1, exempt: 0, openDebt: 2760, credit: 2300 }],
+    totals: { charged: 690, paid: 460, covered: 460, excess: 0, gap: 230, pct: 66.7, balanceDebt: 2760, balanceCredit: 2300, balanceNet: 460, debtors: 1, inCredit: 1 },
+    members: [
+      M(1, 'לימור', 230, { debt: 2760, credit: 0, accounts: [{ key: 'main', debt: 2760, credit: 0 }] }),
+      M(2, 'מראש', 230, { debt: 0, credit: 2300, accounts: [{ key: 'main', debt: 0, credit: 2300 }] }),
+      M(3, 'מאוזן', 0, { debt: 0, credit: 0, accounts: [{ key: 'main', debt: 0, credit: 0 }] })],
+    member: null
+  });
+  t.section('v2.14.63 — building balances row');
+  mod.crRender(rep()); let h = els.crOutput.innerHTML;
+  t.eq('"חובות פתוחים" in red with debtor count', h.includes('<div class="stat-num" style="color:var(--danger);">' + mod.crMoney(2760) + '</div><div class="stat-label">חובות פתוחים · 1 דיירים</div>'), true);
+  t.eq('"יתרות זכות" in green with count', h.includes('<div class="stat-num" style="color:var(--accent);">' + mod.crMoney(2300) + '</div><div class="stat-label">יתרות זכות · 1 דיירים</div>'), true);
+  t.eq('net > 0 → red "נטו לגבייה"', h.includes(mod.crMoney(460) + '</div><div class="stat-label">נטו לגבייה</div>'), true);
+  t.eq('labelled "נכון להיום"', h.includes('יתרות נכון להיום (לא נכון לסוף הטווח)'), true);
+  { const r = rep(); r.totals.balanceNet = -300; mod.crRender(r);
+    t.eq('net < 0 → green "נטו בזכות" (absolute value)', els.crOutput.innerHTML.includes('style="color:var(--accent);">' + mod.crMoney(300) + '</div><div class="stat-label">נטו בזכות</div>'), true); }
+  { const r = rep(); delete r.totals.balanceDebt; mod.crRender(r);
+    t.eq('old payload without balances → no balance row (graceful)', els.crOutput.innerHTML.includes('חובות פתוחים'), false); }
+  t.section('v2.14.63 — account + member tables');
+  mod.crRender(rep()); h = els.crOutput.innerHTML;
+  t.eq('account columns חוב פתוח / זכות', h.includes('<th>חוב פתוח</th><th>זכות</th>'), true);
+  t.eq('account openDebt red, credit green', h.includes('<td style="color:var(--danger);">' + mod.crMoney(2760) + '</td><td style="color:var(--accent);">' + mod.crMoney(2300) + '</td>'), true);
+  t.eq('member column header', h.includes('<th>יתרה נכון להיום</th>'), true);
+  t.eq('debtor → red "לתשלום"', h.includes('<span style="color:var(--danger);font-weight:600;">לתשלום ' + mod.crMoney(2760) + '</span>'), true);
+  t.eq('credit → green "זכות"', h.includes('<span style="color:var(--accent);font-weight:600;">זכות ' + mod.crMoney(2300) + '</span>'), true);
+  t.eq('balanced → "מאוזן"', h.includes('>מאוזן</span>'), true);
+  t.eq('prepaid with gap → "✓ מכוסה מזכות" exactly once', (h.match(/✓ מכוסה מזכות/g) || []).length, 1);
+  t.section('v2.14.63 — member card headline (Tal: red = לתשלום, green = זכות)');
+  { const r = rep(); r.member = Object.assign({}, r.members[0], { rows: [], owedNow: 2760, credit: 0 }); mod.crRender(r);
+    const hh = els.crOutput.innerHTML;
+    t.eq('debtor: red "יתרה לתשלום: ₪2,760"', hh.includes('<span style="color:var(--danger);font-weight:700;font-size:1.05rem;">יתרה לתשלום: ' + mod.crMoney(2760) + '</span>'), true);
+    t.eq('debtor: no green credit line', hh.includes('יתרת זכות:'), false);
+    t.eq('old ambiguous label gone', hh.includes('יתרה לתשלום כעת ('), false); }
+  { const r = rep(); r.member = Object.assign({}, r.members[1], { rows: [], owedNow: 0, credit: 2300 }); mod.crRender(r);
+    const hh = els.crOutput.innerHTML;
+    t.eq('credit: green "יתרת זכות: ₪2,300"', hh.includes('<span style="color:var(--accent);font-weight:700;font-size:1.05rem;">יתרת זכות: ' + mod.crMoney(2300) + '</span>'), true);
+    t.eq('credit: no red debt line', hh.includes('יתרה לתשלום:'), false); }
+  { const r = rep(); r.member = Object.assign({}, r.members[2], { rows: [], owedNow: 0, credit: 0 }); mod.crRender(r);
+    t.eq('balanced: "מאוזן — אין יתרה"', els.crOutput.innerHTML.includes('מאוזן — אין יתרה'), true); }
+  { const r = rep(); r.member = Object.assign({}, M(9, 'שני חשבונות', 0, { debt: 60, credit: 300,
+      accounts: [{ key: 'main', debt: 60, credit: 0 }, { key: 'x:חשמל', label: 'חשמל', debt: 0, credit: 300 }] }), { rows: [] }); mod.crRender(r);
+    const hh = els.crOutput.innerHTML;
+    t.eq('debt AND credit on different accounts → both headlines', hh.includes('יתרה לתשלום: ' + mod.crMoney(60)) && hh.includes('יתרת זכות: ' + mod.crMoney(300)), true);
+    t.eq('per-account breakdown line', hh.includes('ועד בית: <span style="color:var(--danger);">לתשלום ' + mod.crMoney(60)) && hh.includes('חשמל: <span style="color:var(--accent);">זכות ' + mod.crMoney(300)), true); }
+  t.section('v2.14.63 — print + Excel carry the balances');
+  { const r = rep(); r.member = Object.assign({}, r.members[0], { rows: [], owedNow: 2760, credit: 0 });
+    const ph = mod.crBuildPrintHtml(r, { building: 'x', printedAt: 'd' });
+    t.eq('print: balance cards (red/green classes)', ph.includes('<b class="gap">' + mod.crMoney(2760) + '</b><span>חובות פתוחים · 1</span>') && ph.includes('<b class="cr">' + mod.crMoney(2300) + '</b><span>יתרות זכות · 1</span>'), true);
+    t.eq('print: member headline red "יתרה לתשלום"', ph.includes('<div class="bal"><span class="gap">יתרה לתשלום: ' + mod.crMoney(2760) + '</span>'), true);
+    t.eq('print: green CSS class defined', ph.includes('.cr{color:#15803d;}'), true);
+    t.eq('print: member column "יתרה נכון להיום"', ph.includes('<th>יתרה נכון להיום</th>') && ph.includes('<span class="cr">זכות ' + mod.crMoney(2300) + '</span>'), true); }
+  { const sh = mod.crBuildSheets(rep(), 'x');
+    t.eq('Excel summary: account row ends with openDebt, credit (numbers)', sh.summary[4].slice(-2).concat(sh.summary[5].slice(-2)), ['חוב פתוח (היום)', 'זכות (היום)', 2760, 2300]);
+    t.eq('Excel summary: balances line', sh.summary[sh.summary.length - 1], ['יתרות נכון להיום', 'חובות פתוחים', 2760, 'יתרות זכות', 2300, 'נטו', 460]);
+    t.eq('Excel members: debt / credit columns (numbers)', [sh.members[0].slice(-2), sh.members[1].slice(-2), sh.members[2].slice(-2)], [['לתשלום (היום)', 'זכות (היום)'], [2760, 0], [0, 2300]]); }
+  t.section('v2.14.63 — no money math in the page + guide');
+  const pure63 = extractFunctions(app63, ['crRender', 'crMemberHtml', 'crBalanceCell', 'crBalanceHeadline', 'crBuildPrintHtml', 'crBuildSheets']);
+  t.eq('no money arithmetic (balances are printed, never computed)', /\.(charged|paid|covered|gap|excess|debt|credit|openDebt|balanceDebt|balanceCredit)\s*[-+*\/]|[-+*\/]\s*[\w.]*\.(charged|paid|covered|gap|excess|debt|credit|openDebt|balanceDebt|balanceCredit)\b|Math\.(min|max)\(|\.reduce\(/.test(pure63), false);
+  t.eq('guide: balances section', gd63.includes('<h4>⚖️ יתרות נכון להיום</h4>'), true);
+  t.eq('guide: not netted across accounts', gd63.includes('<strong>לא מקזזת</strong> חשבון אחר'), true);
+  t.eq('guide: "✓ מכוסה מזכות" explained', gd63.includes('<strong>✓ מכוסה מזכות</strong>'), true);
+  t.eq('guide: drill-down red/green wording', gd63.includes('>יתרה לתשלום</span> באדום או') && gd63.includes('>יתרת זכות</span> בירוק'), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

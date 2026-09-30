@@ -1870,7 +1870,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.62';
+const HTML_VERSION = '2.14.63';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2149,6 +2149,27 @@ function crStatusLabel(st) {
   return ({ paid: '✅ שולם', partial: '🟡 חלקי', unpaid: '🔴 לא שולם', exempt: '⏸ מושהה' })[st] || st;
 }
 function crSourceLabel(src) { return src === 'bank' ? 'בנק' : src === 'manual' ? 'ידני' : '—'; }
+// v2.14.63 — balance AS OF NOW, colour-coded: debt = red "לתשלום", credit = green "זכות".
+// Debt and credit are shown side by side, never netted (credit on one account does not
+// pay another). Falls back to owedNow/credit for payloads without `balance`.
+function crBalanceOf(m) {
+  if (m && m.balance) return m.balance;
+  return { debt: (m && m.owedNow) || 0, credit: (m && m.credit) || 0, accounts: [] };
+}
+function crBalanceCell(bal) {
+  if (!bal) return '—';
+  const parts = [];
+  if (bal.debt > 0) parts.push('<span style="color:var(--danger);font-weight:600;">לתשלום ' + crMoney(bal.debt) + '</span>');
+  if (bal.credit > 0) parts.push('<span style="color:var(--accent);font-weight:600;">זכות ' + crMoney(bal.credit) + '</span>');
+  return parts.length ? parts.join('<br>') : '<span style="color:var(--text2);">מאוזן</span>';
+}
+function crBalanceHeadline(bal) {
+  const h = [];
+  if (bal.debt > 0) h.push('<span style="color:var(--danger);font-weight:700;font-size:1.05rem;">יתרה לתשלום: ' + crMoney(bal.debt) + '</span>');
+  if (bal.credit > 0) h.push('<span style="color:var(--accent);font-weight:700;font-size:1.05rem;">יתרת זכות: ' + crMoney(bal.credit) + '</span>');
+  if (!h.length) h.push('<span style="color:var(--text2);font-weight:700;">מאוזן — אין יתרה</span>');
+  return h.join(' &nbsp;·&nbsp; ');
+}
 
 function crDefaultRange() {
   const now = new Date();
@@ -2236,18 +2257,29 @@ function crRender(r) {
     '<div class="stat-card"><div class="stat-num' + (T.gap > 0 ? ' warn' : '') + '">' + crMoney(T.gap) + '</div><div class="stat-label">פער</div></div>' +
     '</div>';
   h += '<div style="font-size:0.74rem;color:var(--text2);margin-bottom:14px;">כיסוי חיוב = החלק מהחיוב ששולם (לעולם לא יותר מהחיוב). נגבה בפועל = כל הכסף שנכנס, כולל עודפים שקיזזו חוב קודם או נשמרו כזכות.</div>';
+  if (T.balanceDebt !== undefined) {
+    const net = T.balanceNet || 0;
+    h += '<div style="font-size:0.8rem;color:var(--text2);margin:0 0 6px;">⚖️ יתרות נכון להיום (לא נכון לסוף הטווח)</div>' +
+      '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">' +
+      '<div class="stat-card"><div class="stat-num" style="color:var(--danger);">' + crMoney(T.balanceDebt) + '</div><div class="stat-label">חובות פתוחים · ' + (T.debtors || 0) + ' ' + esc(t('persons')) + '</div></div>' +
+      '<div class="stat-card"><div class="stat-num" style="color:var(--accent);">' + crMoney(T.balanceCredit) + '</div><div class="stat-label">יתרות זכות · ' + (T.inCredit || 0) + ' ' + esc(t('persons')) + '</div></div>' +
+      '<div class="stat-card"><div class="stat-num" style="color:' + (net > 0 ? 'var(--danger)' : net < 0 ? 'var(--accent)' : 'var(--text2)') + ';">' + crMoney(Math.abs(net)) + '</div><div class="stat-label">' + (net > 0 ? 'נטו לגבייה' : net < 0 ? 'נטו בזכות' : 'נטו מאוזן') + '</div></div>' +
+      '</div>';
+  }
 
   // per account
   h += '<div class="card"><div class="card-header">📂 סיכום לפי חשבון</div><div style="overflow-x:auto;"><table><thead><tr>' +
-    '<th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק / ידני</th><th>משלמים</th><th>מושהים</th></tr></thead><tbody>';
+    '<th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק / ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr></thead><tbody>';
   r.accounts.forEach(function(a) {
     h += '<tr><td><strong>' + esc(crAccLabel(a)) + '</strong></td><td>' + crMoney(a.charged) + '</td><td>' + crMoney(a.covered) + '</td><td>' + crMoney(a.paid) +
       '</td><td>' + crPct(a.pct) + '</td><td style="color:' + (a.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(a.gap) +
-      '</td><td>' + crMoney(a.bank) + ' / ' + crMoney(a.manual) + '</td><td>' + a.payers + '/' + a.members + '</td><td>' + (a.exempt || 0) + '</td></tr>';
+      '</td><td>' + crMoney(a.bank) + ' / ' + crMoney(a.manual) + '</td><td>' + a.payers + '/' + a.members + '</td><td>' + (a.exempt || 0) +
+      '</td><td style="color:var(--danger);">' + (a.openDebt ? crMoney(a.openDebt) : '—') + '</td><td style="color:var(--accent);">' + (a.credit ? crMoney(a.credit) : '—') + '</td></tr>';
   });
   if (r.accounts.length > 1) {
     h += '<tr style="font-weight:700;"><td>סה"כ</td><td>' + crMoney(T.charged) + '</td><td>' + crMoney(T.covered) + '</td><td>' + crMoney(T.paid) +
-      '</td><td>' + crPct(T.pct) + '</td><td>' + crMoney(T.gap) + '</td><td></td><td></td><td></td></tr>';
+      '</td><td>' + crPct(T.pct) + '</td><td>' + crMoney(T.gap) + '</td><td></td><td></td><td></td>' +
+      '<td style="color:var(--danger);">' + (T.balanceDebt ? crMoney(T.balanceDebt) : '—') + '</td><td style="color:var(--accent);">' + (T.balanceCredit ? crMoney(T.balanceCredit) : '—') + '</td></tr>';
   }
   h += '</tbody></table></div></div>';
 
@@ -2257,11 +2289,13 @@ function crRender(r) {
     '<div class="spacer"></div><button class="btn btn-secondary btn-sm" id="crMembersToggle" aria-expanded="' + (open ? 'true' : 'false') + '">' + (open ? '▼ כווץ' : '▶ הרחב') + '</button></div>' +
     '<div id="crMembersBody" style="display:' + (open ? 'block' : 'none') + ';">' +
     '<div style="padding:10px 14px 0;"><input id="crMemberFilter" placeholder="סינון לפי שם" style="max-width:220px;font-size:0.8rem;"></div>' +
-    '<div style="overflow-x:auto;"><table><thead><tr><th>שם</th><th>' + esc(t('unit')) + '</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>פער</th><th></th></tr></thead><tbody id="crMemberRows">';
+    '<div style="overflow-x:auto;"><table><thead><tr><th>שם</th><th>' + esc(t('unit')) + '</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>פער</th><th>יתרה נכון להיום</th><th></th></tr></thead><tbody id="crMemberRows">';
   r.members.forEach(function(m) {
     h += '<tr data-cr-name="' + esc(String(m.name || '').toLowerCase()) + '"><td>' + esc(m.name) + (m.suspended ? ' <span title="מושהה">⏸</span>' : '') +
       '</td><td>' + esc(m.unit) + '</td><td>' + crMoney(m.charged) + '</td><td>' + crMoney(m.covered) + '</td><td>' + crMoney(m.paid) +
       '</td><td style="color:' + (m.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(m.gap) +
+      (m.gap > 0 && m.balance && m.balance.debt === 0 && m.balance.credit > 0 ? '<br><span style="color:var(--accent);font-size:0.75rem;">✓ מכוסה מזכות</span>' : '') +
+      '</td><td>' + (m.balance ? crBalanceCell(m.balance) : '—') +
       '</td><td><button class="btn btn-secondary btn-sm" data-cr-member="' + esc(m.id) + '">🔎 פירוט</button></td></tr>';
   });
   h += '</tbody></table></div></div></div>';
@@ -2279,10 +2313,19 @@ function crMemberHtml(m) {
     h += '<tr><td>' + esc(crMonthLabel(row.month)) + '</td><td>' + esc(row.account === 'main' ? t('mainAccount') : row.label) + '</td><td>' + crMoney(row.charged) +
       '</td><td>' + crMoney(row.paid) + '</td><td>' + crMoney(row.covered) + '</td><td>' + crSourceLabel(row.source) + '</td><td>' + crStatusLabel(row.status) + '</td></tr>';
   });
-  h += '</tbody></table></div><div class="card-body" style="font-size:0.85rem;">' +
-    'בטווח: חיוב ' + crMoney(m.charged) + ' · כיסוי ' + crMoney(m.covered) + ' · נגבה בפועל ' + crMoney(m.paid) + ' · פער ' + crMoney(m.gap) +
-    '<br>יתרה לתשלום כעת (' + esc(t('mainAccount')) + '): <strong>' + crMoney(m.owedNow) + '</strong>' +
-    (m.credit > 0 ? ' · יתרת זכות ' + crMoney(m.credit) : '') + '</div></div>';
+  const bal = crBalanceOf(m);
+  h += '</tbody></table></div><div class="card-body" style="font-size:0.85rem;line-height:1.9;">' +
+    '<div>' + crBalanceHeadline(bal) + ' <span style="color:var(--text2);font-size:0.75rem;">(נכון להיום)</span></div>';
+  if (bal.accounts && bal.accounts.length > 1) {
+    h += '<div style="color:var(--text2);">' + bal.accounts.map(function(b) {
+      const nm = b.key === 'main' ? t('mainAccount') : b.label;
+      return esc(nm) + ': ' + (b.debt > 0 ? '<span style="color:var(--danger);">לתשלום ' + crMoney(b.debt) + '</span>' : '') +
+        (b.debt > 0 && b.credit > 0 ? ' · ' : '') + (b.credit > 0 ? '<span style="color:var(--accent);">זכות ' + crMoney(b.credit) + '</span>' : '') +
+        (!(b.debt > 0) && !(b.credit > 0) ? 'מאוזן' : '');
+    }).join(' &nbsp;|&nbsp; ') + '</div>';
+  }
+  h += '<div style="color:var(--text2);">בטווח: חיוב ' + crMoney(m.charged) + ' · כיסוי ' + crMoney(m.covered) + ' · נגבה בפועל ' + crMoney(m.paid) + ' · פער ' + crMoney(m.gap) + '</div>' +
+    '</div></div>';
   return h;
 }
 
@@ -2329,7 +2372,7 @@ function crBuildPrintHtml(r, opts) {
     '.c{border:1px solid #ccc;border-radius:6px;padding:8px;text-align:center;}.c b{display:block;font-size:16px;}.c span{font-size:11px;color:#555;}' +
     '.hint{font-size:11px;color:#555;margin-bottom:10px;}' +
     'table{width:100%;border-collapse:collapse;margin-bottom:6px;}th,td{border:1px solid #ccc;padding:5px 7px;text-align:right;}th{background:#f1f1f1;font-size:12px;}' +
-    'tr.tot td{font-weight:700;background:#fafafa;}.gap{color:#b91c1c;}' +
+    'tr.tot td{font-weight:700;background:#fafafa;}.gap{color:#b91c1c;}.cr{color:#15803d;}.bal{font-size:15px;font-weight:700;margin:6px 0;}' +
     '.mb{page-break-inside:avoid;margin-bottom:12px;}.mb h3{font-size:13px;margin:10px 0 4px;}' +
     '.noprint{margin:18px 0;padding:8px 18px;font-size:14px;cursor:pointer;}' +
     '@media print{body{margin:0;max-width:none;}.noprint{display:none;}h2{page-break-after:avoid;}}' +
@@ -2347,6 +2390,13 @@ function crBuildPrintHtml(r, opts) {
     '<div class="c"><b>' + crPct(T.pct) + '</b><span>אחוז גבייה</span></div>' +
     '<div class="c"><b>' + crMoney(T.gap) + '</b><span>פער</span></div></div>';
   h += '<div class="hint">כיסוי חיוב = החלק מהחיוב ששולם (לא יותר מהחיוב). נגבה בפועל = כל הכסף שנכנס, כולל עודפים.</div>';
+  if (T.balanceDebt !== undefined) {
+    h += '<div class="meta">יתרות נכון להיום (לא נכון לסוף הטווח):</div><div class="cards" style="grid-template-columns:repeat(3,1fr);">' +
+      '<div class="c"><b class="gap">' + crMoney(T.balanceDebt) + '</b><span>חובות פתוחים · ' + (T.debtors || 0) + '</span></div>' +
+      '<div class="c"><b class="cr">' + crMoney(T.balanceCredit) + '</b><span>יתרות זכות · ' + (T.inCredit || 0) + '</span></div>' +
+      '<div class="c"><b class="' + (T.balanceNet > 0 ? 'gap' : T.balanceNet < 0 ? 'cr' : '') + '">' + crMoney(Math.abs(T.balanceNet || 0)) + '</b><span>' +
+      (T.balanceNet > 0 ? 'נטו לגבייה' : T.balanceNet < 0 ? 'נטו בזכות' : 'נטו מאוזן') + '</span></div></div>';
+  }
 
   if (r.member) {
     const m = r.member;
@@ -2355,19 +2405,29 @@ function crBuildPrintHtml(r, opts) {
       h += row([esc(crMonthLabel(x.month)), esc(x.account === 'main' ? t('mainAccount') : x.label), crMoney(x.charged), crMoney(x.paid), crMoney(x.covered), crSourceLabel(x.source), crStatusLabel(x.status)]);
     });
     h += row(['סה"כ', '', crMoney(m.charged), crMoney(m.paid), crMoney(m.covered), '', ''], true) + '</table>';
-    h += '<div class="meta">יתרה לתשלום כעת (' + esc(t('mainAccount')) + '): <b>' + crMoney(m.owedNow) + '</b>' + (m.credit > 0 ? ' · יתרת זכות ' + crMoney(m.credit) : '') + '</div>';
+    const pb = crBalanceOf(m);
+    const heads = [];
+    if (pb.debt > 0) heads.push('<span class="gap">יתרה לתשלום: ' + crMoney(pb.debt) + '</span>');
+    if (pb.credit > 0) heads.push('<span class="cr">יתרת זכות: ' + crMoney(pb.credit) + '</span>');
+    if (!heads.length) heads.push('מאוזן — אין יתרה');
+    h += '<div class="bal">' + heads.join(' · ') + ' <span style="font-size:11px;color:#555;font-weight:400;">(נכון להיום)</span></div>';
   }
 
-  h += '<h2>סיכום לפי חשבון</h2><table><tr><th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק</th><th>ידני</th><th>משלמים</th><th>מושהים</th></tr>';
+  h += '<h2>סיכום לפי חשבון</h2><table><tr><th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק</th><th>ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr>';
   r.accounts.forEach(function(a) {
-    h += row([esc(crAccLabel(a)), crMoney(a.charged), crMoney(a.covered), crMoney(a.paid), crPct(a.pct), crMoney(a.gap), crMoney(a.bank), crMoney(a.manual), a.payers + '/' + a.members, String(a.exempt || 0)]);
+    h += row([esc(crAccLabel(a)), crMoney(a.charged), crMoney(a.covered), crMoney(a.paid), crPct(a.pct), crMoney(a.gap), crMoney(a.bank), crMoney(a.manual), a.payers + '/' + a.members, String(a.exempt || 0),
+      '<span class="gap">' + (a.openDebt ? crMoney(a.openDebt) : '—') + '</span>', '<span class="cr">' + (a.credit ? crMoney(a.credit) : '—') + '</span>']);
   });
-  if (r.accounts.length > 1) h += row(['סה"כ', crMoney(T.charged), crMoney(T.covered), crMoney(T.paid), crPct(T.pct), crMoney(T.gap), '', '', '', ''], true);
+  if (r.accounts.length > 1) h += row(['סה"כ', crMoney(T.charged), crMoney(T.covered), crMoney(T.paid), crPct(T.pct), crMoney(T.gap), '', '', '', '',
+    T.balanceDebt ? crMoney(T.balanceDebt) : '—', T.balanceCredit ? crMoney(T.balanceCredit) : '—'], true);
   h += '</table>';
 
-  h += '<h2>לפי ' + esc(t('person')) + ' (' + r.members.length + ')</h2><table><tr><th>שם</th><th>' + esc(t('unit')) + '</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>פער</th></tr>';
+  h += '<h2>לפי ' + esc(t('person')) + ' (' + r.members.length + ')</h2><table><tr><th>שם</th><th>' + esc(t('unit')) + '</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>פער</th><th>יתרה נכון להיום</th></tr>';
   r.members.forEach(function(m) {
-    h += row([esc(m.name) + (m.suspended ? ' ⏸' : ''), esc(m.unit), crMoney(m.charged), crMoney(m.covered), crMoney(m.paid), '<span class="' + (m.gap > 0 ? 'gap' : '') + '">' + crMoney(m.gap) + '</span>']);
+    const b = m.balance;
+    const bt = !b ? '—' : ((b.debt > 0 ? '<span class="gap">לתשלום ' + crMoney(b.debt) + '</span>' : '') + (b.debt > 0 && b.credit > 0 ? '<br>' : '') +
+      (b.credit > 0 ? '<span class="cr">זכות ' + crMoney(b.credit) + '</span>' : '') + (!(b.debt > 0) && !(b.credit > 0) ? 'מאוזן' : ''));
+    h += row([esc(m.name) + (m.suspended ? ' ⏸' : ''), esc(m.unit), crMoney(m.charged), crMoney(m.covered), crMoney(m.paid), '<span class="' + (m.gap > 0 ? 'gap' : '') + '">' + crMoney(m.gap) + '</span>', bt]);
   });
   h += '</table>';
 
@@ -2408,15 +2468,18 @@ function crBuildSheets(r, building) {
     ['תקופה', crRangeText(r)],
     ['חודש פתוח', r.range.months.indexOf(r.openMonth) !== -1 ? crMonthLabel(r.openMonth) : '—'],
     [],
-    ['חשבון', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'אחוז גבייה', 'פער', 'בנק', 'ידני', 'משלמים', t('persons'), 'מושהים']
+    ['חשבון', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'אחוז גבייה', 'פער', 'בנק', 'ידני', 'משלמים', t('persons'), 'מושהים', 'חוב פתוח (היום)', 'זכות (היום)']
   ];
   r.accounts.forEach(function(a) {
-    summary.push([accName(a), a.charged, a.covered, a.paid, a.pct === null ? '' : a.pct, a.gap, a.bank, a.manual, a.payers, a.members, a.exempt || 0]);
+    summary.push([accName(a), a.charged, a.covered, a.paid, a.pct === null ? '' : a.pct, a.gap, a.bank, a.manual, a.payers, a.members, a.exempt || 0, a.openDebt || 0, a.credit || 0]);
   });
-  summary.push(['סה"כ', r.totals.charged, r.totals.covered, r.totals.paid, r.totals.pct === null ? '' : r.totals.pct, r.totals.gap]);
-  const members = [['שם', t('unit'), 'מושהה', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'פער', 'עודף']];
+  summary.push(['סה"כ', r.totals.charged, r.totals.covered, r.totals.paid, r.totals.pct === null ? '' : r.totals.pct, r.totals.gap, '', '', '', '', '', r.totals.balanceDebt || 0, r.totals.balanceCredit || 0]);
+  summary.push([]);
+  summary.push(['יתרות נכון להיום', 'חובות פתוחים', r.totals.balanceDebt || 0, 'יתרות זכות', r.totals.balanceCredit || 0, 'נטו', r.totals.balanceNet || 0]);
+  const members = [['שם', t('unit'), 'מושהה', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'פער', 'עודף', 'לתשלום (היום)', 'זכות (היום)']];
   r.members.forEach(function(m) {
-    members.push([m.name, m.unit, m.suspended ? 'כן' : '', m.charged, m.covered, m.paid, m.gap, m.excess]);
+    const b = m.balance || {};
+    members.push([m.name, m.unit, m.suspended ? 'כן' : '', m.charged, m.covered, m.paid, m.gap, m.excess, b.debt || 0, b.credit || 0]);
   });
   const detail = [['שם', t('unit'), 'חודש', 'חשבון', 'חיוב', 'שולם', 'כיסוי חיוב', 'פער', 'מקור', 'סטטוס']];
   r.members.forEach(function(m) {
@@ -2436,8 +2499,8 @@ async function crExportExcel() {
   const wb = XLSX.utils.book_new();
   wb.Workbook = { Views: [{ RTL: true }] };
   const add = function(aoa, name, cols) { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = cols.map(function(w) { return { wch: w }; }); XLSX.utils.book_append_sheet(wb, ws, name); };
-  add(sh.summary, 'סיכום', [18, 12, 12, 12, 11, 11, 11, 11, 9, 9, 9]);
-  add(sh.members, 'לפי ' + t('persons'), [22, 12, 8, 11, 11, 11, 11, 11]);
+  add(sh.summary, 'סיכום', [18, 12, 12, 12, 11, 11, 11, 11, 9, 9, 9, 14, 12]);
+  add(sh.members, 'לפי ' + t('persons'), [22, 12, 8, 11, 11, 11, 11, 11, 13, 12]);
   add(sh.detail, 'פירוט חודשי', [22, 12, 9, 16, 10, 10, 10, 10, 8, 10]);
   XLSX.writeFile(wb, 'דוח-גבייה-' + full.range.from + '_' + full.range.to + '.xlsx');
 }

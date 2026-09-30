@@ -336,6 +336,10 @@ t.eq('receipt (lastBankSyncImport) includes alreadyImported',
     .forEach(k => t.eq('v2.14.61: detail row has ' + k, Object.prototype.hasOwnProperty.call(allR.body.members[0].rows[0], k), true));
   t.eq('v2.14.61: without rows=all → no rows', 'rows' in ok.body.members[0], false);
   t.eq('v2.14.61: rows=anything-else → no rows', 'rows' in call('basic', { from: '2026-07', to: '2026-07', rows: '1' }).body.members[0], false);
+  ['openDebt', 'credit'].forEach(k => t.eq('v2.14.63: account row has ' + k, Object.prototype.hasOwnProperty.call(ok.body.accounts[0], k), true));
+  ['balanceDebt', 'balanceCredit', 'balanceNet', 'debtors', 'inCredit'].forEach(k => t.eq('v2.14.63: totals has ' + k, Object.prototype.hasOwnProperty.call(ok.body.totals, k), true));
+  ['debt', 'credit', 'accounts'].forEach(k => t.eq('v2.14.63: member.balance has ' + k, Object.prototype.hasOwnProperty.call(ok.body.members[0].balance || {}, k), true));
+  t.eq('v2.14.63: balance.accounts[0] is main', ok.body.members[0].balance.accounts[0].key, 'main');
   t.eq('route is read-only (no saveTenantData in handler)', /saveTenantData|writeFileSync/.test(body), false);
 }
 

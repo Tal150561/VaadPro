@@ -3354,6 +3354,65 @@ async function v2_14_57_async() {
     const withM = R(fixture(), { from: '2026-07', to: '2026-09', allRows: true, tenantId: 2 });
     t.eq('allRows + tenantId: drill-down still returned', withM.member.rows.length, 3);
   }
+  t.section('v2.14.63 — extraAccountBalance (as of now)');
+  {
+    const B = (acc, extra) => S.extraAccountBalance(Object.assign({ sentLog: {}, paymentHistory: {}, closedMonthsExtra: [] }, extra || {}),
+      { id: 9 }, Object.assign({ id: 'e1', label: 'חשמל', amount: 100 }, acc), '2026-09', 'ספטמבר');
+    const SL = v => ({ sentLog: { '9__acc__e1_ספטמבר': v } });
+    t.eq('credit 1000, open month unpaid → credit 900', B({ openingDebt: -1000 }), { debt: 0, credit: 900 });
+    t.eq('credit 1000, paid 100 → credit 1000', B({ openingDebt: -1000 }, SL(BI(100))), { debt: 0, credit: 1000 });
+    t.eq('clean, overpaid 300 → live credit 200', B({ openingDebt: 0 }, SL(BI(300))), { debt: 0, credit: 200 });
+    t.eq('debtor 50, month unpaid → debt 150', B({ openingDebt: 50 }), { debt: 150, credit: 0 });
+    t.eq('partial 40 of 100 → debt 60', B({ openingDebt: 0 }, SL(MP(40))), { debt: 60, credit: 0 });
+    t.eq('legacy payment value without amount → full', B({ openingDebt: 0 }, SL('bank_import_x')), { debt: 0, credit: 0 });
+    t.eq('suspended, unpaid → exempt (credit untouched)', B({ openingDebt: -1000, suspended: true }), { debt: 0, credit: 1000 });
+    t.eq('quarterly, Sep IS billing → charged', B({ openingDebt: 0, frequency: 'quarterly' }), { debt: 100, credit: 0 });
+    t.eq('yearly, Sep not billing → nothing', B({ openingDebt: -50, frequency: 'yearly' }), { debt: 0, credit: 50 });
+    t.eq('unpaid history record of an unclosed month is added', B({ openingDebt: 0 },
+      { paymentHistory: { '9__acc__e1': [{ month: '2026-08', paid: false, amount: 100, type: 'manual' }] } }), { debt: 200, credit: 0 });
+    t.eq('wa_sent record ignored', B({ openingDebt: 0 },
+      { paymentHistory: { '9__acc__e1': [{ month: '2026-08', paid: false, amount: 100, type: 'wa_sent' }] } }), { debt: 100, credit: 0 });
+    t.eq('current month already closed → only the banked balance', B({ openingDebt: -300 }, { closedMonthsExtra: ['2026-09'] }), { debt: 0, credit: 300 });
+    t.eq('inactive → null', B({ active: false }), null);
+  }
+  t.section('v2.14.63 — report balances: consumed, per member / account / building');
+  {
+    const d = fixture();
+    const r = R(d, { from: '2026-07', to: '2026-09' });
+    const tn = id => d.tenants.find(x => x.id === id);
+    [1, 2, 3, 4, 5, 6].forEach(id => {
+      const sp = S.splitCurrentMonthDebt(fixture(), tn(id), '2026-09', 'ספטמבר', null);
+      const mb = mem(r, id).balance.accounts.find(a => a.key === 'main');
+      t.eq('member ' + id + ': main balance CONSUMED from splitCurrentMonthDebt', [mb.debt, mb.credit], [sp.owedNow, sp.creditLeft]);
+    });
+    t.eq('גד (credit 230 covers Sep) → balanced', [mem(r, 3).balance.debt, mem(r, 3).balance.credit], [0, 0]);
+    t.eq('הדס extras: חשמל 100 (carried) + מים 90 (quarterly Sep) → debt 190', mem(r, 5).balance.debt, 190);
+    t.eq('הדס balance lists main + each extra with a balance', mem(r, 5).balance.accounts.map(a => a.key + ':' + a.debt), ['main:0', 'x:חשמל:100', 'x:מים:90']);
+    t.eq('ורד: " חשמל" paid → not listed, "חשמל-" 20 → debt 20', [mem(r, 6).balance.debt, mem(r, 6).balance.accounts.map(a => a.key)], [20, ['main', 'x:חשמל-']]);
+    t.eq('account openDebt/credit = Σ member balances', r.accounts.every(a => {
+      const sd = Math.round(r.members.reduce((x, m) => x + ((m.balance.accounts.find(b => b.key === a.key) || {}).debt || 0), 0) * 100) / 100;
+      const sc = Math.round(r.members.reduce((x, m) => x + ((m.balance.accounts.find(b => b.key === a.key) || {}).credit || 0), 0) * 100) / 100;
+      return sd === a.openDebt && sc === a.credit;
+    }), true);
+    t.eq('totals.balanceDebt = Σ members debt', r.totals.balanceDebt, Math.round(r.members.reduce((x, m) => x + m.balance.debt, 0) * 100) / 100);
+    t.eq('totals.balanceNet = debt − credit', r.totals.balanceNet, Math.round((r.totals.balanceDebt - r.totals.balanceCredit) * 100) / 100);
+    t.eq('totals.debtors counts members with debt', r.totals.debtors, r.members.filter(m => m.balance.debt > 0).length);
+    t.eq('balance is range-independent (July-only report, same balances)', R(fixture(), { from: '2026-07', to: '2026-07' }).totals.balanceDebt, r.totals.balanceDebt);
+    const rj = R(fixture(), { from: '2026-07', to: '2026-07' });
+    t.eq('account with a balance but no rows in range still listed (מים, July)', !!rj.accounts.find(a => a.key === 'x:מים' && a.members === 0 && a.openDebt === 90), true);
+  }
+  t.section('v2.14.63 — the prepaid member: gap in range, but credit today');
+  {
+    const d = fixture();
+    d.tenants.push({ id: 7, name: 'מראש', openingDebt: -2530 });   // prepaid, nothing recorded in Sep
+    const r = R(d, { from: '2026-09', to: '2026-09' });
+    const m7 = mem(r, 7);
+    t.eq('Sep: charged 230, paid 0 → gap 230 (honest cash view)', [m7.charged, m7.paid, m7.gap], [230, 0, 230]);
+    t.eq('balance today: no debt, credit 2300 (2530 − Sep)', [m7.balance.debt, m7.balance.credit], [0, 2300]);
+    t.eq('building credit total includes it', r.totals.balanceCredit >= 2300 && r.totals.inCredit >= 1, true);
+    const withM = R(d, { from: '2026-09', to: '2026-09', tenantId: 7 });
+    t.eq('drill-down carries the same balance', withM.member.balance, m7.balance);
+  }
   t.section('v2.14.60 — END-TO-END: the same month reports the same before and after the REAL month-close');
   {
     // August still OPEN (mkNow 2026-08). Payments live in sentLog + synced history.
