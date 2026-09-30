@@ -2132,4 +2132,142 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: legacy fix path (undo + re-import)', gd58.includes('ביטול ייבוא אחרון וקליטה חוזרת'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.59 — "דוחות" / "ניתוח מגמות" split into sub-sections (גבייה | הוצאות)
+// Collection reports = Basic+ ; expense reports + ALL trends = Advanced+.
+// EXECUTES the real switchSection / sectionLastSub / applySectionLocks / switchTab.
+// ════════════════════════════════════════════════════════════════
+{
+  const app59 = readSource('public/app.html');
+  const gd59  = readSource('public/vaadpro-guide.js');
+  const srv59 = readSource('server.js');
+  const cStart = app59.indexOf('const SECTION_SUBS');
+  const cEnd   = app59.indexOf('function sectionStoreKey');
+  if (cStart < 0 || cEnd < 0) { console.error('  ❌ v2.14.59 markers moved (SECTION_SUBS / sectionStoreKey) — fix, do NOT delete'); process.exit(1); }
+  const consts59 = app59.slice(cStart, cEnd);
+  const fns59 = extractFunctions(app59, ['sectionStoreKey', 'sectionLastSub', 'switchSection', 'applySectionLocks', 'switchTab']);
+
+  function makeDom() {
+    const mkCls = () => { const set = new Set(); return { add: c => set.add(c), remove: c => set.delete(c), contains: c => set.has(c),
+      toggle: (c, on) => { if (on === undefined) on = !set.has(c); on ? set.add(c) : set.delete(c); return on; } }; };
+    const panels = {}, btns = [];
+    ['reports', 'trends'].forEach(g => ['collection', 'expenses'].forEach(sub => {
+      panels['section-' + g + '-' + sub] = { style: { display: sub === 'expenses' ? 'none' : '' } };
+      const b = { g, sub, lock: null, classList: mkCls(),
+        getAttribute: a => a === 'data-section-group' ? g : a === 'data-section-sub' ? sub : null,
+        insertAdjacentHTML: function () { const self = this; self.lock = { remove: () => { self.lock = null; } }; },
+        querySelector: function (sel) { return sel === '.lock-icon' ? this.lock : null; } };
+      btns.push(b);
+    }));
+    ['tab-reports', 'tab-trends', 'tab-payments'].forEach(id => { panels[id] = { classList: mkCls(), style: {} }; });
+    const document = {
+      getElementById: id => panels[id] || null,
+      querySelectorAll: sel => sel === '[data-section-group]' ? btns : [],
+      querySelector: sel => { const m = sel.match(/data-section-group="([^"]+)"\]\[data-section-sub="([^"]+)"/); return m ? btns.find(b => b.g === m[1] && b.sub === m[2]) || null : null; }
+    };
+    return { document, panels, btns, btn: (g, s) => btns.find(b => b.g === g && b.sub === s) };
+  }
+  function load(planFeatures, stored) {
+    const dom = makeDom();
+    const store = Object.assign({}, stored || {});
+    const modals = [];
+    const ctx = {
+      document: dom.document,
+      sessionStorage: { getItem: k => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = String(v); } },
+      currentTenantId: () => 'B1',
+      planHasFeature: f => planFeatures === 'all' || planFeatures.includes(f),
+      showPlanUpgradeModal: p => modals.push(p),
+      trendRenderSaved: () => {}, switchSubTab: () => {}, tsInit: () => {}, shareInitMsg: () => {},
+      loadBankSyncStatus: () => {}, blRenderTenantGrid: () => {}, blRenderHistory: () => {}, mtgLoad: () => {},
+      setTimeout: () => {}, setInterval: () => 0, clearInterval: () => {}, window: {}
+    };
+    const fns = runInSandbox(consts59 + fns59 + '\nmodule.exports={switchSection,sectionLastSub,applySectionLocks,switchTab};', ctx);
+    return Object.assign({ fns, modals, store }, dom);
+  }
+  const BASIC = ['tenants','payments','whatsapp','maintenance','bulletin','collectionReports'];
+  const ADV   = ['tenants','payments','whatsapp','maintenance','bulletin','email','collectionReports','reports','trends'];
+  const vis = (d, g, s) => d.panels['section-' + g + '-' + s].style.display !== 'none';
+
+  t.section('v2.14.59 — switchSection shows one sub-section, marks its button');
+  {
+    const d = load(ADV);
+    d.fns.switchSection('reports', 'expenses');
+    t.eq('expenses panel visible', vis(d, 'reports', 'expenses'), true);
+    t.eq('collection panel hidden', vis(d, 'reports', 'collection'), false);
+    t.eq('expenses button active', d.btn('reports', 'expenses').classList.contains('active'), true);
+    t.eq('collection button not active', d.btn('reports', 'collection').classList.contains('active'), false);
+    t.eq('trends group untouched', vis(d, 'trends', 'collection'), true);
+    t.eq('choice remembered per building', d.store['vaad_section_reports_B1'], 'expenses');
+    d.fns.switchSection('reports', 'bogus');
+    t.eq('unknown sub → default (collection)', vis(d, 'reports', 'collection'), true);
+  }
+
+  t.section('v2.14.59 — plan gating at sub-section level');
+  {
+    const d = load(BASIC);
+    d.fns.switchSection('reports', 'collection');
+    t.eq('Basic: collection report opens', vis(d, 'reports', 'collection'), true);
+    t.eq('Basic: no upgrade modal for collection', d.modals.length, 0);
+    d.fns.switchSection('reports', 'expenses');
+    t.eq('Basic: expenses blocked → modal "Advanced"', d.modals, ['Advanced']);
+    t.eq('Basic: expenses panel stays hidden', vis(d, 'reports', 'expenses'), false);
+    t.eq('Basic: collection stays visible after blocked click', vis(d, 'reports', 'collection'), true);
+    d.fns.applySectionLocks();
+    t.eq('Basic: expenses button locked 🔒', !!d.btn('reports', 'expenses').lock && d.btn('reports', 'expenses').classList.contains('plan-locked'), true);
+    t.eq('Basic: collection button NOT locked', !!d.btn('reports', 'collection').lock, false);
+    t.eq('Basic: trends/collection locked (Advanced)', !!d.btn('trends', 'collection').lock, true);
+    const a = load(ADV); a.fns.applySectionLocks();
+    t.eq('Advanced: no sub-section locked', a.btns.some(b => b.lock), false);
+  }
+
+  t.section('v2.14.59 — sectionLastSub restores, but never onto a locked sub');
+  {
+    t.eq('first visit → collection', load(ADV).fns.sectionLastSub('reports'), 'collection');
+    t.eq('Advanced: remembered expenses restored', load(ADV, { vaad_section_reports_B1: 'expenses' }).fns.sectionLastSub('reports'), 'expenses');
+    t.eq('Basic (downgraded): remembered expenses → collection', load(BASIC, { vaad_section_reports_B1: 'expenses' }).fns.sectionLastSub('reports'), 'collection');
+    t.eq('garbage in storage → collection', load(ADV, { vaad_section_reports_B1: 'x<y' }).fns.sectionLastSub('reports'), 'collection');
+    t.eq('other building key ignored', load(ADV, { vaad_section_reports_B2: 'expenses' }).fns.sectionLastSub('reports'), 'collection');
+  }
+
+  t.section('v2.14.59 — switchTab: Basic enters "דוחות", not "ניתוח מגמות"');
+  {
+    const d = load(BASIC);
+    d.fns.switchTab('reports');
+    t.eq('Basic: reports tab opens (no modal)', d.modals.length, 0);
+    t.eq('Basic: reports tab active', d.panels['tab-reports'].classList.contains('active'), true);
+    t.eq('Basic: lands on collection', vis(d, 'reports', 'collection'), true);
+    d.fns.switchTab('trends');
+    t.eq('Basic: trends blocked → modal "Advanced"', d.modals, ['Advanced']);
+    t.eq('Basic: trends tab not activated', d.panels['tab-trends'].classList.contains('active'), false);
+    const a = load(ADV, { vaad_section_trends_B1: 'expenses' });
+    a.fns.switchTab('trends');
+    t.eq('Advanced: trends opens on remembered expenses', vis(a, 'trends', 'expenses'), true);
+    a.fns.switchTab('reports', 'expenses');
+    t.eq('switchTab(name, sub) deep-link works', vis(a, 'reports', 'expenses'), true);
+  }
+
+  t.section('v2.14.59 — wiring, server plans, guide');
+  t.eq('tab label is now "📊 דוחות"', app59.includes(`onclick="switchTab('reports')">📊 דוחות</button>`), true);
+  t.eq('old tab label gone', app59.includes('📊 דוחות הוצאות</button>'), false);
+  t.eq('sub-tab buttons have no inline onclick', /data-section-group="[a-z]+" data-section-sub="[a-z]+"[^>]*onclick/.test(app59), false);
+  t.eq('4 sub-tab buttons present', (app59.match(/data-section-group="(reports|trends)"/g) || []).length, 4);
+  t.eq('switchSubTab (property) unchanged', /function switchSubTab\(sub\) \{\s*\/\/ sub = 'maintenance' \| 'tickets'\s*const btnMap = \{ maintenance: 'subMnt', tickets: 'subTkt' \};/.test(app59), true);
+  t.eq('switchTab gates reports on collectionReports', app59.includes("tabFeatureMap = { reports:'collectionReports'"), true);
+  t.eq('applyPlanUI gates reports on collectionReports', app59.includes("'reports':  'collectionReports'"), true);
+  t.eq('applyPlanUI calls applySectionLocks', /applySectionLocks\(\);\s*\/\/ עדכן תצוגת plan/.test(app59), true);
+  t.eq('expense content wrapped in its sub-section', /id="section-reports-expenses"[\s\S]*id="rptFile|id="section-reports-expenses"[\s\S]*דוח הוצאות לדיירים/.test(app59), true);
+  t.eq('server: basic has collectionReports', /basic:\s*\{[^}]*'collectionReports'/.test(srv59), true);
+  t.eq('server: basic does NOT have reports', /basic:\s*\{[^}]*'reports'/.test(srv59), false);
+  t.eq('server: basic does NOT have trends', /basic:\s*\{[^}]*'trends'/.test(srv59), false);
+  t.eq('server: advanced has collectionReports+reports+trends', /advanced:\s*\{[^}]*'collectionReports','reports','trends'/.test(srv59), true);
+  t.eq('guide: reports title is "טאב דוחות"', gd59.includes("title: 'טאב דוחות',"), true);
+  t.eq('guide: anchor reports-collection', gd59.includes('id="vpg-a-reports-collection"'), true);
+  t.eq('guide: anchor reports-expenses', gd59.includes('id="vpg-a-reports-expenses"'), true);
+  t.eq('guide: anchor trends-collection', gd59.includes('id="vpg-a-trends-collection"'), true);
+  t.eq('guide: anchor trends-expenses', gd59.includes('id="vpg-a-trends-expenses"'), true);
+  t.eq('guide: Basic/Advanced split explained', gd59.includes('זמין מחבילת Basic') && gd59.includes('זמין מחבילת Advanced'), true);
+  t.eq('every ?-anchor used in app.html exists in guide',
+    (app59.match(/showHelp\('(?:reports|trends)#([a-z-]+)'\)/g) || []).map(x => x.match(/#([a-z-]+)/)[1]).every(a => gd59.includes('id="vpg-a-' + a + '"')), true);
+}
+
 process.exit(t.done() ? 1 : 0);

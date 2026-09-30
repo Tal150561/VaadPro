@@ -546,7 +546,7 @@ function vpLogout() {
   <div class="tabs">
     <button class="tab-btn active" id="tabBtnTenants" onclick="switchTab('tenants')">👥 דיירים <span class="tbadge green" id="tbT">0</span></button>
     <button class="tab-btn" onclick="switchTab('payments')">💳 תשלומים <span class="tbadge" id="tbP">0</span></button>
-    <button class="tab-btn" onclick="switchTab('reports')">📊 דוחות הוצאות</button>
+    <button class="tab-btn" onclick="switchTab('reports')">📊 דוחות</button>
     <button class="tab-btn" onclick="switchTab('trends')">📈 ניתוח מגמות</button>
     <button class="tab-btn" onclick="switchTab('bulletin')">📣 הודעות ועד הבית</button>
     <button class="tab-btn" onclick="switchTab('settings')">⚙️ הגדרות</button>
@@ -782,9 +782,28 @@ function vpLogout() {
   <!-- TAB REPORTS -->
   <div class="tab-panel" id="tab-reports">
 
+    <!-- v2.14.59 sub-tab bar (switchSection — NOT switchSubTab, which is property-only) -->
+    <div class="sub-tab-bar" style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:18px;">
+      <button id="subRptCollection" class="tab-btn active" data-section-group="reports" data-section-sub="collection" style="font-size:0.84rem;padding:7px 16px;">💰 דוחות גבייה</button>
+      <button id="subRptExpenses" class="tab-btn" data-section-group="reports" data-section-sub="expenses" style="font-size:0.84rem;padding:7px 16px;">🧾 דוחות הוצאות</button>
+    </div>
+
+    <!-- collection reports sub-panel (Basic+) — content arrives in the next phase -->
+    <div id="section-reports-collection">
+      <div class="card">
+        <div class="card-header">💰 דוח גבייה <button class="help-btn" onclick="showHelp('reports#reports-collection')">?</button></div>
+        <div class="card-body">
+          <div class="empty"><div class="empty-icon">🛠️</div><div>דוח הגבייה נמצא בבנייה ויופיע כאן בקרוב — סיכום לפי חשבון בטווח חודשים, בדיקת דייר/חבר פרטני, הדפסה ושמירה.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- expense reports sub-panel (Advanced+) — pre-v2.14.59 content, unchanged -->
+    <div id="section-reports-expenses" style="display:none;">
+
     <!-- Step 1: Upload -->
     <div class="card">
-      <div class="card-header">📊 דוח הוצאות לדיירים <button class="help-btn" onclick="showHelp('reports')">?</button></div>
+      <div class="card-header">📊 דוח הוצאות לדיירים <button class="help-btn" onclick="showHelp('reports#reports-expenses')">?</button></div>
       <div class="card-body">
 
         <div class="rpt-step">
@@ -1195,16 +1214,35 @@ function vpLogout() {
       </div>
     </div>
 
+    </div><!-- /section-reports-expenses -->
+
   </div>
 
   <!-- TAB TRENDS -->
   <div class="tab-panel" id="tab-trends">
 
+    <!-- v2.14.59 sub-tab bar -->
+    <div class="sub-tab-bar" style="display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:18px;">
+      <button id="subTrdCollection" class="tab-btn active" data-section-group="trends" data-section-sub="collection" style="font-size:0.84rem;padding:7px 16px;">💰 מגמות גבייה</button>
+      <button id="subTrdExpenses" class="tab-btn" data-section-group="trends" data-section-sub="expenses" style="font-size:0.84rem;padding:7px 16px;">🧾 מגמות הוצאות</button>
+    </div>
+
+    <div id="section-trends-collection">
+      <div class="card">
+        <div class="card-header">💰 מגמות גבייה <button class="help-btn" onclick="showHelp('trends#trends-collection')">?</button></div>
+        <div class="card-body">
+          <div class="empty"><div class="empty-icon">🛠️</div><div>ניתוח מגמות הגבייה נמצא בבנייה — השוואת דוחות גבייה שמורים, גרפי ₪ ואחוז גבייה.</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="section-trends-expenses" style="display:none;">
+
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('trendSaved')">📋 דוחות שמורים<div class="spacer"></div><span id="trendReportCount" style="font-size:0.8rem;color:var(--text2);"></span><span id="trendSavedIcon" style="margin-right:10px;font-size:0.8rem;color:var(--text3);">▶ הרחב</span></div>
       <div id="trendSavedBody" style="display:none;">
       <div class="card-body">
-        <div id="trendSavedList"><div class="empty"><div class="empty-icon">📊</div><div>עוד אין דוחות שמורים — שמור דוח מטאב "דוחות הוצאות"</div></div></div>
+        <div id="trendSavedList"><div class="empty"><div class="empty-icon">📊</div><div>עוד אין דוחות שמורים — שמור דוח ב"דוחות ← דוחות הוצאות"</div></div></div>
       </div>
       </div>
     </div>
@@ -1272,6 +1310,8 @@ function vpLogout() {
         </div>
       </div>
     </div>
+
+    </div><!-- /section-trends-expenses -->
 
   </div>
 
@@ -1820,7 +1860,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.58';
+const HTML_VERSION = '2.14.59';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -1920,7 +1960,7 @@ function planHasFeature(feature) {
 function applyPlanUI() {
   // מפת טאבים לפיצ'רים
   const tabFeatures = {
-    'reports':  'reports',
+    'reports':  'collectionReports',   // v2.14.59: tab itself is Basic (collection); expenses sub-tab gated below
     'trends':   'trends',
     'bulletin': 'bulletin',
     'maintenance': 'maintenance'
@@ -1943,6 +1983,8 @@ function applyPlanUI() {
       if (lock) lock.remove();
     }
   });
+  // v2.14.59: sub-tab locks (reports→expenses, trends→*) — see SECTION_FEATURES
+  applySectionLocks();
   // עדכן תצוגת plan בסרגל
   const planBadge = document.getElementById('planBadge');
   if (planBadge && vpPlan.plan) {
@@ -1983,8 +2025,8 @@ function switchTab(name, subTab) {
   if (name === 'tickets')     { switchTab('property', 'tickets');     return; }
 
   // בדוק אם הטאב נעול לפי plan
-  const tabFeatureMap = { reports:'reports', trends:'trends', bulletin:'bulletin', property:'maintenance' };
-  const requiredPlanMap = { reports:'Advanced', trends:'Advanced', bulletin:'Basic', property:'Basic' };
+  const tabFeatureMap = { reports:'collectionReports', trends:'trends', bulletin:'bulletin', property:'maintenance' };
+  const requiredPlanMap = { reports:'Basic', trends:'Advanced', bulletin:'Basic', property:'Basic' };
   const feature = tabFeatureMap[name];
   if (feature && !planHasFeature(feature)) {
     showPlanUpgradeModal(requiredPlanMap[name] || 'Advanced');
@@ -2005,9 +2047,73 @@ function switchTab(name, subTab) {
     if (window._bankSyncPoller) { clearInterval(window._bankSyncPoller); window._bankSyncPoller = null; }
   }
   if (name === 'trends') { trendRenderSaved(); }
+  if (name === 'reports' || name === 'trends') { switchSection(name, subTab || sectionLastSub(name)); }
   if (name === 'property') { switchSubTab(subTab || 'maintenance'); }
   if (name === 'meetings')  { mtgLoad(); }
 }
+
+// ── v2.14.59: generic sub-sections for the "דוחות" and "ניתוח מגמות" tabs ──
+// Deliberately separate from switchSubTab (property-only, left untouched).
+// Buttons carry data-section-group / data-section-sub and are wired with
+// addEventListener (no onclick → switchTab's "active" includes() scan and
+// applyPlanUI's tab-name regex scan never see them).
+const SECTION_SUBS = { reports: ['collection', 'expenses'], trends: ['collection', 'expenses'] };
+const SECTION_DEFAULT = { reports: 'collection', trends: 'collection' };
+// feature key per sub-section → plan gate. collectionReports = Basic+, reports/trends = Advanced+.
+const SECTION_FEATURES = {
+  reports: { collection: 'collectionReports', expenses: 'reports' },
+  trends:  { collection: 'trends',            expenses: 'trends'  }
+};
+const SECTION_REQUIRED_PLAN = { collectionReports: 'Basic', reports: 'Advanced', trends: 'Advanced' };
+
+function sectionStoreKey(group) {
+  return 'vaad_section_' + group + '_' + ((typeof currentTenantId === 'function' && currentTenantId()) || 'x');
+}
+function sectionLastSub(group) {
+  let v = null;
+  try { v = sessionStorage.getItem(sectionStoreKey(group)); } catch (e) {}
+  const subs = SECTION_SUBS[group] || [];
+  if (subs.indexOf(v) === -1) v = SECTION_DEFAULT[group];
+  // never land on a sub-section the plan does not include
+  const feat = (SECTION_FEATURES[group] || {})[v];
+  if (feat && !planHasFeature(feat)) v = SECTION_DEFAULT[group];
+  return v;
+}
+
+function switchSection(group, sub) {
+  const subs = SECTION_SUBS[group];
+  if (!subs) return;
+  if (subs.indexOf(sub) === -1) sub = SECTION_DEFAULT[group];
+  const feat = (SECTION_FEATURES[group] || {})[sub];
+  if (feat && !planHasFeature(feat)) {
+    showPlanUpgradeModal(SECTION_REQUIRED_PLAN[feat] || 'Advanced');
+    return;
+  }
+  subs.forEach(function(s) {
+    const panel = document.getElementById('section-' + group + '-' + s);
+    const btn = document.querySelector('[data-section-group="' + group + '"][data-section-sub="' + s + '"]');
+    if (panel) panel.style.display = (s === sub) ? '' : 'none';
+    if (btn) btn.classList.toggle('active', s === sub);
+  });
+  try { sessionStorage.setItem(sectionStoreKey(group), sub); } catch (e) {}
+}
+
+function applySectionLocks() {
+  document.querySelectorAll('[data-section-group]').forEach(function(btn) {
+    const feat = (SECTION_FEATURES[btn.getAttribute('data-section-group')] || {})[btn.getAttribute('data-section-sub')];
+    const locked = !!feat && !planHasFeature(feat);
+    btn.classList.toggle('plan-locked', locked);
+    const lock = btn.querySelector('.lock-icon');
+    if (locked && !lock) btn.insertAdjacentHTML('beforeend', '<span class="lock-icon"> 🔒</span>');
+    if (!locked && lock) lock.remove();
+  });
+}
+
+document.addEventListener('click', function(e) {
+  const btn = e.target && e.target.closest ? e.target.closest('[data-section-group]') : null;
+  if (!btn) return;
+  switchSection(btn.getAttribute('data-section-group'), btn.getAttribute('data-section-sub'));
+});
 
 function switchSubTab(sub) {
   // sub = 'maintenance' | 'tickets'
@@ -7368,7 +7474,7 @@ function trendRenderSaved() {
   const el = document.getElementById('trendSavedList');
   const countEl = document.getElementById('trendReportCount');
   if (!savedReports.length) {
-    el.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><div>עוד אין דוחות שמורים — שמור דוח מטאב "דוחות הוצאות"</div></div>';
+    el.innerHTML = '<div class="empty"><div class="empty-icon">📊</div><div>עוד אין דוחות שמורים — שמור דוח ב"דוחות ← דוחות הוצאות"</div></div>';
     if (countEl) countEl.textContent = '';
     document.getElementById('trendCompareCard').style.display = 'none';
     document.getElementById('trendTimelineCard').style.display = 'none';

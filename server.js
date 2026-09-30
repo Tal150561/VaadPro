@@ -88,8 +88,8 @@ const WA_SESSIONS_DIR = process.env.DATA_DIR ? path.join(process.env.DATA_DIR, '
 // ── Plans ────────────────────────────────────────────────────────
 const PLANS = {
   trial:    { maxTenants: 20,  features: 'all' },
-  basic:    { maxTenants: 20,  features: ['tenants','payments','whatsapp','maintenance','bulletin'] },
-  advanced: { maxTenants: 50,  features: ['tenants','payments','whatsapp','maintenance','bulletin','email','reports','trends'] },
+  basic:    { maxTenants: 20,  features: ['tenants','payments','whatsapp','maintenance','bulletin','collectionReports'] },
+  advanced: { maxTenants: 50,  features: ['tenants','payments','whatsapp','maintenance','bulletin','email','collectionReports','reports','trends'] },
   premium:  { maxTenants: 999, features: 'all' },
   unlimited:{ maxTenants: 999, features: 'all' },
   suspended:{ maxTenants: 0,   features: [] }
