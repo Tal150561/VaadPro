@@ -2739,4 +2739,27 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('expense-reports wrapper closes BEFORE the settings panel', a > 0 && a < b, true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.66 — manual import (browser) dedup: parity with the server helpers
+// ════════════════════════════════════════════════════════════════
+{
+  const app66 = readSource('public/app.html'), srv66 = readSource('server.js');
+  const C = runInSandbox(extractFunctions(app66, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen']) + 'module.exports={fp:bankRowFingerprintGlobal,pre:bankFpPrefixes,seen:bankFpAlreadySeen};');
+  const Sv = runInSandbox(extractFunctions(srv66, ['bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen']) + 'module.exports={fp:bankRowFingerprint,pre:bankFpPrefixes,seen:bankFpAlreadySeen};');
+  const stored = ['46290|230|שר שלום לילך ואו|640988', '46267|230|זהבי תמר|75790', '46200|230|ישן בלי אסמכתא'];
+  const cases = [['46290', 230, 'שר שלום לילך ואו', ''], ['46290', 230, 'שר שלום לילך ואו', '640988'], ['46290', 230, 'שר שלום לילך ואו', '640989'],
+                 ['46200', 230, 'ישן בלי אסמכתא', '111'], ['46290', 460, 'שר שלום לילך ואו', ''], ['46267', '230.00', '  זהבי   תמר ', '']];
+  const run = M => { const set = new Set(stored), pr = M.pre(stored); return cases.map(c => M.seen(set, pr, M.fp(c[0], c[1], c[2], c[3]), M.fp(c[0], c[1], c[2]))); };
+  t.section('v2.14.66 — browser dedup == server dedup');
+  t.eq('browser results on the incident matrix', run(C), [true, true, false, true, false, true]);
+  t.eq('browser == server on every case', JSON.stringify(run(C)), JSON.stringify(run(Sv)));
+  t.eq('browser prefixes accept a Set (alreadyImportedFp is a Set)', [...C.pre(new Set(stored))].length, 2);
+  t.eq('analyzeBankRows: prefixes from PRIOR fingerprints, right after the Set', /var alreadyImportedFp = new Set\([^\n]*\n\s*var alreadyImportedFpPrefixes = bankFpPrefixes\(alreadyImportedFp\);/.test(app66), true);
+  t.eq('analyzeBankRows: the dedup check uses bankFpAlreadySeen', app66.includes('if(bankFpAlreadySeen(alreadyImportedFp, alreadyImportedFpPrefixes, fp, fpLegacy)){') && app66.indexOf('if(bankFpAlreadySeen(alreadyImportedFp') > app66.indexOf('function analyzeBankRows(rows,fileName){'), true);
+  const gd66 = readSource('public/vaadpro-guide.js');
+  t.eq('guide: catch-up close explained (incl. the new-building guard)', gd66.includes('🔁 סגירה שהוחמצה נסגרת בהשלמה') && gd66.includes('בניין חדש שהוקם באמצע חודש'), true);
+  t.eq('guide: dedup without אסמכתא explained', gd66.includes('<strong>בלי מספר אסמכתא</strong>') && gd66.includes('אסמכתא <strong>שונה</strong>'), true);
+  t.eq('no old one-directional check left in the browser', /alreadyImportedFp\.has\(fp\) \|\| alreadyImportedFp\.has\(fpLegacy\)/.test(app66), false);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

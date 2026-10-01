@@ -5582,7 +5582,7 @@ app.post('/api/apply-ambiguous-match', authMiddleware, (req, res) => {
     const fpList = Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints : [];
     const fp = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '', '');
     const fpLegacy = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '');
-    const alreadyWritten = fpList.includes(fp) || fpList.includes(fpLegacy);
+    const alreadyWritten = bankFpAlreadySeen(new Set(fpList), bankFpPrefixes(fpList), fp, fpLegacy);   // v2.14.66: both directions
 
     let applied = false, tenant = null;
     if (decision !== 'ignore' && !alreadyWritten) {
@@ -5821,6 +5821,66 @@ function closeMonthUnpaid() {
 // ====================================================================
 }
 // ── Cron יומי — בדיקת תחזוקה ───────────────────────────────────
+// ── v2.14.66 — month-close CATCH-UP (incident 2026-10-01) ─────────────────────
+// The regular close runs ONLY inside the 08:00 (server time) cron on the 1st, and the
+// cron timer is armed at process start. A deploy/restart on the 1st after 08:00 → the
+// timer is armed for the 2nd, where getDate() !== 1 → the previous month is NEVER
+// closed (Tal's building, 1.10: September stayed open after the 2.14.65 deploy).
+// Catch-up closes the previous month for a building ONLY when it is still open AND
+// the month before it IS closed — i.e. the building was live in the system through
+// that month. A building onboarded mid-month (nothing closed yet) is never charged
+// for a month its opening balance already covers (same as before). Main == extra:
+// extras use closedMonthsExtra the same way. Idempotent (the close functions check
+// their own markers). The day-1 path (closeMonthUnpaid / runMaintenanceCronWithAccounts)
+// is untouched.
+function monthBeforeKey(mk) {
+  const p = String(mk).split('-').map(Number);
+  const t = p[0] * 12 + (p[1] - 1) - 1;
+  return Math.floor(t / 12) + '-' + String((t % 12) + 1).padStart(2, '0');
+}
+function monthCloseCatchUpDue(closed, prevKey) {
+  const c = Array.isArray(closed) ? closed : [];
+  return !c.includes(prevKey) && c.includes(monthBeforeKey(prevKey));
+}
+function catchUpMonthClose(now) {
+  now = now || new Date();
+  const prevDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const prevKey = prevDate.getFullYear() + '-' + String(prevDate.getMonth() + 1).padStart(2, '0');
+  const prevHeb = HEBREW_MONTHS[prevDate.getMonth()];
+  const result = { prevKey, main: [], extra: [] };
+  let backedUp = false;
+  for (const user of loadUsers()) {
+    if (!user.tenantId) continue;
+    try {
+      const d = loadTenantData(user.tenantId);
+      if (!d.tenants || !d.tenants.length) continue;
+      const dueMain = monthCloseCatchUpDue(d.closedMonths, prevKey);
+      const dueExtra = monthCloseCatchUpDue(d.closedMonthsExtra, prevKey);
+      if (!dueMain && !dueExtra) continue;
+      if (!backedUp) { createBackup('pre-catchup-close'); backedUp = true; }
+      if (!d.paymentHistory) d.paymentHistory = {};
+      const patch = {};
+      if (dueMain) {
+        const r = closeMonthUnpaidForBuilding(d, prevKey, prevHeb);
+        if (r.changed) Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths });
+        result.main.push(user.tenantId);
+      }
+      if (dueExtra) {
+        const r = closeExtraAccountsForBuilding(d, prevKey);
+        if (r.changed) Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra });
+        result.extra.push(user.tenantId);
+      }
+      if (Object.keys(patch).length) saveTenantData(user.tenantId, patch);
+    } catch (e) {
+      console.error(`[catchUpMonthClose:${user.tenantId}]`, e.message);
+    }
+  }
+  if (result.main.length || result.extra.length) {
+    console.log(`[catchUpMonthClose] ${prevKey}: main ${result.main.length} · extra ${result.extra.length} בניינים נסגרו בהשלמה`);
+  }
+  return result;
+}
+
 async function runMaintenanceCron() {
   const users = loadUsers();
   const today = new Date();
@@ -5831,6 +5891,9 @@ async function runMaintenanceCron() {
   if (today.getDate() === 1) {
     console.log('[runMaintenanceCron] ראשון לחודש — מריץ closeMonthUnpaid');
     closeMonthUnpaid();
+  } else {
+    // v2.14.66 — a 1st that was missed (restart after 08:00) is closed on the next run.
+    try { catchUpMonthClose(new Date()); } catch (e) { console.error('[catchUpMonthClose]', e.message); }
   }
 
   // Backup Layer 2 — daily rolling snapshot of all data files (then prune old)
@@ -6112,6 +6175,14 @@ function scheduleDailyCron() {
   console.log(`[MaintenanceCron] יופעל ב-${next.toLocaleTimeString('he-IL')}`);
 }
 scheduleDailyCron();
+// v2.14.66 — catch-up shortly after boot: a restart on the 1st after the 08:00 run
+// (or any later day) closes a still-open previous month. On the 1st before 09:00 the
+// regular 08:00 / 08:05 runs are still ahead, so the catch-up stays out of their way.
+setTimeout(() => {
+  const n = new Date();
+  if (n.getDate() === 1 && n.getHours() < 9) return;
+  try { catchUpMonthClose(n); } catch (e) { console.error('[catchUpMonthClose boot]', e.message); }
+}, 2 * 60 * 1000);
 
 // Auto-send: check every minute
 setInterval(runAutoSendCron, 60 * 1000);
@@ -7832,6 +7903,29 @@ function bankRowFingerprint(dateVal, amount, nameOrDesc, ref) {
   return r ? (d + '|' + a + '|' + n + '|' + r) : (d + '|' + a + '|' + n);
 }
 
+// ── v2.14.66 — cross-import dedup in BOTH directions (incident 2026-10-01) ──
+// v2.14.29 covered "incoming row WITH a ref vs. a stored key WITHOUT one" (fpLegacy).
+// The reverse was missing: September was imported with the אסמכתא column
+// ("46290|230|שר שלום לילך ואו|640988"), and on 1.10 the BankSync file arrived
+// WITHOUT refs ("46290|230|שר שלום לילך ואו") → not recognised → the v2.14.58
+// accumulate path added it on top → every payer's September doubled (תומר 460,
+// תמי 920) and showed as fake credit. Rule: an incoming row that has NO ref is a
+// duplicate of a stored key whose first three parts (date|amount|name) match.
+// An incoming row WITH a ref keeps the old behaviour: a different ref is a different
+// transaction (the שחם חנה same-day double payment, v2.14.28) and is NOT skipped.
+function bankFpPrefixes(fps) {
+  const out = new Set();
+  for (const f of (fps || [])) {
+    const parts = String(f).split('|');
+    if (parts.length >= 4) out.add(parts.slice(0, -1).join('|'));
+  }
+  return out;
+}
+function bankFpAlreadySeen(seen, prefixes, fp, fpLegacy) {
+  if (seen.has(fp) || seen.has(fpLegacy)) return true;
+  return fp === fpLegacy && !!prefixes && prefixes.has(fpLegacy);   // incoming has no ref
+}
+
 // ── bankRowMonthKey (v2.14.4, #3 multi-month split) ────────────────
 // Parse a bank-file date cell to a 'YYYY-MM' key. Mirrors the client parseDate()
 // in app.html EXACTLY (Excel serial, DD/MM/YYYY, DD.MM.YYYY, YYYY-MM-DD, then a
@@ -8209,6 +8303,8 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
     (importedFingerprints && typeof importedFingerprints.has === 'function' && typeof importedFingerprints.add === 'function')
       ? importedFingerprints
       : new Set(Array.isArray(importedFingerprints) ? importedFingerprints : []);
+  // v2.14.66: 3-part prefixes of PRIOR 4-part keys (computed once, prior runs only).
+  const alreadyImportedPrefixes = bankFpPrefixes(alreadyImported);
   const consumedFingerprints = new Set();
   const newFingerprints = [];
   const duplicateWarnings = [];
@@ -8368,7 +8464,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       // still de-dupes. In-file + storage stay on the 4-part key.
       const fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
       const fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-      if (alreadyImported.has(fp) || alreadyImported.has(fpLegacy)) {    // imported before (either key) → skip, but surface it
+      if (bankFpAlreadySeen(alreadyImported, alreadyImportedPrefixes, fp, fpLegacy)) {    // imported before (any key, v2.14.66) → skip, but surface it
         seenRowIdx.add(m.rowIdx);
         tenantHadPriorImport = true;
         alreadyImportedSkips.push({ tenantId: tenant.id, name: tenant.name, amount: m.amount, date: m.dateVal || '', scope: 'main' });
@@ -8472,7 +8568,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           // v2.14.29: cross-import checks both 4-part and legacy 3-part keys.
           const fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
           const fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-          if (alreadyImported.has(fp) || alreadyImported.has(fpLegacy)) {            // imported before (either key) → skip, but surface it
+          if (bankFpAlreadySeen(alreadyImported, alreadyImportedPrefixes, fp, fpLegacy)) {            // imported before (any key, v2.14.66) → skip, but surface it
             usedRowIdxForMain.add(m.rowIdx);
             alreadyImportedSkips.push({ tenantId: tenant.id, name: `${tenant.name} (${acc.label})`, amount: m.amount, date: m.dateVal || '', scope: 'extra', accountId: acc.id });
             return;

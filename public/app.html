@@ -1870,7 +1870,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.65';
+const HTML_VERSION = '2.14.66';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4189,6 +4189,24 @@ function bankRowFingerprintGlobal(dateVal, amount, nameOrDesc, ref) {
   return rr ? (dd+'|'+aa+'|'+nn+'|'+rr) : (dd+'|'+aa+'|'+nn);
 }
 
+// v2.14.66 — cross-import dedup in BOTH directions. MUST stay identical to the server
+// bankFpPrefixes / bankFpAlreadySeen (incident 2026-10-01: a file WITHOUT אסמכתא
+// re-imported rows stored WITH one → doubled). An incoming row with NO ref is a
+// duplicate of a stored 4-part key with the same date|amount|name; an incoming row
+// WITH a ref still needs an exact (or legacy 3-part) match.
+function bankFpPrefixes(fps) {
+  var out = new Set();
+  (Array.isArray(fps) ? fps : Array.from(fps || [])).forEach(function(f){
+    var parts = String(f).split('|');
+    if (parts.length >= 4) out.add(parts.slice(0, -1).join('|'));
+  });
+  return out;
+}
+function bankFpAlreadySeen(seen, prefixes, fp, fpLegacy) {
+  if (seen.has(fp) || seen.has(fpLegacy)) return true;
+  return fp === fpLegacy && !!prefixes && prefixes.has(fpLegacy);
+}
+
 // v2.14.58 — how much a sentLog VALUE already records as paid (bank_import /
 // manual_paid); reminders (sent_) and empty → 0. MUST match server
 // parseSentLogAmount. (The old inline manual_paid regex read the ISO year, not the amount.)
@@ -5431,6 +5449,7 @@ function splitOverpayAcrossMonths(buckets, opts) {
   }
   var hebOfMk = function(mk){ return MONTH_NAMES_HE[parseInt(String(mk).split('-')[1])-1]; };
   var alreadyImportedFp = new Set(Array.isArray(data.importedBankFingerprints) ? data.importedBankFingerprints : []);
+  var alreadyImportedFpPrefixes = bankFpPrefixes(alreadyImportedFp);   // v2.14.66 — prior runs only
   var consumedFp = new Set();
   var newFp = [];
   var dupWarnings = [];
@@ -5681,7 +5700,7 @@ function splitOverpayAcrossMonths(buckets, opts) {
         // alone, so חנה's two genuine rows (distinct ref) are not collapsed.
         var fp       = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
         var fpLegacy = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
-        if(alreadyImportedFp.has(fp) || alreadyImportedFp.has(fpLegacy)){   // imported in a prior run (either key) → skip, but surface it
+        if(bankFpAlreadySeen(alreadyImportedFp, alreadyImportedFpPrefixes, fp, fpLegacy)){   // imported in a prior run (any key, v2.14.66) → skip, but surface it
           seenRowIdx.add(m.rowIdx);
           tenantHadPriorImport=true;
           alreadyImportedSkips.push({ name: tenant.name, amount: m.amount, date: m.dateVal||'' });

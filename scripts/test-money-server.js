@@ -3725,4 +3725,106 @@ const v2_14_64_async = async () => {
   t.eq('send-one (REAL route): the WhatsApp text carries the same block', msg && msg.includes('• זכות30: *70 ₪*') && !msg.includes('מכוסה'), true);
 };
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.66 — INCIDENT 2026-10-01: (1) cross-import dedup in both directions,
+// (2) month-close catch-up after a missed 1st. REAL functions.
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const B = lib.loadBankAnalyzer();
+  const FP = lib.runInSandbox(lib.extractFunctions(src, ['bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen']) + 'module.exports={bankRowFingerprint,bankFpPrefixes,bankFpAlreadySeen};');
+  t.section('v2.14.66 — dedup helpers, on the REAL fingerprints of 1.10');
+  const stored = ['46290|230|שר שלום לילך ואו|640988', '46267|230|זהבי תמר|75790', '46200|230|ישן בלי אסמכתא'];
+  const seen = new Set(stored), pre = FP.bankFpPrefixes(stored);
+  const chk = (d, a, n, r) => FP.bankFpAlreadySeen(seen, pre, FP.bankRowFingerprint(d, a, n, r), FP.bankRowFingerprint(d, a, n));
+  t.eq('INCIDENT: same row WITHOUT ref vs stored WITH ref → duplicate (was: new!)', chk('46290', 230, 'שר שלום לילך ואו', ''), true);
+  t.eq('same row with the SAME ref → duplicate (unchanged)', chk('46290', 230, 'שר שלום לילך ואו', '640988'), true);
+  t.eq('same date/amount/name, DIFFERENT ref → NEW (שחם double payment, v2.14.28)', chk('46290', 230, 'שר שלום לילך ואו', '640989'), false);
+  t.eq('incoming WITH ref vs stored legacy 3-part → duplicate (v2.14.29, unchanged)', chk('46200', 230, 'ישן בלי אסמכתא', '111'), true);
+  t.eq('different amount → new', chk('46290', 460, 'שר שלום לילך ואו', ''), false);
+  t.eq('different date → new', chk('46291', 230, 'שר שלום לילך ואו', ''), false);
+  t.eq('prefixes only from 4-part keys', [...pre].sort(), ['46267|230|זהבי תמר', '46290|230|שר שלום לילך ואו'].sort());
+
+  t.section('v2.14.66 — INCIDENT end-to-end through the REAL agent analyzer (open September)');
+  const mk = () => ({ config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: ['2026-08'], closedMonthsExtra: ['2026-08'], sentLog: {}, paymentHistory: {}, importedBankFingerprints: [],
+    tenants: [{ id: 1, name: 'תומר', phone: '0501111111', keywords: 'תומר', customAmount: 230, openingDebt: 0 },
+              { id: 9, name: 'תמי', phone: '0502222222', keywords: 'תמי', customAmount: 230, openingDebt: 0,
+                extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100, matchKeywords: 'חשמל' }] }] });
+  const imp = (d, rows, mapping, monthKey) => {
+    const r = B.analyzeBankRowsServer(rows, mapping, d.tenants, d.sentLog, monthKey, d.config, new Set(d.importedBankFingerprints),
+      d.paymentHistory, d.defaultTariffs, d.closedMonths, d.closedMonthsExtra);
+    d.sentLog = r.newSentLog; d.importedBankFingerprints = d.importedBankFingerprints.concat(r.newFingerprints || []);
+    return r;
+  };
+  const withRef = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: 3 };
+  const noRef   = { colName: 0, colAmount: 1, colDate: 2, colNote: -1, colRef: -1 };
+  const sepWithRef = [['שם', 'סכום', 'תאריך', 'אסמכתא'], ['תומר', '230', '46267', '640988'], ['תמי', '460', '46268', '75790']];
+  const sepNoRef   = [['שם', 'סכום', 'תאריך'], ['תומר', '230', '46267'], ['תמי', '460', '46268']];
+  const d = mk();
+  const r1 = imp(d, sepWithRef, withRef, '2026-09');
+  t.eq('September import (with אסמכתא): 2 matched', r1.matched.length, 2);
+  const before = JSON.stringify(d.sentLog);
+  const r2 = imp(d, sepNoRef, noRef, '2026-09');
+  t.eq('1.10 agent file WITHOUT אסמכתא: 0 matched (was 2 → doubled)', r2.matched.length, 0);
+  t.eq('…both reported as already imported', (r2.alreadyImportedSkips || []).length, 2);
+  t.eq('…sentLog untouched (no accumulate: תומר stays 230, תמי 460)', JSON.stringify(r2.newSentLog), before);
+  t.eq('…no new fingerprints', (r2.newFingerprints || []).length, 0);
+  const r3 = imp(d, [['שם', 'סכום', 'תאריך', 'אסמכתא'], ['תומר', '230', '46267', '640999']], withRef, '2026-09');
+  t.eq('a GENUINE 2nd payment (other אסמכתא, same day/amount) is still counted', r3.matched.length, 1);
+  // extra account (main == extra) — fixture shape of the existing extra-dedup test
+  { const tx = [{ id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 230, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }] }];
+    const ex1 = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך', 'אסמכתא'], ['ביטוח מבנה', '50', '46269', '5551']], withRef, tx, {}, '2026-09', { amount: 230 }, new Set());
+    t.eq('extra account: September row (with אסמכתא) matched', ex1.matched.filter(m => m.matchType === 'extra_account').length, 1);
+    const ex2 = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '50', '46269']], noRef, tx, {}, '2026-09', { amount: 230 }, new Set(ex1.newFingerprints));
+    t.eq('extra account: same row WITHOUT אסמכתא → not counted again (was: counted)', ex2.matched.filter(m => m.matchType === 'extra_account').length, 0);
+    t.eq('extra account: reported as already imported (scope extra)', (ex2.alreadyImportedSkips || []).some(x => x.scope === 'extra'), true); }
+  t.eq('pending-queue overlap guard uses the same rule', src.includes('const alreadyWritten = bankFpAlreadySeen(new Set(fpList), bankFpPrefixes(fpList), fp, fpLegacy);'), true);
+
+  t.section('v2.14.66 — month-close catch-up (REAL close functions)');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const CU = (buildings, nowDate) => {
+    const saved = [], backups = [];
+    const code = months + '\n' + lib.extractFunctions(src, ['monthBeforeKey', 'monthCloseCatchUpDue', 'catchUpMonthClose',
+      'closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate'])
+      + 'module.exports={catchUpMonthClose,monthCloseCatchUpDue,monthBeforeKey};';
+    const m = lib.runInSandbox(code, {
+      loadUsers: () => Object.keys(buildings).map(id => ({ tenantId: id })),
+      loadTenantData: id => buildings[id], saveTenantData: (id, p) => saved.push({ id, keys: Object.keys(p).sort() }),
+      createBackup: tag => backups.push(tag), console: { log() {}, error() {}, warn() {} } });
+    return { r: m.catchUpMonthClose(nowDate), saved, backups, m };
+  };
+  const bld = (closed, closedX, od) => ({ config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: closed, closedMonthsExtra: closedX, sentLog: {}, paymentHistory: {},
+    tenants: [{ id: 1, name: 'א', openingDebt: od || 0, customAmount: 230 }] });
+  { const m = CU({}, new Date(2026, 9, 1, 16)).m;
+    t.eq('monthBeforeKey 2026-09 → 2026-08; 2027-01 → 2026-12', [m.monthBeforeKey('2026-09'), m.monthBeforeKey('2027-01')], ['2026-08', '2026-12']);
+    t.eq('due: prev open + month before closed', m.monthCloseCatchUpDue(['2026-07', '2026-08'], '2026-09'), true);
+    t.eq('not due: prev already closed', m.monthCloseCatchUpDue(['2026-08', '2026-09'], '2026-09'), false);
+    t.eq('not due: new building (nothing closed)', m.monthCloseCatchUpDue([], '2026-09'), false);
+    t.eq('not due: gap (month before not closed)', m.monthCloseCatchUpDue(['2026-07'], '2026-09'), false); }
+  { const tal = bld(['2026-07', '2026-08'], ['2026-07', '2026-08'], 1840);
+    const fresh = bld([], [], 0), done = bld(['2026-08', '2026-09'], ['2026-08', '2026-09'], 0);
+    const run = CU({ TAL: tal, NEW: fresh, DONE: done }, new Date(2026, 9, 1, 16, 13));
+    t.eq("Tal's building (Aug closed, Sep open, 1.10 16:13) → September closed", tal.closedMonths, ['2026-07', '2026-08', '2026-09']);
+    t.eq('…extras marker too (main == extra)', tal.closedMonthsExtra.includes('2026-09'), true);
+    t.eq('…unpaid September accrued (1840 → 2070, like the regular close)', tal.tenants[0].openingDebt, 2070);
+    t.eq('…saved once with the close fields', run.saved.filter(x => x.id === 'TAL').length, 1);
+    t.eq('new building (nothing closed) untouched', [fresh.closedMonths.length, fresh.tenants[0].openingDebt], [0, 0]);
+    t.eq('already-closed building untouched', done.tenants[0].openingDebt, 0);
+    t.eq('one pre-catch-up backup', run.backups, ['pre-catchup-close']);
+    t.eq('result lists the building', [run.r.prevKey, run.r.main], ['2026-09', ['TAL']]);
+    const again = CU({ TAL: tal }, new Date(2026, 9, 2, 8));
+    t.eq('second run is a NO-OP (no save, no backup, no double accrual)', [again.saved.length, again.backups.length, tal.tenants[0].openingDebt], [0, 0, 2070]); }
+  { const y = bld(['2026-11'], ['2026-11'], 0);
+    CU({ Y: y }, new Date(2027, 0, 3, 9));
+    t.eq('year boundary: 3.1.2027 closes December 2026', y.closedMonths.includes('2026-12'), true); }
+  t.section('v2.14.66 — wiring');
+  t.eq('cron: day 1 unchanged, other days run the catch-up', /if \(today\.getDate\(\) === 1\) \{\s*console\.log\('\[runMaintenanceCron\] ראשון לחודש — מריץ closeMonthUnpaid'\);\s*closeMonthUnpaid\(\);\s*\} else \{[\s\S]{0,200}catchUpMonthClose\(new Date\(\)\)/.test(src), true);
+  t.eq('boot catch-up after 2 min, skipped on the 1st before 09:00', /setTimeout\(\(\) => \{\s*const n = new Date\(\);\s*if \(n\.getDate\(\) === 1 && n\.getHours\(\) < 9\) return;\s*try \{ catchUpMonthClose\(n\);/.test(src) && src.includes('}, 2 * 60 * 1000);'), true);
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();
