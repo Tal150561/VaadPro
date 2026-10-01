@@ -902,6 +902,8 @@ function vpLogout() {
       </div>
     </div>
 
+    </div><!-- /section-reports-expenses -->
+
   </div>
 
   <!-- TAB SETTINGS -->
@@ -1223,8 +1225,6 @@ function vpLogout() {
         <div class="hint" style="margin-top:8px;">לאחר שמירה, תוכל לשייך חשבונות לכל דייר מרשימת הדיירים</div>
       </div>
     </div>
-
-    </div><!-- /section-reports-expenses -->
 
   </div>
 
@@ -1870,7 +1870,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.64';
+const HTML_VERSION = '2.14.65';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an

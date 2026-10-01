@@ -2716,4 +2716,27 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: reminder behaviour changes', gd64.includes('תשלום חלקי בחשבון נוסף'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.65 HOTFIX — every .tab-panel must be a TOP-LEVEL sibling.
+// v2.14.59 closed the expense-reports wrapper before "TAB TRENDS" instead of
+// before "TAB SETTINGS" → #tab-settings was nested inside #tab-reports and the
+// settings tab rendered EMPTY (Tal could not download a backup, 2026-10-01).
+// ════════════════════════════════════════════════════════════════
+{
+  const html = readSource('public/app.html').replace(/<script\b[\s\S]*?<\/script>/g, '').replace(/<style\b[\s\S]*?<\/style>/g, '');
+  let depth = 0; const panels = [];
+  for (const m of html.matchAll(/<div\b[^>]*>|<\/div>/g)) {
+    const tag = m[0];
+    if (tag.startsWith('</')) { depth--; continue; }
+    if (/class="[^"]*\btab-panel\b/.test(tag)) panels.push([(tag.match(/id="([^"]+)"/) || [])[1], depth]);
+    depth++;
+  }
+  t.section('v2.14.65 — tab panels are not nested');
+  t.eq('all 9 tab panels found', panels.length, 9);
+  panels.forEach(([id, dp]) => t.eq(id + ' is top-level (depth 0)', dp, 0));
+  t.eq('<div> balance of the whole page markup', depth, 0);
+  const a = html.indexOf('/section-reports-expenses'), b = html.indexOf('id="tab-settings"');
+  t.eq('expense-reports wrapper closes BEFORE the settings panel', a > 0 && a < b, true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
