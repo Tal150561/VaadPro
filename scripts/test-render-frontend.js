@@ -2762,4 +2762,101 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('no old one-directional check left in the browser', /alreadyImportedFp\.has\(fp\) \|\| alreadyImportedFp\.has\(fpLegacy\)/.test(app66), false);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.67 — collection trends page (EXECUTED): chart config, saved list,
+// selection, compare render, save button, backup ?full=1.
+// ════════════════════════════════════════════════════════════════
+{
+  const app67 = readSource('public/app.html');
+  const gd67 = readSource('public/vaadpro-guide.js');
+  const head67 = app67.slice(app67.indexOf('const CR_HEB'), app67.indexOf('\n', app67.indexOf('let crMembersOpen')) + 1);
+  const ctHead = app67.slice(app67.indexOf('let ctLast = null'), app67.indexOf('};   // [label, good direction') + 3);
+  const fns67 = extractFunctions(app67, ['crMonthLabel', 'crMoney', 'crPct', 'esc', 'ctChartConfig', 'ctRenderSaved', 'ctToggleSel', 'ctDeltaHtml', 'ctRenderCompare', 'crSaveSnapshot', 'ctCompare']);
+  const LBL = { mainAccount: 'ועד בית', persons: 'דיירים', person: 'דייר' };
+  function load67(o) {
+    o = o || {};
+    const els = { ctSavedList: { innerHTML: '' }, ctCompareBtn: { disabled: true }, ctCompare: { innerHTML: '' } };
+    const calls = { fetch: [], modal: [], toast: [] };
+    const ctx = { document: { getElementById: id => els[id] || null }, t: k => LBL[k] || k, API: '/api',
+      planHasFeature: f => (o.plan || ['trends']).includes(f), showPlanUpgradeModal: p => calls.modal.push(p), toast: (m) => calls.toast.push(m),
+      fetch: async (url, opt) => { calls.fetch.push([url, opt && opt.body ? JSON.parse(opt.body) : null]); const r = o.response || { status: 200, body: {} };
+        return { status: r.status, ok: r.status < 300, json: async () => r.body }; },
+      encodeURIComponent, Promise, confirm: () => true };
+    const mod = runInSandbox(head67 + ctHead + '\n' + fns67 + '\ncrLast = __crLast; if (__saved) ctSaved = __saved;\nmodule.exports={ctChartConfig,ctRenderSaved,ctToggleSel,ctRenderCompare,crSaveSnapshot,ctCompare,crMoney,getSel:()=>ctSel,setSel:v=>{ctSel=v;}};',
+      Object.assign(ctx, { __crLast: o.crLast === undefined ? { range: { from: '2026-07', to: '2026-09' } } : o.crLast, __saved: o.saved || null }));
+    return { mod, els, calls };
+  }
+  const TR = { series: [{ month: '2026-08', charged: 690, paid: 920, covered: 690, pct: 100 }, { month: '2026-09', charged: 690, paid: 460, covered: 460, pct: 66.7 }] };
+  t.section('v2.14.67 — chart config from the server series');
+  { const { mod } = load67();
+    const m = mod.ctChartConfig(TR, 'money');
+    t.eq('₪ view: bars charged + covered, line paid', [m.type, m.data.datasets.map(x => x.label), m.data.datasets[2].type], ['bar', ['חיוב', 'כיסוי חיוב', 'נגבה בפועל'], 'line']);
+    t.eq('₪ view: values exactly as given', [m.data.datasets[0].data, m.data.datasets[1].data, m.data.datasets[2].data], [[690, 690], [690, 460], [920, 460]]);
+    t.eq('labels in Hebrew months', m.data.labels, ['אוגוסט 2026', 'ספטמבר 2026']);
+    const p = mod.ctChartConfig(TR, 'pct');
+    t.eq('% view: one line of server pct, axis 0–100', [p.type, p.data.datasets[0].data, p.options.scales.y.min, p.options.scales.y.max], ['line', [100, 66.7], 0, 100]); }
+  const SAVED = [{ id: 'b', savedAt: '2026-10-01T09:00:00Z', label: 'יולי – ספטמבר 2026', range: { months: 3 }, includesOpenMonth: true, members: 12,
+                   totals: { charged: 2070, covered: 1840, pct: 88.9, gap: 230, balanceDebt: 2760, balanceCredit: 0 } },
+                 { id: 'a', savedAt: '2026-07-01T09:00:00Z', label: 'אפריל – יוני 2026', range: { months: 3 }, includesOpenMonth: false, members: 12,
+                   totals: { charged: 2070, covered: 1610, pct: 77.8, gap: 460, balanceDebt: 3000, balanceCredit: 230 } }];
+  t.section('v2.14.67 — saved list + selection');
+  { const L = load67({ saved: SAVED }); L.mod.ctRenderSaved(); const h = L.els.ctSavedList.innerHTML;
+    t.eq('one row per saved report', (h.match(/data-ct-sel="/g) || []).length, 2);
+    t.eq('open-month badge only on the partial one', (h.match(/⏳ חלקי/g) || []).length, 1);
+    t.eq('debt red / credit green columns', h.includes('<td style="color:var(--danger);">' + L.mod.crMoney(2760) + '</td>') && h.includes('<td style="color:var(--accent);">' + L.mod.crMoney(230) + '</td>'), true);
+    t.eq('delete button by data attribute', h.includes('data-ct-del="a"'), true);
+    t.eq('compare disabled with 0 selected', L.els.ctCompareBtn.disabled, true);
+    L.mod.ctToggleSel('a', true); t.eq('1 selected → still disabled', L.els.ctCompareBtn.disabled, true);
+    L.mod.ctToggleSel('b', true); t.eq('2 selected → enabled', L.els.ctCompareBtn.disabled, false);
+    L.mod.ctToggleSel('x', true); t.eq('a 3rd pick drops the oldest pick (max 2)', L.mod.getSel(), ['b', 'x']);
+    const E = load67({ saved: [] }); E.mod.ctRenderSaved(); t.eq('empty state explains how to save', E.els.ctSavedList.innerHTML.includes('💾 שמור למגמות'), true); }
+  t.section('v2.14.67 — compare render (colours = good / bad direction)');
+  const CMP = { a: { label: 'אפריל – יוני 2026', savedAt: '2026-07-01T09:00:00Z' }, b: { label: 'יולי – ספטמבר 2026', savedAt: '2026-10-01T09:00:00Z' },
+    pct: { a: 77.8, b: 88.9, deltaPts: 11.1 },
+    totals: [{ key: 'covered', a: 1610, b: 1840, delta: 230, deltaPct: 14.3 }, { key: 'gap', a: 460, b: 230, delta: -230, deltaPct: -50 },
+             { key: 'balanceDebt', a: 3000, b: 2760, delta: -240, deltaPct: -8 }, { key: 'charged', a: 2070, b: 2070, delta: 0, deltaPct: 0 },
+             { key: 'debtors', a: 3, b: 1, delta: -2, deltaPct: -66.7 }],
+    accounts: [{ key: 'main', label: null, pct: { a: 77.8, b: 88.9 }, covered: { delta: 230, deltaPct: 14.3 }, gap: { delta: -230, deltaPct: -50 }, openDebt: { delta: -240, deltaPct: -8 } },
+               { key: 'x:חשמל', label: 'חשמל', pct: { a: 50, b: 100 }, covered: { delta: 100, deltaPct: 100 }, gap: { delta: -100, deltaPct: -100 }, openDebt: { delta: 0, deltaPct: null } }],
+    members: { improved: [{ name: 'אבי', unit: '1', debtA: 460, debtB: 0 }], worsened: [{ name: 'גד', unit: '3', debtA: 0, debtB: 690 }],
+               newDebtors: ['3'], cleared: ['1'], unchangedDebtors: 1, joined: [{ name: 'דן' }], left: [{ name: 'רון' }] } };
+  { const L = load67(); L.mod.ctRenderCompare(CMP); const h = L.els.ctCompare.innerHTML;
+    t.eq('pct: +11.1 points in green', h.includes('<span style="color:var(--accent);font-weight:600;">▲ 11.1 נק׳</span>'), true);
+    t.eq('covered up → green ▲', h.includes('<span style="color:var(--accent);font-weight:600;">▲ ' + L.mod.crMoney(230) + ' (+14.3%)</span>'), true);
+    t.eq('gap down → green ▼', h.includes('<span style="color:var(--accent);font-weight:600;">▼ ' + L.mod.crMoney(230) + ' (-50%)</span>'), true);
+    t.eq('no change → "—"', h.includes('<td>חיוב</td><td>' + L.mod.crMoney(2070) + '</td><td>' + L.mod.crMoney(2070) + '</td><td><span style="color:var(--text2);">—</span></td>'), true);
+    t.eq('debtors count shown as a number (no ₪), down = green', h.includes('<td>3</td><td>1</td><td><span style="color:var(--accent);font-weight:600;">▼ 2</span></td>'), true);
+    t.eq('accounts table when > 1 account', h.includes('<td>חשמל</td><td>50% → 100%</td>'), true);
+    t.eq('improved / worsened lists', h.includes('✅ החוב ירד (1)') && h.includes('אבי · 1: ' + L.mod.crMoney(460) + ' → ' + L.mod.crMoney(0)) && h.includes('⚠️ החוב עלה (1)'), true);
+    t.eq('joined / left listed separately', h.includes('הצטרפו: דן') && h.includes('עזבו / הוסרו: רון'), true);
+    const many = JSON.parse(JSON.stringify(CMP)); many.members.improved = new Array(13).fill(0).map((_, i) => ({ name: 'n' + i, unit: '', debtA: 10, debtB: 0 }));
+    L.mod.ctRenderCompare(many); t.eq('lists capped at 10 + "ועוד 3"', L.els.ctCompare.innerHTML.includes('ועוד 3'), true); }
+  t.section('v2.14.67 — save + compare requests');
+  const runs67 = [];
+  runs67.push((async () => {
+    const A = load67({ response: { status: 200, body: { report: { label: 'יולי – ספטמבר 2026' }, count: 3 } } }); await A.mod.crSaveSnapshot();
+    t.eq('save posts the on-screen range to /collection-reports', A.calls.fetch[0], ['/api/collection-reports', { from: '2026-07', to: '2026-09' }]);
+    t.eq('save toast names the label and count', A.calls.toast[0], '💾 נשמר למגמות: יולי – ספטמבר 2026 (3 דוחות שמורים)');
+    const B = load67({ plan: ['collectionReports'] }); await B.mod.crSaveSnapshot();
+    t.eq('Basic → upgrade modal, no request', [B.calls.modal, B.calls.fetch.length], [['Advanced'], 0]);
+    const C = load67({ response: { status: 409, body: { error: 'נשמרו כבר 36 דוחות — מחקו דוח ישן כדי לשמור חדש' } } }); await C.mod.crSaveSnapshot();
+    t.eq('cap reached → server message', C.calls.toast[0], '❌ נשמרו כבר 36 דוחות — מחקו דוח ישן כדי לשמור חדש');
+    const N = load67({ crLast: null }); await N.mod.crSaveSnapshot(); t.eq('no report yet → message, no request', [N.calls.toast[0], N.calls.fetch.length], ['הפיקו דוח קודם', 0]);
+    const P = load67({ saved: SAVED, response: { status: 200, body: CMP } }); P.mod.setSel(['b', 'a']); await P.mod.ctCompare();
+    t.eq('compare: the OLDER report is A (base)', P.calls.fetch[0][0], '/api/collection-reports-compare?a=a&b=b');
+  })());
+  global.__crRuns = (global.__crRuns || []).concat(runs67);
+  t.section('v2.14.67 — wiring, CONSUME, guide');
+  t.eq('trends/collection entry hook', app67.includes("if (group === 'trends' && sub === 'collection' && typeof ctOnEnter === 'function') ctOnEnter();"), true);
+  t.eq('placeholder gone', app67.includes('ניתוח מגמות הגבייה נמצא בבנייה'), false);
+  t.eq('controls present', ['id="ctFrom"', 'id="ctTo"', 'id="ctAccount"', 'id="ctChart"', 'id="ctSavedList"', 'id="ctCompareBtn"', 'id="ctCompare"', 'id="crSaveBtn"'].every(x => app67.includes(x)), true);
+  t.eq('backup download asks ?full=1', app67.includes("const r = await fetch(API + '/data?full=1');") && app67.indexOf("/data?full=1") < app67.indexOf("link.download = 'vaad-backup-'"), true);
+  t.eq('page never posts collectionReports through /api/data', /JSON\.stringify\(\{[^}]*collectionReports/.test(app67), false);
+  const pure67 = extractFunctions(app67, ['ctChartConfig', 'ctRenderSaved', 'ctRenderCompare', 'ctDeltaHtml']);
+  t.eq('no money arithmetic in the trends renderers', /\.(charged|paid|covered|gap|excess|debt|credit|balanceDebt|balanceCredit|delta|deltaPct|deltaPts|debtA|debtB)\s*[-+*\/]|[-+*\/]\s*[\w.]*\.(charged|paid|covered|gap|excess|debt|credit|balanceDebt|balanceCredit|delta|debtA|debtB)\b|Math\.(min|max)\(|\.reduce\(/.test(pure67), false);
+  t.eq('guide: trends sections', ['<h4>📈 מגמת גבייה חודשית</h4>', '<h4>💾 דוחות גבייה שמורים</h4>', '<h4>⚖️ השוואה בין שני דוחות</h4>', '<h4>💾 שמירה למגמות</h4>'].every(x => gd67.includes(x)), true);
+  t.eq('guide: "בבנייה" gone from trends-collection', gd67.slice(gd67.indexOf('vpg-a-trends-collection'), gd67.indexOf('vpg-a-trends-expenses')).includes('בבנייה'), false);
+  t.eq('guide: per-month average + backup', gd67.includes('<strong>ממוצע לחודש</strong>') && gd67.includes('נכללים בגיבוי'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

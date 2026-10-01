@@ -1237,13 +1237,33 @@ function vpLogout() {
       <button id="subTrdExpenses" class="tab-btn" data-section-group="trends" data-section-sub="expenses" style="font-size:0.84rem;padding:7px 16px;">🧾 מגמות הוצאות</button>
     </div>
 
+    <!-- v2.14.67 — collection trends (Advanced). Every number comes from the server:
+         /api/collection-trend (live series), /api/collection-reports (saved snapshots),
+         /api/collection-reports-compare (deltas). The page only formats and charts. -->
     <div id="section-trends-collection">
       <div class="card">
-        <div class="card-header">💰 מגמות גבייה <button class="help-btn" onclick="showHelp('trends#trends-collection')">?</button></div>
+        <div class="card-header">📈 מגמת גבייה חודשית <button class="help-btn" onclick="showHelp('trends#trends-collection')">?</button></div>
         <div class="card-body">
-          <div class="empty"><div class="empty-icon">🛠️</div><div>ניתוח מגמות הגבייה נמצא בבנייה — השוואת דוחות גבייה שמורים, גרפי ₪ ואחוז גבייה.</div></div>
+          <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;">
+            <div><label style="font-size:0.78rem;color:var(--text2);display:block;">מחודש</label><input type="month" id="ctFrom"></div>
+            <div><label style="font-size:0.78rem;color:var(--text2);display:block;">עד חודש</label><input type="month" id="ctTo"></div>
+            <div style="min-width:160px;"><label style="font-size:0.78rem;color:var(--text2);display:block;">חשבון</label><select id="ctAccount"><option value="all">כל החשבונות</option></select></div>
+            <button class="btn btn-green btn-sm" id="ctRunBtn">📈 הצג</button>
+            <div style="display:flex;gap:4px;">
+              <button class="btn btn-secondary btn-sm" id="ctViewMoney">₪</button>
+              <button class="btn btn-secondary btn-sm" id="ctViewPct">%</button>
+            </div>
+          </div>
+          <div id="ctStatus" style="font-size:0.82rem;color:var(--text2);margin-top:8px;"></div>
+          <div style="position:relative;height:280px;margin-top:10px;"><canvas id="ctChart"></canvas></div>
         </div>
       </div>
+      <div class="card" style="margin-top:14px;">
+        <div class="card-header">💾 דוחות גבייה שמורים <span id="ctSavedCount" style="font-size:0.78rem;color:var(--text2);font-weight:400;"></span>
+          <div class="spacer"></div><button class="btn btn-secondary btn-sm" id="ctCompareBtn" disabled>⚖️ השווה בין 2 שנבחרו</button></div>
+        <div id="ctSavedList"><div class="card-body" style="color:var(--text2);font-size:0.85rem;">טוען...</div></div>
+      </div>
+      <div id="ctCompare"></div>
     </div>
 
     <div id="section-trends-expenses" style="display:none;">
@@ -1870,7 +1890,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.66';
+const HTML_VERSION = '2.14.67';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2107,6 +2127,7 @@ function switchSection(group, sub) {
   });
   try { sessionStorage.setItem(sectionStoreKey(group), sub); } catch (e) {}
   if (group === 'reports' && sub === 'collection' && typeof crOnEnter === 'function') crOnEnter();
+  if (group === 'trends' && sub === 'collection' && typeof ctOnEnter === 'function') ctOnEnter();
 }
 
 function applySectionLocks() {
@@ -2243,6 +2264,7 @@ function crRender(r) {
   h += '<div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:12px;">' +
     '<button class="btn btn-secondary btn-sm" id="crPrintBtn">🖨️ הדפס / PDF</button>' +
     '<button class="btn btn-secondary btn-sm" id="crExcelBtn">📥 Excel</button>' +
+    '<button class="btn btn-secondary btn-sm" id="crSaveBtn" title="שומר עותק קפוא של הדוח (כולל היתרות של היום) להשוואה במגמות גבייה">💾 שמור למגמות' + ((typeof planHasFeature === 'function' && planHasFeature('trends')) ? '' : ' 🔒') + '</button>' +
     '<label style="font-size:0.8rem;color:var(--text2);display:flex;align-items:center;gap:6px;cursor:pointer;"><input type="checkbox" id="crPrintDetail" style="width:auto;"> בהדפסה: פירוט חודשי לכל ה' + esc(t('persons')) + '</label>' +
     '</div>';
 
@@ -2525,6 +2547,229 @@ document.addEventListener('input', function(e) {
   document.querySelectorAll('#crMemberRows tr').forEach(function(tr) {
     tr.style.display = (!q || (tr.getAttribute('data-cr-name') || '').indexOf(q) !== -1) ? '' : 'none';
   });
+});
+
+// ── v2.14.67: collection report → save snapshot (Advanced) ───────────────────
+async function crSaveSnapshot() {
+  if (!planHasFeature('trends')) { showPlanUpgradeModal('Advanced'); return; }
+  if (!crLast || !crLast.range || !crLast.range.from) { toast('הפיקו דוח קודם', 'error'); return; }
+  try {
+    const res = await fetch(API + '/collection-reports', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: crLast.range.from, to: crLast.range.to }) });
+    const body = await res.json().catch(function() { return {}; });
+    if (res.status === 403) { showPlanUpgradeModal(body.requiredPlan || 'Advanced'); return; }
+    if (!res.ok) { toast('❌ ' + (body.error || 'שגיאה בשמירה'), 'error'); return; }
+    toast('💾 נשמר למגמות: ' + body.report.label + ' (' + body.count + ' דוחות שמורים)', 'success');
+    ctSavedDirty = true;
+  } catch (e) { toast('❌ שגיאת תקשורת — נסו שוב', 'error'); }
+}
+
+// ── v2.14.67: collection trends screen (מגמות גבייה) ──────────────────────────
+let ctLast = null, ctSaved = [], ctSel = [], ctView = 'money', ctChartObj = null, ctEntered = false, ctSavedDirty = true;
+const CT_METRICS = {
+  charged: ['חיוב', 0], covered: ['כיסוי חיוב', 1], paid: ['נגבה בפועל', 1], gap: ['פער', -1],
+  chargedPerMonth: ['חיוב לחודש (ממוצע)', 0], coveredPerMonth: ['כיסוי לחודש (ממוצע)', 1],
+  balanceDebt: ['חובות פתוחים ביום השמירה', -1], balanceCredit: ['יתרות זכות ביום השמירה', 0], debtors: ['מספר חייבים ביום השמירה', -1]
+};   // [label, good direction: 1 = up is good, -1 = down is good, 0 = neutral]
+
+function ctOnEnter() {
+  const f = document.getElementById('ctFrom'), to = document.getElementById('ctTo');
+  if (f && to && !f.value && !to.value) {
+    const now = new Date(), st = new Date(now.getFullYear(), now.getMonth() - 11, 1);
+    to.value = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+    f.value = st.getFullYear() + '-' + String(st.getMonth() + 1).padStart(2, '0');
+  }
+  if (!ctEntered) { ctEntered = true; ctLoadTrend(); }
+  if (ctSavedDirty) ctLoadSaved();
+}
+
+async function ctLoadTrend() {
+  const f = (document.getElementById('ctFrom') || {}).value || '', to = (document.getElementById('ctTo') || {}).value || '';
+  const acc = (document.getElementById('ctAccount') || {}).value || 'all';
+  const st = document.getElementById('ctStatus');
+  if (!/^\d{4}-\d{2}$/.test(f) || !/^\d{4}-\d{2}$/.test(to) || f > to) { if (st) st.textContent = 'בחרו טווח חודשים תקין'; return; }
+  if (st) st.textContent = '⏳ טוען...';
+  try {
+    const res = await fetch(API + '/collection-trend?from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(to) + '&account=' + encodeURIComponent(acc));
+    const body = await res.json().catch(function() { return {}; });
+    if (res.status === 403) { if (st) st.textContent = ''; showPlanUpgradeModal(body.requiredPlan || 'Advanced'); return; }
+    if (!res.ok) { if (st) st.textContent = '❌ ' + (body.error || 'שגיאה'); return; }
+    ctLast = body;
+    ctFillAccounts(body);
+    if (st) st.textContent = body.series.length ? (body.range.months.indexOf(body.openMonth) !== -1 ? '⏳ ' + crMonthLabel(body.openMonth) + ' עדיין פתוח — נתוניו עשויים להשתנות' : '') : 'אין חודשי גבייה בטווח';
+    ctRenderChart();
+  } catch (e) { if (st) st.textContent = '❌ שגיאת תקשורת — נסו שוב'; }
+}
+
+function ctFillAccounts(tr) {
+  const sel = document.getElementById('ctAccount');
+  if (!sel) return;
+  const keep = tr.account || sel.value || 'all';
+  sel.innerHTML = '<option value="all">כל החשבונות</option>' + (tr.accounts || []).map(function(a) {
+    return '<option value="' + esc(a.key) + '">' + esc(a.key === 'main' ? t('mainAccount') : a.label) + '</option>';
+  }).join('');
+  sel.value = keep;
+}
+
+// Pure: Chart.js config from the server series (no money math — values as given).
+function ctChartConfig(tr, view) {
+  const labels = (tr.series || []).map(function(x) { return crMonthLabel(x.month); });
+  if (view === 'pct') {
+    return { type: 'line', data: { labels: labels, datasets: [{ label: 'אחוז גבייה (כיסוי ÷ חיוב)', data: tr.series.map(function(x) { return x.pct; }),
+      borderColor: '#25D366', backgroundColor: 'rgba(37,211,102,.15)', tension: 0.3, fill: true, spanGaps: true }] },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#c9d1d9' } } },
+        scales: { y: { min: 0, max: 100, ticks: { color: '#8b949e', callback: function(v) { return v + '%'; } } }, x: { ticks: { color: '#8b949e' } } } } };
+  }
+  return { type: 'bar', data: { labels: labels, datasets: [
+      { label: 'חיוב', data: tr.series.map(function(x) { return x.charged; }), backgroundColor: 'rgba(139,148,158,.55)' },
+      { label: 'כיסוי חיוב', data: tr.series.map(function(x) { return x.covered; }), backgroundColor: 'rgba(37,211,102,.8)' },
+      { label: 'נגבה בפועל', data: tr.series.map(function(x) { return x.paid; }), type: 'line', borderColor: '#58a6ff', backgroundColor: '#58a6ff', tension: 0.3 }] },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { labels: { color: '#c9d1d9' } } },
+      scales: { y: { beginAtZero: true, ticks: { color: '#8b949e', callback: function(v) { return '₪' + Number(v).toLocaleString('he-IL'); } } }, x: { ticks: { color: '#8b949e' } } } } };
+}
+
+function ctRenderChart() {
+  const cv = document.getElementById('ctChart');
+  if (!cv || !ctLast || typeof Chart === 'undefined') return;
+  if (ctChartObj) { try { ctChartObj.destroy(); } catch (e) {} ctChartObj = null; }
+  ctChartObj = new Chart(cv, ctChartConfig(ctLast, ctView));
+  const bm = document.getElementById('ctViewMoney'), bp = document.getElementById('ctViewPct');
+  if (bm) bm.classList.toggle('active', ctView === 'money');
+  if (bp) bp.classList.toggle('active', ctView === 'pct');
+}
+
+async function ctLoadSaved() {
+  const box = document.getElementById('ctSavedList');
+  try {
+    const res = await fetch(API + '/collection-reports');
+    const body = await res.json().catch(function() { return {}; });
+    if (!res.ok) { if (box) box.innerHTML = '<div class="card-body" style="color:var(--danger);">❌ ' + esc(body.error || 'שגיאה') + '</div>'; return; }
+    ctSaved = body.reports || [];
+    ctSel = ctSel.filter(function(id) { return ctSaved.some(function(r) { return r.id === id; }); });
+    ctSavedDirty = false;
+    const cnt = document.getElementById('ctSavedCount');
+    if (cnt) cnt.textContent = '(' + ctSaved.length + ' מתוך ' + body.max + ')';
+    ctRenderSaved();
+  } catch (e) { if (box) box.innerHTML = '<div class="card-body" style="color:var(--danger);">❌ שגיאת תקשורת</div>'; }
+}
+
+function ctRenderSaved() {
+  const box = document.getElementById('ctSavedList');
+  if (!box) return;
+  if (!ctSaved.length) {
+    box.innerHTML = '<div class="card-body"><div class="empty"><div class="empty-icon">💾</div><div>עדיין אין דוחות שמורים. הפיקו דוח ב"דוחות ← דוחות גבייה" ולחצו "💾 שמור למגמות".</div></div></div>';
+  } else {
+    let h = '<div style="overflow-x:auto;"><table><thead><tr><th></th><th>דוח</th><th>נשמר</th><th>חודשים</th><th>חיוב</th><th>כיסוי חיוב</th><th>%</th><th>פער</th><th>חובות ביום השמירה</th><th>זכויות ביום השמירה</th><th></th></tr></thead><tbody>';
+    ctSaved.forEach(function(r) {
+      const T = r.totals || {};
+      h += '<tr><td><input type="checkbox" style="width:auto;" data-ct-sel="' + esc(r.id) + '"' + (ctSel.indexOf(r.id) !== -1 ? ' checked' : '') + '></td>' +
+        '<td><strong>' + esc(r.label) + '</strong>' + (r.includesOpenMonth ? ' <span title="כולל חודש שהיה פתוח בעת השמירה" style="font-size:0.72rem;color:var(--warn);">⏳ חלקי</span>' : '') + '</td>' +
+        '<td>' + esc(new Date(r.savedAt).toLocaleDateString('he-IL')) + '</td><td>' + r.range.months + '</td>' +
+        '<td>' + crMoney(T.charged) + '</td><td>' + crMoney(T.covered) + '</td><td>' + crPct(T.pct) + '</td>' +
+        '<td style="color:' + (T.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(T.gap) + '</td>' +
+        '<td style="color:var(--danger);">' + (T.balanceDebt ? crMoney(T.balanceDebt) : '—') + '</td>' +
+        '<td style="color:var(--accent);">' + (T.balanceCredit ? crMoney(T.balanceCredit) : '—') + '</td>' +
+        '<td><button class="btn btn-sm" style="font-size:0.7rem;background:rgba(248,81,73,.1);color:var(--danger);border:1px solid rgba(248,81,73,.2);" data-ct-del="' + esc(r.id) + '">🗑️</button></td></tr>';
+    });
+    box.innerHTML = h + '</tbody></table></div><div class="card-body" style="font-size:0.75rem;color:var(--text2);">סמנו שני דוחות ולחצו "⚖️ השווה". הישן מבין השניים הוא הבסיס.</div>';
+  }
+  const btn = document.getElementById('ctCompareBtn');
+  if (btn) btn.disabled = ctSel.length !== 2;
+}
+
+function ctToggleSel(id, on) {
+  ctSel = ctSel.filter(function(x) { return x !== id; });
+  if (on) { ctSel.push(id); if (ctSel.length > 2) ctSel.shift(); }
+  ctRenderSaved();
+}
+
+async function ctDelete(id) {
+  const r = ctSaved.find(function(x) { return x.id === id; });
+  if (!confirm('למחוק את הדוח השמור "' + (r ? r.label : '') + '"? אי אפשר לשחזר את היתרות של אותו יום.')) return;
+  try {
+    const res = await fetch(API + '/collection-reports/' + encodeURIComponent(id), { method: 'DELETE' });
+    const body = await res.json().catch(function() { return {}; });
+    if (!res.ok) { toast('❌ ' + (body.error || 'שגיאה במחיקה'), 'error'); return; }
+    toast('🗑️ הדוח נמחק', 'success');
+    ctLoadSaved();
+  } catch (e) { toast('❌ שגיאת תקשורת', 'error'); }
+}
+
+async function ctCompare() {
+  if (ctSel.length !== 2) return;
+  const pair = ctSel.map(function(id) { return ctSaved.find(function(r) { return r.id === id; }); }).filter(Boolean)
+    .sort(function(x, y) { return String(x.savedAt).localeCompare(String(y.savedAt)); });
+  if (pair.length !== 2) return;
+  try {
+    const res = await fetch(API + '/collection-reports-compare?a=' + encodeURIComponent(pair[0].id) + '&b=' + encodeURIComponent(pair[1].id));
+    const body = await res.json().catch(function() { return {}; });
+    if (!res.ok) { toast('❌ ' + (body.error || 'שגיאה בהשוואה'), 'error'); return; }
+    ctRenderCompare(body);
+  } catch (e) { toast('❌ שגיאת תקשורת', 'error'); }
+}
+
+// Colour of a delta: green when it moved the good way, red when the bad way.
+function ctDeltaHtml(delta, deltaPct, good, isCount) {
+  if (delta === 0 || delta === null || delta === undefined) return '<span style="color:var(--text2);">—</span>';
+  const col = good === 0 ? 'var(--text2)' : ((delta > 0) === (good > 0) ? 'var(--accent)' : 'var(--danger)');
+  const v = isCount ? String(delta) : crMoney(Math.abs(delta));
+  return '<span style="color:' + col + ';font-weight:600;">' + (delta > 0 ? '▲ ' : '▼ ') + (isCount ? v.replace('-', '') : v) +
+    (deltaPct !== null && deltaPct !== undefined ? ' (' + (deltaPct > 0 ? '+' : '') + deltaPct + '%)' : '') + '</span>';
+}
+
+function ctRenderCompare(c) {
+  const box = document.getElementById('ctCompare');
+  if (!box) return;
+  let h = '<div class="card" style="margin-top:14px;border-color:var(--info);"><div class="card-header">⚖️ ' + esc(c.a.label) + ' ← ' + esc(c.b.label) +
+    '<span style="font-size:0.75rem;color:var(--text2);font-weight:400;">&nbsp; (נשמרו ' + esc(new Date(c.a.savedAt).toLocaleDateString('he-IL')) + ' / ' + esc(new Date(c.b.savedAt).toLocaleDateString('he-IL')) + ')</span></div>';
+  h += '<div style="overflow-x:auto;"><table><thead><tr><th>מדד</th><th>' + esc(c.a.label) + '</th><th>' + esc(c.b.label) + '</th><th>שינוי</th></tr></thead><tbody>';
+  h += '<tr><td><strong>אחוז גבייה</strong></td><td>' + crPct(c.pct.a) + '</td><td>' + crPct(c.pct.b) + '</td><td>' +
+    (c.pct.deltaPts === null || c.pct.deltaPts === 0 ? '<span style="color:var(--text2);">—</span>' :
+      '<span style="color:' + (c.pct.deltaPts > 0 ? 'var(--accent)' : 'var(--danger)') + ';font-weight:600;">' + (c.pct.deltaPts > 0 ? '▲ ' : '▼ ') + Math.abs(c.pct.deltaPts) + ' נק׳</span>') + '</td></tr>';
+  c.totals.forEach(function(x) {
+    const m = CT_METRICS[x.key] || [x.key, 0];
+    const isCount = x.key === 'debtors';
+    h += '<tr><td>' + esc(m[0]) + '</td><td>' + (isCount ? x.a : crMoney(x.a)) + '</td><td>' + (isCount ? x.b : crMoney(x.b)) + '</td><td>' + ctDeltaHtml(x.delta, isCount ? null : x.deltaPct, m[1], isCount) + '</td></tr>';
+  });
+  h += '</tbody></table></div>';
+  if (c.accounts.length > 1) {
+    h += '<div class="card-body" style="padding-bottom:0;"><strong>לפי חשבון</strong></div><div style="overflow-x:auto;"><table><thead><tr><th>חשבון</th><th>% גבייה</th><th>כיסוי חיוב</th><th>פער</th><th>חוב פתוח</th></tr></thead><tbody>';
+    c.accounts.forEach(function(a) {
+      h += '<tr><td>' + esc(a.key === 'main' ? t('mainAccount') : a.label) + '</td><td>' + crPct(a.pct.a) + ' → ' + crPct(a.pct.b) + '</td>' +
+        '<td>' + ctDeltaHtml(a.covered.delta, a.covered.deltaPct, 1) + '</td><td>' + ctDeltaHtml(a.gap.delta, a.gap.deltaPct, -1) + '</td><td>' + ctDeltaHtml(a.openDebt.delta, a.openDebt.deltaPct, -1) + '</td></tr>';
+    });
+    h += '</tbody></table></div>';
+  }
+  const list = function(title, arr, color) {
+    if (!arr.length) return '';
+    let x = '<div style="flex:1;min-width:240px;"><div style="font-weight:600;color:' + color + ';margin-bottom:4px;">' + title + ' (' + arr.length + ')</div>';
+    arr.slice(0, 10).forEach(function(m) {
+      x += '<div style="font-size:0.82rem;">' + esc(m.name) + (m.unit ? ' · ' + esc(m.unit) : '') + ': ' + crMoney(m.debtA) + ' → ' + crMoney(m.debtB) + '</div>';
+    });
+    return x + (arr.length > 10 ? '<div style="font-size:0.75rem;color:var(--text2);">ועוד ' + (arr.length - 10) + '</div>' : '') + '</div>';
+  };
+  h += '<div class="card-body"><div style="font-size:0.8rem;color:var(--text2);margin-bottom:8px;">חוב פתוח לכל ' + esc(t('person')) + ' — כפי שהיה ביום השמירה של כל דוח.</div><div style="display:flex;gap:16px;flex-wrap:wrap;">' +
+    list('✅ החוב ירד', c.members.improved, 'var(--accent)') + list('⚠️ החוב עלה', c.members.worsened, 'var(--danger)') +
+    '</div><div style="font-size:0.8rem;color:var(--text2);margin-top:8px;">חייבים חדשים: ' + c.members.newDebtors.length + ' · סגרו את החוב: ' + c.members.cleared.length + ' · חוב ללא שינוי: ' + c.members.unchangedDebtors +
+    ((c.members.joined || []).length ? ' · הצטרפו: ' + c.members.joined.map(function(m) { return esc(m.name); }).join(', ') : '') +
+    ((c.members.left || []).length ? ' · עזבו / הוסרו: ' + c.members.left.map(function(m) { return esc(m.name); }).join(', ') : '') + '</div></div></div>';
+  box.innerHTML = h;
+}
+
+document.addEventListener('click', function(e) {
+  if (!e.target || !e.target.closest) return;
+  if (e.target.closest('#crSaveBtn')) { crSaveSnapshot(); return; }
+  if (e.target.closest('#ctRunBtn')) { ctLoadTrend(); return; }
+  if (e.target.closest('#ctViewMoney')) { ctView = 'money'; ctRenderChart(); return; }
+  if (e.target.closest('#ctViewPct')) { ctView = 'pct'; ctRenderChart(); return; }
+  if (e.target.closest('#ctCompareBtn')) { ctCompare(); return; }
+  const del = e.target.closest('[data-ct-del]');
+  if (del) { ctDelete(del.getAttribute('data-ct-del')); }
+});
+document.addEventListener('change', function(e) {
+  if (!e.target) return;
+  if (e.target.id === 'ctAccount') { ctLoadTrend(); return; }
+  if (e.target.getAttribute && e.target.getAttribute('data-ct-sel')) ctToggleSel(e.target.getAttribute('data-ct-sel'), e.target.checked);
 });
 
 function switchSubTab(sub) {
@@ -7490,7 +7735,7 @@ async function backupData() {
     // Try to get fresh data from server first
     let exportData = data;
     try {
-      const r = await fetch(API + '/data');
+      const r = await fetch(API + '/data?full=1');   // v2.14.67: include saved collection reports
       exportData = await r.json();
     } catch(e) { /* offline – use in-memory */ }
 

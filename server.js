@@ -1772,6 +1772,194 @@ app.get('/api/status', authMiddleware, (req, res) => {
 });
 
 // Data CRUD
+// ════════════════════════════════════════════════════════════════
+// v2.14.67 — COLLECTION TRENDS (Phase 3): saved snapshots, compare, live series
+// ════════════════════════════════════════════════════════════════
+// Locked design (SKILL "📌 COLLECTION REPORT", option C = both):
+//   • a SAVED snapshot freezes what the server computed at save time — incl. the
+//     balances "as of that day", which can never be reconstructed later;
+//   • the LIVE monthly series comes straight from buildCollectionReport.monthly;
+//   • every number (snapshot, deltas, %) is computed HERE; pages only format.
+// Stored in d.collectionReports — written ONLY by the routes below, never through
+// POST /api/data (pages send partial patches; saveTenantData merges by key), and
+// stripped from GET /api/data (polled every 2.5s) unless ?full=1 (backup download).
+const COLLECTION_REPORTS_MAX = 36;
+
+function crReportLabel(from, to) {
+  const lab = mk => HEBREW_MONTHS[Number(String(mk).slice(5)) - 1] || mk;
+  const y = mk => String(mk).slice(0, 4);
+  if (!from) return '';
+  if (from === to) return lab(from) + ' ' + y(from);
+  if (y(from) === y(to)) return lab(from) + ' – ' + lab(to) + ' ' + y(to);
+  return lab(from) + ' ' + y(from) + ' – ' + lab(to) + ' ' + y(to);
+}
+
+// Slim, frozen copy of a report (no per-month member rows, no drill-down).
+function buildCollectionSnapshot(rep, id, savedAt) {
+  const months = (rep.range && rep.range.months) || [];
+  return {
+    id: String(id), savedAt: savedAt,
+    label: crReportLabel(rep.range.from, rep.range.to),
+    range: { from: rep.range.from, to: rep.range.to, months },
+    openMonth: rep.openMonth,
+    includesOpenMonth: months.indexOf(rep.openMonth) !== -1,
+    totals: rep.totals,
+    accounts: rep.accounts,
+    monthly: rep.monthly,
+    members: (rep.members || []).map(m => ({
+      id: m.id, name: m.name, unit: m.unit, suspended: !!m.suspended,
+      charged: m.charged, paid: m.paid, covered: m.covered, excess: m.excess, gap: m.gap,
+      balance: m.balance ? { debt: m.balance.debt, credit: m.balance.credit } : { debt: 0, credit: 0 }
+    }))
+  };
+}
+
+function crSnapshotMeta(sn) {
+  return { id: sn.id, savedAt: sn.savedAt, label: sn.label, range: { from: sn.range.from, to: sn.range.to, months: (sn.range.months || []).length },
+    includesOpenMonth: !!sn.includesOpenMonth, totals: sn.totals, members: (sn.members || []).length };
+}
+
+// A → B deltas. Totals are also given per month (periods may differ in length).
+function compareCollectionSnapshots(a, b) {
+  const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+  const pctDelta = (x, y) => (x ? Math.round((y - x) / Math.abs(x) * 1000) / 10 : null);
+  const line = (key, va, vb) => ({ key, a: r2(va), b: r2(vb), delta: r2(vb - va), deltaPct: pctDelta(va, vb) });
+  const ma = Math.max(1, (a.range.months || []).length), mb = Math.max(1, (b.range.months || []).length);
+  const T = (sn, k) => parseFloat((sn.totals || {})[k]) || 0;
+  const totals = [
+    line('charged', T(a, 'charged'), T(b, 'charged')),
+    line('covered', T(a, 'covered'), T(b, 'covered')),
+    line('paid', T(a, 'paid'), T(b, 'paid')),
+    line('gap', T(a, 'gap'), T(b, 'gap')),
+    line('chargedPerMonth', T(a, 'charged') / ma, T(b, 'charged') / mb),
+    line('coveredPerMonth', T(a, 'covered') / ma, T(b, 'covered') / mb),
+    line('balanceDebt', T(a, 'balanceDebt'), T(b, 'balanceDebt')),
+    line('balanceCredit', T(a, 'balanceCredit'), T(b, 'balanceCredit')),
+    line('debtors', T(a, 'debtors'), T(b, 'debtors'))
+  ];
+  const pctA = (a.totals || {}).pct, pctB = (b.totals || {}).pct;
+  const pct = { a: pctA == null ? null : pctA, b: pctB == null ? null : pctB,
+    deltaPts: (pctA == null || pctB == null) ? null : Math.round((pctB - pctA) * 10) / 10 };
+  // accounts: union by key
+  const accKeys = [];
+  [a, b].forEach(sn => (sn.accounts || []).forEach(x => { if (accKeys.indexOf(x.key) === -1) accKeys.push(x.key); }));
+  const accounts = accKeys.map(k => {
+    const xa = (a.accounts || []).find(x => x.key === k) || {}, xb = (b.accounts || []).find(x => x.key === k) || {};
+    return { key: k, label: xa.label || xb.label || null,
+      charged: line('charged', xa.charged, xb.charged), covered: line('covered', xa.covered, xb.covered),
+      gap: line('gap', xa.gap, xb.gap), openDebt: line('openDebt', xa.openDebt, xb.openDebt), credit: line('credit', xa.credit, xb.credit),
+      pct: { a: xa.pct == null ? null : xa.pct, b: xb.pct == null ? null : xb.pct,
+             deltaPts: (xa.pct == null || xb.pct == null) ? null : Math.round((xb.pct - xa.pct) * 10) / 10 } };
+  });
+  // members: debt balance on each save day (the one figure only a snapshot keeps)
+  const ids = [];
+  [a, b].forEach(sn => (sn.members || []).forEach(m => { if (ids.indexOf(String(m.id)) === -1) ids.push(String(m.id)); }));
+  const members = ids.map(id => {
+    const x = (a.members || []).find(m => String(m.id) === id), y = (b.members || []).find(m => String(m.id) === id);
+    const da = x ? x.balance.debt : 0, db = y ? y.balance.debt : 0;
+    return { id, name: (y || x).name, unit: (y || x).unit, inA: !!x, inB: !!y,
+      debtA: r2(da), debtB: r2(db), debtDelta: r2(db - da),
+      creditA: r2(x ? x.balance.credit : 0), creditB: r2(y ? y.balance.credit : 0),
+      gapA: r2(x ? x.gap : 0), gapB: r2(y ? y.gap : 0) };
+  });
+  // Movement is judged only for members present in BOTH snapshots; someone who
+  // joined (only in B) or left (only in A) is listed separately, never as "worse".
+  const both = members.filter(m => m.inA && m.inB);
+  const improved = both.filter(m => m.debtDelta < 0).sort((p, q) => p.debtDelta - q.debtDelta);
+  const worsened = both.filter(m => m.debtDelta > 0).sort((p, q) => q.debtDelta - p.debtDelta);
+  return {
+    a: crSnapshotMeta(a), b: crSnapshotMeta(b), totals, pct, accounts,
+    members: { improved, worsened,
+      newDebtors: both.filter(m => m.debtA === 0 && m.debtB > 0).map(m => m.id),
+      cleared: both.filter(m => m.debtA > 0 && m.debtB === 0).map(m => m.id),
+      unchangedDebtors: both.filter(m => m.debtA > 0 && m.debtDelta === 0).length,
+      joined: members.filter(m => !m.inA && m.inB).map(m => ({ id: m.id, name: m.name, unit: m.unit, debtB: m.debtB })),
+      left: members.filter(m => m.inA && !m.inB).map(m => ({ id: m.id, name: m.name, unit: m.unit, debtA: m.debtA })) }
+  };
+}
+
+// Live monthly series for one account filter: 'all' | 'main' | 'x:<label>'.
+function buildCollectionTrend(d, opts) {
+  opts = opts || {};
+  const rep = buildCollectionReport(d, { from: opts.from, to: opts.to, mkNow: opts.mkNow, emNow: opts.emNow });
+  const acc = opts.account || 'all';
+  const series = rep.monthly.map(m => {
+    const v = acc === 'all' ? m : (m.byAccount[acc] || { charged: 0, paid: 0, covered: 0 });
+    return { month: m.month, charged: v.charged, paid: v.paid, covered: v.covered,
+      pct: v.charged > 0 ? Math.round(v.covered / v.charged * 1000) / 10 : null };
+  });
+  return { range: rep.range, openMonth: rep.openMonth, account: acc,
+    accounts: rep.accounts.map(a => ({ key: a.key, label: a.label })), series };
+}
+
+function crRequireTrends(req, res) {
+  const user = loadUsers().find(u => u.tenantId === req.user.tenantId);
+  if (!user) { res.status(404).json({ error: 'משתמש לא נמצא' }); return false; }
+  if (!planHasFeature(user.plan, 'trends')) { res.status(403).json({ error: 'מגמות גבייה אינן כלולות בחבילה', requiredPlan: 'Advanced' }); return false; }
+  return true;
+}
+const CR_MONTH_RE = /^\d{4}-(0[1-9]|1[0-2])$/;
+
+app.post('/api/collection-reports', authMiddleware, (req, res) => {
+  try {
+    if (!crRequireTrends(req, res)) return;
+    const from = String((req.body || {}).from || ''), to = String((req.body || {}).to || '');
+    if (!CR_MONTH_RE.test(from) || !CR_MONTH_RE.test(to) || from > to) return res.status(400).json({ error: 'טווח חודשים לא תקין' });
+    const d = loadTenantData(req.user.tenantId);
+    const list = Array.isArray(d.collectionReports) ? d.collectionReports : [];
+    if (list.length >= COLLECTION_REPORTS_MAX) return res.status(409).json({ error: `נשמרו כבר ${COLLECTION_REPORTS_MAX} דוחות — מחקו דוח ישן כדי לשמור חדש`, max: COLLECTION_REPORTS_MAX });
+    const rep = buildCollectionReport(d, { from, to });
+    if (!rep.range.months.length) return res.status(400).json({ error: 'אין חודשי גבייה בטווח שנבחר' });
+    const sn = buildCollectionSnapshot(rep, Date.now(), new Date().toISOString());
+    saveTenantData(req.user.tenantId, { collectionReports: list.concat([sn]) });
+    res.json({ ok: true, report: crSnapshotMeta(sn), count: list.length + 1 });
+  } catch (e) { console.error('[collection-reports save]', e); res.status(500).json({ error: 'שגיאה בשמירת הדוח' }); }
+});
+
+app.get('/api/collection-reports', authMiddleware, (req, res) => {
+  try {
+    if (!crRequireTrends(req, res)) return;
+    const d = loadTenantData(req.user.tenantId);
+    const list = (Array.isArray(d.collectionReports) ? d.collectionReports : []).map(crSnapshotMeta)
+      .sort((x, y) => String(y.savedAt).localeCompare(String(x.savedAt)));
+    res.json({ reports: list, max: COLLECTION_REPORTS_MAX });
+  } catch (e) { console.error('[collection-reports list]', e); res.status(500).json({ error: 'שגיאה' }); }
+});
+
+app.get('/api/collection-reports-compare', authMiddleware, (req, res) => {
+  try {
+    if (!crRequireTrends(req, res)) return;
+    const d = loadTenantData(req.user.tenantId);
+    const list = Array.isArray(d.collectionReports) ? d.collectionReports : [];
+    const a = list.find(x => x.id === String(req.query.a || '')), b = list.find(x => x.id === String(req.query.b || ''));
+    if (!a || !b) return res.status(404).json({ error: 'דוח לא נמצא' });
+    if (a.id === b.id) return res.status(400).json({ error: 'בחרו שני דוחות שונים' });
+    res.json(compareCollectionSnapshots(a, b));
+  } catch (e) { console.error('[collection-reports compare]', e); res.status(500).json({ error: 'שגיאה בהשוואה' }); }
+});
+
+app.delete('/api/collection-reports/:id', authMiddleware, (req, res) => {
+  try {
+    if (!crRequireTrends(req, res)) return;
+    const d = loadTenantData(req.user.tenantId);
+    const list = Array.isArray(d.collectionReports) ? d.collectionReports : [];
+    const next = list.filter(x => x.id !== String(req.params.id));
+    if (next.length === list.length) return res.status(404).json({ error: 'דוח לא נמצא' });
+    saveTenantData(req.user.tenantId, { collectionReports: next });
+    res.json({ ok: true, count: next.length });
+  } catch (e) { console.error('[collection-reports delete]', e); res.status(500).json({ error: 'שגיאה במחיקה' }); }
+});
+
+app.get('/api/collection-trend', authMiddleware, (req, res) => {
+  try {
+    if (!crRequireTrends(req, res)) return;
+    const from = String(req.query.from || ''), to = String(req.query.to || '');
+    if (!CR_MONTH_RE.test(from) || !CR_MONTH_RE.test(to) || from > to) return res.status(400).json({ error: 'טווח חודשים לא תקין' });
+    const d = loadTenantData(req.user.tenantId);
+    res.json(buildCollectionTrend(d, { from, to, account: String(req.query.account || 'all') }));
+  } catch (e) { console.error('[collection-trend]', e); res.status(500).json({ error: 'שגיאה בהפקת המגמה' }); }
+});
+
 // v2.14.60 — collection report (read-only). Plan feature 'collectionReports' (Basic+).
 app.get('/api/collection-report', authMiddleware, (req, res) => {
   try {
@@ -1867,6 +2055,12 @@ app.get('/api/data', authMiddleware, (req, res) => {
         shouldRemind:  autoSendShouldRemind(d, t, mkNow)
       };
     });
+  }
+  // v2.14.67 — saved collection reports are large and only the trends screen needs
+  // them (own routes); keep them out of the 2.5s poll. The backup download asks ?full=1.
+  if (req.query.full !== '1' && Array.isArray(d.collectionReports)) {
+    d.collectionReportsCount = d.collectionReports.length;
+    delete d.collectionReports;
   }
   res.json(d);
 });
@@ -3064,7 +3258,7 @@ function buildCollectionReport(d, opts) {
     closedExtra: new Set(d.closedMonthsExtra || [])
   };
   const accounts = new Map();   // key → aggregate
-  const monthly = new Map(months.map(M => [M, { month: M, charged: 0, paid: 0, covered: 0 }]));
+  const monthly = new Map(months.map(M => [M, { month: M, charged: 0, paid: 0, covered: 0, byAccount: {} }]));
   const acc0 = (key, label) => {
     if (!accounts.has(key)) accounts.set(key, { key, label, charged: 0, paid: 0, covered: 0, excess: 0, gap: 0,
       bank: 0, manual: 0, openDebt: 0, credit: 0, _members: new Set(), _payers: new Set(), _debtors: new Set(), _exempt: new Set() });
@@ -3100,6 +3294,9 @@ function buildCollectionReport(d, opts) {
       if (cell.status === 'exempt') a._exempt.add(tid);
       const mm = monthly.get(M);
       mm.charged += cell.charged; mm.paid += cell.paid; mm.covered += cell.covered;
+      // v2.14.67 — per-account monthly series (live trend chart, account filter)
+      const ma = mm.byAccount[key] || (mm.byAccount[key] = { label, charged: 0, paid: 0, covered: 0 });
+      ma.charged += cell.charged; ma.paid += cell.paid; ma.covered += cell.covered;
       m.charged += cell.charged; m.paid += cell.paid; m.covered += cell.covered; m.excess += cell.excess; m.gap += cell.gap;
       if (wantId === tid || opts.allRows) rows.push(Object.assign({ month: M, account: key, label }, cell));
     };
@@ -3171,7 +3368,11 @@ function buildCollectionReport(d, opts) {
     buildingStart, openMonth: mkNow,
     closedInRange: months.filter(M => c.closed.has(M)),
     accounts: accList, totals,
-    monthly: [...monthly.values()].map(x => ({ month: x.month, charged: r2(x.charged), paid: r2(x.paid), covered: r2(x.covered) })),
+    monthly: [...monthly.values()].map(x => {
+      const byAccount = {};
+      Object.keys(x.byAccount).forEach(k => { const v = x.byAccount[k]; byAccount[k] = { label: v.label, charged: r2(v.charged), paid: r2(v.paid), covered: r2(v.covered) }; });
+      return { month: x.month, charged: r2(x.charged), paid: r2(x.paid), covered: r2(x.covered), byAccount };
+    }),
     members, member: detail, warnings
   };
 }

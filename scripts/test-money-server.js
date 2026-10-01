@@ -3827,4 +3827,129 @@ const v2_14_64_async = async () => {
   t.eq('boot catch-up after 2 min, skipped on the 1st before 09:00', /setTimeout\(\(\) => \{\s*const n = new Date\(\);\s*if \(n\.getDate\(\) === 1 && n\.getHours\(\) < 9\) return;\s*try \{ catchUpMonthClose\(n\);/.test(src) && src.includes('}, 2 * 60 * 1000);'), true);
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.67 — collection trends (Phase 3): snapshots, compare, live series,
+// routes (REAL handler bodies), GET /api/data strip.
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  if (!src.includes('const COLLECTION_REPORTS_MAX = 36;')) { console.error('  ❌ v2.14.67 consts moved'); process.exit(1); }
+  const CONSTS = src.match(/const COLLECTION_REPORTS_MAX = 36;/)[0] + '\n' + src.match(/const CR_MONTH_RE = [^\n]*;/)[0];
+  const BI7 = a => 'bank_import_2026-09-03T10:00:00.000Z_' + a + '_payer_x';
+  const fx = () => ({ config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: ['2026-07', '2026-08'], closedMonthsExtra: ['2026-07', '2026-08'],
+    tenants: [{ id: 1, name: 'אבי', aptNumber: '1', openingDebt: 460 },
+              { id: 2, name: 'בתיה', aptNumber: '2', openingDebt: 0, extraAccounts: [{ id: 'e1', label: 'חשמל', amount: 100 }] },
+              { id: 3, name: 'גד', aptNumber: '3', openingDebt: 0 }],
+    paymentHistory: { '1': [{ month: '2026-07', paid: true, amount: 230, paidAmount: 230, type: 'bank' }],
+                      '2': [{ month: '2026-07', paid: true, amount: 230, paidAmount: 230, type: 'bank' }, { month: '2026-08', paid: true, amount: 230, paidAmount: 230, type: 'bank' }],
+                      '2__acc__e1': [{ month: '2026-07', paid: true, amount: 100, paidAmount: 100, type: 'bank' }],
+                      '3': [{ month: '2026-07', paid: true, amount: 230, paidAmount: 230, type: 'bank' }, { month: '2026-08', paid: true, amount: 230, paidAmount: 230, type: 'bank' }] },
+    sentLog: { '2_ספטמבר': BI7(230), '3_ספטמבר': BI7(230), '2__acc__e1_ספטמבר': BI7(100) } });
+  const R = (d, o) => S.buildCollectionReport(d, Object.assign({ mkNow: '2026-09', emNow: 'ספטמבר' }, o));
+
+  t.section('v2.14.67 — labels + monthly per-account series');
+  t.eq('label: one month', S.crReportLabel('2026-09', '2026-09'), 'ספטמבר 2026');
+  t.eq('label: same year', S.crReportLabel('2026-07', '2026-09'), 'יולי – ספטמבר 2026');
+  t.eq('label: across years', S.crReportLabel('2025-11', '2026-01'), 'נובמבר 2025 – ינואר 2026');
+  const rep = R(fx(), { from: '2026-07', to: '2026-09' });
+  t.eq('monthly: Σ byAccount == month totals (every month)', rep.monthly.every(m => ['charged', 'paid', 'covered'].every(k =>
+    Math.round(Object.values(m.byAccount).reduce((x, v) => x + v[k], 0) * 100) === Math.round(m[k] * 100))), true);
+  t.eq('monthly: חשמל has its own series', rep.monthly.map(m => (m.byAccount['x:חשמל'] || {}).covered), [100, 0, 100]);
+
+  t.section('v2.14.67 — snapshot (frozen, slim)');
+  const sn = S.buildCollectionSnapshot(rep, 111, '2026-10-01T10:00:00.000Z');
+  t.eq('snapshot meta', [sn.id, sn.label, sn.includesOpenMonth, sn.range.months.length], ['111', 'יולי – ספטמבר 2026', true, 3]);
+  t.eq('snapshot keeps totals incl. balances of that day', [sn.totals.charged, sn.totals.balanceDebt], [rep.totals.charged, rep.totals.balanceDebt]);
+  t.eq('snapshot members are slim (no monthly rows)', sn.members.every(m => !('rows' in m) && 'balance' in m && Object.keys(m.balance).sort().join() === 'credit,debt'), true);
+  t.eq('snapshot does not alias the report (frozen copy of members)', sn.members[0] !== rep.members[0], true);
+  t.eq('meta drops members, keeps totals', (() => { const m = S.crSnapshotMeta(sn); return [!('members' in m) || typeof m.members === 'number', m.totals.charged]; })(), [true, rep.totals.charged]);
+
+  t.section('v2.14.67 — compare A → B');
+  const dA = fx(); const snA = S.buildCollectionSnapshot(R(dA, { from: '2026-07', to: '2026-08' }), 1, '2026-09-01T00:00:00Z');
+  const dB = fx(); dB.tenants[0].openingDebt = 0; dB.sentLog['1_ספטמבר'] = BI7(230);    // אבי cleared his debt
+  dB.tenants[2].openingDebt = 690;                                                        // גד became a debtor
+  dB.tenants.push({ id: 4, name: 'דן', aptNumber: '4', openingDebt: 0 });
+  const snB = S.buildCollectionSnapshot(R(dB, { from: '2026-07', to: '2026-09' }), 2, '2026-10-01T00:00:00Z');
+  const c = S.compareCollectionSnapshots(snA, snB);
+  const tl = k => c.totals.find(x => x.key === k);
+  t.eq('totals: delta = B − A', tl('charged').delta, Math.round((snB.totals.charged - snA.totals.charged) * 100) / 100);
+  t.eq('totals: per-month average uses each period length (2 vs 3)', [tl('chargedPerMonth').a, tl('chargedPerMonth').b],
+    [Math.round(snA.totals.charged / 2 * 100) / 100, Math.round(snB.totals.charged / 3 * 100) / 100]);
+  t.eq('pct: delta in points', c.pct.deltaPts, Math.round((snB.totals.pct - snA.totals.pct) * 10) / 10);
+  t.eq('deltaPct null when A is 0', c.totals.every(x => x.a !== 0 || x.deltaPct === null), true);
+  t.eq('members: אבי improved (debt down)', c.members.improved.map(m => m.name), ['אבי']);
+  t.eq('members: גד worsened (+690)', c.members.worsened.map(m => [m.name, m.debtDelta]), [['גד', 690]]);
+  t.eq('members: new debtor גד, cleared אבי', [c.members.newDebtors, c.members.cleared], [['3'], ['1']]);
+  t.eq('members: דן (only in B) is NOT judged as worse / new debtor', c.members.improved.concat(c.members.worsened).some(m => m.id === '4') || c.members.newDebtors.includes('4'), false);
+  t.eq('members: דן listed as joined (with his debt in B)', c.members.joined.map(m => [m.name, m.debtB]), [['דן', 230]]);
+  t.eq('members: nobody left', c.members.left, []);
+  t.eq('accounts: union incl. חשמל with pct points', c.accounts.map(a => a.key).sort(), ['main', 'x:חשמל'].sort());
+
+  t.section('v2.14.67 — live trend series');
+  const d0 = fx();
+  const all = S.buildCollectionTrend(d0, { from: '2026-07', to: '2026-09', account: 'all', mkNow: '2026-09', emNow: 'ספטמבר' });
+  t.eq('series has every month', all.series.map(x => x.month), ['2026-07', '2026-08', '2026-09']);
+  t.eq('series == report.monthly (all)', all.series.map(x => x.covered), R(fx(), { from: '2026-07', to: '2026-09' }).monthly.map(m => m.covered));
+  t.eq('pct = covered/charged (one decimal)', all.series.every(x => x.charged > 0 ? x.pct === Math.round(x.covered / x.charged * 1000) / 10 : x.pct === null), true);
+  const el = S.buildCollectionTrend(fx(), { from: '2026-07', to: '2026-09', account: 'x:חשמל', mkNow: '2026-09', emNow: 'ספטמבר' });
+  t.eq('account filter x:חשמל', el.series.map(x => [x.charged, x.covered]), [[100, 100], [100, 0], [100, 100]]);
+  t.eq('unknown account → zeros, pct null', S.buildCollectionTrend(fx(), { from: '2026-07', to: '2026-07', account: 'x:אין', mkNow: '2026-09', emNow: 'ספטמבר' }).series[0], { month: '2026-07', charged: 0, paid: 0, covered: 0, pct: null });
+  t.eq('account list for the dropdown', all.accounts.map(a => a.key), ['main', 'x:חשמל']);
+
+  t.section('v2.14.67 — routes (REAL handlers) with the REAL plan gate');
+  const plansSrc = src.match(/const PLANS = \{[\s\S]*?\n\};/)[0];
+  const PL = lib.runInSandbox(plansSrc + '\n' + lib.extractFunctions(src, ['getPlan', 'planHasFeature']) + 'module.exports={planHasFeature};');
+  const helpers = lib.runInSandbox; // eslint quiet
+  const body = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const reqFn = lib.extractFunctions(src, ['crRequireTrends']);
+  const run = (head, store, plan, req) => {
+    const out = { status: 200 };
+    const g = Object.assign({}, S, { planHasFeature: PL.planHasFeature, loadUsers: () => [{ tenantId: 'B', plan }],
+      loadTenantData: () => JSON.parse(JSON.stringify(store.d)), saveTenantData: (id, p) => { Object.assign(store.d, p); store.saves++; } });
+    const names = Object.keys(g);
+    const fn = new Function(...names, 'req', 'res', CONSTS + '\n' + reqFn + '\n' + body(head));
+    fn(...names.map(n => g[n]), Object.assign({ user: { tenantId: 'B' }, query: {}, params: {}, body: {} }, req),
+      { status(c) { out.status = c; return this; }, json(o) { out.body = o; } });
+    return out;
+  };
+  const H = { save: "app.post('/api/collection-reports', authMiddleware, (req, res) => {", list: "app.get('/api/collection-reports', authMiddleware, (req, res) => {",
+              cmp: "app.get('/api/collection-reports-compare', authMiddleware, (req, res) => {", del: "app.delete('/api/collection-reports/:id', authMiddleware, (req, res) => {",
+              trend: "app.get('/api/collection-trend', authMiddleware, (req, res) => {" };
+  const store = { d: fx(), saves: 0 };
+  t.eq('save on Basic → 403 Advanced', [run(H.save, store, 'basic', { body: { from: '2026-07', to: '2026-08' } }).status, store.saves], [403, 0]);
+  t.eq('save bad range → 400', run(H.save, store, 'advanced', { body: { from: '2026-09', to: '2026-07' } }).status, 400);
+  t.eq('save range before the building started → 400 (no months)', run(H.save, store, 'advanced', { body: { from: '2020-01', to: '2020-02' } }).status, 400);
+  const s1 = run(H.save, store, 'advanced', { body: { from: '2026-07', to: '2026-08' } });
+  t.eq('save → 200 + meta + count', [s1.status, s1.body.report.label, s1.body.count], [200, 'יולי – אוגוסט 2026', 1]);
+  t.eq('stored snapshot computed by the SERVER (totals == report)', store.d.collectionReports[0].totals.charged, R(fx(), { from: '2026-07', to: '2026-08' }).totals.charged);
+  const s2 = run(H.save, store, 'trial', { body: { from: '2026-07', to: '2026-09' } });
+  t.eq('trial ("all") can save', s2.status, 200);
+  const ls = run(H.list, store, 'advanced', {});
+  t.eq('list: newest first, meta only (members = count)', [ls.body.reports.length, typeof ls.body.reports[0].members, ls.body.max], [2, 'number', 36]);
+  t.eq('list on Basic → 403', run(H.list, store, 'basic', {}).status, 403);
+  const [i1, i2] = store.d.collectionReports.map(x => x.id);
+  t.eq('compare → 200 with deltas', (() => { const r = run(H.cmp, store, 'advanced', { query: { a: i1, b: i2 } }); return [r.status, Array.isArray(r.body.totals)]; })(), [200, true]);
+  t.eq('compare same id → 400', run(H.cmp, store, 'advanced', { query: { a: i1, b: i1 } }).status, 400);
+  t.eq('compare missing → 404', run(H.cmp, store, 'advanced', { query: { a: i1, b: 'nope' } }).status, 404);
+  t.eq('trend → 200 / Basic 403 / bad range 400', [run(H.trend, store, 'advanced', { query: { from: '2026-07', to: '2026-09' } }).status,
+    run(H.trend, store, 'basic', { query: { from: '2026-07', to: '2026-09' } }).status, run(H.trend, store, 'advanced', { query: { from: 'x', to: 'y' } }).status], [200, 403, 400]);
+  t.eq('delete missing → 404', run(H.del, store, 'advanced', { params: { id: 'nope' } }).status, 404);
+  t.eq('delete → 200, one left', (() => { const r = run(H.del, store, 'advanced', { params: { id: i1 } }); return [r.status, store.d.collectionReports.length]; })(), [200, 1]);
+  { const full = { d: fx(), saves: 0 }; full.d.collectionReports = new Array(36).fill(0).map((_, i) => ({ id: 'x' + i, savedAt: '2026', label: 'l', range: { from: '2026-07', to: '2026-07', months: ['2026-07'] }, totals: {}, members: [] }));
+    const r = run(H.save, full, 'advanced', { body: { from: '2026-07', to: '2026-08' } });
+    t.eq('cap 36 → 409, nothing saved', [r.status, full.saves], [409, 0]); }
+  t.eq('routes never write via saveTenantData anything but collectionReports', [H.save, H.del].every(h => /saveTenantData\(req\.user\.tenantId, \{ collectionReports: [^}]+\}\)/.test(body(h))), true);
+
+  t.section('v2.14.67 — GET /api/data keeps saved reports out of the 2.5s poll');
+  const gd = body("app.get('/api/data', authMiddleware, (req, res) => {");
+  const strip = gd.slice(gd.indexOf('  // v2.14.67 — saved collection reports are large'), gd.lastIndexOf('res.json(d);'));
+  const runStrip = q => { const d = { tenants: [], collectionReports: [{ id: 'a' }, { id: 'b' }] }; new Function('req', 'd', strip)({ query: q }, d); return d; };
+  t.eq('poll: reports stripped, count kept', (() => { const d = runStrip({}); return ['collectionReports' in d, d.collectionReportsCount]; })(), [false, 2]);
+  t.eq('?full=1 (backup download): reports included', runStrip({ full: '1' }).collectionReports.length, 2);
+  t.eq('strip sits right before the final res.json(d)', /delete d\.collectionReports;\s*\}\s*res\.json\(d\);\s*$/.test(gd), true);
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();

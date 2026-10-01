@@ -76,7 +76,9 @@ const SERVER_FNS = [
   'crMonthAdd', 'crMonthsBetween', 'crTenantCreatedMonth', 'crBuildingStartMonth',
   'crCell', 'crMainMonth', 'crExtraMonth', 'crAccountKey', 'buildCollectionReport',
   // v2.14.63/64 — extra-account split / balance as of now (single source for extras)
-  'extraAccountSplit', 'extraAccountBalance', 'extraMonthKeyFor'
+  'extraAccountSplit', 'extraAccountBalance', 'extraMonthKeyFor',
+  // v2.14.67 — collection trends (Phase 3)
+  'crReportLabel', 'buildCollectionSnapshot', 'crSnapshotMeta', 'compareCollectionSnapshots', 'buildCollectionTrend'
 ];
 
 function loadServer() {
