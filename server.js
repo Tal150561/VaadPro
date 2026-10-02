@@ -1837,6 +1837,9 @@ function compareCollectionSnapshots(a, b) {
     line('balanceCredit', T(a, 'balanceCredit'), T(b, 'balanceCredit')),
     line('debtors', T(a, 'debtors'), T(b, 'debtors'))
   ];
+  const ppA = (a.totals || {}).paidPct, ppB = (b.totals || {}).paidPct;
+  const paidPct = { a: ppA == null ? null : ppA, b: ppB == null ? null : ppB,
+    deltaPts: (ppA == null || ppB == null) ? null : Math.round((ppB - ppA) * 10) / 10 };   // v2.14.69 (older snapshots: null)
   const pctA = (a.totals || {}).pct, pctB = (b.totals || {}).pct;
   const pct = { a: pctA == null ? null : pctA, b: pctB == null ? null : pctB,
     deltaPts: (pctA == null || pctB == null) ? null : Math.round((pctB - pctA) * 10) / 10 };
@@ -1868,7 +1871,7 @@ function compareCollectionSnapshots(a, b) {
   const improved = both.filter(m => m.debtDelta < 0).sort((p, q) => p.debtDelta - q.debtDelta);
   const worsened = both.filter(m => m.debtDelta > 0).sort((p, q) => q.debtDelta - p.debtDelta);
   return {
-    a: crSnapshotMeta(a), b: crSnapshotMeta(b), totals, pct, accounts,
+    a: crSnapshotMeta(a), b: crSnapshotMeta(b), totals, pct, paidPct, accounts,
     members: { improved, worsened,
       newDebtors: both.filter(m => m.debtA === 0 && m.debtB > 0).map(m => m.id),
       cleared: both.filter(m => m.debtA > 0 && m.debtB === 0).map(m => m.id),
@@ -2166,6 +2169,20 @@ app.post('/api/data', authMiddleware, (req, res) => {
         return res.json({ ok: false, limitError: true, error: `הגעת למגבלת ${maxT} דיירים בתוכנית ${planName} — צור קשר לשדרוג`, max: maxT });
       }
     }
+    // ── v2.14.69: suspension periods (tenant + each extra account) ──────
+    try {
+      const prevD = loadTenantData(req.user.tenantId);
+      const mkS = getMonthKey(prevD.config || {});
+      const prevById = new Map((prevD.tenants || []).map(x => [String(x.id), x]));
+      req.body.tenants.forEach(nt => {
+        const pt = prevById.get(String(nt && nt.id));
+        normalizeSuspensionPeriods(pt, nt, mkS);
+        (nt && Array.isArray(nt.extraAccounts) ? nt.extraAccounts : []).forEach(na => {
+          const pa = pt && Array.isArray(pt.extraAccounts) ? pt.extraAccounts.find(x => x.id === na.id) : null;
+          normalizeSuspensionPeriods(pa, na, mkS);
+        });
+      });
+    } catch (e) { console.error('[suspension periods]', e.message); }
     // ── Column A (v2.13.16): maintain personalTariffs on fee change ──────
     // The tenants tab edits a scalar customAmount. Per the locked model, a fee
     // change must CLOSE the tenant's open personalTariffs interval and OPEN a new
@@ -3133,7 +3150,7 @@ function crMainMonth(d, t, M, c) {
       charged = resolveTariffRate(t, d.defaultTariffs, M, live); paid = 0; status = 'unpaid';
     }
   }
-  if (t.suspended === true && status !== 'paid') { charged = 0; status = 'exempt'; }
+  if (crSuspendedIn(t, M) && status !== 'paid') { charged = 0; status = 'exempt'; }   // v2.14.69: by period
   return crCell(charged, paid, source, status);
 }
 
@@ -3161,7 +3178,7 @@ function crExtraMonth(d, t, acc, M, c) {
   let charged = (billing && amount > 0) ? amount : 0;
   if (charged === 0 && paid <= 0) return null;
   let status = paid <= 0 ? 'unpaid' : (paid < charged ? 'partial' : 'paid');
-  if (acc.suspended === true && status !== 'paid') { charged = 0; status = 'exempt'; }
+  if (crSuspendedIn(acc, M) && status !== 'paid') { charged = 0; status = 'exempt'; }   // v2.14.69: by period
   return crCell(charged, paid, source, status);
 }
 
@@ -3334,6 +3351,8 @@ function buildCollectionReport(d, opts) {
     const out = { key: a.key, label: a.label };
     ['charged', 'paid', 'covered', 'excess', 'gap', 'bank', 'manual', 'openDebt', 'credit'].forEach(k => { out[k] = r2(a[k]); });
     out.pct = out.charged > 0 ? Math.round(out.covered / out.charged * 1000) / 10 : null;
+    out.paidPct = out.charged > 0 ? Math.round(out.paid / out.charged * 1000) / 10 : null;   // v2.14.69 — יחס גבייה בפועל
+    out.netPaid = r2(out.paid - out.charged);
     out.members = a._members.size; out.payers = a._payers.size; out.debtors = a._debtors.size; out.exempt = a._exempt.size;
     return out;
   }).filter(a => a.key === 'main' || a.members > 0 || a.openDebt > 0 || a.credit > 0);
@@ -3343,6 +3362,9 @@ function buildCollectionReport(d, opts) {
   accList.forEach(a => { Object.keys(totals).forEach(k => { totals[k] += a[k]; }); });
   Object.keys(totals).forEach(k => { totals[k] = r2(totals[k]); });
   totals.pct = totals.charged > 0 ? Math.round(totals.covered / totals.charged * 1000) / 10 : null;
+  // v2.14.69 — יחס גבייה בפועל (cash ÷ charge, may exceed 100) + net cash vs. charge
+  totals.paidPct = totals.charged > 0 ? Math.round(totals.paid / totals.charged * 1000) / 10 : null;
+  totals.netPaid = r2(totals.paid - totals.charged);
   // v2.14.63 — building balances AS OF NOW (debts and credits are NOT netted per member
   // across accounts: credit on electricity does not pay the committee fee).
   totals.balanceDebt = r2(accList.reduce((sum, a) => sum + a.openDebt, 0));
@@ -3361,6 +3383,13 @@ function buildCollectionReport(d, opts) {
     loose.get(k).push(a.label);
   });
   loose.forEach(list => { if (list.length > 1) warnings.push({ type: 'similarLabels', labels: list }); });
+  // v2.14.69 — suspended without a start month → past months are exempted (legacy); ask for the date.
+  const undated = [];
+  (d.tenants || []).forEach(t => {
+    if (crSuspensionUndated(t)) undated.push(t.name || String(t.id));
+    (t.extraAccounts || []).forEach(a => { if (a.active !== false && crSuspensionUndated(a)) undated.push((t.name || t.id) + ' · ' + (a.label || 'חשבון נוסף')); });
+  });
+  if (undated.length) warnings.push({ type: 'suspensionNoDate', names: undated });
 
   members.sort((a, b) => (b.gap - a.gap) || String(a.name).localeCompare(String(b.name), 'he'));
   return {
@@ -6039,6 +6068,55 @@ function monthBeforeKey(mk) {
   const t = p[0] * 12 + (p[1] - 1) - 1;
   return Math.floor(t / 12) + '-' + String((t % 12) + 1).padStart(2, '0');
 }
+// ── v2.14.69 — suspension PERIODS (tenant + extra account) ─────────────────────
+// `suspended` is the CURRENT state; `suspensions: [{from:'YYYY-MM', to:'YYYY-MM'|null}]`
+// records WHEN. Kept by the server on every save path (POST /api/data tenants,
+// POST /api/tenant-accounts): off→on opens a period at the active month; on→off closes
+// it at the month before (a period opened and closed in the same month is dropped).
+// A tenant suspended BEFORE v2.14.69 has no period ("legacy") — left undated until
+// Tal sets "מושהה מחודש"; the report then keeps the old behaviour (exempt every month)
+// and warns. Only the collection report reads the periods (past months); month-close,
+// reminders and the current-month split keep using the current flag.
+function normalizeSuspensionPeriods(prevEnt, nextEnt, mk) {
+  if (!nextEnt || typeof nextEnt !== 'object') return nextEnt;
+  const wasS = !!prevEnt && prevEnt.suspended === true;
+  const isS = nextEnt.suspended === true;
+  const src = Array.isArray(nextEnt.suspensions) ? nextEnt.suspensions
+            : (prevEnt && Array.isArray(prevEnt.suspensions) ? prevEnt.suspensions : []);
+  const ok = m => typeof m === 'string' && /^\d{4}-(0[1-9]|1[0-2])$/.test(m);
+  let list = src.filter(p => p && typeof p === 'object')
+    .map(p => ({ from: ok(p.from) ? p.from : null, to: ok(p.to) ? p.to : null }))
+    .filter(p => p.from || p.to);
+  // at most ONE open period (the latest by from)
+  const opens = list.filter(p => !p.to).sort((x, y) => String(x.from).localeCompare(String(y.from)));
+  if (opens.length > 1) list = list.filter(p => p.to || p === opens[opens.length - 1]);
+  const open = list.find(p => !p.to);
+  if (open && open.from && open.from > mk) open.from = mk;           // never in the future
+  if (isS) {
+    if (!open && !wasS) list.push({ from: mk, to: null });
+  } else if (open) {
+    const to = monthBeforeKey(mk);
+    if (open.from && to < open.from) list = list.filter(p => p !== open);
+    else open.to = to;
+  }
+  list.sort((x, y) => String(x.from || '').localeCompare(String(y.from || '')));
+  if (list.length) nextEnt.suspensions = list; else delete nextEnt.suspensions;
+  return nextEnt;
+}
+
+// Was this tenant / extra account suspended in month M? (collection report only)
+function crSuspendedIn(ent, M) {
+  if (!ent) return false;
+  const ps = Array.isArray(ent.suspensions) ? ent.suspensions : [];
+  if (ps.some(p => (!p.from || p.from <= M) && (!p.to || M <= p.to))) return true;
+  // legacy: suspended now but no open dated period → exempt every month (pre-2.14.69 behaviour)
+  return ent.suspended === true && !ps.some(p => !p.to);
+}
+
+function crSuspensionUndated(ent) {
+  return !!ent && ent.suspended === true && !(Array.isArray(ent.suspensions) && ent.suspensions.some(p => p && !p.to && p.from));
+}
+
 function monthCloseCatchUpDue(closed, prevKey) {
   const c = Array.isArray(closed) ? closed : [];
   return !c.includes(prevKey) && c.includes(monthBeforeKey(prevKey));
@@ -9147,6 +9225,17 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
       payer:       (acc.payer === 'owner' || acc.payer === 'tenant') ? acc.payer : (prev && prev.payer) || 'owner', // שלב 1: מי משלם
       active:      acc.active !== false, // default true
     };
+  });
+  // v2.14.69 — FIX: the per-account ⏸ suspension (v2.14.31, design 2C) was DROPPED here
+  // (the field list above never carried it) → the modal's checkbox never persisted.
+  // Persist it + keep its suspension periods.
+  const mkA = getMonthKey(d.config || {});
+  merged.forEach((m, i) => {
+    const sent = accounts[i] || {};
+    if (sent.suspended === true) m.suspended = true;
+    const prev = existing.find(e => e.id === m.id);
+    if (Array.isArray(sent.suspensions)) m.suspensions = sent.suspensions;
+    normalizeSuspensionPeriods(prev, m, mkA);
   });
   d.tenants[tenantIdx].extraAccounts = merged;
   // שלב 1: שמירת סלוטי בעלים/שוכר (אם נשלחו) — שדות שם/טלפון/אימייל לכל סלוט

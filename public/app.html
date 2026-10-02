@@ -1890,7 +1890,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.67';
+const HTML_VERSION = '2.14.69';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2173,6 +2173,20 @@ function crSourceLabel(src) { return src === 'bank' ? 'בנק' : src === 'manual
 // v2.14.63 — balance AS OF NOW, colour-coded: debt = red "לתשלום", credit = green "זכות".
 // Debt and credit are shown side by side, never netted (credit on one account does not
 // pay another). Falls back to owedNow/credit for payloads without `balance`.
+// v2.14.69 — "יחס גבייה בפועל": secondary lines under the % and gap cards. Formats
+// the server's paidPct / netPaid / excess only.
+function crPaidLine(T) {
+  if (!T || T.paidPct === null || T.paidPct === undefined) return '';
+  return 'בפועל: ' + T.paidPct + '% (' + crMoney(T.paid) + ' מתוך ' + crMoney(T.charged) + ')';
+}
+function crNetLine(T) {
+  if (!T || T.netPaid === undefined) return '';
+  const n = T.netPaid;
+  let h = n > 0 ? 'בפועל: +' + crMoney(n) + ' מעבר לחיוב' : (n < 0 ? 'בפועל: חסרים ' + crMoney(Math.abs(n)) : 'בפועל: ₪0 — נגבה כמו החיוב');
+  if (T.excess > 0) h += ' · כולל ' + crMoney(T.excess) + ' על חוב קודם / זכות';
+  return h;
+}
+
 function crBalanceOf(m) {
   if (m && m.balance) return m.balance;
   return { debt: (m && m.owedNow) || 0, credit: (m && m.credit) || 0, accounts: [] };
@@ -2258,6 +2272,8 @@ function crRender(r) {
   if (r.range.requestedFrom < r.range.from) notes.push('הדוח מתחיל ב' + esc(crMonthLabel(r.range.from)) + ' — תחילת הגבייה במערכת');
   if (r.range.months.indexOf(r.openMonth) !== -1) notes.push('⏳ ' + esc(crMonthLabel(r.openMonth)) + ' עדיין פתוח — הנתונים שלו יתעדכנו עד סגירת החודש');
   (r.warnings || []).forEach(function(w) {
+    if (w.type === 'suspensionNoDate') notes.push('⚠️ השהיה ללא תאריך התחלה: ' + w.names.map(function(x) { return esc(x); }).join(', ') +
+      ' — הם נחשבים פטורים בכל החודשים בדוח. קבעו "מושהה מחודש" בעריכת ה' + esc(t('person')) + ' (או בחשבונות שלו) כדי שהחודשים שלפני ההשהיה ייספרו נכון.');
     if (w.type === 'similarLabels') notes.push('⚠️ חשבונות בשמות דומים: ' + w.labels.map(function(x) { return '"' + esc(x) + '"'; }).join(', ') + ' — אם זה אותו חשבון, אחדו את השם ב' + esc(t('persons')));
   });
   h += '<div style="margin:14px 0 8px;font-size:0.82rem;color:var(--text2);line-height:1.8;">' + notes.join('<br>') + '</div>';
@@ -2275,8 +2291,10 @@ function crRender(r) {
     '<div class="stat-card"><div class="stat-num">' + crMoney(T.charged) + '</div><div class="stat-label">חיוב</div></div>' +
     '<div class="stat-card"><div class="stat-num">' + crMoney(T.covered) + '</div><div class="stat-label">כיסוי חיוב</div></div>' +
     '<div class="stat-card"><div class="stat-num">' + crMoney(T.paid) + '</div><div class="stat-label">נגבה בפועל</div></div>' +
-    '<div class="stat-card"><div class="stat-num">' + crPct(T.pct) + '</div><div class="stat-label">אחוז גבייה</div></div>' +
-    '<div class="stat-card"><div class="stat-num' + (T.gap > 0 ? ' warn' : '') + '">' + crMoney(T.gap) + '</div><div class="stat-label">פער</div></div>' +
+    '<div class="stat-card"><div class="stat-num">' + crPct(T.pct) + '</div><div class="stat-label">אחוז גבייה</div>' +
+      (crPaidLine(T) ? '<div style="font-size:0.72rem;color:var(--info);margin-top:2px;">' + crPaidLine(T) + '</div>' : '') + '</div>' +
+    '<div class="stat-card"><div class="stat-num' + (T.gap > 0 ? ' warn' : '') + '">' + crMoney(T.gap) + '</div><div class="stat-label">פער</div>' +
+      (crNetLine(T) ? '<div style="font-size:0.72rem;color:var(--info);margin-top:2px;">' + crNetLine(T) + '</div>' : '') + '</div>' +
     '</div>';
   h += '<div style="font-size:0.74rem;color:var(--text2);margin-bottom:14px;">כיסוי חיוב = החלק מהחיוב ששולם (לעולם לא יותר מהחיוב). נגבה בפועל = כל הכסף שנכנס, כולל עודפים שקיזזו חוב קודם או נשמרו כזכות.</div>';
   if (T.balanceDebt !== undefined) {
@@ -2291,16 +2309,16 @@ function crRender(r) {
 
   // per account
   h += '<div class="card"><div class="card-header">📂 סיכום לפי חשבון</div><div style="overflow-x:auto;"><table><thead><tr>' +
-    '<th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק / ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr></thead><tbody>';
+    '<th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>% בפועל</th><th>פער</th><th>בנק / ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr></thead><tbody>';
   r.accounts.forEach(function(a) {
     h += '<tr><td><strong>' + esc(crAccLabel(a)) + '</strong></td><td>' + crMoney(a.charged) + '</td><td>' + crMoney(a.covered) + '</td><td>' + crMoney(a.paid) +
-      '</td><td>' + crPct(a.pct) + '</td><td style="color:' + (a.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(a.gap) +
+      '</td><td>' + crPct(a.pct) + '</td><td style="color:var(--info);">' + crPct(a.paidPct) + '</td><td style="color:' + (a.gap > 0 ? 'var(--danger)' : 'var(--text2)') + ';">' + crMoney(a.gap) +
       '</td><td>' + crMoney(a.bank) + ' / ' + crMoney(a.manual) + '</td><td>' + a.payers + '/' + a.members + '</td><td>' + (a.exempt || 0) +
       '</td><td style="color:var(--danger);">' + (a.openDebt ? crMoney(a.openDebt) : '—') + '</td><td style="color:var(--accent);">' + (a.credit ? crMoney(a.credit) : '—') + '</td></tr>';
   });
   if (r.accounts.length > 1) {
     h += '<tr style="font-weight:700;"><td>סה"כ</td><td>' + crMoney(T.charged) + '</td><td>' + crMoney(T.covered) + '</td><td>' + crMoney(T.paid) +
-      '</td><td>' + crPct(T.pct) + '</td><td>' + crMoney(T.gap) + '</td><td></td><td></td><td></td>' +
+      '</td><td>' + crPct(T.pct) + '</td><td>' + crPct(T.paidPct) + '</td><td>' + crMoney(T.gap) + '</td><td></td><td></td><td></td>' +
       '<td style="color:var(--danger);">' + (T.balanceDebt ? crMoney(T.balanceDebt) : '—') + '</td><td style="color:var(--accent);">' + (T.balanceCredit ? crMoney(T.balanceCredit) : '—') + '</td></tr>';
   }
   h += '</tbody></table></div></div>';
@@ -2409,8 +2427,8 @@ function crBuildPrintHtml(r, opts) {
     '<div class="c"><b>' + crMoney(T.charged) + '</b><span>חיוב</span></div>' +
     '<div class="c"><b>' + crMoney(T.covered) + '</b><span>כיסוי חיוב</span></div>' +
     '<div class="c"><b>' + crMoney(T.paid) + '</b><span>נגבה בפועל</span></div>' +
-    '<div class="c"><b>' + crPct(T.pct) + '</b><span>אחוז גבייה</span></div>' +
-    '<div class="c"><b>' + crMoney(T.gap) + '</b><span>פער</span></div></div>';
+    '<div class="c"><b>' + crPct(T.pct) + '</b><span>אחוז גבייה</span>' + (crPaidLine(T) ? '<span style="display:block;font-size:10px;">' + crPaidLine(T) + '</span>' : '') + '</div>' +
+    '<div class="c"><b>' + crMoney(T.gap) + '</b><span>פער</span>' + (crNetLine(T) ? '<span style="display:block;font-size:10px;">' + crNetLine(T) + '</span>' : '') + '</div></div>';
   h += '<div class="hint">כיסוי חיוב = החלק מהחיוב ששולם (לא יותר מהחיוב). נגבה בפועל = כל הכסף שנכנס, כולל עודפים.</div>';
   if (T.balanceDebt !== undefined) {
     h += '<div class="meta">יתרות נכון להיום (לא נכון לסוף הטווח):</div><div class="cards" style="grid-template-columns:repeat(3,1fr);">' +
@@ -2435,12 +2453,12 @@ function crBuildPrintHtml(r, opts) {
     h += '<div class="bal">' + heads.join(' · ') + ' <span style="font-size:11px;color:#555;font-weight:400;">(נכון להיום)</span></div>';
   }
 
-  h += '<h2>סיכום לפי חשבון</h2><table><tr><th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>פער</th><th>בנק</th><th>ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr>';
+  h += '<h2>סיכום לפי חשבון</h2><table><tr><th>חשבון</th><th>חיוב</th><th>כיסוי חיוב</th><th>נגבה בפועל</th><th>%</th><th>% בפועל</th><th>פער</th><th>בנק</th><th>ידני</th><th>משלמים</th><th>מושהים</th><th>חוב פתוח</th><th>זכות</th></tr>';
   r.accounts.forEach(function(a) {
-    h += row([esc(crAccLabel(a)), crMoney(a.charged), crMoney(a.covered), crMoney(a.paid), crPct(a.pct), crMoney(a.gap), crMoney(a.bank), crMoney(a.manual), a.payers + '/' + a.members, String(a.exempt || 0),
+    h += row([esc(crAccLabel(a)), crMoney(a.charged), crMoney(a.covered), crMoney(a.paid), crPct(a.pct), crPct(a.paidPct), crMoney(a.gap), crMoney(a.bank), crMoney(a.manual), a.payers + '/' + a.members, String(a.exempt || 0),
       '<span class="gap">' + (a.openDebt ? crMoney(a.openDebt) : '—') + '</span>', '<span class="cr">' + (a.credit ? crMoney(a.credit) : '—') + '</span>']);
   });
-  if (r.accounts.length > 1) h += row(['סה"כ', crMoney(T.charged), crMoney(T.covered), crMoney(T.paid), crPct(T.pct), crMoney(T.gap), '', '', '', '',
+  if (r.accounts.length > 1) h += row(['סה"כ', crMoney(T.charged), crMoney(T.covered), crMoney(T.paid), crPct(T.pct), crPct(T.paidPct), crMoney(T.gap), '', '', '', '',
     T.balanceDebt ? crMoney(T.balanceDebt) : '—', T.balanceCredit ? crMoney(T.balanceCredit) : '—'], true);
   h += '</table>';
 
@@ -2490,12 +2508,12 @@ function crBuildSheets(r, building) {
     ['תקופה', crRangeText(r)],
     ['חודש פתוח', r.range.months.indexOf(r.openMonth) !== -1 ? crMonthLabel(r.openMonth) : '—'],
     [],
-    ['חשבון', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'אחוז גבייה', 'פער', 'בנק', 'ידני', 'משלמים', t('persons'), 'מושהים', 'חוב פתוח (היום)', 'זכות (היום)']
+    ['חשבון', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'אחוז גבייה', 'פער', 'בנק', 'ידני', 'משלמים', t('persons'), 'מושהים', 'חוב פתוח (היום)', 'זכות (היום)', 'יחס גבייה בפועל %']
   ];
   r.accounts.forEach(function(a) {
-    summary.push([accName(a), a.charged, a.covered, a.paid, a.pct === null ? '' : a.pct, a.gap, a.bank, a.manual, a.payers, a.members, a.exempt || 0, a.openDebt || 0, a.credit || 0]);
+    summary.push([accName(a), a.charged, a.covered, a.paid, a.pct === null ? '' : a.pct, a.gap, a.bank, a.manual, a.payers, a.members, a.exempt || 0, a.openDebt || 0, a.credit || 0, (a.paidPct === null || a.paidPct === undefined) ? '' : a.paidPct]);
   });
-  summary.push(['סה"כ', r.totals.charged, r.totals.covered, r.totals.paid, r.totals.pct === null ? '' : r.totals.pct, r.totals.gap, '', '', '', '', '', r.totals.balanceDebt || 0, r.totals.balanceCredit || 0]);
+  summary.push(['סה"כ', r.totals.charged, r.totals.covered, r.totals.paid, r.totals.pct === null ? '' : r.totals.pct, r.totals.gap, '', '', '', '', '', r.totals.balanceDebt || 0, r.totals.balanceCredit || 0, (r.totals.paidPct === null || r.totals.paidPct === undefined) ? '' : r.totals.paidPct]);
   summary.push([]);
   summary.push(['יתרות נכון להיום', 'חובות פתוחים', r.totals.balanceDebt || 0, 'יתרות זכות', r.totals.balanceCredit || 0, 'נטו', r.totals.balanceNet || 0]);
   const members = [['שם', t('unit'), 'מושהה', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'פער', 'עודף', 'לתשלום (היום)', 'זכות (היום)']];
@@ -2521,7 +2539,7 @@ async function crExportExcel() {
   const wb = XLSX.utils.book_new();
   wb.Workbook = { Views: [{ RTL: true }] };
   const add = function(aoa, name, cols) { const ws = XLSX.utils.aoa_to_sheet(aoa); ws['!cols'] = cols.map(function(w) { return { wch: w }; }); XLSX.utils.book_append_sheet(wb, ws, name); };
-  add(sh.summary, 'סיכום', [18, 12, 12, 12, 11, 11, 11, 11, 9, 9, 9, 14, 12]);
+  add(sh.summary, 'סיכום', [18, 12, 12, 12, 11, 11, 11, 11, 9, 9, 9, 14, 12, 14]);
   add(sh.members, 'לפי ' + t('persons'), [22, 12, 8, 11, 11, 11, 11, 11, 13, 12]);
   add(sh.detail, 'פירוט חודשי', [22, 12, 9, 16, 10, 10, 10, 10, 8, 10]);
   XLSX.writeFile(wb, 'דוח-גבייה-' + full.range.from + '_' + full.range.to + '.xlsx');
@@ -2726,6 +2744,11 @@ function ctRenderCompare(c) {
   h += '<tr><td><strong>אחוז גבייה</strong></td><td>' + crPct(c.pct.a) + '</td><td>' + crPct(c.pct.b) + '</td><td>' +
     (c.pct.deltaPts === null || c.pct.deltaPts === 0 ? '<span style="color:var(--text2);">—</span>' :
       '<span style="color:' + (c.pct.deltaPts > 0 ? 'var(--accent)' : 'var(--danger)') + ';font-weight:600;">' + (c.pct.deltaPts > 0 ? '▲ ' : '▼ ') + Math.abs(c.pct.deltaPts) + ' נק׳</span>') + '</td></tr>';
+  if (c.paidPct && (c.paidPct.a !== null || c.paidPct.b !== null)) {
+    h += '<tr><td>יחס גבייה בפועל</td><td>' + crPct(c.paidPct.a) + '</td><td>' + crPct(c.paidPct.b) + '</td><td>' +
+      (c.paidPct.deltaPts === null || c.paidPct.deltaPts === 0 ? '<span style="color:var(--text2);">—</span>' :
+        '<span style="color:var(--text2);font-weight:600;">' + (c.paidPct.deltaPts > 0 ? '▲ ' : '▼ ') + Math.abs(c.paidPct.deltaPts) + ' נק׳</span>') + '</td></tr>';
+  }
   c.totals.forEach(function(x) {
     const m = CT_METRICS[x.key] || [x.key, 0];
     const isCount = x.key === 'debtors';
@@ -2771,6 +2794,21 @@ document.addEventListener('change', function(e) {
   if (e.target.id === 'ctAccount') { ctLoadTrend(); return; }
   if (e.target.getAttribute && e.target.getAttribute('data-ct-sel')) ctToggleSel(e.target.getAttribute('data-ct-sel'), e.target.checked);
 });
+
+// ── v2.14.69: suspension start month (the SERVER keeps the periods; the page only
+// edits the start of the OPEN period, e.g. for a tenant suspended before v2.14.69) ──
+function suspOpenFrom(ent) {
+  const ps = ent && Array.isArray(ent.suspensions) ? ent.suspensions : [];
+  const open = ps.find(function(p) { return p && !p.to; });
+  return open && open.from ? open.from : '';
+}
+function suspSetOpenFrom(ent, from) {
+  if (!ent || !/^\d{4}-(0[1-9]|1[0-2])$/.test(String(from || ''))) return;
+  const ps = Array.isArray(ent.suspensions) ? ent.suspensions.slice() : [];
+  const open = ps.find(function(p) { return p && !p.to; });
+  if (open) open.from = from; else ps.push({ from: from, to: null });
+  ent.suspensions = ps;
+}
 
 function switchSubTab(sub) {
   // sub = 'maintenance' | 'tickets'
@@ -3525,7 +3563,7 @@ function startEdit(id) {
   cells[1].innerHTML='<input id="ek-'+id+'" value="'+(t.keywords||'')+'" style="width:100%;font-size:0.79rem;margin-bottom:4px;" placeholder="מילות חיפוש">' + (_isKibbutz ? _gushEdit : _aptEdit);
   cells[2].innerHTML='<input id="ep-'+id+'" value="'+t.phone+'" style="width:100%;direction:ltr;" placeholder="טלפון">';
   cells[3].innerHTML='<input id="ee-'+id+'" value="'+(t.email||'')+'" style="width:100%;direction:ltr;font-size:0.82rem;" placeholder="email@example.com">';
-  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span><br><label style="font-size:0.75rem;color:var(--text3);display:inline-flex;align-items:center;gap:4px;margin-top:4px;"><input id="esusp-'+id+'" type="checkbox" '+(t.suspended===true?'checked':'')+'> ⏸ השהה מגבייה (פטור מדמי ועד)</label>';
+  cells[4].innerHTML='<input id="ea-'+id+'" type="number" value="'+(t.customAmount||'')+'" style="width:80px;" placeholder="ברירת מחדל" min="1"> <span style="font-size:0.75rem;color:var(--text3);">סכום</span> <input id="eod-'+id+'" type="number" value="'+(t.openingDebt||0)+'" style="width:80px;margin-right:8px;" placeholder="0"> <span style="font-size:0.75rem;color:var(--text3);">יתרת פתיחה (חוב/זכות)</span><br><label style="font-size:0.75rem;color:var(--text3);display:inline-flex;align-items:center;gap:4px;margin-top:4px;"><input id="esusp-'+id+'" type="checkbox" '+(t.suspended===true?'checked':'')+'> ⏸ השהה מגבייה (פטור מדמי ועד)</label> <label style="font-size:0.75rem;color:var(--text3);display:inline-flex;align-items:center;gap:4px;margin-top:4px;" title="מאיזה חודש הדייר פטור. חודשים שלפני כן נספרים בדוח הגבייה כחיוב רגיל.">מחודש <input id="esuspfrom-'+id+'" type="month" value="'+suspOpenFrom(t)+'" style="width:150px;"></label>';
   cells[5].innerHTML='<button class="btn btn-green btn-sm" onclick="saveEdit('+id+')">💾 שמור</button> <button class="btn btn-secondary btn-sm" onclick="cancelEdit()">✕</button>';
   document.getElementById('en-'+id).focus();
 }
@@ -3575,6 +3613,9 @@ async function saveEdit(id) {
   const susp = suspEl ? suspEl.checked : (t.suspended===true);
   t.name=n;t.phone=p;t.keywords=k;t.email=e;t.customAmount=ca||null;t.openingDebt=od||0;t.propertyLabel=pl||'';t.aptNumber=apt||'';t.gushChelka=gush||'';
   if (susp) t.suspended = true; else delete t.suspended;
+  // v2.14.69 — start month of the suspension (server opens/closes the periods itself)
+  const suspFromEl = document.getElementById('esuspfrom-'+id);
+  if (susp && suspFromEl && suspFromEl.value) suspSetOpenFrom(t, suspFromEl.value);
   // v2.14.41 (B): soft heads-up if the edited keywords now collide with another
   // member (excludeId=this member so we compare against OTHERS). Non-blocking.
   if (k) {
@@ -5007,7 +5048,12 @@ function render() {
       h+='<td style="font-size:0.77rem;color:var(--text2);">'+(t.keywords||'<span style="opacity:.4;">—</span>')+'</td>';
       h+='<td style="direction:ltr;text-align:right;font-family:monospace;font-size:0.81rem;">'+t.phone+'</td>';
       h+='<td style="font-size:0.78rem;color:var(--text2);direction:ltr;">'+(t.email||'<span style="opacity:.35;">—</span>')+'</td>';
-      const amtInner = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>' : '<span style="opacity:.4;">ברירת מחדל</span>';
+      // v2.14.68 — an explicit ₪0 fee IS charged the default everywhere (customAmount ||
+      // config.amount, incl. month-close) — so "ברירת מחדל" is the truth; say why.
+      const zeroFee = t.customAmount === 0;   // a STRING '0' is truthy → shown as ₪0, and the server also charges 0 for it
+      const amtInner = t.customAmount ? '<span style="color:var(--accent);font-weight:700;">₪'+t.customAmount+'</span>'
+        : (zeroFee ? '<span style="opacity:.6;" title="סכום 0 מתפרש כברירת מחדל ונגבה דמי הוועד הרגילים. כדי לפטור דייר מתשלום — השתמשו בהשהיה (⏸).">ברירת מחדל ⓘ</span>'
+                   : '<span style="opacity:.4;">ברירת מחדל</span>');
       const displayAmount = '<span class="tariff-open" title="היסטוריית תעריפים" onclick="openTenantTariff('+t.id+')" style="cursor:pointer;border-bottom:1px dashed var(--border);">'+amtInner+' 📊</span>';
       // ⚠️ v2.13.10 — unified with the payments tab and the portal.
       // Previously this showed the RAW openingDebt field, which is only the
@@ -5146,7 +5192,9 @@ function render() {
         if (currentMonthDebt > 0) breakdown.push('החודש: '+currentMonthDebt+'₪');
         if (historyDebt > 0) breakdown.push('חודשים קודמים: '+historyDebt+'₪');
         if (openingDebt > 0) breakdown.push('יתרת פתיחה: '+openingDebt+'₪');
-        if (openingDebt < 0) breakdown.push('קרדיט: ₪'+creditBalance);
+        // v2.14.68 — only a REAL remaining credit (תמי: openingDebt −230 offset by an unpaid
+        // June record → creditBalance 0 used to print "קרדיט: ₪0").
+        if (openingDebt < 0 && creditBalance > 0) breakdown.push('קרדיט: ₪'+creditBalance);
         debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+totalDebt+'₪</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }
@@ -8100,7 +8148,11 @@ function rptSaveReport() {
     };
   });
 
-  const label = trendMakeLabel(dateFrom, dateTo);
+  // v2.14.68 — label from the ACTUAL selected expenses (Q3-instead-of-July bug: the
+  // To-field is auto-filled with today, so 01/07 → 04/08 spanned two months). The
+  // dup-guard below still keys on the fields (unchanged behaviour).
+  const span = rptExpenseSpan(sel);
+  const label = span ? trendMakeLabel(span.from, span.to) : trendMakeLabel(dateFrom, dateTo);
   const report = {
     id: Date.now(),
     label: label,
@@ -8124,6 +8176,22 @@ function rptSaveReport() {
   trendSaveReports();
   toast('💾 דוח נשמר: ' + label, 'success');
   trendRenderSaved();
+}
+
+// v2.14.68 — earliest / latest date of the given expenses. ex.date is he-IL formatted
+// (dd.mm.yyyy, see the row parser) — parsed by its digits, never via new Date(str).
+// null when any date is missing/unparseable (caller falls back to the date fields).
+function rptExpenseSpan(list) {
+  let from = null, to = null;
+  for (const ex of (list || [])) {
+    const m = String((ex && ex.date) || '').match(/^(\d{1,2})\D(\d{1,2})\D(\d{4})$/);
+    if (!m) return null;
+    const d = new Date(+m[3], +m[2] - 1, +m[1]);
+    if (isNaN(d)) return null;
+    if (!from || d < from) from = d;
+    if (!to || d > to) to = d;
+  }
+  return from ? { from, to } : null;
 }
 
 function trendMakeLabel(dateFrom, dateTo) {
@@ -9603,6 +9671,7 @@ function renderTenantAccountsModal() {
         </label>
         <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;color:var(--text2);">
           <input type="checkbox" ${acc.suspended===true?'checked':''} onchange="taModalAccounts[${i}].suspended=this.checked?true:undefined"> ⏸ השהה גבייה
+          <span style="font-size:0.75rem;color:var(--text2);" title="מאיזה חודש החשבון פטור (לדוח הגבייה)">מחודש <input type="month" value="${suspOpenFrom(acc)}" style="width:140px;" onchange="suspSetOpenFrom(taModalAccounts[${i}], this.value)"></span>
         </label>
       </div>
     </div>`;

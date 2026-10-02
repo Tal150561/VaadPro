@@ -2280,7 +2280,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const cs = app60.indexOf('const CR_HEB'), ce = app60.indexOf('let crMembersOpen');   // v2.14.61: slice now ends at crMembersOpen
   if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crMembersOpen) — fix, do NOT delete'); process.exit(1); }
   const head60 = app60.slice(cs, app60.indexOf('\n', ce) + 1);
-  const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline',
+  const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crPaidLine', 'crNetLine',
     'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc']);
   const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה' };
   function load60(opts) {
@@ -2391,7 +2391,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: two measures explained', gd60.includes('<strong>כיסוי חיוב</strong>') && gd60.includes('<strong>נגבה בפועל</strong>'), true);
   t.eq('guide: overpay example 230/460', gd60.includes('חיוב 230, שולמו 460'), true);
   t.eq('guide: closed vs open month', gd60.includes('<strong>חודש סגור</strong>') && gd60.includes('<strong>חודש פתוח</strong>'), true);
-  t.eq('guide: suspension is current-state only', gd60.includes('אין למערכת היסטוריה של מתי הושהה'), true);
+  t.eq('guide: suspension by period (v2.14.69 replaced the current-state-only note)', gd60.includes('<strong>בחודשי ההשהיה בלבד</strong>'), true);
   t.eq('guide: similar labels box', gd60.includes('⚠️ חשבונות בשמות דומים'), true);
   t.eq('guide: collection "בבנייה" box gone from reports section', gd60.slice(gd60.indexOf('vpg-a-reports-collection'), gd60.indexOf('vpg-a-reports-expenses')).includes('🛠️ בבנייה'), false);
   global.__crRuns = runs;
@@ -2404,7 +2404,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const app61 = readSource('public/app.html');
   const gd61  = readSource('public/vaadpro-guide.js');
   const head61 = app61.slice(app61.indexOf('const CR_HEB'), app61.indexOf('\n', app61.indexOf('let crMembersOpen')) + 1);
-  const fns61 = extractFunctions(app61, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crRangeText',
+  const fns61 = extractFunctions(app61, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crPaidLine', 'crNetLine', 'crRangeText',
     'crRender', 'crMemberHtml', 'crToggleMembers', 'crFetchFull', 'crBuildPrintHtml', 'crPrint', 'crBuildSheets', 'crExportExcel', 'esc']);
   const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה', org: 'קיבוץ' };
   const mkReport = n => {
@@ -2569,7 +2569,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const gd63 = readSource('public/vaadpro-guide.js');
   const head63 = app63.slice(app63.indexOf('const CR_HEB'), app63.indexOf('\n', app63.indexOf('let crMembersOpen')) + 1);
   const fns63 = extractFunctions(app63, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel',
-    'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crRangeText', 'crRender', 'crMemberHtml', 'crBuildPrintHtml', 'crBuildSheets', 'esc']);
+    'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crPaidLine', 'crNetLine', 'crRangeText', 'crRender', 'crMemberHtml', 'crBuildPrintHtml', 'crBuildSheets', 'esc']);
   const LBL = { mainAccount: 'ועד בית', persons: 'דיירים', person: 'דייר', unit: 'דירה', org: 'ועד הבית' };
   const els = { crOutput: { innerHTML: '' } };
   const mod = runInSandbox(head63 + fns63 + '\nmodule.exports={crRender,crBuildPrintHtml,crBuildSheets,crMoney};',
@@ -2630,7 +2630,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('print: green CSS class defined', ph.includes('.cr{color:#15803d;}'), true);
     t.eq('print: member column "יתרה נכון להיום"', ph.includes('<th>יתרה נכון להיום</th>') && ph.includes('<span class="cr">זכות ' + mod.crMoney(2300) + '</span>'), true); }
   { const sh = mod.crBuildSheets(rep(), 'x');
-    t.eq('Excel summary: account row ends with openDebt, credit (numbers)', sh.summary[4].slice(-2).concat(sh.summary[5].slice(-2)), ['חוב פתוח (היום)', 'זכות (היום)', 2760, 2300]);
+    t.eq('Excel summary: openDebt, credit columns (numbers) — v2.14.69 adds the paid-ratio column after them', sh.summary[4].slice(11, 13).concat(sh.summary[5].slice(11, 13)), ['חוב פתוח (היום)', 'זכות (היום)', 2760, 2300]);
     t.eq('Excel summary: balances line', sh.summary[sh.summary.length - 1], ['יתרות נכון להיום', 'חובות פתוחים', 2760, 'יתרות זכות', 2300, 'נטו', 460]);
     t.eq('Excel members: debt / credit columns (numbers)', [sh.members[0].slice(-2), sh.members[1].slice(-2), sh.members[2].slice(-2)], [['לתשלום (היום)', 'זכות (היום)'], [2760, 0], [0, 2300]]); }
   t.section('v2.14.63 — no money math in the page + guide');
@@ -2857,6 +2857,107 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: trends sections', ['<h4>📈 מגמת גבייה חודשית</h4>', '<h4>💾 דוחות גבייה שמורים</h4>', '<h4>⚖️ השוואה בין שני דוחות</h4>', '<h4>💾 שמירה למגמות</h4>'].every(x => gd67.includes(x)), true);
   t.eq('guide: "בבנייה" gone from trends-collection', gd67.slice(gd67.indexOf('vpg-a-trends-collection'), gd67.indexOf('vpg-a-trends-expenses')).includes('בבנייה'), false);
   t.eq('guide: per-month average + backup', gd67.includes('<strong>ממוצע לחודש</strong>') && gd67.includes('נכללים בגיבוי'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.68 — small fixes: expense-trend label, "קרדיט: ₪0", ₪0 fee, pricing
+// ════════════════════════════════════════════════════════════════
+{
+  const app68 = readSource('public/app.html'), gd68 = readSource('public/vaadpro-guide.js'), pr68 = readSource('public/pricing.html');
+  const L = runInSandbox(extractFunctions(app68, ['rptExpenseSpan', 'trendMakeLabel']) + 'module.exports={rptExpenseSpan,trendMakeLabel};');
+  const exJuly = [{ date: '03.07.2026' }, { date: '28.07.2026' }, { date: '15.07.2026' }];
+  t.section('v2.14.68 — expense-trend label from the SELECTED expenses');
+  t.eq('span = min/max of the expenses', (() => { const s = L.rptExpenseSpan(exJuly); return [s.from.getDate(), s.to.getDate(), s.to.getMonth()]; })(), [3, 28, 6]);
+  t.eq('unparseable date → null (fallback to fields)', L.rptExpenseSpan([{ date: '03.07.2026' }, { date: 'xx' }]), null);
+  t.eq('empty → null', L.rptExpenseSpan([]), null);
+  t.eq('dd/mm/yyyy also accepted', L.rptExpenseSpan([{ date: '01/08/2026' }]).from.getMonth(), 7);
+  // REAL rptSaveReport on the original bug: July expenses, fields 01/07 → 04/08 (To auto-filled with "today")
+  const saveFn = extractFunctions(app68, ['rptExpenseSpan', 'trendMakeLabel', 'rptSaveReport']);
+  const runSave = (exps, from, to) => {
+    const store = { saved: [], toast: [] };
+    const ctx = { document: { getElementById: id => ({ rptDateFrom: { value: from }, rptDateTo: { value: to } })[id] },
+      rptExpenses: exps.map(e => Object.assign({ checked: true, desc: 'x', amount: 100 }, e)), savedReports: store.saved,
+      rptCategorize: () => 'כללי', trendLoadReports: () => {}, trendSaveReports: () => {}, trendRenderSaved: () => {},
+      toast: m => store.toast.push(m), confirm: () => true };
+    runInSandbox(saveFn + '\nrptSaveReport();', ctx);
+    return store;
+  };
+  { const st = runSave(exJuly, '2026-07-01', '2026-08-04');
+    t.eq('THE BUG: July expenses, fields 01/07→04/08 → label "יולי 2026" (was "Q3 2026")', st.saved[0].label, 'יולי 2026');
+    t.eq('…dateFrom/dateTo stay the fields (dup-guard unchanged)', [st.saved[0].dateFrom, st.saved[0].dateTo], ['2026-07-01', '2026-08-04']);
+    t.eq('…toast shows the corrected label', st.toast[0], '💾 דוח נשמר: יולי 2026'); }
+  t.eq('expenses really in July+August → quarter label stays', runSave([{ date: '03.07.2026' }, { date: '10.08.2026' }], '2026-07-01', '2026-08-31').saved[0].label, 'Q3 2026');
+  t.eq('unparseable expense date → label from the fields (old behaviour)', runSave([{ date: '?' }], '2026-07-01', '2026-07-31').saved[0].label, 'יולי 2026');
+
+  t.section('v2.14.68 — "קרדיט: ₪0" and the ₪0 fee');
+  t.eq('credit line only when creditBalance > 0', app68.includes("if (openingDebt < 0 && creditBalance > 0) breakdown.push('קרדיט: ₪'+creditBalance);") && !app68.includes("        if (openingDebt < 0) breakdown.push('קרדיט: ₪'+creditBalance);"), true);
+  const feeExpr = app68.match(/const zeroFee = [^\n]*\n\s*const amtInner = [\s\S]*?ברירת מחדל<\/span>'\);/)[0];
+  const fee = v => new Function('t', feeExpr + '\nreturn amtInner;')({ customAmount: v });
+  t.eq('explicit ₪0 → "ברירת מחדל ⓘ" with the why (suspend instead)', fee(0).includes('ברירת מחדל ⓘ') && fee(0).includes('השתמשו בהשהיה'), true);
+  t.eq('"0" STRING → "₪0" (truthy; the server charges parseFloat("0") = 0 — honest)', fee('0').includes('₪0') && !fee('0').includes('ברירת מחדל'), true);
+  t.eq('no fee set → plain "ברירת מחדל" (unchanged)', [fee(null).includes('ברירת מחדל ⓘ'), fee(null).includes('ברירת מחדל')], [false, true]);
+  t.eq('₪350 → shown (unchanged)', fee(350).includes('₪350'), true);
+  t.eq('guide: ₪0 fee explained', gd68.includes('<strong>סכום 0 מתפרש כברירת מחדל</strong>'), true);
+
+  t.section('v2.14.68 — pricing wording follows the plan split');
+  t.eq('Basic lists the collection report', pr68.includes('<li>דוח גבייה לפי תקופה — הדפסה ו-Excel</li>') && !pr68.includes('<li>דוחות חודשיים</li>'), true);
+  t.eq('Advanced lists expense reports + trends', pr68.includes('<li>דוחות הוצאות + מגמות גבייה והוצאות (גרפים והשוואה)</li>') && !pr68.includes('<li>דוחות שנתיים</li>'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.69 — paid-ratio lines, suspension "מחודש" UI, compare row, guide
+// ════════════════════════════════════════════════════════════════
+{
+  const app69 = readSource('public/app.html'), gd69 = readSource('public/vaadpro-guide.js');
+  const head69 = app69.slice(app69.indexOf('const CR_HEB'), app69.indexOf('\n', app69.indexOf('let crMembersOpen')) + 1);
+  const F = runInSandbox(head69 + extractFunctions(app69, ['crMonthLabel', 'crMoney', 'crPct', 'esc', 'crPaidLine', 'crNetLine', 'suspOpenFrom', 'suspSetOpenFrom'])
+    + 'module.exports={crPaidLine,crNetLine,suspOpenFrom,suspSetOpenFrom,crMoney};', {});
+  t.section('v2.14.69 — "יחס גבייה בפועל" lines (format server fields only)');
+  t.eq('paid line: September as Tal saw it', F.crPaidLine({ paidPct: 109.1, paid: 2760, charged: 2530 }), 'בפועל: 109.1% (' + F.crMoney(2760) + ' מתוך ' + F.crMoney(2530) + ')');
+  t.eq('paid line: null ratio → nothing', F.crPaidLine({ paidPct: null }), '');
+  t.eq('net line: +230 beyond the charge, incl. old debt', F.crNetLine({ netPaid: 230, excess: 230 }), 'בפועל: +' + F.crMoney(230) + ' מעבר לחיוב · כולל ' + F.crMoney(230) + ' על חוב קודם / זכות');
+  t.eq('net line: corrected September (0, with 230 old debt)', F.crNetLine({ netPaid: 0, excess: 230 }), 'בפועל: ₪0 — נגבה כמו החיוב · כולל ' + F.crMoney(230) + ' על חוב קודם / זכות');
+  t.eq('net line: short', F.crNetLine({ netPaid: -460, excess: 0 }), 'בפועל: חסרים ' + F.crMoney(460));
+  { const els = { crOutput: { innerHTML: '' } };
+    const fns = extractFunctions(app69, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline',
+      'crPaidLine', 'crNetLine', 'crRender', 'crMemberHtml', 'esc']);
+    const M = runInSandbox(head69 + fns + 'module.exports={crRender};', { document: { getElementById: id => els[id] || null }, t: k => ({ mainAccount: 'ועד בית', persons: 'דיירים', person: 'דייר', unit: 'דירה' })[k] || k });
+    const T = { charged: 690, covered: 460, paid: 690, excess: 230, gap: 230, pct: 66.7, paidPct: 100, netPaid: 0, balanceDebt: 2760, balanceCredit: 0, balanceNet: 2760, debtors: 1, inCredit: 0 };
+    M.crRender({ range: { from: '2026-09', to: '2026-09', requestedFrom: '2026-09', requestedTo: '2026-09', months: ['2026-09'] }, buildingStart: '2026-07', openMonth: '2026-10',
+      closedInRange: ['2026-09'], monthly: [], members: [], member: null, totals: T,
+      accounts: [{ key: 'main', label: null, charged: 690, covered: 460, paid: 690, pct: 66.7, paidPct: 100, gap: 230, bank: 690, manual: 0, members: 3, payers: 2, exempt: 0, openDebt: 2760, credit: 0 }],
+      warnings: [{ type: 'suspensionNoDate', names: ['רון'] }] });
+    const h = els.crOutput.innerHTML;
+    t.eq('% card: 66.7% big + "בפועל: 100%" under it', h.includes('>66.7%</div><div class="stat-label">אחוז גבייה</div><div style="font-size:0.72rem;color:var(--info);margin-top:2px;">בפועל: 100%'), true);
+    t.eq('gap card: line under it', h.includes('<div class="stat-label">פער</div><div style="font-size:0.72rem;color:var(--info);margin-top:2px;">בפועל: ₪0 — נגבה כמו החיוב'), true);
+    t.eq('accounts table: "% בפועל" column with the server value', h.includes('<th>%</th><th>% בפועל</th>') && h.includes('<td>66.7%</td><td style="color:var(--info);">100%</td>'), true);
+    t.eq('undated-suspension warning tells where to fix it', h.includes('⚠️ השהיה ללא תאריך התחלה: רון') && h.includes('"מושהה מחודש"'), true); }
+  t.section('v2.14.69 — suspension start month (page edits only the OPEN period)');
+  t.eq('open period start read', F.suspOpenFrom({ suspensions: [{ from: '2026-03', to: '2026-05' }, { from: '2026-10', to: null }] }), '2026-10');
+  t.eq('legacy (no periods) → empty field', F.suspOpenFrom({ suspended: true }), '');
+  { const e = { suspended: true }; F.suspSetOpenFrom(e, '2026-10'); t.eq('legacy → set creates the open period', e.suspensions, [{ from: '2026-10', to: null }]); }
+  { const e = { suspensions: [{ from: '2026-03', to: '2026-05' }, { from: '2026-09', to: null }] }; F.suspSetOpenFrom(e, '2026-10');
+    t.eq('existing open period → only its start changes (closed ones kept)', e.suspensions, [{ from: '2026-03', to: '2026-05' }, { from: '2026-10', to: null }]); }
+  { const e = { suspended: true }; F.suspSetOpenFrom(e, 'bad'); t.eq('invalid month ignored', 'suspensions' in e, false); }
+  t.eq('tenant edit row: "מחודש" field', app69.includes('id=\"esuspfrom-\'+id+\'\" type=\"month\" value=\"\'+suspOpenFrom(t)+\'\"'), true);
+  t.eq('tenant edit save applies it only while suspended', app69.includes("if (susp && suspFromEl && suspFromEl.value) suspSetOpenFrom(t, suspFromEl.value);"), true);
+  t.eq('accounts modal: "מחודש" field per account', app69.includes('value="${suspOpenFrom(acc)}" style="width:140px;" onchange="suspSetOpenFrom(taModalAccounts[${i}], this.value)"'), true);
+  t.section('v2.14.69 — compare row + guide');
+  { const els = { ctCompare: { innerHTML: '' } };
+    const ctHead = app69.slice(app69.indexOf('let ctLast = null'), app69.indexOf('};   // [label, good direction') + 3);
+    const C = runInSandbox(head69 + ctHead + '\n' + extractFunctions(app69, ['crMonthLabel', 'crMoney', 'crPct', 'esc', 'ctDeltaHtml', 'ctRenderCompare']) + 'module.exports={ctRenderCompare};',
+      { document: { getElementById: id => els[id] || null }, t: k => k });
+    const base = { a: { label: 'A', savedAt: '2026-09-01T00:00:00Z' }, b: { label: 'B', savedAt: '2026-10-01T00:00:00Z' }, pct: { a: 100, b: 66.7, deltaPts: -33.3 }, totals: [], accounts: [],
+      members: { improved: [], worsened: [], newDebtors: [], cleared: [], unchangedDebtors: 0, joined: [], left: [] } };
+    C.ctRenderCompare(Object.assign({}, base, { paidPct: { a: 150, b: 100, deltaPts: -50 } }));
+    t.eq('compare: "יחס גבייה בפועל" row (neutral colour)', els.ctCompare.innerHTML.includes('<tr><td>יחס גבייה בפועל</td><td>150%</td><td>100%</td><td><span style="color:var(--text2);font-weight:600;">▼ 50 נק׳</span>'), true);
+    C.ctRenderCompare(base);
+    t.eq('compare: older snapshots without paidPct → no row, no crash', els.ctCompare.innerHTML.includes('יחס גבייה בפועל'), false); }
+  t.eq('guide: the lost "איך נקבע החיוב" heading is back (deleted by v2.14.63)', gd69.includes("'<h4>איך נקבע החיוב של כל חודש</h4>' +"), true);
+  t.eq('guide: paid ratio explained with the 690/460/690 example', gd69.includes('<h4>📊 אחוז גבייה מול יחס גבייה בפועל</h4>') && gd69.includes('אחוז גבייה 66.7%, בפועל 100%, פער 230'), true);
+  t.eq('guide: suspension periods + undated warning + "מחודש" field', gd69.includes('<strong>בחודשי ההשהיה בלבד</strong>') && gd69.includes('⚠️ השהיה ללא תאריך') && gd69.includes('שדה <strong>"מחודש"</strong>'), true);
+  t.eq('guide: no stale "no suspension history" sentence left', gd69.includes('אין למערכת היסטוריה של מתי הושהה'), false);
+  t.eq('guide: every collection-report <ul> list follows a heading (no orphan list)', !/<\/ul>' \+\n\s*\n\s*'<ul>/.test(gd69), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

@@ -3273,7 +3273,7 @@ async function v2_14_57_async() {
     t.eq('מים quarterly: only Sep billed (90), Jul/Aug skipped', [w.charged, w.members], [90, 1]);
     const d4 = acc(r, 'x:חשמל-');
     t.eq('"חשמל-" is its own row (60 unpaid)', [d4.charged, d4.paid], [60, 0]);
-    t.eq('near-duplicate label warning', r.warnings, [{ type: 'similarLabels', labels: ['חשמל', 'חשמל-'] }]);
+    t.eq('near-duplicate label warning (+ v2.14.69 undated-suspension warning for דנה)', r.warnings, [{ type: 'similarLabels', labels: ['חשמל', 'חשמל-'] }, { type: 'suspensionNoDate', names: ['דנה'] }]);
     t.eq('main row first', r.accounts[0].key, 'main');
     t.eq('totals = sum of accounts (4510 charged)', r.totals.charged, 4510);
     t.eq('totals.covered = main + extras', r.totals.covered, 2750 + 500 + 0 + 0);
@@ -3950,6 +3950,99 @@ const v2_14_64_async = async () => {
   t.eq('poll: reports stripped, count kept', (() => { const d = runStrip({}); return ['collectionReports' in d, d.collectionReportsCount]; })(), [false, 2]);
   t.eq('?full=1 (backup download): reports included', runStrip({ full: '1' }).collectionReports.length, 2);
   t.eq('strip sits right before the final res.json(d)', /delete d\.collectionReports;\s*\}\s*res\.json\(d\);\s*$/.test(gd), true);
+}
+
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.69 — suspension PERIODS + "יחס גבייה בפועל" (Tal: לימור suspended from
+// 1.10 still owes September; the paid ratio must be visible on the same cards)
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const N = (prev, next, mk) => S.normalizeSuspensionPeriods(prev, next, mk || '2026-10');
+  t.section('v2.14.69 — normalizeSuspensionPeriods');
+  t.eq('off → on opens a period at the active month', N({}, { suspended: true }).suspensions, [{ from: '2026-10', to: null }]);
+  t.eq('new tenant created suspended → period', N(undefined, { suspended: true }).suspensions, [{ from: '2026-10', to: null }]);
+  t.eq('on → off closes at the month before', N({ suspended: true, suspensions: [{ from: '2026-06', to: null }] }, { suspensions: [{ from: '2026-06', to: null }] }).suspensions, [{ from: '2026-06', to: '2026-09' }]);
+  t.eq('opened and closed in the same month → dropped', 'suspensions' in N({ suspended: true, suspensions: [{ from: '2026-10', to: null }] }, { suspensions: [{ from: '2026-10', to: null }] }), false);
+  t.eq('LEGACY (suspended before 2.14.69, no period) stays undated', 'suspensions' in N({ suspended: true }, { suspended: true }), false);
+  t.eq('page sets the start month (לימור → 2026-10)', N({ suspended: true }, { suspended: true, suspensions: [{ from: '2026-10', to: null }] }).suspensions, [{ from: '2026-10', to: null }]);
+  t.eq('a future start month is clamped to the active month', N({ suspended: true }, { suspended: true, suspensions: [{ from: '2027-03', to: null }] }).suspensions, [{ from: '2026-10', to: null }]);
+  t.eq('page omitted the field → previous periods are kept', N({ suspended: true, suspensions: [{ from: '2026-04', to: null }] }, { suspended: true }).suspensions, [{ from: '2026-04', to: null }]);
+  t.eq('re-suspend keeps the old closed period + opens a new one', N({ suspensions: [{ from: '2026-03', to: '2026-05' }] }, { suspended: true }).suspensions, [{ from: '2026-03', to: '2026-05' }, { from: '2026-10', to: null }]);
+  t.eq('two open periods collapse to the latest', N({ suspended: true }, { suspended: true, suspensions: [{ from: '2026-02', to: null }, { from: '2026-07', to: null }] }).suspensions, [{ from: '2026-07', to: null }]);
+  t.eq('garbage entries dropped', N({}, { suspended: true, suspensions: [null, { from: 'x' }, 5] }).suspensions, [{ from: '2026-10', to: null }]);
+  t.section('v2.14.69 — crSuspendedIn');
+  const per = { suspended: true, suspensions: [{ from: '2026-10', to: null }] };
+  t.eq('before the period → charged', [S.crSuspendedIn(per, '2026-09'), S.crSuspendedIn(per, '2026-10'), S.crSuspendedIn(per, '2026-12')], [false, true, true]);
+  const closed = { suspensions: [{ from: '2026-03', to: '2026-05' }] };
+  t.eq('closed period → only inside', ['2026-02', '2026-03', '2026-05', '2026-06'].map(m => S.crSuspendedIn(closed, m)), [false, true, true, false]);
+  t.eq('legacy (suspended, no period) → every month', [S.crSuspendedIn({ suspended: true }, '2025-01'), S.crSuspensionUndated({ suspended: true })], [true, true]);
+  t.eq('not suspended, no periods → never', S.crSuspendedIn({}, '2026-09'), false);
+
+  t.section('v2.14.69 — THE CASE: September with לימור suspended from 1.10');
+  const fx = withPeriod => ({ config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: ['2026-08', '2026-09'], closedMonthsExtra: ['2026-08', '2026-09'], sentLog: {},
+    tenants: [{ id: 1, name: 'אבי', openingDebt: 0 }, { id: 9, name: 'תמי', openingDebt: -230 },
+              Object.assign({ id: 4, name: 'לימור', openingDebt: 2070, suspended: true }, withPeriod ? { suspensions: [{ from: '2026-10', to: null }] } : {})],
+    paymentHistory: { '1': [{ month: '2026-08', paid: true, amount: 230, paidAmount: 230, type: 'bank' }, { month: '2026-09', paid: true, amount: 230, paidAmount: 230, type: 'bank' }],
+                      '9': [{ month: '2026-08', paid: true, amount: 230, paidAmount: 230, type: 'bank' }, { month: '2026-09', paid: true, amount: 230, paidAmount: 460, type: 'bank', creditBanked: true }] } });
+  const rep = d => S.buildCollectionReport(d, { from: '2026-09', to: '2026-09', mkNow: '2026-10', emNow: 'אוקטובר' });
+  { const r = rep(fx(true)), T = r.totals, L = r.members.find(m => m.id === 4);
+    t.eq('dated: לימור CHARGED for September (unpaid)', [L.charged, L.paid, L.gap], [230, 0, 230]);
+    t.eq('dated: charged 690 · covered 460 · paid 690 · gap 230', [T.charged, T.covered, T.paid, T.gap], [690, 460, 690, 230]);
+    t.eq('dated: אחוז גבייה 66.7 (covered ÷ charged)', T.pct, 66.7);
+    t.eq('dated: יחס בפועל 100 (paid ÷ charged), netPaid 0, excess 230 (תמי\'s June debt)', [T.paidPct, T.netPaid, T.excess], [100, 0, 230]);
+    t.eq('dated: no undated-suspension warning', r.warnings.some(w => w.type === 'suspensionNoDate'), false);
+    t.eq('dated: main account row carries paidPct / netPaid', [r.accounts[0].paidPct, r.accounts[0].netPaid], [100, 0]);
+    const oct = S.buildCollectionReport(fx(true), { from: '2026-10', to: '2026-10', mkNow: '2026-10', emNow: 'אוקטובר' });
+    t.eq('dated: October (inside the period) → exempt', oct.members.find(m => m.id === 4).charged, 0); }
+  { const r = rep(fx(false)), T = r.totals;
+    t.eq('LEGACY (no date): old behaviour — לימור exempt, 100% / paid 150%', [T.charged, T.pct, T.paidPct, T.netPaid], [460, 100, 150, 230]);
+    t.eq('LEGACY: warning names her', r.warnings.find(w => w.type === 'suspensionNoDate').names, ['לימור']); }
+  t.eq('paidPct null when nothing charged', S.buildCollectionReport({ config: { amount: 230 }, tenants: [], closedMonths: ['2026-08'], paymentHistory: {}, sentLog: {} },
+    { from: '2026-09', to: '2026-09', mkNow: '2026-10', emNow: 'אוקטובר' }).totals.paidPct, null);
+  { const d = fx(true); d.tenants[0].extraAccounts = [{ id: 'e1', label: 'חשמל', amount: 100, suspended: true, suspensions: [{ from: '2026-10', to: null }] }];
+    const r = rep(d);
+    t.eq('extra account (main == extra): suspended from Oct → September charged', r.accounts.find(a => a.key === 'x:חשמל').charged, 100); }
+
+  t.section('v2.14.69 — save paths keep the periods (REAL code)');
+  const pd = src.slice(src.indexOf("app.post('/api/data', authMiddleware, (req, res) => {"));
+  const blkS = pd.slice(pd.indexOf('    // ── v2.14.69: suspension periods'), pd.indexOf('    // ── Column A (v2.13.16)'));
+  const prevD = { config: { manualMonth: 'אוקטובר' }, tenants: [{ id: 4, name: 'לימור' }, { id: 5, name: 'רון', suspended: true, suspensions: [{ from: '2026-04', to: null }],
+    extraAccounts: [{ id: 'x', label: 'חשמל', amount: 100 }] }] };
+  const body = { tenants: [{ id: 4, name: 'לימור', suspended: true }, { id: 5, name: 'רון', extraAccounts: [{ id: 'x', label: 'חשמל', amount: 100, suspended: true }] }, { id: 6, name: 'חדש', suspended: true }] };
+  new Function('req', 'loadTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'console', blkS)
+    ({ body, user: { tenantId: 'B' } }, () => prevD, S.getMonthKey, S.normalizeSuspensionPeriods, { error() {} });
+  const mkNow = S.getMonthKey({ manualMonth: 'אוקטובר' });
+  t.eq('POST /api/data: לימור suspended now → period from the active month', body.tenants[0].suspensions, [{ from: mkNow, to: null }]);
+  t.eq('POST /api/data: רון un-suspended → his period closed', body.tenants[1].suspensions[0].to !== null, true);
+  t.eq('POST /api/data: רון\'s extra account suspended → its own period', body.tenants[1].extraAccounts[0].suspensions, [{ from: mkNow, to: null }]);
+  t.eq('POST /api/data: a NEW tenant created suspended → period', body.tenants[2].suspensions, [{ from: mkNow, to: null }]);
+  // POST /api/tenant-accounts — the REAL handler (the dropped-suspension bug)
+  const ta = src.indexOf("app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {");
+  const taBody = src.slice(ta + "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {".length, src.indexOf('\n});\n', ta));
+  const runTA = (store, accounts) => { let out;
+    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'req', 'res', taBody)
+      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods,
+       { user: { tenantId: 'B' }, params: { tenantId: '7' }, body: { accounts } }, { json: o => { out = o; } });
+    return out; };
+  const st = { config: { manualMonth: 'אוקטובר' }, tenants: [{ id: 7, name: 'ת', extraAccounts: [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0 }] }] };
+  runTA(st, [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0, suspended: true }]);
+  t.eq('FIX: the modal\'s ⏸ on an extra account is now SAVED (was dropped)', st.tenants[0].extraAccounts[0].suspended, true);
+  t.eq('…and its period opened', st.tenants[0].extraAccounts[0].suspensions, [{ from: mkNow, to: null }]);
+  runTA(st, [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0, suspensions: [{ from: '2026-08', to: null }], suspended: true }]);
+  t.eq('modal "מחודש" sets the start month', st.tenants[0].extraAccounts[0].suspensions, [{ from: '2026-08', to: null }]);
+  runTA(st, [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0 }]);
+  t.eq('un-suspend from the modal → flag removed, period closed', [st.tenants[0].extraAccounts[0].suspended, st.tenants[0].extraAccounts[0].suspensions[0].to !== null], [undefined, true]);
+
+  t.section('v2.14.69 — compare carries the paid ratio');
+  const s1 = S.buildCollectionSnapshot(rep(fx(false)), 1, '2026-10-01T00:00:00Z'), s2 = S.buildCollectionSnapshot(rep(fx(true)), 2, '2026-10-02T00:00:00Z');
+  t.eq('snapshot totals keep paidPct', [s1.totals.paidPct, s2.totals.paidPct], [150, 100]);
+  t.eq('compare.paidPct a/b/deltaPts', S.compareCollectionSnapshots(s1, s2).paidPct, { a: 150, b: 100, deltaPts: -50 });
+  const old = JSON.parse(JSON.stringify(s1)); delete old.totals.paidPct;
+  t.eq('older snapshot without paidPct → nulls (no crash)', S.compareCollectionSnapshots(old, s2).paidPct, { a: null, b: 100, deltaPts: null });
 }
 
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();
