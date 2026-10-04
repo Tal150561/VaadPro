@@ -4161,4 +4161,53 @@ const v2_14_64_async = async () => {
   t.eq('…and nothing written', [again.newSentLog['A_אוקטובר'], again.newSentLog['B_אוקטובר']], [undefined, undefined]);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.71 — the negative-openingDebt belt hid credit that can never have been
+// banked: the OPEN month (קרטר דורית 300 instead of 500 until the close) and a month
+// close SKIPPED for a suspended member (אוסנת 200 instead of 300 — FOREVER).
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const bk = (amt, p) => 'bank_import_2026-10-03T14:52:31.723Z_' + amt + '_payer_' + p;
+  const base = extra => Object.assign({ config: { amount: 300, monthMode: 'manual', manualMonth: 'אוקטובר' },
+    defaultTariffs: [{ rate: 300, startDate: '2000-01-01', endDate: null }], closedMonths: ['2026-09'], closedMonthsExtra: ['2026-09'] }, extra);
+  t.section('v2.14.71 — belt narrowed: never-bankable credit counts under a negative openingDebt');
+  {
+    const d = base({ tenants: [{ id: 14, name: 'קרטר דורית', customAmount: 200, openingDebt: -300, personalTariffs: [{ rate: 200, startDate: '2000-01-01', endDate: null }] }],
+      sentLog: { '14_אוקטובר': bk(400, 'קרטר') }, paymentHistory: { '14': [{ month: '2026-10', paid: true, amount: 200, paidAmount: 400, type: 'bank' }] } });
+    t.eq('THE CASE קרטר דורית: credit 300 + October surplus 200 = 500 (was 300 until the close)', S.getCreditBalance(d, '14'), 500);
+    t.eq('…no debt', S.calcTotalDebt(d, '14', '2026-10'), 0);
+    const C = lib.loadCloseMonth(d, new Date('2026-11-01T08:00:00'));
+    const _l = console.log; console.log = () => {}; C.runForBuilding(d, '2026-10', 'אוקטובר'); console.log = _l;
+    t.eq('precondition: REAL close banks it (openingDebt −500, creditBanked)', [d.tenants[0].openingDebt, !!d.paymentHistory['14'][0].creditBanked], [-500, true]);
+    t.eq('after the close: still 500 — not doubled to 700', S.getCreditBalance(d, '14'), 500);
+  }
+  {
+    const d = base({ closedMonths: [], closedMonthsExtra: [],
+      tenants: [{ id: 6, name: 'אוסנת', customAmount: null, openingDebt: -200, suspended: true }],
+      sentLog: { '6_אוקטובר': bk(100, 'ארזי אוסנת') }, paymentHistory: { '6': [{ month: '2026-10', paid: true, amount: 0, paidAmount: 100, type: 'bank' }] } });
+    t.eq('THE CASE אוסנת (after 🧹, nothing closed): credit 200 + 100 = 300 (was 200)', S.getCreditBalance(d, '6'), 300);
+    const C = lib.loadCloseMonth(d, new Date('2026-11-01T08:00:00'));
+    C.runForBuilding(d, '2026-10', 'אוקטובר');
+    t.eq('precondition: the REAL close SKIPS her (suspended) — openingDebt stays −200, October now closed', [d.tenants[0].openingDebt, d.closedMonths.includes('2026-10')], [-200, true]);
+    t.eq('after the close: still 300 — the ₪0 month close skipped is never lost', S.getCreditBalance(d, '6'), 300);
+  }
+  {
+    const d = base({ tenants: [{ id: 7, name: 'ותיק', customAmount: 200, openingDebt: -300 }],
+      sentLog: { '7_ספטמבר': bk(500, 'x') }, paymentHistory: { '7': [{ month: '2026-09', paid: true, amount: 200, paidAmount: 500, type: 'bank' }] } });
+    t.eq('legacy belt KEPT: closed month, no stamp, negative openingDebt → 300 (not 600)', S.getCreditBalance(d, '7'), 300);
+  }
+  {
+    const d = base({ config: { amount: 300, monthMode: 'manual', manualMonth: 'ינואר' }, closedMonths: ['2025-12'],
+      tenants: [{ id: 8, name: 'דצמבר', customAmount: 200, openingDebt: -300 }],
+      sentLog: { '8_דצמבר': bk(500, 'x') }, paymentHistory: { '8': [{ month: '2025-12', paid: true, amount: 200, paidAmount: 500, type: 'bank' }] } });
+    t.eq('year boundary: a December key read in January is NOT treated as open → belt applies (300)', S.getCreditBalance(d, '8'), 300);
+  }
+  {
+    const d = base({ tenants: [{ id: 1, name: 'בן', customAmount: 200, openingDebt: 1200 }],
+      sentLog: { '1_אוקטובר': bk(350, 'x') }, paymentHistory: { '1': [{ month: '2026-10', paid: true, amount: 200, paidAmount: 350, type: 'bank' }] } });
+    t.eq('positive openingDebt unchanged: בן 1,050', S.calcTotalDebt(d, '1', '2026-10'), 1050);
+  }
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();

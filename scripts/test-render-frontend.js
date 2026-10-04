@@ -3020,6 +3020,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     const gd70 = readSource('public/vaadpro-guide.js');
     t.section('v2.14.70 — guide');
     t.eq('guide: an already-assigned ambiguous row is not offered again', gd70.includes('🔁 ייבוא חוזר של אותו קובץ') && gd70.includes('לא תוצג שוב'), true);
+    t.eq('guide (2.14.71): a surplus joins existing credit immediately', gd70.includes('זכות 300 ועודף 200 באוקטובר → מוצגת זכות 500 כבר עכשיו'), true);
     t.eq('guide: a suspended member\'s payment becomes credit', gd70.includes('<strong>דייר מושהה ששילם</strong>') && gd70.includes('כל הסכום הופך לזכות'), true);
   }
 

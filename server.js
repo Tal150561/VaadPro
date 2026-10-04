@@ -1375,12 +1375,20 @@ function calcMonthBalance(sentLogVal, expectedAmount) {
 // before creditBanked existed (no marker, but a negative openingDebt still
 // proves the surplus was banked). Do NOT change `<0` to `<=0` — openingDebt===0
 // is ambiguous and the marker resolves it, not the threshold.
-function getDerivedCredit(tenantData, tenantId, creditTotal) {
+// ⭐ v2.14.71 — the belt was too wide: with a negative openingDebt it zeroed ALL live
+// credit, including credit that can NEVER have been banked: the OPEN month (not closed
+// yet) and a month month-close SKIPPED (suspended member, record frozen at ₪0 by
+// paymentRateForMonth). קרטר דורית (credit 300, paid +200 in October) showed 300 until
+// the close; אוסנת (suspended, credit 200, paid 100) showed 200 FOREVER — close skips her.
+// calcShortfallFromSentLog now reports that never-bankable part as `creditLive`; under a
+// negative openingDebt only it counts. Closed, non-zero months without a marker (legacy,
+// pre-v2.14.5) stay suppressed exactly as before.
+function getDerivedCredit(tenantData, tenantId, creditTotal, creditLive) {
   if (!creditTotal) return 0;
   const openingDebt = parseFloat(
     (tenantData.tenants || []).find(t => String(t.id) === String(tenantId))?.openingDebt || 0
   );
-  if (openingDebt < 0) return 0; // legacy belt-and-braces — see note above
+  if (openingDebt < 0) return Math.min(creditTotal, parseFloat(creditLive) || 0); // legacy belt — see note above
   return creditTotal;
 }
 
@@ -1396,6 +1404,13 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
   const year    = o.year || new Date().getFullYear();
   let total = 0;
   let creditTotal = 0;
+  let creditLive = 0;   // v2.14.71 — credit that can never have been banked (see getDerivedCredit)
+  const _closed = Array.isArray(tenantData.closedMonths) ? tenantData.closedMonths.filter(m => /^\d{4}-\d{2}$/.test(String(m))) : [];
+  const _lastClosed = _closed.length ? _closed.slice().sort()[_closed.length - 1]
+    : ((typeof getMonthKey === 'function' && typeof monthBeforeKey === 'function') ? monthBeforeKey(getMonthKey(tenantData.config || {})) : '');
+  // Upper bound: the key's year is inferred (current year), so a December key read in
+  // January lands in the FUTURE — that is last year's month, not an open one.
+  const _mkNowLive = (typeof getMonthKey === 'function') ? getMonthKey(tenantData.config || {}) : '9999-12';
   const months = [];
   Object.keys(sentLog).forEach(key => {
     if (key.includes('__acc__')) return;                 // extra accounts: separate path
@@ -1435,11 +1450,16 @@ function calcShortfallFromSentLog(tenantData, tenantId, opts) {
       const rec = (history || []).find(r => r.month === monthKey && r.type !== 'wa_sent');
       if (rec && rec.creditBanked) return;
       creditTotal += bal.credit; months.push({ monthKey, hebMonth, credit: bal.credit });
+      // v2.14.71 — never bankable: the month is still OPEN (after the last closed month),
+      // or close skipped it (record frozen at ₪0 for a suspended month, no close stamp).
+      const _skippedByClose = rec && parseFloat(rec.amount) === 0 && !rec.shortfallBanked && !rec.debtOffset;
+      if ((_lastClosed && monthKey > _lastClosed && monthKey <= _mkNowLive) || _skippedByClose) creditLive += bal.credit;
     }
   });
   return {
     total: Math.round(total * 100) / 100,
     creditTotal: Math.round(creditTotal * 100) / 100,
+    creditLive: Math.round(creditLive * 100) / 100,
     months
   };
 }
@@ -1464,7 +1484,7 @@ function calcTotalDebt(tenantData, tenantId, currentMonthKey) {
   // ⚠️ Overpayment counts as credit IMMEDIATELY (sf.creditTotal), symmetric with
   // sf.total. Once closeMonthUnpaid runs it writes the same surplus into a
   // negative openingDebt — see getDerivedCredit() for the double-count guard.
-  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal);
+  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal, sf.creditLive);
   // openingDebt can be negative (credit from overpayment) — offsets historyDebt
   // Math.max(0,...) — total debt shown cannot be negative; credit shown separately via getCreditBalance()
   return Math.max(0, historyDebt + openingDebt + sf.total - derivedCredit);
@@ -1485,7 +1505,7 @@ function getCreditBalance(tenantData, tenantId) {
   // moment the bank row lands, not only after closeMonthUnpaid writes a negative
   // openingDebt on the 1st. The old `if (openingDebt >= 0) return 0` early-exit
   // hid all pre-close credit and is deliberately removed.
-  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal);
+  const derivedCredit = getDerivedCredit(tenantData, tenantId, sf.creditTotal, sf.creditLive);
   // Net: positive means credit remaining after covering any unpaid history/shortfall
   const net = -(historyDebt + openingDebt) + derivedCredit - sf.total;
   return Math.max(0, Math.round(net * 100) / 100);
