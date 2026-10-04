@@ -1890,7 +1890,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.69';
+const HTML_VERSION = '2.14.70';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -5969,6 +5969,19 @@ function splitOverpayAcrossMonths(buckets, opts) {
           if (_vd.ambiguous) {
             // block ALL tenants from this row; collect it once for the panel.
             seenRowIdx.add(m.rowIdx);
+            // v2.14.70 (bug 2, אורית 3.10): dedup BEFORE offering the row. A row that a
+            // previous import already wrote (fingerprint stored) is "already imported" —
+            // offering it again let the operator re-assign it and the money ACCUMULATED
+            // (100 → 200). Same rule in the agent analyzer (server.js) — keep in parity.
+            if (!_ambiguousSeen.has(m.rowIdx)) {
+              var _afp  = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+              var _afpL = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+              if (bankFpAlreadySeen(alreadyImportedFp, alreadyImportedFpPrefixes, _afp, _afpL)) {
+                _ambiguousSeen.add(m.rowIdx);
+                alreadyImportedSkips.push({ name: m.nameVal || '', amount: m.amount, date: m.dateVal || '', ambiguous: true });
+                return;
+              }
+            }
             if (!_ambiguousSeen.has(m.rowIdx)) {
               _ambiguousSeen.add(m.rowIdx);
               _ambiguousRows.push({
@@ -6253,13 +6266,18 @@ function commitBankImport(){
                                 charge: r.amount, payerName: r.payerName||'', note: r.note||'',
                                 prevDebt: Math.round((parseFloat(t.openingDebt)||0)*100)/100 });
       } else {
+        // v2.14.70 (bug 2) belt: never write a row whose fingerprint a PRIOR import
+        // already stored (same guard as the server's /api/apply-ambiguous-match).
+        var _afp0 = bankRowFingerprintGlobal(r.date, r.amount, r.rawText || r.payerName || '', '');
+        var _priorSet = new Set(P.priorFp || []);
+        if (bankFpAlreadySeen(_priorSet, bankFpPrefixes(P.priorFp || []), _afp0, _afp0)) { _ambIgnored++; return; }
         var _key = t.id + '_' + em;
         var _accrued = Math.round((_readSentLogAmount(_key) + (parseFloat(r.amount)||0)) * 100) / 100;
         data.sentLog[_key] =
           'bank_import_' + new Date().toISOString() + '_' + _accrued + '_payer_' + (r.payerName||'');
         // fingerprint the row now that it is actually written (avoid re-import loss)
         var _afp = bankRowFingerprintGlobal(r.date, r.amount, r.rawText || r.payerName || '', '');
-        if (P.newFp.indexOf(_afp) < 0) P.newFp.push(_afp);
+        if (P.newFp.indexOf(_afp) < 0 && (P.priorFp || []).indexOf(_afp) < 0) P.newFp.push(_afp);
       }
       _ambApplied++;
     } else if (r._decision === 'ignore') {

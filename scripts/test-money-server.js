@@ -4045,4 +4045,120 @@ const v2_14_64_async = async () => {
   t.eq('older snapshot without paidPct → nulls (no crash)', S.compareCollectionSnapshots(old, s2).paidPct, { a: null, b: 100, deltaPts: null });
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.70 — נווה ים 3.10: (1) a manual import rewrote CLOSED months' records
+// (creditBanked lost → September surplus counted twice), (2) an already-imported
+// ambiguous row was offered again and accumulated, (3) a suspended member's
+// payment was judged against the full tariff. THE FULL CHAIN, REAL code:
+// manual import (POST /api/data) → REAL month-close → next month's manual import.
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const pd = src.slice(src.indexOf("app.post('/api/data', authMiddleware, (req, res) => {"));
+  const blk = pd.slice(pd.indexOf('  if (req.body.sentLog) {'), pd.indexOf('  if (_undoPrev) {'));
+  // The page posts its WHOLE sentLog (app.html commitBankImport) — reproduce exactly that.
+  const sync = (disk, newKeys, month) => {
+    const body = { sentLog: Object.assign({}, disk.sentLog, newKeys), bankMonthOverride: month };
+    new Function('req', 'loadTenantData', 'seedTariffsIfMissing', 'getMonthKey', 'hebMonthToMonthKey', 'paymentRateForMonth', 'recordPayment', 'console', blk)
+      ({ body, user: { tenantId: 'B' } }, () => disk, S.seedTariffsIfMissing, S.getMonthKey, S.hebMonthToMonthKey, S.paymentRateForMonth, S.recordPayment, { error() {}, log() {} });
+    disk.sentLog = body.sentLog; disk.paymentHistory = body.paymentHistory;
+    if (body.tenants) disk.tenants = body.tenants; if (body.defaultTariffs) disk.defaultTariffs = body.defaultTariffs;
+    return body;
+  };
+  const bk = (amt, payer, ts) => 'bank_import_' + (ts || '2026-09-29T06:55:21.179Z') + '_' + amt + '_payer_' + payer;
+  const T = (id, name, fee, opening, extra) => Object.assign({ id, name, customAmount: fee, openingDebt: opening,
+    personalTariffs: fee ? [{ rate: fee, startDate: '2000-01-01', endDate: null }] : undefined }, extra || {});
+  const fx = () => ({
+    config: { amount: 300, monthMode: 'manual', manualMonth: 'אוקטובר' },
+    defaultTariffs: [{ rate: 300, startDate: '2000-01-01', endDate: null }],
+    tenants: [T(1, 'בן', 200, 1300), T(2, 'אדרי', 200, 3400), T(3, 'אופיר', 100, 3400), T(4, 'חלקי', 200, 0),
+              T(5, 'אורית', null, 0, { suspended: true, suspensions: [{ from: '2026-10', to: null }] }),
+              T(6, 'אוסנת', null, 0, { suspended: true })],
+    sentLog: {}, paymentHistory: {}, closedMonths: ['2026-08'], closedMonthsExtra: ['2026-08']
+  });
+  const d = fx();
+  // 29.9 — September manual import
+  sync(d, { '1_ספטמבר': bk(300, 'בן קרטר'), '2_ספטמבר': bk(500, 'אדרי'), '3_ספטמבר': bk(100, 'אופיר'), '4_ספטמבר': bk(150, 'חלקי') }, '2026-09');
+  // 1.10 — the REAL close of September
+  const C = lib.loadCloseMonth(d, new Date('2026-10-01T08:00:00'));
+  const _log = console.log; console.log = () => {};
+  C.runForBuilding(d, '2026-09', 'ספטמבר');
+  console.log = _log;
+  const deb = id => S.calcTotalDebt(d, String(id), '2026-10');
+  t.section('v2.14.70 — chain: Sept import → REAL close (preconditions)');
+  t.eq('precondition: close banked September (בן 1300+200−300=1200, אדרי 3100, אופיר 3400, חלקי 50)',
+    d.tenants.slice(0, 4).map(x => x.openingDebt), [1200, 3100, 3400, 50]);
+  const sep = id => (d.paymentHistory[String(id)] || []).find(r => r.month === '2026-09');
+  t.eq('precondition: creditBanked on בן + אדרי, shortfallBanked on חלקי', [!!sep(1).creditBanked, !!sep(2).creditBanked, !!sep(4).shortfallBanked], [true, true, true]);
+  t.eq('precondition: displayed debt right before October (1200 / 3100 / 50)', [deb(1), deb(2), deb(4)], [1200, 3100, 50]);
+  const sepBefore = J([sep(1), sep(2), sep(3), sep(4)]);
+
+  // 3.10 — October manual import (the page posts the WHOLE sentLog, September included)
+  sync(d, { '1_אוקטובר': bk(350, 'בן קרטר', '2026-10-03T14:52:31.723Z'), '2_אוקטובר': bk(700, 'אדרי', '2026-10-03T14:52:31.723Z'),
+            '3_אוקטובר': bk(300, 'אופיר', '2026-10-03T14:52:31.723Z'), '4_אוקטובר': bk(200, 'חלקי', '2026-10-03T14:52:31.723Z'),
+            '5_אוקטובר': bk(100, 'ארזי (טל) אורית', '2026-10-03T14:52:31.723Z') }, '2026-10');
+  t.section('v2.14.70 — bug 1: a manual import never rewrites a CLOSED month');
+  t.eq('THE BUG: September records byte-identical after the October import (stamps kept)', J([sep(1), sep(2), sep(3), sep(4)]), sepBefore);
+  t.eq('THE CASE בן: 1200 + 200 − 350 = 1050 (was 950)', deb(1), 1050);
+  t.eq('THE CASE אדרי: 3100 + 200 − 700 = 2600 (was 2300)', deb(2), 2600);
+  t.eq('אופיר (no Sept surplus) unchanged: 3200', deb(3), 3200);
+  t.eq('closed PARTIAL not doubled: חלקי 50 + 200 − 200 = 50 (was 100)', deb(4), 50);
+  t.eq('October records were written (open month still syncs)', ['1', '2', '3', '4'].map(id => d.paymentHistory[id].some(r => r.month === '2026-10' && r.paid)), [true, true, true, true]);
+  {
+    // unchanged open-month key with a paid record → kept as is (no churn)
+    d.paymentHistory['1'].find(r => r.month === '2026-10').date = 'KEEP';
+    sync(d, {}, '2026-10');
+    t.eq('unchanged open-month key → record NOT rewritten', d.paymentHistory['1'].find(r => r.month === '2026-10').date, 'KEEP');
+    // changed open-month key → rewritten (accumulated amount reaches the record)
+    sync(d, { '1_אוקטובר': bk(550, 'בן קרטר', '2026-10-04T10:00:00.000Z') }, '2026-10');
+    t.eq('changed open-month key → record updated (paidAmount 550)', d.paymentHistory['1'].find(r => r.month === '2026-10').paidAmount, 550);
+    // changed CLOSED-month key with a paid record → still frozen
+    sync(d, { '2_ספטמבר': bk(900, 'אדרי', '2026-10-04T10:00:00.000Z') }, '2026-10');
+    t.eq('changed CLOSED-month key → record frozen (paidAmount 500, creditBanked kept)', [sep(2).paidAmount, !!sep(2).creditBanked], [500, true]);
+    // a payment key with NO record → still created (heal path kept)
+    delete d.paymentHistory['3'];
+    sync(d, {}, '2026-10');
+    t.eq('payment key without a record → record created (heal kept)', (d.paymentHistory['3'] || []).some(r => r.month === '2026-10' && r.paid), true);
+  }
+
+  t.section('v2.14.70 — bug 3: a suspended member pays → credit, never phantom debt');
+  t.eq('paymentRateForMonth: inside the dated period → 0', S.paymentRateForMonth(d.tenants[4], d.defaultTariffs, '2026-10', 300), 0);
+  t.eq('paymentRateForMonth: the month BEFORE the period → full tariff 300', S.paymentRateForMonth(d.tenants[4], d.defaultTariffs, '2026-09', 300), 300);
+  t.eq('paymentRateForMonth: legacy undated suspension → 0', S.paymentRateForMonth(d.tenants[5], d.defaultTariffs, '2026-11', 300), 0);
+  t.eq('paymentRateForMonth: not suspended → resolveTariffRate (200)', S.paymentRateForMonth(d.tenants[0], d.defaultTariffs, '2026-10', 300), 200);
+  const orit = d.paymentHistory['5'].find(r => r.month === '2026-10');
+  t.eq('THE CASE אורית: October record frozen at 0 (was 300 → "חלקי 100/300")', orit.amount, 0);
+  t.eq('אורית: no debt, credit 100', [S.calcTotalDebt(d, '5', '2026-10'), S.getCreditBalance(d, '5')], [0, 100]);
+  sync(d, { '6_נובמבר': bk(100, 'ארזי אוסנת', '2026-11-02T10:00:00.000Z') }, '2026-11');
+  t.eq('אוסנת (legacy suspended) pays in November → frozen 0 → credit, no debt', [d.paymentHistory['6'].find(r => r.month === '2026-11').amount, S.calcTotalDebt(d, '6', '2026-11')], [0, 0]);
+  t.eq('every payment-freeze site uses paymentRateForMonth (sync, sentlog-key, agent, apply-ambiguous)',
+    (src.match(/= paymentRateForMonth\(tenant,/g) || []).length, 4);
+  t.eq('repair-tariffs skips suspended months (never "repairs" 0 back to the tariff)',
+    /app\.post\('\/api\/repair-tariffs'[\s\S]*?if \(crSuspendedIn\(tenant, rec\.month\)\) continue;[\s\S]*?const correct = resolveTariffRate/.test(src), true);
+  {
+    // apply-ambiguous-match (REAL handler) for a suspended member → amount 0
+    const b = { config: { amount: 300 }, defaultTariffs: [{ rate: 300, startDate: '2000-01-01', endDate: null }],
+      tenants: [{ id: 9, name: 'אורית', suspended: true, suspensions: [{ from: '2026-10', to: null }] }], sentLog: {}, paymentHistory: {},
+      importedBankFingerprints: [], pendingAmbiguousMatches: [{ rowIdx: 3, amount: 100, date: '01/10/2026', payerName: 'ארזי (טל) אורית', rawText: 'ארזי (טל) אורית', scope: 'main' }] };
+    const r = lib.loadApplyAmbiguous(b, { rowKey: '3|100|01/10/2026|ארזי (טל) אורית|main', tenantId: 9 });
+    t.eq('apply-ambiguous (REAL): suspended member → record amount 0', [r.result.applied, b.paymentHistory['9'][0].amount], [true, 0]);
+  }
+
+  t.section('v2.14.70 — bug 2: an already-imported AMBIGUOUS row is not offered again (agent)');
+  const B70 = lib.loadBankAnalyzer();
+  const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3, colRef: 4 };
+  const rows = [['שם', 'סכום', 'תאריך', 'הערות', 'אסמכתא'], ['כהן', '100', '01/10/2026', 'זיכוי', '260222222']];
+  const tenants = [{ id: 'A', name: 'כהן לוי', phone: '0500000001', keywords: 'כהן', customAmount: 300, openingDebt: 0 },
+                   { id: 'B', name: 'כהן כהן', phone: '0500000002', keywords: 'כהן', customAmount: 300, openingDebt: 0 }];
+  const first = B70.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-10', { amount: 300 }, new Set());
+  t.eq('precondition: first run → row is ambiguous (queued)', first.ambiguousMatchHits.length, 1);
+  // what the assign path stores: date|amount|rawText WITHOUT ref (the אורית key)
+  const stored = B70.bankRowFingerprint('01/10/2026', 100, 'כהן', '');
+  const again = B70.analyzeBankRowsServer(rows, mapping, tenants, {}, '2026-10', { amount: 300 }, new Set([stored]));
+  t.eq('THE BUG: re-run of the same file → NOT queued again', again.ambiguousMatchHits.length, 0);
+  t.eq('…surfaced as already imported instead', again.alreadyImportedSkips.some(x => x.ambiguous === true && x.amount === 100), true);
+  t.eq('…and nothing written', [again.newSentLog['A_אוקטובר'], again.newSentLog['B_אוקטובר']], [undefined, undefined]);
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();

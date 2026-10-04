@@ -1272,6 +1272,20 @@ function resolveTariffRate(tenant, defaultTariffs, monthKey, legacyFallback) {
   return parseFloat(legacyFallback) || 0;
 }
 
+// ── v2.14.70 — the charge to FREEZE into a payment record (bug 3, נווה ים 3.10) ──
+// A member suspended in a month owes NOTHING for it (month-close skips them), so a
+// payment that month is all credit. Before 2.14.70 every payment path froze the full
+// tariff (אורית, suspended from 10/26, paid 100 → "חלקי 100/300" + phantom debt; and
+// the suspended member is never closed, so it never banked and stayed forever).
+// main == extra: extraAccountSplit already exempts a suspended account's month.
+// Used by EVERY payment-freeze site: POST /api/data sync, /api/sentlog-key manual
+// mark, the agent import, /api/apply-ambiguous-match. resolveTariffRate (tracked)
+// is unchanged; repair-tariffs skips suspended months for the same reason.
+function paymentRateForMonth(tenant, defaultTariffs, monthKey, legacyFallback) {
+  if (crSuspendedIn(tenant, monthKey)) return 0;
+  return resolveTariffRate(tenant, defaultTariffs, monthKey, legacyFallback);
+}
+
 // Close the open interval (endDate=null) at `asOf` and open a new one at `rate`.
 // Used when a fee changes. Mutates + returns the array. Idempotent-ish: if the
 // open interval already has this exact rate, it's a no-op (no churn on re-save).
@@ -2124,7 +2138,7 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
     // defaultTariffs -> legacy customAmount. Lazy-seed the tables first.
     const seeded = seedTariffsIfMissing(d);
     const liveAmount = tenant.customAmount || (d.config && d.config.amount) || 300;
-    const expected   = resolveTariffRate(tenant, d.defaultTariffs, monthKey, liveAmount);
+    const expected   = paymentRateForMonth(tenant, d.defaultTariffs, monthKey, liveAmount);   // v2.14.70: suspended month → 0
     const amtMatch = String(value).match(/_amount_([\d.]+)/);
     const paidAmount = amtMatch ? parseFloat(amtMatch[1]) : expected;
     recordPayment(d, tenantId, monthKey, 'manual', expected, tenant.name, '', paidAmount);
@@ -2278,6 +2292,18 @@ app.post('/api/data', authMiddleware, (req, res) => {
     const mk = req.body.bankMonthOverride || getMonthKey(config);
     const tenants = current.tenants || [];
     if (!current.paymentHistory) current.paymentHistory = {};
+    // ⭐ v2.14.70 — FIX (נווה ים 3.10, bug 1): the page posts its WHOLE sentLog on every
+    // manual bank import. This loop used to call recordPayment for EVERY payment key in
+    // it, and recordPayment REPLACES the month record — so each manual import rewrote
+    // the records of months that were ALREADY CLOSED, wiping the creditBanked /
+    // shortfallBanked / debtOffset stamps month-close had put there. The live derivation
+    // then counted the closed month's surplus a SECOND time (בן: 1,200 → 950 instead of
+    // 1,050; אור, אטיאס, אדרי the same; a closed partial would double the debt).
+    // Rule: a key whose month already has a PAID record is synced only when its value
+    // CHANGED, and NEVER when that month is closed (a closed month changes only through
+    // the closed-month approval flow). recordPayment itself is untouched (protected).
+    const _syncPrevSent = current.sentLog || {};
+    const _syncClosed = new Set(Array.isArray(current.closedMonths) ? current.closedMonths : []);
     // ⚠️ Record each payment against the month named IN ITS OWN sentLog key,
     // NOT against `mk` (current month / bankMonthOverride). The old code used `mk`
     // for every entry, so a stray old bank_import value present anywhere in the
@@ -2299,11 +2325,16 @@ app.post('/api/data', authMiddleware, (req, res) => {
       if (!keyMonthKey) return; // unexpected key (e.g. legacy ISO key like _2026-04) — leave untouched
       const tenant = tenants.find(t => String(t.id) === tenantId);
       if (!tenant) return;
+      const _rec = (current.paymentHistory[tenantId] || []).find(r => r.month === keyMonthKey && r.type !== 'wa_sent');
+      if (_rec && _rec.paid) {
+        if (_syncClosed.has(keyMonthKey)) return;                        // closed month → frozen
+        if (String(_syncPrevSent[key] || '') === String(val)) return;    // unchanged → keep the record as is
+      }
       // Column A: freeze the tariff in effect FOR keyMonthKey (the key's own
       // month), NOT the live customAmount. This is the retroactive-import fix —
       // importing an old-month file no longer stamps today's rate onto it.
       const legacyFallback = tenant.customAmount || (config.amount || 300);
-      const amount = resolveTariffRate(tenant, current.defaultTariffs, keyMonthKey, legacyFallback);
+      const amount = paymentRateForMonth(tenant, current.defaultTariffs, keyMonthKey, legacyFallback);   // v2.14.70: suspended month → 0
       let type = null;
       let payerName = '';
       let paidAmount = null;
@@ -2375,6 +2406,7 @@ app.post('/api/repair-tariffs', authMiddleware, (req, res) => {
     for (const rec of hist) {
       if (!rec || rec.type === 'wa_sent') continue;      // reminders carry no charge
       if (!rec.month) continue;
+      if (crSuspendedIn(tenant, rec.month)) continue;    // v2.14.70: a suspended month is frozen at 0 on purpose
       const correct = resolveTariffRate(tenant, d.defaultTariffs, rec.month, legacyFallback);
       const stored  = parseFloat(rec.amount);
       if (isNaN(correct) || correct <= 0) continue;      // never write a silent 0
@@ -5836,7 +5868,7 @@ app.post('/api/apply-ambiguous-match', authMiddleware, (req, res) => {
 
       // paymentHistory record for the resolved tenant + month.
       const tdForHistory = { paymentHistory: d.paymentHistory || (d.paymentHistory = {}) };
-      const rate = resolveTariffRate(tenant, d.defaultTariffs, mk, (tenant.customAmount) || (d.config && d.config.amount) || 300);
+      const rate = paymentRateForMonth(tenant, d.defaultTariffs, mk, (tenant.customAmount) || (d.config && d.config.amount) || 300);   // v2.14.70: suspended month → 0
       // v2.14.58: the month record carries the ACCUMULATED total (recordPayment
       // replaces the month record; closeMonthUnpaid reads its paidAmount).
       recordPayment(tdForHistory, tid, mk, 'bank', rate, tenant.name, row.payerName || '', accrued);
@@ -8725,6 +8757,18 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
       if (_vd) {
         if (_vd.ambiguous) {
           seenRowIdx.add(m.rowIdx);
+          // v2.14.70 (bug 2, אורית 3.10): dedup BEFORE queueing. An ambiguous row that a
+          // previous run already wrote (its fingerprint is stored) is "already imported",
+          // never offered again — re-assigning it ACCUMULATED the money a second time.
+          if (!_ambiguousSeen.has(m.rowIdx)) {
+            const _afp  = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+            const _afpL = bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+            if (bankFpAlreadySeen(alreadyImported, alreadyImportedPrefixes, _afp, _afpL)) {
+              _ambiguousSeen.add(m.rowIdx);
+              alreadyImportedSkips.push({ tenantId: null, name: m.nameVal || '', amount: m.amount, date: m.dateVal || '', scope: 'main', ambiguous: true });
+              return;
+            }
+          }
           if (!_ambiguousSeen.has(m.rowIdx)) {
             _ambiguousSeen.add(m.rowIdx);
             ambiguousMatchHits.push({
@@ -9045,7 +9089,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
         if (payerMatch) payerName = payerMatch[1];
         const amtMatch = slVal.match(/bank_import_[^_]+_([\d.]+)_/);
         if (amtMatch) paidAmount = parseFloat(amtMatch[1]);
-        const amount = resolveTariffRate(tenant, d.defaultTariffs, mkISO, legacyFallback);
+        const amount = paymentRateForMonth(tenant, d.defaultTariffs, mkISO, legacyFallback);   // v2.14.70: suspended month → 0
         recordPayment(tenantDataForHistory, String(m.tenantId), mkISO, 'bank', amount, m.name, payerName, paidAmount);
       });
     });

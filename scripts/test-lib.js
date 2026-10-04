@@ -80,7 +80,9 @@ const SERVER_FNS = [
   // v2.14.67 — collection trends (Phase 3)
   'crReportLabel', 'buildCollectionSnapshot', 'crSnapshotMeta', 'compareCollectionSnapshots', 'buildCollectionTrend',
   // v2.14.69 — suspension periods
-  'monthBeforeKey', 'normalizeSuspensionPeriods', 'crSuspendedIn', 'crSuspensionUndated'
+  'monthBeforeKey', 'normalizeSuspensionPeriods', 'crSuspendedIn', 'crSuspensionUndated',
+  // v2.14.70 — the charge frozen into a payment record (suspended month → 0)
+  'paymentRateForMonth'
 ];
 
 function loadServer() {
@@ -379,7 +381,7 @@ function loadApplyAmbiguous(building, reqBody) {
     }
   };
   const code = months + '\n'
-    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'applyPaymentToDebt', 'recordPayment', 'parseSentLogAmount', 'accumulatePaidAmount'])
+    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'crSuspendedIn', 'paymentRateForMonth', 'applyPaymentToDebt', 'recordPayment', 'parseSentLogAmount', 'accumulatePaidAmount'])
     + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);

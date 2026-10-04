@@ -2960,4 +2960,67 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: every collection-report <ul> list follows a heading (no orphan list)', !/<\/ul>' \+\n\s*\n\s*'<ul>/.test(gd69), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.70 — bug 2 (אורית, נווה ים 3.10): the same file imported twice → the
+// AMBIGUOUS row was offered again and re-assigning it accumulated 100 → 200.
+// ════════════════════════════════════════════════════════════════
+{
+  const app70 = readSource('public/app.html');
+  const srv70 = readSource('server.js');
+  t.section('v2.14.70 — analyzeBankRows: dedup BEFORE offering an ambiguous row');
+  const fnStart = app70.indexOf('function analyzeBankRows(rows,fileName){');
+  const amb = app70.indexOf('if (_vd.ambiguous) {', fnStart);
+  const ambBlock = app70.slice(amb, app70.indexOf('_ambiguousRows.push({', amb));
+  t.eq('the ambiguous branch checks bankFpAlreadySeen before queueing', /bankFpAlreadySeen\(alreadyImportedFp, alreadyImportedFpPrefixes, _afp, _afpL\)/.test(ambBlock), true);
+  t.eq('…and reports it as already imported', /alreadyImportedSkips\.push\(\{[^}]*ambiguous: true/.test(ambBlock), true);
+  const sAmb = srv70.slice(srv70.indexOf('        if (_vd.ambiguous) {'), srv70.indexOf('            ambiguousMatchHits.push({'));
+  t.eq('parity: the agent analyzer has the same check', /bankFpAlreadySeen\(alreadyImported, alreadyImportedPrefixes, _afp, _afpL\)/.test(sAmb), true);
+
+  t.section('v2.14.70 — commitBankImport never re-writes an already-imported ambiguous row (executed)');
+  const code = extractFunctions(app70, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'commitBankImport']);
+  const run = (priorFp, sentLog) => {
+    const P = { matched: [], unmatched: [], alreadyImportedSkips: [], dupWarnings: [], newFp: [], priorFp: priorFp.slice(),
+      em: 'אוקטובר', selectedMonthKey: '2026-10', hebOfMk: () => 'אוקטובר', splitMonths: null, total: 1, ta: 0, fileName: 'x.xls', filterByAmount: false,
+      ambiguousRows: [{ rowIdx: 12, amount: 100, date: '46296', payerName: 'ארזי (טל) אורית', rawText: 'ארזי (טל) אורית', _decision: 'assign', _assignTo: 5 }] };
+    let posted = null;
+    const scope = {
+      window: { _pendingBankImport: P, _closedMonthApprovals: null },
+      data: { closedMonths: ['2026-09'], sentLog: sentLog, importedBankFingerprints: [], tenants: [{ id: 5, name: 'ארזי טל (אורית)', openingDebt: 0 }] },
+      VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+      API: '', fetch: function(u, o){ posted = JSON.parse(o.body); return Promise.resolve({ json: function(){ return Promise.resolve({ ok: true }); } }); },
+      toast: function(){}, render: function(){}, showBankResult: function(){}, resetDropZone: function(){}, renderAmbiguousMatchPanel: function(){},
+      renderClosedMonthApprovals: function(){}, loadData: function(){ return Promise.resolve(); },
+      localStorage: { getItem: function(){ return 't'; } },
+      document: { getElementById: function(){ return null; }, querySelector: function(){ return null; }, createElement: function(){ return { style: {}, appendChild: function(){} }; }, body: { appendChild: function(){} } },
+      confirm: function(){ return true; }, console: console
+    };
+    const fn = new Function(Object.keys(scope).join(','), code + '\n; return commitBankImport;').apply(null, Object.keys(scope).map(k => scope[k]));
+    fn();
+    return { sl: scope.data.sentLog, posted };
+  };
+  const amtOf = v => { const m = String(v || '').match(/^bank_import_[^_]+_([\d.]+)_payer_/); return m ? parseFloat(m[1]) : null; };
+  const fpStored = '46296|100|ארזי (טל) אורית';
+  {
+    const r = run([fpStored], { '5_אוקטובר': 'bank_import_2026-10-03T14:52:31.723Z_100_payer_ארזי (טל) אורית' });
+    t.eq('THE BUG (אורית): row already imported → stays 100 (was 200)', amtOf(r.sl['5_אוקטובר']), 100);
+    t.eq('…and its fingerprint is not stored a second time', r.posted.importedBankFingerprints.filter(x => x === fpStored).length, 1);
+  }
+  {
+    const r = run(['46296|100|ארזי (טל) אורית|260222222'], {});
+    t.eq('stored key WITH ref also recognised (both directions) → not written', r.sl['5_אוקטובר'], undefined);
+  }
+  {
+    const r = run([], {});
+    t.eq('a genuinely new ambiguous row is still written once (100)', amtOf(r.sl['5_אוקטובר']), 100);
+    t.eq('…with its fingerprint stored once', r.posted.importedBankFingerprints.filter(x => x === fpStored).length, 1);
+  }
+}
+
+  {
+    const gd70 = readSource('public/vaadpro-guide.js');
+    t.section('v2.14.70 — guide');
+    t.eq('guide: an already-assigned ambiguous row is not offered again', gd70.includes('🔁 ייבוא חוזר של אותו קובץ') && gd70.includes('לא תוצג שוב'), true);
+    t.eq('guide: a suspended member\'s payment becomes credit', gd70.includes('<strong>דייר מושהה ששילם</strong>') && gd70.includes('כל הסכום הופך לזכות'), true);
+  }
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
