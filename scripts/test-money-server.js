@@ -2138,6 +2138,11 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   const { loadBankAnalyzer } = require('./test-lib');
   const B = loadBankAnalyzer();
   const dft = [{ rate: 230, startDate: '2000-01-01', endDate: null }];
+  // v2.14.72: the split may only fill OPEN months (after the last closed month). These
+  // cases model "May was the last close → June/July/August are open and unpaid" —
+  // explicit, so they no longer depend on the clock (with NO close at all, the wall is
+  // the month before today's active month: see the v2.14.72 wall section below).
+  const OPEN_SINCE_MAY = ['2026-05'];
   const tOf = () => ([{ id: 'R', name: 'מירי', phone: '0527247713', keywords: 'סיגולים, מירי', aptNumber: '3', customAmount: null }]);
   const amtOf = (sl, heb) => parseFloat(String(sl['R_' + heb]).match(/bank_import_[^_]+_([\d.]+)_/)[1]);
 
@@ -2145,7 +2150,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   {
     const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','460','07/08/2026','ועד הבית יולי אוגוסט']];
     const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
-    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft, OPEN_SINCE_MAY);
     t.eq('split into TWO months', r.matched[0].monthsSplit, 2);
     t.eq('July key written = 230', amtOf(r.newSentLog, 'יולי'), 230);
     t.eq('August key written = 230 (NOT 460)', amtOf(r.newSentLog, 'אוגוסט'), 230);
@@ -2156,7 +2161,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   {
     const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','690','07/08/2026','']];
     const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
-    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft, OPEN_SINCE_MAY);
     t.eq('x3 → three months', r.matched[0].monthsSplit, 3);
     t.eq('June=230', amtOf(r.newSentLog, 'יוני'), 230);
     t.eq('July=230', amtOf(r.newSentLog, 'יולי'), 230);
@@ -2169,7 +2174,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     const sl = { 'R_יולי': 'bank_import_2026-07-01T00:00:00.000Z_230_payer_x' };
     const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','460','07/08/2026','']];
     const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
-    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), sl, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), sl, '2026-08', { amount: 230 }, new Set(), {}, dft, OPEN_SINCE_MAY);
     t.eq('July NOT overwritten (still original)', r.newSentLog['R_יולי'], sl['R_יולי']);
     t.eq('June filled instead', amtOf(r.newSentLog, 'יוני'), 230);
     t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
@@ -2179,7 +2184,7 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
   {
     const rows = [['שם','סכום','תאריך','הערה'], ['סיגולים מירי','230','07/08/2026','']];
     const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
-    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft);
+    const r = B.analyzeBankRowsServer(rows, mapping, tOf(), {}, '2026-08', { amount: 230 }, new Set(), {}, dft, OPEN_SINCE_MAY);
     t.eq('single charge → one month only', r.matched[0].monthsSplit, 1);
     t.eq('August=230', amtOf(r.newSentLog, 'אוגוסט'), 230);
     t.eq('no July key', r.newSentLog['R_יולי'], undefined);
@@ -4207,6 +4212,156 @@ const v2_14_64_async = async () => {
     const d = base({ tenants: [{ id: 1, name: 'בן', customAmount: 200, openingDebt: 1200 }],
       sentLog: { '1_אוקטובר': bk(350, 'x') }, paymentHistory: { '1': [{ month: '2026-10', paid: true, amount: 200, paidAmount: 350, type: 'bank' }] } });
     t.eq('positive openingDebt unchanged: בן 1,050', S.calcTotalDebt(d, '1', '2026-10'), 1050);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// v2.14.72 — נווה ים 3.10 (2nd report): the lump-sum split parked money INSIDE
+// openingDebt. After 🧹 closedMonths is empty, so splitOverpayAcrossMonths saw
+// August/September as "open & unpaid": אופיר 300 = 3×100 → Aug/Sep/Oct (200 gone,
+// 3,400 instead of 3,200); קרטר דורית 400 = 2×200 → Sep/Oct (credit 300 not 500).
+// Fix: ONE wall rule — splitWallMonthKey = last closed month, else the month before
+// the active month (= calcShortfallFromSentLog's _lastClosed). Agent (main + extra)
+// and the manual import (data.splitWallMonth) both use it.
+// THE REAL FILE, THE REAL CODE: app.html analyzeBankRows → commitBankImport →
+// POST /api/data sync → calcTotalDebt / getCreditBalance. No injected payments.
+// ════════════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const B = lib.loadBankAnalyzer();
+  const mkNow = S.getMonthKey({ manualMonth: 'אוקטובר' });          // active month of the fixture
+  const yr = mkNow.split('-')[0];
+
+  t.section('v2.14.72 — splitWallMonthKey (the one wall rule)');
+  t.eq('closed months → the LATEST closed month', S.splitWallMonthKey(['2026-07', '2026-09', '2026-08'], {}), '2026-09');
+  t.eq('nothing closed (after 🧹) → the month BEFORE the active month', S.splitWallMonthKey([], { manualMonth: 'אוקטובר' }), yr + '-09');
+  t.eq('closedMonths missing → same fallback', S.splitWallMonthKey(undefined, { manualMonth: 'אוקטובר' }), yr + '-09');
+  t.eq('garbage entries ignored', S.splitWallMonthKey(['x', '', null, '2026-08'], {}), '2026-08');
+  t.eq('year boundary: active January → wall is December of the previous year', S.splitWallMonthKey([], { manualMonth: 'ינואר' }), (parseInt(yr) - 1) + '-12');
+  t.eq('the agent analyzer uses the SAME function', B.splitWallMonthKey([], { manualMonth: 'אוקטובר' }), S.splitWallMonthKey([], { manualMonth: 'אוקטובר' }));
+  {
+    // parity with the credit side: a month is "open" for calcShortfallFromSentLog
+    // exactly when it is above the wall (v2.14.71) — both sides now agree.
+    const bk = (a) => 'bank_import_2026-10-03T14:52:31.723Z_' + a + '_payer_x';
+    const d = { config: { amount: 300, manualMonth: 'אוקטובר' }, closedMonths: [], tenants: [{ id: 1, name: 'x', customAmount: 100, openingDebt: 0 }],
+      sentLog: { '1_ספטמבר': bk(300), '1_אוקטובר': bk(300) }, paymentHistory: {} };
+    const sf = S.calcShortfallFromSentLog(d, '1', { year: parseInt(yr) });
+    const wall = S.splitWallMonthKey(d.closedMonths, d.config);
+    t.eq('parity: credit counted live ONLY for months above the wall (Oct yes, Sep no)', [sf.creditLive, wall], [200, yr + '-09']);
+  }
+  const srcS = lib.readSource('server.js');
+  t.eq('GET /api/data ships splitWallMonth + splitWallMonthExtra', /d\.splitWallMonth\s*=\s*splitWallMonthKey\(d\.closedMonths, d\.config\);[\s\S]{0,80}d\.splitWallMonthExtra\s*=\s*splitWallMonthKey\(d\.closedMonthsExtra, d\.config\);/.test(srcS), true);
+  t.eq('agent main split: isClosed = closedMonths OR <= wall', srcS.includes('const isClosedMonth = (mk) => _closedMain.has(mk) || mk <= _wallMain;'), true);
+  t.eq('agent extra split: isClosed = closedMonthsExtra OR <= its OWN wall', srcS.includes('const isClosedAccMonth = (mk) => _closedExtra.has(mk) || mk <= _wallExtra;'), true);
+
+  // ── the real file (exactly what the browser's SheetJS read gives: serial dates) ──
+  const ROWS = [
+    ['תאריך רישום','תאריך ערך','שם','בנק','סניף','חשבון','סכום','סוג תנועה','אסמכתא','הערות'],
+    [46296,46296,'אור שחם ובז',11,302,173566,100,'זיכוי מבנק',401285,'תשלום לערבות הדדית'],
+    [46296,46296,'אופיר סעדון',10,747,365226,300,'זיכוי',26080911,'זיכוי מידי'],
+    [46296,46296,'אלעד ארזי',14,348,581936,0,'זיכוי מבנק',5982,'(ועד הבית יולי אוגוסט (הערת לקוח'],
+    [46296,46296,'אגוזי תומר והילה',11,56,3974546,0,'זיכוי מבנק',152411,'תשלום לערבות הדדית'],
+    [46296,46296,'ארזי אוסנת',4,22,103268,100,'זיכוי מבנק',623253,'תשלום חוב ערבות הדדית'],
+    [46296,46296,'בן קרטר',12,613,699043,350,'זיכוי מבנק',4111,'ערבות הדדית'],
+    [46296,46296,'אטיאס חנית מסיקה',31,93,200300,350,'זיכוי מבנק',324026,'זיכוי מיידי'],
+    [46296,46296,'אבינועם ניסים ועמליה',12,613,699999,100,'זיכוי',777456,'זיכוי'],
+    [46296,46296,'ארביב הרצל ואמיליה',17,56,420131,500,'זיכוי מבנק',299565,'ערבות הדדית אוגוסט 2026'],
+    [46296,46296,'אדרי חיים ועדי',9,1,704560,700,'זיכוי מבנק',111336,'זיכוי'],
+    [46296,46296,'ארזי (טל) אורית',10,747,333322,100,'זיכוי',260222222,'זיכוי'],
+    [46296,46296,'קרטר דורית ואריה',9,1,704560,400,'זיכוי מבנק',111336,'זיכוי'],
+  ];
+  const IDS = { colName: 2, colAmount: 6, colDate: 0, colNote: 9, colRef: 8, bankMonth: '2026-10' };
+  const AGENT_MAP = { colName: 2, colAmount: 6, colDate: 0, colNote: 9, colRef: 8 };
+  const T = (id, name, kw, fee, od, x) => Object.assign({ id, name, keywords: kw, phone: '05' + String(id).padStart(8, '0'), customAmount: fee, openingDebt: od,
+    personalTariffs: fee ? [{ rate: fee, startDate: '2000-01-01', endDate: null }] : undefined }, x || {});
+  // נווה ים right after 🧹 התחלה נקייה: openingDebt = Tal's "30/9" column, nothing closed.
+  const fixture = (closed) => ({
+    config: { amount: 300, monthMode: 'manual', manualMonth: 'אוקטובר' },
+    defaultTariffs: [{ rate: 300, startDate: '2000-01-01', endDate: null }],
+    tenants: [T(1, 'מגרש 1 - אדריאן דודסקו', 'אדריאן, דודסקו', null, 0), T(2, 'מגרש 2- טל ברקן', 'טל', null, 0),
+      T(3, 'גוש 12 , חלקה 2', 'אורלי', null, 600), T(4, 'אור שחם ובז', 'בז, אור שחם ובז', 200, 6700),
+      T(5, 'אופיר סעדון', 'אופיר סעדון', 100, 3400), T(6, 'אלעד ארזי', 'אלעד ארזי', 100, 1400),
+      T(7, 'אגוזי תומר והילה', 'אגוזי, תומר והילה', 200, -300), T(8, 'ארזי אוסנת', 'אוסנת, ארזי אוסנת', null, -200, { suspended: true }),
+      T(9, 'קרטר בן', 'בן, בן קרטר', 200, 1200), T(10, 'אטיאס חנית מסיקה', 'חנית, אטיאס חנית', 100, 4550),
+      T(11, 'אבינועם ניסים ועמליה', 'ניסים, עמליה, אבינועם ניסים ועמליה', 200, 0), T(12, 'ארביב הרצל ואמיליה', 'הרצל, אמיליה, ארביב', null, 0, { suspended: true }),
+      T(13, 'אדרי חיים ועדי', 'אדרי, אדרי חיים ועדי', 200, 3100), T(14, 'קרטר דורית ואריה', 'דורית, אריה, קרטר', 200, -300),
+      T(15, 'ארזי טל (אורית)', 'ארזי טל, טל, ארזי אורית', null, 0, { suspended: true, suspensions: [{ from: '2026-10', to: null }] })],
+    sentLog: {}, paymentHistory: {}, closedMonths: closed || [], closedMonthsExtra: closed || [], importedBankFingerprints: [] });
+  // GET /api/data as the page receives it
+  const shipped = disk => Object.assign(JSON.parse(JSON.stringify(disk)), { effectiveMonth: 'אוקטובר', currentAutoMonth: 'אוקטובר',
+    splitWallMonth: S.splitWallMonthKey(disk.closedMonths, disk.config), splitWallMonthExtra: S.splitWallMonthKey(disk.closedMonthsExtra, disk.config) });
+  const assignOrit = P => (P.ambiguousRows || []).forEach(r => { r._decision = 'assign'; r._assignTo = 15; });   // what Tal did
+  const manual = (closed, answer) => {
+    const disk = fixture(closed);
+    const r = lib.runManualImport({ rows: ROWS, ids: IDS, data: shipped(disk), confirm: answer, decide: assignOrit });
+    lib.runDataSync(S, disk, r.posted);
+    return { r, disk };
+  };
+  const bal = (disk, id) => ({ debt: S.calcTotalDebt(disk, String(id), mkNow), credit: S.getCreditBalance(disk, String(id)) });
+  const ALL = disk => disk.tenants.map(x => [x.name, bal(disk, x.id)]);
+  // Tal's check sheet (= screenshot 3 for everyone the split did not touch)
+  const EXPECT = [
+    ['מגרש 1 - אדריאן דודסקו', { debt: 0, credit: 0 }], ['מגרש 2- טל ברקן', { debt: 0, credit: 0 }], ['גוש 12 , חלקה 2', { debt: 600, credit: 0 }],
+    ['אור שחם ובז', { debt: 6800, credit: 0 }], ['אופיר סעדון', { debt: 3200, credit: 0 }], ['אלעד ארזי', { debt: 1400, credit: 0 }],
+    ['אגוזי תומר והילה', { debt: 0, credit: 300 }], ['ארזי אוסנת', { debt: 0, credit: 300 }], ['קרטר בן', { debt: 1050, credit: 0 }],
+    ['אטיאס חנית מסיקה', { debt: 4300, credit: 0 }], ['אבינועם ניסים ועמליה', { debt: 100, credit: 0 }], ['ארביב הרצל ואמיליה', { debt: 0, credit: 500 }],
+    ['אדרי חיים ועדי', { debt: 2600, credit: 0 }], ['קרטר דורית ואריה', { debt: 0, credit: 500 }], ['ארזי טל (אורית)', { debt: 0, credit: 100 }]];
+
+  t.section('v2.14.72 — THE INCIDENT, manual import (REAL analyze → REAL commit → REAL sync), after 🧹');
+  for (const answer of [false, true]) {
+    const { r, disk } = manual([], answer);
+    const lbl = answer ? '[אישור]' : '[ביטול]';
+    t.eq(lbl + ' preview equals Tal\'s screen: 9 identified · 1 ambiguous · 6 not identified', [r.P.matched.length, r.P.ambiguousRows.length, r.P.unmatched.length], [9, 1, 6]);
+    t.eq(lbl + ' THE BUG (msg): no "file contains payments from N months" for an all-October file', [r.P.splitMonths, /הקובץ מכיל תשלומים מ-/.test(r.preview)], [null, false]);
+    t.eq(lbl + ' nothing to split → no dialog at all', r.confirms.length, 0);
+    t.eq(lbl + ' THE BUG (money): NO payment parked on August/September', Object.keys(disk.sentLog).filter(k => /_(אוגוסט|ספטמבר)$/.test(k)), []);
+    t.eq(lbl + ' אופיר: whole 300 on October', B.parseSentLogAmount(disk.sentLog['5_אוקטובר']), 300);
+    t.eq(lbl + ' every member equals Tal\'s sheet (אופיר 3,200 · קרטר דורית credit 500 · all others unchanged)', ALL(disk), EXPECT);
+  }
+
+  t.section('v2.14.72 — the AGENT path, same file, same state');
+  {
+    const disk = fixture([]);
+    const res = B.analyzeBankRowsServer(ROWS, AGENT_MAP, disk.tenants, {}, '2026-10', disk.config, new Set(), {}, disk.defaultTariffs, disk.closedMonths, disk.closedMonthsExtra);
+    t.eq('agent: NO key on August/September', Object.keys(res.newSentLog).filter(k => /_(אוגוסט|ספטמבר)$/.test(k)), []);
+    t.eq('agent: אופיר 300 and קרטר דורית 400 stay whole on October', [B.parseSentLogAmount(res.newSentLog['5_אוקטובר']), B.parseSentLogAmount(res.newSentLog['14_אוקטובר'])], [300, 400]);
+    t.eq('agent: ambiguous אורית row still queued (not guessed)', res.ambiguousMatchHits.length, 1);
+  }
+
+  t.section('v2.14.72 — what must STILL work: a genuinely OPEN month is still filled');
+  {
+    // August closed, September NOT yet closed (its charge is NOT in openingDebt) → the
+    // split may fill September; October keeps the rest as credit.
+    const { r, disk } = manual(['2026-08'], true);
+    const op = r.P.lumpSplits.find(l => l.name === 'אופיר סעדון');
+    t.eq('lumpSplits lists אופיר: Sep 100 · Oct 200 (Aug closed = wall)', op && op.parts, [{ mk: '2026-09', sum: 100 }, { mk: '2026-10', sum: 200 }]);
+    t.eq('lumpSplits lists קרטר דורית: Sep 200 · Oct 200', (r.P.lumpSplits.find(l => l.name === 'קרטר דורית ואריה') || {}).parts, [{ mk: '2026-09', sum: 200 }, { mk: '2026-10', sum: 200 }]);
+    t.eq('the file itself is still ONE month (no "N months" line)', r.P.splitMonths, null);
+    t.eq('preview shows the per-tenant 🔀 line', /class="bank-lump-splits"[\s\S]*אופיר סעדון 300₪ → ספטמבר 100₪ · אוקטובר 200₪/.test(r.preview), true);
+    t.eq('ONE dialog, naming the tenants and months', [r.confirms.length, /אופיר סעדון 300₪ → ספטמבר 100₪ · אוקטובר 200₪/.test(r.confirms[0]), /ביטול = לרשום הכל בחודש הנבחר בלבד/.test(r.confirms[0])], [1, true, true]);
+    t.eq('[אישור] written as listed: Sep 100 + Oct 200', [B.parseSentLogAmount(disk.sentLog['5_ספטמבר']), B.parseSentLogAmount(disk.sentLog['5_אוקטובר'])], [100, 200]);
+    const agent = B.analyzeBankRowsServer(ROWS, AGENT_MAP, fixture(['2026-08']).tenants, {}, '2026-10', disk.config, new Set(), {}, disk.defaultTariffs, ['2026-08'], ['2026-08']);
+    t.eq('agent (parity): Sep 100 + Oct 200', [B.parseSentLogAmount(agent.newSentLog['5_ספטמבר']), B.parseSentLogAmount(agent.newSentLog['5_אוקטובר'])], [100, 200]);
+  }
+  {
+    const { disk } = manual(['2026-08'], false);
+    t.eq('[ביטול] now really means "all in the selected month": אופיר 300 on October, nothing on September',
+      [B.parseSentLogAmount(disk.sentLog['5_אוקטובר']), disk.sentLog['5_ספטמבר']], [300, undefined]);
+  }
+
+  t.section('v2.14.72 — extra accounts (main == extra): the extra split obeys its OWN wall');
+  {
+    const tenants = [{ id: 'E', name: 'דייר', phone: '0500000009', keywords: 'דייר', customAmount: 100, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 40, matchKeywords: 'ביטוח מבנה', openingDebt: 0 }] }];
+    const rows = [['שם', 'סכום', 'תאריך', 'הערות'], ['ביטוח מבנה', '120', '01/10/2026', '']];
+    const map = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+    const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+    const keysOf = res => Object.keys(res.newSentLog).filter(k => k.includes('__acc__'));
+    const none = B.analyzeBankRowsServer(rows, map, J(tenants), {}, '2026-10', cfg, new Set(), {}, null, [], []);
+    t.eq('extra, nothing closed: 120 = 3×40 stays on October (no Aug/Sep)', keysOf(none).filter(k => /_(אוגוסט|ספטמבר)$/.test(k)), []);
+    const open = B.analyzeBankRowsServer(rows, map, J(tenants), {}, '2026-10', cfg, new Set(), {}, null, ['2026-09'], ['2026-07']);
+    t.eq('extra wall comes from closedMonthsExtra (July) — NOT the main marker (Sep): Aug + Sep filled',
+      keysOf(open).filter(k => /_(אוגוסט|ספטמבר)$/.test(k)).length, 2);
   }
 }
 

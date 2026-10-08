@@ -853,7 +853,8 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   t.eq('client undated → fallback month', g3.buckets.get('2026-06').sum, 300);
 
   // Guards on the write/confirm wiring (these can't be executed without DOM/confirm).
-  t.eq('split write is gated behind a confirm', /confirm\(\s*\n?\s*'הקובץ מכיל תשלומים מ-'/.test(app), true);
+  // v2.14.72 (C): one confirm covers dated multi-month rows AND lump splits.
+  t.eq('split write is gated behind a confirm', /doSplit = confirm\(\s*\n?\s*_q \+/.test(app) && app.includes("'הקובץ מכיל תשלומים בתאריכים מ-'"), true);
   t.eq('declining the split writes into the chosen month (em)',
     /var _sKey = m\.tenant\.id \+ '_' \+ em;\s*[\s\S]{0,200}?data\.sentLog\[_sKey\] =/.test(app), true);
   t.eq('accepting the split writes per-month keys',
@@ -933,7 +934,7 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   // v2.14.39b — OPTION 1: a CLOSED selected month bypasses the split dialog and
   // routes each tenant's FULL amount to the approval panel as one row.
   t.eq('computes _selClosed from selectedMonthKey vs closedMonths', /_selClosed\s*=\s*\(Array\.isArray\(data\.closedMonths\)/.test(commit), true);
-  t.eq('split dialog suppressed when selected month closed', /if \(!_selClosed && P\.splitMonths/.test(commit), true);
+  t.eq('split dialog suppressed when selected month closed', /if \(!_selClosed && \(_hasMultiRows \|\| _lumpList\.length\)\)/.test(commit), true);
   t.eq('closed selected month → full m.amount to approvals (skip split)', /if \(_selClosed\)\s*\{[\s\S]{0,220}?_closedApprovals\.push\([\s\S]{0,160}?charge:\s*m\.amount/.test(commit), true);
 
   // ── v2.14.40 — enriched approval panel (why-here + bank note + preview + batch) ──
@@ -3023,5 +3024,56 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('guide (2.14.71): a surplus joins existing credit immediately', gd70.includes('זכות 300 ועודף 200 באוקטובר → מוצגת זכות 500 כבר עכשיו'), true);
     t.eq('guide: a suspended member\'s payment becomes credit', gd70.includes('<strong>דייר מושהה ששילם</strong>') && gd70.includes('כל הסכום הופך לזכות'), true);
   }
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.72 (C) — lump-sum split: shown per tenant, asked once, Cancel obeyed.
+// EXECUTED: the REAL analyzeBankRows (preview) + REAL commitBankImport.
+// ════════════════════════════════════════════════════════════════
+{
+  const { runManualImport } = require('./test-lib');
+  const amt = v => { const m = String(v || '').match(/bank_import_[^_]+_([\d.]+)_/); return m ? parseFloat(m[1]) : null; };
+  const rows = [['תאריך', 'שם', 'סכום', 'הערות'], ['01/10/2026', 'אופיר סעדון', '300', 'זיכוי'], ['01/10/2026', 'בן קרטר', '200', 'זיכוי']];
+  const ids = { colDate: 0, colName: 1, colAmount: 2, colNote: 3, colRef: -1, bankMonth: '2026-10' };
+  const mkData = (wall) => ({ config: { amount: 300, manualMonth: 'אוקטובר' }, effectiveMonth: 'אוקטובר', closedMonths: ['2026-08'],
+    splitWallMonth: wall, sentLog: {}, importedBankFingerprints: [], paymentHistory: {},
+    tenants: [{ id: 5, name: 'אופיר סעדון', keywords: 'אופיר סעדון', phone: '0500000005', customAmount: 100, openingDebt: 0 },
+              { id: 9, name: 'קרטר בן', keywords: 'בן קרטר', phone: '0500000009', customAmount: 200, openingDebt: 0 }] });
+  t.section('v2.14.72 (C) — preview + one dialog + Cancel (executed)');
+  {
+    const r = runManualImport({ rows, ids, data: mkData('2026-08'), confirm: false });
+    t.eq('pending carries lumpSplits (אופיר only — בן paid one month)', r.P.lumpSplits.map(l => l.name), ['אופיר סעדון']);
+    t.eq('file-level splitMonths stays null (all rows dated October)', r.P.splitMonths, null);
+    t.eq('preview: per-tenant 🔀 line', /class="bank-lump-splits"[\s\S]*אופיר סעדון 300₪ → ספטמבר 100₪ · אוקטובר 200₪/.test(r.preview), true);
+    t.eq('preview: NO "the file contains payments from N months" line', /הקובץ מכיל תשלומים מ-/.test(r.preview), false);
+    t.eq('ONE dialog that names the split', [r.confirms.length, r.confirms[0].includes('תשלום אחד שמכסה כמה חודשים (1)')], [1, true]);
+    t.eq('THE BUG: Cancel → whole 300 on October, nothing on September', [amt(r.posted.sentLog['5_אוקטובר']), r.posted.sentLog['5_ספטמבר']], [300, undefined]);
+    t.eq('Cancel: a single-month payer is untouched (בן 200 October)', amt(r.posted.sentLog['9_אוקטובר']), 200);
+  }
+  {
+    const r = runManualImport({ rows, ids, data: mkData('2026-08'), confirm: true });
+    t.eq('Confirm → written as listed: Sep 100 + Oct 200', [amt(r.posted.sentLog['5_ספטמבר']), amt(r.posted.sentLog['5_אוקטובר'])], [100, 200]);
+  }
+  {
+    const r = runManualImport({ rows, ids, data: mkData('2026-09'), confirm: true });
+    t.eq('wall at September (consumed from data.splitWallMonth) → no split, no dialog', [r.P.lumpSplits.length, r.confirms.length, amt(r.posted.sentLog['5_אוקטובר'])], [0, 0, 300]);
+  }
+  {
+    const d = mkData(undefined); delete d.splitWallMonth;
+    const r = runManualImport({ rows, ids, data: d, confirm: true });
+    t.eq('old server (no splitWallMonth) → closedMonths only, as in 2.14.71 (Sep open)', r.P.lumpSplits.length, 1);
+  }
+  {
+    // genuine multi-ROW file (dates in Sep and Oct) still gets the file-level line
+    const rows2 = [['תאריך', 'שם', 'סכום', 'הערות'], ['20/09/2026', 'בן קרטר', '200', ''], ['01/10/2026', 'בן קרטר', '200', '']];
+    const r = runManualImport({ rows: rows2, ids, data: mkData('2026-08'), confirm: false });
+    t.eq('multi-dated rows: file-level months listed, no lump list', [r.P.splitMonths, r.P.lumpSplits.length], [['2026-09', '2026-10'], 0]);
+    t.eq('multi-dated rows: dialog uses the "dates from N months" wording', r.confirms[0].includes('הקובץ מכיל תשלומים בתאריכים מ-2 חודשים שונים'), true);
+    t.eq('multi-dated rows + Cancel → all 400 on October (unchanged behaviour)', amt(r.posted.sentLog['9_אוקטובר']), 400);
+  }
+  const app72 = readSource('public/app.html'), gd72 = readSource('public/vaadpro-guide.js');
+  t.eq('commit: a lump split no longer bypasses the answer', app72.includes('if ((doSplit || m._lumpSplit) &&'), false);
+  t.eq('HTML_VERSION is 2.14.72', /const HTML_VERSION = '2\.14\.72';/.test(app72), true);
+  t.eq('guide: lump-split box (open months only, Cancel = selected month)', gd72.includes('🔀 תשלום אחד שמכסה כמה חודשים') && gd72.includes('רק לחודשים שעדיין פתוחים') && gd72.includes('<strong>ביטול</strong> = לרשום את כל הסכום בחודש הנבחר'), true);
+}
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

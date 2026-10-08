@@ -1890,7 +1890,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.71';
+const HTML_VERSION = '2.14.72';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -6050,7 +6050,13 @@ function splitOverpayAcrossMonths(buckets, opts) {
       // that lands on a closed month is NOT written silently; instead we collect it
       // as a closed-month hit and surface a decision row after the preview.
       var _closedMain = new Set(Array.isArray(data.closedMonths) ? data.closedMonths : []);
-      var _isClosedM = function(mk){ return _closedMain.has(mk); };
+      // v2.14.72 — THE WALL (נווה ים 3.10: אופיר 300 → Aug/Sep/Oct, 200 vanished).
+      // Every month <= data.splitWallMonth is ALREADY inside openingDebt (last closed
+      // month, or — when nothing is marked closed, e.g. right after 🧹 — the month
+      // before the active month). The server computes it (splitWallMonthKey); we
+      // CONSUME it. Absent (old server) → closedMonths only, as before.
+      var _wallMk = (typeof data.splitWallMonth === 'string' && /^\d{4}-\d{2}$/.test(data.splitWallMonth)) ? data.splitWallMonth : null;
+      var _isClosedM = function(mk){ return _closedMain.has(mk) || (_wallMk !== null && mk <= _wallMk); };
       var _sp = splitOverpayAcrossMonths(grouped.buckets, {
         chargeForMonth: function(){ return _splitCharge; },
         isPaid: _isPaidM,
@@ -6109,13 +6115,25 @@ function splitOverpayAcrossMonths(buckets, opts) {
   //
   // Compute the multi-month split decision at PREVIEW time so we can show it, but
   // DEFER the actual confirm() + sentLog write to commitBankImport().
-  var splitTenants = matched.filter(function(m){ return m._buckets && m._buckets.size > 1; });
+  // v2.14.72 (C): "the file contains payments from N months" counts ONLY rows whose
+  // own DATES fall in different months. A lump-sum split (one row fanned into
+  // months) is NOT a file property — it is listed separately, per tenant, so the
+  // operator sees exactly what will be written (נווה ים: an all-October file was
+  // announced as "3 months" because of אופיר's split).
+  var splitTenants = matched.filter(function(m){ return m._buckets && m._buckets.size > 1 && !m._lumpSplit; });
   var splitMonths = null;
   if (splitTenants.length) {
     var monthSet = new Set();
     splitTenants.forEach(function(m){ m._buckets.forEach(function(_v,mk){ monthSet.add(mk); }); });
     splitMonths = Array.from(monthSet).sort();
   }
+  var lumpSplits = matched.filter(function(m){ return m._lumpSplit && m._buckets && m._buckets.size > 1; })
+    .map(function(m){
+      var parts = [];
+      m._buckets.forEach(function(b, mk){ parts.push({ mk: mk, sum: b.sum }); });
+      parts.sort(function(a, b){ return a.mk < b.mk ? -1 : a.mk > b.mk ? 1 : 0; });
+      return { name: m.tenant.name, amount: m.amount, parts: parts };
+    });
 
   // Stash everything the commit step needs. No side effects yet.
   window._pendingBankImport = {
@@ -6129,6 +6147,7 @@ function splitOverpayAcrossMonths(buckets, opts) {
     selectedMonthKey: selectedMonthKey,
     hebOfMk: hebOfMk,
     splitMonths: splitMonths,
+    lumpSplits: lumpSplits,   // v2.14.72 (C)
     total: mr.length,
     ta: ta,
     fileName: fileName,
@@ -6170,13 +6189,28 @@ function commitBankImport(){
   // Multi-month split confirm — deferred here from detection time.
   // v2.14.39b: only offered for an OPEN selected month. For a closed month the
   // split is bypassed (see _selClosed handling in the commit loop below).
+  // v2.14.72 (C): ONE question that covers BOTH kinds of multi-month write — rows
+  // dated in different months AND a lump-sum row fanned into months — and Cancel
+  // now means the same for both: the whole amount goes to the selected month (an
+  // overpayment there is credit). Before, a lump split was written even on Cancel.
   var doSplit = false;
-  if (!_selClosed && P.splitMonths && P.splitMonths.length) {
-    var monthsList = P.splitMonths.map(function(mk){ return hebOfMk(mk) + ' ' + mk.split('-')[0]; }).join(', ');
+  var _lumpList = Array.isArray(P.lumpSplits) ? P.lumpSplits : [];
+  var _hasMultiRows = !!(P.splitMonths && P.splitMonths.length);
+  if (!_selClosed && (_hasMultiRows || _lumpList.length)) {
+    var _q = '';
+    if (_hasMultiRows) {
+      var monthsList = P.splitMonths.map(function(mk){ return hebOfMk(mk) + ' ' + mk.split('-')[0]; }).join(', ');
+      _q += 'הקובץ מכיל תשלומים בתאריכים מ-' + P.splitMonths.length + ' חודשים שונים (' + monthsList + ').\n\n';
+    }
+    if (_lumpList.length) {
+      _q += 'תשלום אחד שמכסה כמה חודשים (' + _lumpList.length + '):\n' + _lumpList.map(function(l){
+        return '• ' + l.name + ' ' + l.amount + '₪ → ' + l.parts.map(function(pt){ return hebOfMk(pt.mk) + ' ' + pt.sum + '₪'; }).join(' · ');
+      }).join('\n') + '\n\n';
+    }
     doSplit = confirm(
-      'הקובץ מכיל תשלומים מ-' + P.splitMonths.length + ' חודשים שונים (' + monthsList + ').\n\n' +
-      'לרשום כל תשלום בחודש שלו? (מומלץ)\n\n' +
-      'ביטול = לרשום הכל בחודש הנבחר בלבד.'
+      _q +
+      'אישור = לרשום כל תשלום בחודש שלו כמפורט. (מומלץ)\n' +
+      'ביטול = לרשום הכל בחודש הנבחר בלבד (עודף נשמר כזכות).'
     );
   }
 
@@ -6209,7 +6243,11 @@ function commitBankImport(){
     // v2.14.38: a LUMP-SUM split (one row fanned into months) always writes its
     // per-month buckets — collapsing it back to `em` would recreate the phantom
     // overpayment we are fixing. A genuine multi-ROW file still obeys `doSplit`.
-    if ((doSplit || m._lumpSplit) && m._buckets && m._buckets.size > 1) {
+    // v2.14.72 (C): a lump split obeys the same question — Cancel keeps it whole on
+    // the selected month (credit). The split itself can no longer reach a month that
+    // is already inside openingDebt (the wall in analyzeBankRows), so the v2.14.38
+    // phantom-credit case is not recreated by Cancel: the money stays, as credit.
+    if (doSplit && m._buckets && m._buckets.size > 1) {
       m._buckets.forEach(function(b, mk){
         if (_closedMainSet.has(mk)) {                       // closed → approval, not silent write
           _closedApprovals.push({ tenantId: m.tenant.id, name: m.tenant.name, month: mk, scope: 'main',
@@ -6731,6 +6769,18 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
     var _hebNames=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
     var _lbl=splitMonths.map(function(mk){return _hebNames[parseInt(mk.split('-')[1])-1]+' '+mk.split('-')[0];}).join(', ');
     h+='<div style="margin-top:8px;font-size:0.78rem;color:var(--warn);">📅 הקובץ מכיל תשלומים מ-'+splitMonths.length+' חודשים ('+_lbl+'). בעת האישור תישאל אם לפצל לחודשים.</div>';
+  }
+  // v2.14.72 (C): a lump-sum split is shown PER TENANT (what exactly will be written),
+  // never folded into the file's month count above.
+  var _lumps = (previewMode && window._pendingBankImport && Array.isArray(window._pendingBankImport.lumpSplits)) ? window._pendingBankImport.lumpSplits : [];
+  if(_lumps.length){
+    var _hebL=['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+    h+='<div class="bank-lump-splits" style="margin-top:8px;font-size:0.78rem;color:var(--warn);">🔀 תשלום אחד שמכסה כמה חודשים ('+_lumps.length+') — בעת האישור תישאל אם לפצל:';
+    _lumps.forEach(function(l){
+      h+='<div style="color:var(--text2);margin-top:2px;">• '+esc(String(l.name))+' '+Number(l.amount).toLocaleString()+'₪ → '
+        +l.parts.map(function(pt){ return _hebL[parseInt(String(pt.mk).split('-')[1])-1]+' '+Number(pt.sum).toLocaleString()+'₪'; }).join(' · ')+'</div>';
+    });
+    h+='</div>';
   }
   if(previewMode){
     // Nothing is written yet — the admin must explicitly confirm to save.

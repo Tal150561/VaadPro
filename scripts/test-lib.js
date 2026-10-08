@@ -80,7 +80,7 @@ const SERVER_FNS = [
   // v2.14.67 — collection trends (Phase 3)
   'crReportLabel', 'buildCollectionSnapshot', 'crSnapshotMeta', 'compareCollectionSnapshots', 'buildCollectionTrend',
   // v2.14.69 — suspension periods
-  'monthBeforeKey', 'normalizeSuspensionPeriods', 'crSuspendedIn', 'crSuspensionUndated',
+  'monthBeforeKey', 'splitWallMonthKey', 'normalizeSuspensionPeriods', 'crSuspendedIn', 'crSuspensionUndated',
   // v2.14.70 — the charge frozen into a payment record (suspended month → 0)
   'paymentRateForMonth'
 ];
@@ -112,8 +112,8 @@ function loadBankAnalyzer() {
   const splitMonths = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
     + (splitMonths ? splitMonths[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer'])
-    + 'module.exports={getMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,parseSentLogAmount,accumulatePaidAmount,mergeExtraPaymentHistory,analyzeBankRowsServer};';
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'monthBeforeKey', 'splitWallMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer'])
+    + 'module.exports={getMonthKey,splitWallMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,parseSentLogAmount,accumulatePaidAmount,mergeExtraPaymentHistory,analyzeBankRowsServer};';
   return runInSandbox(code);
 }
 
@@ -528,9 +528,82 @@ function loadDeliverySuspect() {
   return runInSandbox(code);
 }
 
+// ── v2.14.72 — the MANUAL import, executed end to end (REAL app.html code) ──────
+// Runs the live analyzeBankRows (detect + preview) and commitBankImport (the
+// confirm + sentLog write + the POST payload) with a stub DOM. Lesson of 2.14.70/71:
+// a "replay" that INJECTS the payment never exercises the analyzer — the lump split
+// that lost אופיר's 200 lived exactly there. This runs the analyzer for real.
+// Top-level helpers are pulled on demand from the LIVE source (ReferenceError →
+// extract that function), extended to the first end that PARSES, because
+// analyzeBankRows holds column-0 nested copies of shared helpers (extractFunctions
+// would stop at the first column-0 '}').
+function extractFunctionParsed(src, name) {
+  const i = src.search(new RegExp('\\n(?:async )?function ' + name + '\\s*\\(')) + 1;
+  if (i <= 0) throw new Error('test-lib: function not found in source: ' + name);
+  let j = i;
+  for (;;) {
+    j = src.indexOf('\n}', j + 1);
+    if (j < 0) throw new Error('test-lib: function does not parse: ' + name);
+    const cand = src.slice(i, j + 2);
+    try { new Function(cand); return cand; } catch (e) { /* not the end yet */ }
+  }
+}
+function runManualImport(opts) {
+  const app = opts.appSrc || readSource('public/app.html');
+  const data = opts.data;                       // what GET /api/data shipped (mutated)
+  const ids = Object.assign({ bankAmount: '', bankTolerance: '5' }, opts.ids || {});
+  const els = {};
+  const el = id => els[id] || (els[id] = { id, value: ids[id] !== undefined ? String(ids[id]) : '', style: {}, innerHTML: '',
+    classList: { add() {}, remove() {}, toggle() {} }, appendChild() {}, querySelector() { return null; }, querySelectorAll() { return []; },
+    setAttribute() {}, addEventListener() {}, scrollIntoView() {} });
+  const confirms = [];
+  const env = {
+    document: { getElementById: el, querySelector: () => null, querySelectorAll: () => [], createElement: () => el('_n' + Math.random()), body: { appendChild() {} } },
+    window: {}, data, API: '', toast: () => {}, render: () => {}, resetDropZone: () => {}, renderClosedMonthApprovals: a => { env._approvals = a; },
+    loadData: () => Promise.resolve(), localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { getItem: () => null, setItem() {} },
+    console: { log() {}, warn() {}, error() {} }, alert: () => {}, setTimeout: () => 0,
+    confirm: q => { confirms.push(q); return typeof opts.confirm === 'function' ? opts.confirm(q) : !!opts.confirm; },
+    fetch: (u, o) => { env._posted = o && o.body ? JSON.parse(o.body) : null; return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) }); }
+  };
+  const names = new Set(['analyzeBankRows', 'commitBankImport', 'showBankResult', 'parseDate']);
+  const snap = JSON.stringify({ sentLog: data.sentLog || {}, fp: data.importedBankFingerprints || [] });
+  for (let guard = 0; guard < 200; guard++) {
+    const s0 = JSON.parse(snap); data.sentLog = s0.sentLog; data.importedBankFingerprints = s0.fp;
+    confirms.length = 0; env._posted = null; env._approvals = null; env.window._pendingBankImport = null;
+    let src = ''; names.forEach(n => { src += extractFunctionParsed(app, n) + '\n'; });
+    const keys = Object.keys(env);
+    try {
+      const fn = new Function(...keys, src + '\n;return {analyzeBankRows,commitBankImport};')(...keys.map(k => env[k]));
+      fn.analyzeBankRows(opts.rows, opts.fileName || 'bank.xls');
+      const P = env.window._pendingBankImport;
+      const preview = el('bankResult').innerHTML;
+      if (opts.decide) opts.decide(P);
+      if (opts.commit !== false) fn.commitBankImport();
+      return { P, preview, confirms: confirms.slice(), posted: env._posted, approvals: env._approvals, data };
+    } catch (e) {
+      const m = /^(\w+) is not defined/.exec(e.message);
+      if (!m || !new RegExp('\\n(?:async )?function ' + m[1] + '\\(').test(app)) throw e;
+      names.add(m[1]);
+    }
+  }
+  throw new Error('test-lib: runManualImport could not resolve dependencies');
+}
+// The REAL POST /api/data sentLog-sync block (same slice as the v2.14.70 chain test).
+function runDataSync(S, disk, posted) {
+  const src = readSource('server.js');
+  const pd = src.slice(src.indexOf("app.post('/api/data', authMiddleware, (req, res) => {"));
+  const blk = pd.slice(pd.indexOf('  if (req.body.sentLog) {'), pd.indexOf('  if (_undoPrev) {'));
+  const body = { sentLog: posted.sentLog, bankMonthOverride: posted.bankMonthOverride };
+  new Function('req', 'loadTenantData', 'seedTariffsIfMissing', 'getMonthKey', 'hebMonthToMonthKey', 'paymentRateForMonth', 'recordPayment', 'console', blk)
+    ({ body, user: { tenantId: 'B' } }, () => disk, S.seedTariffsIfMissing, S.getMonthKey, S.hebMonthToMonthKey, S.paymentRateForMonth, S.recordPayment, { error() {}, log() {} });
+  disk.sentLog = body.sentLog; disk.paymentHistory = body.paymentHistory;
+  if (body.tenants) disk.tenants = body.tenants; if (body.defaultTariffs) disk.defaultTariffs = body.defaultTariffs;
+  if (posted.importedBankFingerprints) disk.importedBankFingerprints = posted.importedBankFingerprints;
+  return disk;
+}
 
 module.exports = {
-  readSource, extractFunctions, runInSandbox,
+  readSource, extractFunctions, runInSandbox, extractFunctionParsed, runManualImport, runDataSync,
   loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute, loadSendOneRoute,
   extractHtmlRegion, makeRunner
 };

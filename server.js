@@ -2026,6 +2026,9 @@ app.get('/api/data', authMiddleware, (req, res) => {
   d.serverVersion     = SERVER_VERSION;
   d.effectiveMonth    = getEffectiveMonth(d.config);
   d.currentAutoMonth  = getEffectiveMonth(d.config);
+  // v2.14.72 — the lump-sum split wall for the manual import (app.html consumes it).
+  d.splitWallMonth      = splitWallMonthKey(d.closedMonths, d.config);
+  d.splitWallMonthExtra = splitWallMonthKey(d.closedMonthsExtra, d.config);
   // Stage 2: computed labels (orgType + overrides) so the frontend mirrors the
   // SAME LABELS + fallback as the server. orgType absent -> vaad -> existing strings.
   d.labels = getLabels(d.config);
@@ -6120,6 +6123,21 @@ function monthBeforeKey(mk) {
   const t = p[0] * 12 + (p[1] - 1) - 1;
   return Math.floor(t / 12) + '-' + String((t % 12) + 1).padStart(2, '0');
 }
+// ── v2.14.72 — the lump-sum split WALL (נווה ים 3.10, אופיר / קרטר דורית) ─────
+// A month <= this key is ALREADY inside openingDebt: the last closed month, or —
+// when nothing is marked closed (a fresh building, or right after 🧹 התחלה נקייה)
+// — the month BEFORE the active month (the tenants file is "as of the END of the
+// previous month"; the close catch-up honours the same convention). SAME rule as
+// calcShortfallFromSentLog's _lastClosed (v2.14.71). splitOverpayAcrossMonths must
+// never place money on such a month: its charge is already in openingDebt, so the
+// money would simply vanish (אופיר 300 = 3×100 → Aug/Sep/Oct, 200 lost).
+// Used by the agent analyzer (main + extra) and shipped to app.html as
+// data.splitWallMonth / data.splitWallMonthExtra (CONSUME, do not compute).
+function splitWallMonthKey(closedArr, config) {
+  const c = Array.isArray(closedArr) ? closedArr.filter(m => /^\d{4}-\d{2}$/.test(String(m))) : [];
+  if (c.length) return c.slice().sort()[c.length - 1];
+  return monthBeforeKey(getMonthKey(config || {}));
+}
 // ── v2.14.69 — suspension PERIODS (tenant + extra account) ─────────────────────
 // `suspended` is the CURRENT state; `suspensions: [{from:'YYYY-MM', to:'YYYY-MM'|null}]`
 // records WHEN. Kept by the server on every save path (POST /api/data tenants,
@@ -8521,6 +8539,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
   // and is surfaced to the operator via `closedMonthHits` for manual resolution.
   const _closedMain  = Array.isArray(closedMonths)      ? new Set(closedMonths)      : new Set();
   const _closedExtra = Array.isArray(closedMonthsExtra) ? new Set(closedMonthsExtra) : new Set();
+  // v2.14.72: the split wall — every month <= it is already inside openingDebt
+  // (see splitWallMonthKey). Main and extra each use their OWN close marker.
+  const _wallMain  = splitWallMonthKey(closedMonths, config);
+  const _wallExtra = splitWallMonthKey(closedMonthsExtra, config);
   const closedMonthHits = [];
   const iName   = parseInt(mapping.colName   ?? -1);
   const iAmount = parseInt(mapping.colAmount ?? -1);
@@ -8863,7 +8885,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
         const v = String(newSentLog[tenant.id + '_' + heb] || '');
         return v.startsWith('bank_import') || v.startsWith('manual_paid');
       };
-      const isClosedMonth = (mk) => _closedMain.has(mk); // GUARDRAIL 3
+      const isClosedMonth = (mk) => _closedMain.has(mk) || mk <= _wallMain; // GUARDRAIL 3 + v2.14.72 wall
       const { buckets } = splitOverpayAcrossMonths(grouped0.buckets, {
         chargeForMonth, isPaid: isPaidMonth, isClosed: isClosedMonth, note: noteText
       });
@@ -8943,7 +8965,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
             return v.startsWith('bank_import') || v.startsWith('manual_paid');
           };
           // GUARDRAIL 3: extra accounts close against the SEPARATE closedMonthsExtra marker.
-          const isClosedAccMonth = (mk) => _closedExtra.has(mk);
+          const isClosedAccMonth = (mk) => _closedExtra.has(mk) || mk <= _wallExtra; // + v2.14.72 wall
           const { buckets } = accCharge > 0
             ? splitOverpayAcrossMonths(grouped0Acc.buckets, {
                 chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, isClosed: isClosedAccMonth, note: accNote
