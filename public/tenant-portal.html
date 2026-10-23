@@ -934,7 +934,7 @@ function portalRenderMeetings() {
         decisionsHtml +=
           '<div style="display:flex;gap:8px;align-items:flex-start;margin-bottom:6px;font-size:0.84rem;">' +
             '<span style="color:var(--accent);font-weight:700;min-width:18px;">' + (i+1) + '.</span>' +
-            '<div>' + dec.text +
+            '<div><span style="white-space:pre-wrap;">' + String(dec.text || '').replace(/[&<>]/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;'}[c]; }) + '</span>' +
               (dec.dueDate ? '<span style="color:var(--text2);font-size:0.78rem;"> — יעד: '+dec.dueDate+'</span>' : '') +
               (dec.assignee ? '<span style="color:var(--text2);font-size:0.78rem;"> | אחראי: '+dec.assignee+'</span>' : '') +
               '<span style="font-size:0.75rem;margin-right:4px;padding:1px 6px;border-radius:10px;background:'+statusBg+';color:'+statusColor+';">'+dec.status+'</span>' +

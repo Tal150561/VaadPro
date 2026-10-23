@@ -3072,8 +3072,45 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   }
   const app72 = readSource('public/app.html'), gd72 = readSource('public/vaadpro-guide.js');
   t.eq('commit: a lump split no longer bypasses the answer', app72.includes('if ((doSplit || m._lumpSplit) &&'), false);
-  t.eq('HTML_VERSION is 2.14.72', /const HTML_VERSION = '2\.14\.72';/.test(app72), true);
+  t.eq('HTML_VERSION is ≥ 2.14.72 (bumped every release)', /const HTML_VERSION = '2\.14\.(7[2-9]|[89]\d)';/.test(app72), true);
   t.eq('guide: lump-split box (open months only, Cancel = selected month)', gd72.includes('🔀 תשלום אחד שמכסה כמה חודשים') && gd72.includes('רק לחודשים שעדיין פתוחים') && gd72.includes('<strong>ביטול</strong> = לרשום את כל הסכום בחודש הנבחר'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.73 — (1) auto-send pause pill in the settings header,
+//            (2) meeting decision = multi-line textarea (EXECUTED render)
+// ════════════════════════════════════════════════════════════════
+{
+  const app73 = readSource('public/app.html'), gd73 = readSource('public/vaadpro-guide.js');
+  const portal73 = readSource('public/tenant-portal.html'), pkg73 = JSON.parse(readSource('package.json'));
+  t.section('v2.14.73 — auto-send header pill');
+  t.eq('HTML_VERSION === package.json version', app73.includes("const HTML_VERSION = '" + pkg73.version + "';"), true);
+  t.eq('header pill exists and calls the SAME toggleAutoSend (stopPropagation)', /id="autoSendHeaderPill" onclick="event\.stopPropagation\(\);toggleAutoSend\(\)"/.test(app73), true);
+  {
+    const fns = extractFunctions(app73, ['updateSchedule']);
+    const els = {};
+    const mk = id => (els[id] = els[id] || { id, textContent: '', innerHTML: '', title: '', style: {} });
+    const run = cfg => { const S = runInSandbox(fns + '\nmodule.exports={updateSchedule};',
+      { data: { config: cfg, effectiveMonth: 'אוקטובר' }, document: { getElementById: mk }, esc: x => String(x) });
+      S.updateSchedule(); return els.autoSendHeaderPill.textContent; };
+    t.eq('default (flag absent) → pill shows ACTIVE', run({}).includes('פעילה — השהה'), true);
+    t.eq('autoSendEnabled:false → pill shows PAUSED', run({ autoSendEnabled: false }).includes('מושהית — הפעל'), true);
+  }
+  t.section('v2.14.73 — decision textarea');
+  {
+    const fns = extractFunctions(app73, ['mtgRenderDecisions', 'mtgAutoGrow', 'esc']);
+    const el = { innerHTML: '', querySelectorAll: () => [] };
+    const S = runInSandbox('var mtgDecisions;\n' + fns + '\nmodule.exports={render:function(d){mtgDecisions=d;mtgRenderDecisions();}};',
+      { document: { getElementById: () => el } });
+    S.render([{ text: 'שורה 1\nשורה "2" <b>', dueDate: '2026-11-01', assignee: 'כולם', status: 'בוצע' }]);
+    t.eq('decision text renders in a <textarea> (not a one-line input)', /<textarea class="mtg-dec-text"[^>]*>שורה 1\nשורה &quot;2&quot; &lt;b&gt;<\/textarea>/.test(el.innerHTML), true);
+    t.eq('textarea is full width on its own row', /mtg-dec-text[^>]*width:100%/.test(el.innerHTML), true);
+    t.eq('no one-line text input for the decision any more', /type="text"[^>]*placeholder="טקסט ההחלטה/.test(el.innerHTML), false);
+    t.eq('date / assignee / status / ✕ still present', ['type="date"', 'placeholder="אחראי"', '>בוצע<', 'mtgRemoveDecision(0)'].every(x => el.innerHTML.includes(x)), true);
+  }
+  t.eq('portal: decision keeps line breaks (pre-wrap) and is HTML-escaped', portal73.includes('<span style="white-space:pre-wrap;">\' + String(dec.text || \'\').replace(/[&<>]/g'), true);
+  t.eq('guide: auto-send pause pill + autosave explained', gd73.includes('⏸ השהיית השליחה האוטומטית') && gd73.includes('💾 שמירה אוטומטית'), true);
+  t.eq('guide: multi-line decisions explained', gd73.includes('✍️ כתיבת החלטות'), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

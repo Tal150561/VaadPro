@@ -968,9 +968,12 @@ function vpLogout() {
     <div class="card">
       <div class="card-header" style="cursor:pointer;user-select:none;" onclick="toggleSection('secPay')">⚙️ הגדרות תשלום ותזמון
         <button class="help-btn" onclick="event.stopPropagation();showHelp('settings#set-pay')">?</button>
+        <!-- v2.14.73 — auto-send pause/resume pill in the header (like BankSync), visible while collapsed -->
+        <button type="button" id="autoSendHeaderPill" onclick="event.stopPropagation();toggleAutoSend()" style="margin-right:10px;border-radius:12px;padding:2px 10px;font-size:0.72rem;cursor:pointer;"></button>
         <span id="secPayIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
       </div>
       <div class="card-body" id="secPayBody" style="display:none;">
+        <div class="hint" id="cfgAutoSaveHint" style="margin-bottom:10px;">💾 שינויים בשדות נשמרים אוטומטית (מופיעה הודעה ”הגדרות נשמרו“) — אין צורך בכפתור שמירה.</div>
         <div class="grid-3">
           <div><label>סכום חודשי (₪)</label><input type="number" id="cfgAmount" value="300" min="1" onchange="saveConfig()"></div>
           <div><label>יום בחודש לשליחה</label><input type="number" id="cfgDay" value="1" min="1" max="28" onchange="saveConfig()"></div>
@@ -1890,7 +1893,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.72';
+const HTML_VERSION = '2.14.73';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3298,6 +3301,15 @@ function updateSchedule() {
     ? '<span style="color:var(--green)">🟢 שליחה אוטומטית פועלת</span>'
     : '<span style="color:#f59e0b">🟠 שליחה אוטומטית מושהית</span>';
   if(tbtn) tbtn.textContent = enabled ? '⏸ השהה' : '▶ הפעל';
+  // v2.14.73 — header pill (same switch, same toggleAutoSend) — mirrors the BankSync pill
+  const hp=document.getElementById('autoSendHeaderPill');
+  if(hp){
+    hp.textContent = enabled ? '▶️ שליחה אוטומטית פעילה — השהה' : '⏸️ שליחה אוטומטית מושהית — הפעל';
+    hp.title = enabled ? 'השהה את שליחת ההודעות האוטומטיות' : 'הפעל מחדש את שליחת ההודעות האוטומטיות';
+    hp.style.background = enabled ? 'rgba(37,211,102,.12)' : 'rgba(245,158,11,.15)';
+    hp.style.border = '1px solid ' + (enabled ? 'var(--accent,#25D366)' : '#f59e0b');
+    hp.style.color = enabled ? 'var(--accent,#25D366)' : '#f59e0b';
+  }
   // v2.14.30 — auto-send failure banner (Part 3)
   const eb=document.getElementById('lastAutoSendError');
   if(eb){
@@ -11248,11 +11260,15 @@ function mtgRenderDecisions() {
     el.innerHTML = '<div style="color:var(--text2);font-size:0.85rem;padding:8px 0;">אין החלטות עדיין</div>';
     return;
   }
+  // v2.14.73 — decision text is a multi-line, auto-growing textarea on its OWN
+  // full-width row; date / assignee / status / ✕ sit on the row below. (Was a
+  // one-line <input> squeezed into a 4-column grid — on mobile only ~10 chars showed.)
   el.innerHTML = mtgDecisions.map((d, i) => `
-    <div style="display:grid;grid-template-columns:1fr auto auto auto;gap:8px;align-items:center;margin-bottom:8px;background:var(--surface2);border-radius:8px;padding:10px 12px;">
-      <input type="text" value="${(d.text||'').replace(/"/g,'&quot;')}" placeholder="טקסט ההחלטה *"
-        oninput="mtgDecisions[${i}].text=this.value"
-        style="background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:6px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.85rem;width:100%;" />
+    <div class="mtg-dec-row" style="margin-bottom:8px;background:var(--surface2);border-radius:8px;padding:10px 12px;">
+      <textarea class="mtg-dec-text" rows="3" placeholder="טקסט ההחלטה *"
+        oninput="mtgDecisions[${i}].text=this.value;mtgAutoGrow(this)"
+        style="display:block;box-sizing:border-box;width:100%;min-height:72px;resize:vertical;line-height:1.6;unicode-bidi:plaintext;text-align:right;background:var(--bg);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-family:'Heebo',sans-serif;font-size:0.88rem;margin-bottom:8px;">${esc(d.text||'')}</textarea>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
       <input type="date" value="${d.dueDate||''}"
         oninput="mtgDecisions[${i}].dueDate=this.value"
         title="תאריך יעד"
@@ -11266,8 +11282,17 @@ function mtgRenderDecisions() {
         <option ${d.status==='בתהליך'?'selected':''}>בתהליך</option>
         <option ${d.status==='בוצע'?'selected':''}>בוצע</option>
       </select>
-      <button class="btn btn-danger-soft btn-sm" onclick="mtgRemoveDecision(${i})" style="padding:4px 9px;">✕</button>
+      <button class="btn btn-danger-soft btn-sm" onclick="mtgRemoveDecision(${i})" style="padding:4px 9px;margin-right:auto;" title="מחק החלטה">✕</button>
+      </div>
     </div>`).join('');
+  el.querySelectorAll('textarea.mtg-dec-text').forEach(mtgAutoGrow);
+}
+
+// v2.14.73 — grow a decision textarea to fit its text (capped; scrolls beyond).
+function mtgAutoGrow(ta) {
+  if (!ta || !ta.style) return;
+  ta.style.height = 'auto';
+  ta.style.height = Math.min(Math.max(ta.scrollHeight + 2, 72), 320) + 'px';
 }
 
 async function mtgSave() {
