@@ -9519,6 +9519,224 @@ function validateCollection(d) {
     errors: issues.filter(i => i.severity === 'error').length, warnings: issues.filter(i => i.severity === 'warn').length }, issues };
 }
 
+// ── v2.14.75 (1ב) — tenants file: extra-account columns (פ9) ─────────────────
+// Three columns per FIXED account definition: "<שם>" (שיוך/סטטוס), "<שם> – סכום",
+// "<שם> – יתרת פתיחה". TRI-STATE: a missing column or an empty cell never touches
+// anything; only an explicit value changes the account. Export → import is a no-op.
+// Writes ONLY tenant.extraAccounts DEFINITIONS (create / amount / openingDebt /
+// ⏸ / delete a CLEAN account). Never sentLog or paymentHistory. The opening balance
+// is a definition, exactly like the main account's חוב_התחלתי in the same file.
+function tfAccHeaders(tpl) {
+  const L = crAccountKey(tpl && tpl.label);
+  return [L, L + ' – סכום', L + ' – יתרת פתיחה'];
+}
+
+// Raw header → { tplId, field: 'status' | 'amount' | 'openingDebt' } or null.
+// The longest matching definition name wins ("חשמל" vs "חשמל חניה").
+function tfParseAccountHeader(raw, templates) {
+  const h = String(raw == null ? '' : raw).replace(/[\u200e\u200f\u202a-\u202e]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (!h) return null;
+  const list = (Array.isArray(templates) ? templates : []).filter(t => t && t.id)
+    .map(t => ({ tpl: t, k: tplNameKey(t.label) })).sort((a, b) => b.k.length - a.k.length);
+  const SUFFIX = { 'סכום': 'amount', 'סכום חודשי': 'amount', 'תשלום': 'amount', 'תשלום חודשי': 'amount',
+    'יתרת פתיחה': 'openingDebt', 'חוב התחלתי': 'openingDebt', 'יתרה': 'openingDebt',
+    'שיוך': 'status', 'סטטוס': 'status' };
+  for (const { tpl, k } of list) {
+    if (h === k) return { tplId: tpl.id, field: 'status' };
+    if (h.length > k.length && h.startsWith(k)) {
+      const tail = h.slice(k.length);
+      if (!/^[\s\-–—:_|/]/.test(tail)) continue;          // a separator is required
+      const rest = tail.replace(/^[\s\-–—:_|/]+/, '').replace(/_/g, ' ').trim();
+      if (SUFFIX[rest]) return { tplId: tpl.id, field: SUFFIX[rest] };
+    }
+  }
+  return null;
+}
+
+// Status cell → {ok, value: 'active' | 'suspended' | 'none' | null(no change)} or {ok:false, error}.
+function tfParseStatusCell(raw) {
+  const v = String(raw == null ? '' : raw).trim().toLowerCase();
+  if (v === '' || v === 'לא פעיל') return { ok: true, value: null };   // "לא פעיל" = what the export writes for an inactive account
+  if (['פעיל', 'פעילה', 'כן', 'yes', 'y', 'v', '✓', '1', 'true', 'active'].includes(v)) return { ok: true, value: 'active' };
+  if (['מושהה', 'מושהית', 'השהיה', 'מושעה', 'suspended', 'hold', 'pause', '⏸'].includes(v)) return { ok: true, value: 'suspended' };
+  if (['לא', 'no', 'n', '0', 'false', 'הסר', 'ללא', 'none', 'x', '✗'].includes(v)) return { ok: true, value: 'none' };
+  return { ok: false, error: 'ערך לא מזוהה ("' + String(raw).trim() + '") — פעיל / מושהה / לא' };
+}
+
+// Money cell → {ok, value: number | null(no change)} or {ok:false, error}.
+function tfParseMoneyCell(raw, allowNegative) {
+  let s = String(raw == null ? '' : raw).trim();
+  if (s === '') return { ok: true, value: null };
+  s = s.replace(/[₪,\s\u200e\u200f]/g, '');
+  if (!/^-?\d+(\.\d+)?$/.test(s)) return { ok: false, error: 'ערך לא מספרי' };
+  const n = Math.round(parseFloat(s) * 100) / 100;
+  if (!isFinite(n)) return { ok: false, error: 'ערך לא מספרי' };
+  if (n < 0 && !allowNegative) return { ok: false, error: 'ערך שלילי לא מותר' };
+  return { ok: true, value: n };
+}
+
+// GET /api/tenant-file-accounts — the columns + each member's cells, for the export.
+function tenantFileAccountExport(d) {
+  const all = (d.accountTemplates || []).filter(t => t && t.id);
+  const fixed = all.filter(t => (t.type || 'fixed') === 'fixed');
+  const headers = [];
+  fixed.forEach(tpl => headers.push(...tfAccHeaders(tpl)));
+  const byTenant = {};
+  (d.tenants || []).forEach(t => {
+    const row = [];
+    fixed.forEach(tpl => {
+      const a = accLinkedToTemplate(t, tpl, all);
+      if (!a) { row.push('', '', ''); return; }
+      row.push(a.active === false ? 'לא פעיל' : (a.suspended === true ? 'מושהה' : 'פעיל'));
+      row.push(parseFloat(a.amount) || 0);
+      row.push(Math.round((parseFloat(a.openingDebt) || 0) * 100) / 100);
+    });
+    byTenant[String(t.id)] = row;
+  });
+  return { ok: true, headers, templates: fixed.length, byTenant };
+}
+
+// Dry plan. input = { headers: [raw account headers], rows: [{ row, tenantId|null, name,
+// suspended, cells: [raw, aligned with headers] }] }. A row without tenantId is a NEW
+// member (preview only): it is simulated with the "חובה לכל החברים" accounts it will get.
+// The commit RE-PLANS against the stored data (never trusts a client plan) → idempotent.
+function planTenantFileAccounts(d, input) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const headers = (input && Array.isArray(input.headers)) ? input.headers : [];
+  const rows = (input && Array.isArray(input.rows)) ? input.rows : [];
+  const mk = getMonthKey(d.config || {});
+  const cols = [], unknown = [], computed = [], duplicate = [];
+  headers.forEach((h, idx) => {
+    const name = String(h == null ? '' : h).trim();
+    const p = tfParseAccountHeader(h, templates);
+    if (!p) { if (name) unknown.push(name); return; }
+    const tpl = templates.find(t => t.id === p.tplId);
+    if ((tpl.type || 'fixed') !== 'fixed') { computed.push(name); return; }
+    if (cols.some(c => c.tplId === p.tplId && c.field === p.field)) { duplicate.push(name); return; }
+    cols.push({ idx, tplId: p.tplId, field: p.field, header: name, label: crAccountKey(tpl.label) });
+  });
+  const tplIds = [];
+  cols.forEach(c => { if (!tplIds.includes(c.tplId)) tplIds.push(c.tplId); });
+  const byId = new Map((d.tenants || []).map(t => [String(t.id), t]));
+  const items = [], errors = [], warnings = [];
+  for (const r of rows) {
+    if (!r || typeof r !== 'object') continue;
+    const row = r.row, cells = Array.isArray(r.cells) ? r.cells : [];
+    let t, isNew = false;
+    if (r.tenantId !== undefined && r.tenantId !== null && r.tenantId !== '') {
+      t = byId.get(String(r.tenantId));
+      if (!t) { errors.push({ row, msg: (r.name || '') + ' — החבר לא נמצא במערכת; החשבונות שלו לא עודכנו' }); continue; }
+    } else {
+      isNew = true;
+      t = { id: '__new_' + row, name: r.name || '', suspended: r.suspended === true, extraAccounts: [] };
+      applyRequiredAccounts(templates, t, mk);
+    }
+    const name = t.name || r.name || String(t.id);
+    for (const tplId of tplIds) {
+      const tpl = templates.find(x => x.id === tplId);
+      const label = crAccountKey(tpl.label);
+      const cell = f => { const c = cols.find(x => x.tplId === tplId && x.field === f); return c ? cells[c.idx] : ''; };
+      const st = tfParseStatusCell(cell('status'));
+      const am = tfParseMoneyCell(cell('amount'), false);
+      const od = tfParseMoneyCell(cell('openingDebt'), true);
+      const bad = [];
+      if (!st.ok) bad.push(label + ': ' + st.error);
+      if (!am.ok) bad.push(label + ' – סכום: ' + am.error);
+      if (!od.ok) bad.push(label + ' – יתרת פתיחה: ' + od.error);
+      if (bad.length) { errors.push({ row, msg: name + ' — ' + bad.join(' · ') + ' — החשבון לא עודכן' }); continue; }
+      const status = st.value, amount = am.value, opening = od.value;
+      if (status === null && amount === null && opening === null) continue;        // nothing asked → untouched
+      const base = { row, tid: isNew ? null : String(t.id), isNew, name, tplId, label };
+      const acc = accLinkedToTemplate(t, tpl, templates);
+      if (status === 'none') {
+        if (amount !== null || opening !== null) { errors.push({ row, msg: name + ' · ' + label + ' — "לא" יחד עם סכום או יתרה — סתירה, החשבון לא עודכן' }); continue; }
+        if (!acc) continue;
+        if (!isNew && accHasMoney(d, t.id, acc)) {
+          warnings.push({ row, msg: name + ' · ' + label + ' — יש יתרה או היסטוריית תשלומים, החשבון לא הוסר. כדי לעצור גבייה כתבו "מושהה".' });
+          continue;
+        }
+        items.push(Object.assign(base, { action: 'delete', changes: ['הסרת החשבון'] }));
+        continue;
+      }
+      if (!acc) {
+        if ((t.extraAccounts || []).some(a => a && tplNameKey(a.label) === tplNameKey(tpl.label))) {
+          errors.push({ row, msg: name + ' · ' + label + ' — לחבר יש חשבון באותו שם שאינו מקושר להגדרה; לא נוצר חשבון כפול' });
+          continue;
+        }
+        if (status === null) {
+          warnings.push({ row, msg: name + ' · ' + label + ' — הוזנו סכום או יתרה, אבל החבר לא משויך לחשבון. כדי לשייך כתבו "פעיל" או "מושהה" בעמודה "' + label + '".' });
+          continue;
+        }
+        const amt = amount !== null ? amount : r2(parseFloat(tpl.amount) || 0);
+        const changes = ['שיוך חדש' + (status === 'suspended' ? ' (מושהה)' : ''), 'סכום ' + amt];
+        if (opening !== null && opening !== 0) changes.push('יתרת פתיחה ' + opening);
+        if (!(amt > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
+        items.push(Object.assign(base, { action: 'create', status, amount, openingDebt: opening, changes }));
+        continue;
+      }
+      const ch = [], set = {};
+      const curAmt = r2(parseFloat(acc.amount) || 0);
+      if (amount !== null && curAmt !== amount) {
+        ch.push('סכום: ' + curAmt + ' → ' + amount); set.amount = amount;
+        if (!(amount > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
+      }
+      const curOd = r2(parseFloat(acc.openingDebt) || 0);
+      if (opening !== null && curOd !== opening) { ch.push('יתרת פתיחה: ' + curOd + ' → ' + opening); set.openingDebt = opening; }
+      if (status !== null) {
+        if (acc.active === false) { ch.push('חשבון "לא פעיל" → פעיל (היתרה תוצג ותיגבה)'); set.reactivate = true; }
+        const curS = acc.suspended === true;
+        if (status === 'suspended' && !curS) { ch.push('סטטוס: פעיל → מושהה'); set.suspended = true; }
+        if (status === 'active' && curS) { ch.push('סטטוס: מושהה → פעיל'); set.suspended = false; }
+      }
+      if (!ch.length) continue;                                                     // same values → no-op
+      items.push(Object.assign(base, { action: 'update', set, changes: ch }));
+    }
+  }
+  const counts = { create: 0, update: 0, delete: 0 };
+  items.forEach(it => { counts[it.action]++; });
+  return { ok: true, mk, templates: templates.length,
+    columns: { recognized: cols.map(c => ({ header: c.header, label: c.label, field: c.field })), unknown, computed, duplicate },
+    items, errors, warnings, counts };
+}
+
+// Apply a plan made against THIS store (the route re-plans just before). Belts re-check
+// the link (no twin) and the money guard (never delete an account that has money).
+function commitTenantFileAccounts(d, plan) {
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const byId = new Map((d.tenants || []).map(t => [String(t.id), t]));
+  let created = 0, updated = 0, deleted = 0;
+  for (const it of (plan.items || [])) {
+    if (it.tid === null || it.tid === undefined) continue;                          // preview-only (new member)
+    const t = byId.get(String(it.tid)); if (!t) continue;
+    const tpl = templates.find(x => x.id === it.tplId); if (!tpl) continue;
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (it.action === 'create') {
+      if (acc) continue;
+      if (!Array.isArray(t.extraAccounts)) t.extraAccounts = [];
+      const a = accFromTemplate(tpl, t, plan.mk, { amount: it.amount, suspended: it.status === 'suspended' });
+      if (it.openingDebt !== null && it.openingDebt !== undefined) a.openingDebt = it.openingDebt;
+      t.extraAccounts.push(a); created++;
+    } else if (it.action === 'update') {
+      if (!acc) continue;
+      const prev = Object.assign({}, acc);
+      const s = it.set || {};
+      if (s.amount !== undefined) acc.amount = s.amount;
+      if (s.openingDebt !== undefined) acc.openingDebt = s.openingDebt;
+      if (s.reactivate === true) acc.active = true;
+      if (s.suspended === true) acc.suspended = true;
+      if (s.suspended === false) { delete acc.suspended; delete acc.suspendedByApply; }
+      if (s.suspended !== undefined) normalizeSuspensionPeriods(prev, acc, plan.mk);
+      if (acc.templateId !== tpl.id) acc.templateId = tpl.id;
+      updated++;
+    } else if (it.action === 'delete') {
+      if (!acc || accHasMoney(d, t.id, acc)) continue;
+      t.extraAccounts = t.extraAccounts.filter(x => x !== acc); deleted++;
+    }
+  }
+  return { created, updated, deleted };
+}
+
 // ── Account Templates (config-level) ──────────────────────────
 // GET /api/account-templates — returns building-level account template list
 app.get('/api/account-templates', authMiddleware, (req, res) => {
@@ -9612,6 +9830,26 @@ app.post('/api/account-templates/:id/start-billing', authMiddleware, (req, res) 
 app.get('/api/validate-collection', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
   res.json(validateCollection(d));
+});
+
+// ── v2.14.75 (1ב) — tenants file: extra-account columns ──────────────────────
+// GET: columns + cells for the export. POST: dryRun (DEFAULT) → plan; dryRun:false →
+// re-plan against the stored data and apply. Writes ONLY tenants (definitions).
+app.get('/api/tenant-file-accounts', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json(tenantFileAccountExport(d));
+});
+
+app.post('/api/tenant-file-accounts', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  if (!Array.isArray(b.headers) || !Array.isArray(b.rows)) return res.json({ ok: false, error: 'בקשה לא תקינה' });
+  if (b.headers.length > 300 || b.rows.length > 5000) return res.json({ ok: false, error: 'הקובץ גדול מדי' });
+  const plan = planTenantFileAccounts(d, { headers: b.headers, rows: b.rows });
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitTenantFileAccounts(d, plan);
+  if (r.created || r.updated || r.deleted) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, created: r.created, updated: r.updated, deleted: r.deleted, errors: plan.errors, warnings: plan.warnings });
 });
 
 // ── Per-Tenant Account Overrides ──────────────────────────────

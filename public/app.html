@@ -1909,7 +1909,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.74';
+const HTML_VERSION = '2.14.75';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3697,10 +3697,14 @@ var TENANT_EXPORT_COLS = [
   { key:'suspended',     he:'סטטוס' }
 ];
 
-function tenantExportRows() {
-  var header = TENANT_EXPORT_COLS.map(function(c){ return c.he; });
+// v2.14.75 (1ב) — `acc` = server-built extra-account columns (GET /api/tenant-file-accounts):
+// {headers, byTenant:{id:[cells]}}. Absent → the file is exactly the pre-1ב file.
+function tenantExportRows(acc) {
+  var accHeaders = (acc && Array.isArray(acc.headers)) ? acc.headers : [];
+  var header = TENANT_EXPORT_COLS.map(function(c){ return c.he; }).concat(accHeaders);
   var rows = [header];
   data.tenants.forEach(function(t){
+    var accCells = accHeaders.length ? ((acc.byTenant || {})[String(t.id)] || accHeaders.map(function(){ return ''; })) : [];
     rows.push([
       t.id,
       t.name || '',
@@ -3713,14 +3717,32 @@ function tenantExportRows() {
       t.aptNumber || '',
       t.gushChelka || '',
       (t.suspended === true) ? 'מושהה' : ''
-    ]);
+    ].concat(accCells));
   });
   return rows;
 }
 
-function exportTenantsCSV() {
+// v2.14.75 (1ב) — extra-account columns for the tenants file, built by the server
+// (one implementation for the names, the link and the cells → export → import = no-op).
+async function tfFetchAccountCols() {
+  try {
+    const r = await fetch(API + '/tenant-file-accounts');
+    const d = await r.json();
+    if (d && d.ok && Array.isArray(d.headers)) return d;
+  } catch (e) {}
+  return null;
+}
+// '' when nothing is missing; a note when the building has extra accounts but the
+// columns could not be fetched (the file is still safe: absent columns change nothing).
+function tfExportNote(acc) {
+  var hasExtras = (data.tenants || []).some(function(t){ return (t.extraAccounts || []).length > 0; });
+  return (!acc && hasExtras) ? ' (ללא עמודות החשבונות הנוספים — נסו שוב)' : '';
+}
+
+async function exportTenantsCSV() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
-  var rows = tenantExportRows();
+  var acc = await tfFetchAccountCols();
+  var rows = tenantExportRows(acc);
   // Build CSV; quote every field, double internal quotes (Excel-safe).
   var csv = rows.map(function(r){
     return r.map(function(cell){
@@ -3735,18 +3757,20 @@ function exportTenantsCSV() {
   link.href = url; link.download = 'דיירים-ועד-הבית.csv';
   link.click();
   URL.revokeObjectURL(url);
-  toast('📥 קובץ CSV יוצא!','success');
+  toast('📥 קובץ CSV יוצא!' + tfExportNote(acc),'success');
 }
 
-function exportTenantsExcel() {
+async function exportTenantsExcel() {
   if(!data.tenants.length){toast('⚠️ אין דיירים לייצא','error');return;}
-  var rows = tenantExportRows();
+  var acc = await tfFetchAccountCols();
+  var rows = tenantExportRows(acc);
   const ws=XLSX.utils.aoa_to_sheet(rows);
-  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:12}];
+  ws['!cols'] = [{wch:16},{wch:22},{wch:16},{wch:28},{wch:30},{wch:14},{wch:14},{wch:14},{wch:12},{wch:14},{wch:12}]
+    .concat(((acc && acc.headers) || []).map(function(){ return {wch:16}; }));
   const wb=XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb,ws,'דיירים');
   XLSX.writeFile(wb,'דיירים-ועד-הבית.xlsx');
-  toast('📤 קובץ Excel יוצא!','success');
+  toast('📤 קובץ Excel יוצא!' + tfExportNote(acc),'success');
 }
 
 // v2.14.41 (B): on-demand report of search-keywords shared by 2+ members. This
@@ -4086,11 +4110,78 @@ function processImportFile(file) {
       }
       const plan=planTenantImport(data.tenants,headerKeys,aoa.slice(1));
       window._importPlan=plan;
-      renderImportPreview(plan,file.name);
+      // v2.14.75 (1ב) — extra-account columns are checked by the server BEFORE the preview.
+      tfAttachAccountPlan(plan,aoa[0],aoa.slice(1)).then(function(){
+        if(window._importPlan===plan) renderImportPreview(plan,file.name);
+      });
     }catch(err){toast('\u274c \u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e7\u05e8\u05d9\u05d0\u05ea \u05d4\u05e7\u05d5\u05d1\u05e5: '+err.message,'error');}
   };
   reader.onerror=function(){toast('\u274c \u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e7\u05e8\u05d9\u05d0\u05ea \u05d4\u05e7\u05d5\u05d1\u05e5','error');};
   reader.readAsArrayBuffer(file);
+}
+
+// ── v2.14.75 (1ב) — extra-account columns of the tenants file ─────────
+// Columns the main importer does not know (tenantHeaderToKey → null) are sent to the
+// server, which matches them to the account definitions and plans the changes (dryRun).
+// Rows: every matched/new row of the main plan; a new member has no id until confirm.
+function tfAccountInput(plan, headerRow, dataRows) {
+  var idx = [];
+  (headerRow || []).forEach(function(h, i){ if (String(h == null ? '' : h).trim() && !tenantHeaderToKey(h)) idx.push(i); });
+  if (!idx.length) return null;
+  var rows = [];
+  function take(item, tenantId) {
+    var raw = (dataRows || [])[item.row - 2] || [];
+    rows.push({ row: item.row, tenantId: tenantId, name: item.name, suspended: item.fields && item.fields.suspended === true,
+      cells: idx.map(function(i){ return raw[i] == null ? '' : String(raw[i]); }) });
+  }
+  (plan.updates || []).forEach(function(u){ take(u, u.id); });
+  (plan.creates || []).forEach(function(c){ take(c, (c.newId !== undefined && c.newId !== null) ? c.newId : null); });
+  return { headers: idx.map(function(i){ return String(headerRow[i]).trim(); }), rows: rows };
+}
+
+async function tfAttachAccountPlan(plan, headerRow, dataRows) {
+  var inp = tfAccountInput(plan, headerRow, dataRows);
+  if (!inp) return;
+  plan.accSource = { headerRow: headerRow, dataRows: dataRows };
+  try {
+    var r = await fetch(API + '/tenant-file-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ headers: inp.headers, rows: inp.rows, dryRun: true }) });
+    var d = await r.json();
+    if (d && d.ok) plan.accPlan = d; else plan.accError = (d && d.error) || 'שגיאה';
+  } catch (e) { plan.accError = 'השרת לא בדק את עמודות החשבונות'; }
+}
+
+// Preview block. A building without account definitions sees nothing (unchanged preview).
+function tfRenderAccountPlan(plan) {
+  var esc = function(x){ return String(x == null ? '' : x).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); };
+  var hasExtras = (data.tenants || []).some(function(t){ return (t.extraAccounts || []).length > 0; });
+  if (!plan.accPlan) {
+    if (plan.accError && hasExtras) return '<div class="import-row warn">⚠️ עמודות החשבונות הנוספים לא נבדקו (' + esc(plan.accError) + ') — הן לא ייובאו. שאר הנתונים כן.</div>';
+    return '';
+  }
+  var P = plan.accPlan;
+  if (!P.templates) return '';
+  var cols = P.columns || {};
+  var h = '<div class="tf-acc-plan" style="margin-top:10px;padding-top:8px;border-top:1px dashed var(--border);">';
+  h += '<div style="font-size:0.82rem;font-weight:600;margin-bottom:6px;">🧾 חשבונות נוספים — ➕ שיוך: <strong>' + P.counts.create + '</strong> · 🔄 עדכון: <strong>' + P.counts.update + '</strong> · 🗑️ הסרה: <strong>' + P.counts.delete + '</strong></div>';
+  if ((cols.recognized || []).length) h += '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:4px;">עמודות שזוהו: ' + cols.recognized.map(function(c){ return esc(c.header); }).join(' · ') + '</div>';
+  else h += '<div class="import-row warn">ℹ️ לא נמצאו בקובץ עמודות של חשבונות נוספים — החשבונות לא ישתנו.</div>';
+  if ((cols.unknown || []).length) h += '<div class="import-row warn">ℹ️ עמודות שלא זוהו (לא ייובאו): ' + cols.unknown.map(esc).join(' · ') + '</div>';
+  if ((cols.computed || []).length) h += '<div class="import-row warn">ℹ️ חשבון מחושב עדיין לא נתמך בקובץ דיירים: ' + cols.computed.map(esc).join(' · ') + '</div>';
+  if ((cols.duplicate || []).length) h += '<div class="import-row warn">ℹ️ עמודה כפולה (רק הראשונה נקראת): ' + cols.duplicate.map(esc).join(' · ') + '</div>';
+  (P.errors || []).forEach(function(er){ h += '<div class="import-row err">❌ שורה ' + er.row + ': ' + esc(er.msg) + '</div>'; });
+  (P.warnings || []).forEach(function(w){ h += '<div class="import-row warn">⚠️ שורה ' + w.row + ': ' + esc(w.msg) + '</div>'; });
+  var ICON = { create: '➕', update: '🔄', 'delete': '🗑️' };
+  (P.items || []).forEach(function(it){
+    h += '<div class="import-row ' + (it.action === 'delete' ? 'warn' : 'ok') + '">' + ICON[it.action] + ' ' + esc(it.name) + ' · ' + esc(it.label) + ' — ' + esc((it.changes || []).join(' · ')) + '</div>';
+  });
+  h += '</div>';
+  return h;
+}
+
+function tfAccountCommitNeeded(plan) {
+  var P = plan && plan.accPlan;
+  return !!(P && P.counts && (P.counts.create + P.counts.update + P.counts['delete']) > 0 && plan.accSource);
 }
 
 function renderImportPreview(plan,fileName){
@@ -4112,6 +4203,7 @@ function renderImportPreview(plan,fileName){
 
   plan.updates.forEach(function(u){ html+='<div class="import-row ok">\ud83d\udd04 '+esc(u.name)+' \u2014 \u05e2\u05d3\u05db\u05d5\u05df</div>'; });
   plan.creates.forEach(function(c){ html+='<div class="import-row ok">\u2795 '+esc(c.name)+' | '+esc(c.fields.phone)+'</div>'; });
+  html+=tfRenderAccountPlan(plan);   // v2.14.75 (1ב)
   html+='</div>';
 
   const total=plan.updates.length+plan.creates.length;
@@ -4151,6 +4243,7 @@ async function confirmImport() {
     };
     // v2.14.34 — new tenant starts suspended only if the file says so.
     if (c.fields.suspended === true) nt.suspended = true;
+    c.newId = nt.id;   // v2.14.75 (1ב) — the extra-account columns of this row follow it
     data.tenants.push(nt);
   });
   const n=plan.updates.length+plan.creates.length;
@@ -4159,11 +4252,31 @@ async function confirmImport() {
   try{
     const saveR=await fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tenants:data.tenants})}).then(function(r){return r.json();}).catch(function(){return {ok:true};});
     if(saveR&&saveR.limitError){toast('\u26a0\ufe0f '+saveR.error,'error');await loadData();render();return;}
+    // v2.14.75 (1ב) — extra-account columns: AFTER the members exist (new ones got their
+    // "חובה לכל החברים" accounts on the save above). The server re-plans and applies.
+    let accNote='';
+    if(tfAccountCommitNeeded(plan)){
+      const accR=await tfCommitAccountPlan(plan);
+      if(accR&&accR.ok) accNote=' · חשבונות נוספים: '+accR.created+' שיוכים, '+accR.updated+' עדכונים, '+accR.deleted+' הסרות';
+      else accNote=' · ⚠️ החשבונות הנוספים לא עודכנו: '+((accR&&accR.error)||'שגיאה');
+    }
     // v2.14.14 — reload from server BEFORE render so server-computed fields
     // (monthBalances / totalDebt / creditBalance) refresh. render() alone shows
     // stale local tenant data → user had to press F5 to see the update.
-    await loadData(); render(); toast('\u2705 \u05d9\u05d5\u05d1\u05d0\u05d5 '+n+' \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd!','success');
+    await loadData(); render(); toast('\u2705 \u05d9\u05d5\u05d1\u05d0\u05d5 '+n+' \u05d3\u05d9\u05d9\u05e8\u05d9\u05dd!'+accNote,(accNote.indexOf('\u26a0')>=0)?'error':'success');
   }catch(e){toast('\u274c \u05e9\u05d2\u05d9\u05d0\u05d4 \u05d1\u05e9\u05de\u05d9\u05e8\u05d4: '+e.message,'error');}
+}
+
+// v2.14.75 (1ב) — commit the extra-account columns (dryRun:false). New members now carry
+// the id assigned in confirmImport (c.newId).
+async function tfCommitAccountPlan(plan) {
+  var inp = tfAccountInput(plan, plan.accSource.headerRow, plan.accSource.dataRows);
+  if (!inp) return { ok: true, created: 0, updated: 0, deleted: 0 };
+  try {
+    var r = await fetch(API + '/tenant-file-accounts', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ headers: inp.headers, rows: inp.rows, dryRun: false }) });
+    return await r.json();
+  } catch (e) { return { ok: false, error: e.message }; }
 }
 
 async function sendOne(id) {
@@ -8031,7 +8144,73 @@ function annualOffsetNote(tenant, monthName) {
   return o.monthCharge + ' ₪ עבור החודש · ' + parts.join(' · ');
 }
 
-function exportAnnualPayments() {
+// v2.14.75 (1ב) — the yearly export gets ONE SHEET PER EXTRA ACCOUNT. Numbers are
+// CONSUMED from the server collection report (rows=all): crExtraMonth per month and
+// extraAccountSplit for the balance — never re-derived here (one source for extras).
+function annualAccountSheetsData(rep) {
+  if (!rep || !Array.isArray(rep.members)) return [];
+  var months = (rep.range && rep.range.months) || [];
+  var keys = [], labels = {};
+  rep.members.forEach(function(m){
+    (m.rows || []).forEach(function(r){ if (r.account !== 'main' && keys.indexOf(r.account) < 0) { keys.push(r.account); labels[r.account] = r.label; } });
+    ((m.balance && m.balance.accounts) || []).forEach(function(b){ if (b.key !== 'main' && keys.indexOf(b.key) < 0) { keys.push(b.key); labels[b.key] = b.label; } });
+  });
+  keys.sort(function(a, b){ return String(labels[a]).localeCompare(String(labels[b]), 'he'); });
+  var ST = { paid: 'שולם', partial: 'שולם חלקית', unpaid: 'לא שולם', exempt: 'פטור' };
+  var r2 = function(n){ return Math.round(n * 100) / 100; };
+  return keys.map(function(key){
+    var header = ['דירה', 'שם'];
+    months.forEach(function(M){ var mn = MONTHS_HE[Number(M.slice(5)) - 1]; header.push(mn + ' – סטטוס', mn + ' – שולם'); });
+    header.push('סה"כ חויב', 'סה"כ שולם', 'פער', 'יתרה נוכחית');
+    var rows = [header];
+    var members = rep.members.filter(function(m){
+      return (m.rows || []).some(function(r){ return r.account === key; })
+        || ((m.balance && m.balance.accounts) || []).some(function(b){ return b.key === key; });
+    }).slice().sort(function(a, b){ return String(a.name).localeCompare(String(b.name), 'he'); });
+    members.forEach(function(m){
+      var row = [m.unit || '', m.name || ''];
+      var ch = 0, pd = 0, gp = 0;
+      months.forEach(function(M){
+        var c = (m.rows || []).filter(function(r){ return r.account === key && r.month === M; })[0];
+        if (!c) { row.push('', ''); return; }
+        row.push(ST[c.status] || c.status || '', c.paid > 0 ? c.paid : '');
+        ch += c.charged || 0; pd += c.paid || 0; gp += c.gap || 0;
+      });
+      var b = ((m.balance && m.balance.accounts) || []).filter(function(x){ return x.key === key; })[0];
+      var bal = b ? r2((b.debt || 0) - (b.credit || 0)) : 0;     // + = חוב, − = זכות (as in the main sheet)
+      row.push(r2(ch), r2(pd), gp > 0 ? -r2(gp) : '', bal !== 0 ? bal : '');
+      rows.push(row);
+    });
+    return { key: key, label: labels[key], rows: rows };
+  });
+}
+
+// Appends the account sheets to `wb`. Returns a note for the toast ('' = nothing to say).
+async function annualAppendAccountSheets(wb, year) {
+  var hasExtras = (data.tenants || []).some(function(t){ return (t.extraAccounts || []).length > 0; });
+  if (!hasExtras) return '';
+  var rep = null;
+  try {
+    var r = await fetch(API + '/collection-report?from=' + year + '-01&to=' + year + '-12&rows=all');
+    rep = await r.json();
+  } catch (e) { rep = null; }
+  if (!rep || !Array.isArray(rep.members)) return ' (ללא גיליונות החשבונות הנוספים' + (rep && rep.error ? ': ' + rep.error : '') + ')';
+  var sheets = annualAccountSheetsData(rep);
+  var used = {};
+  sheets.forEach(function(sh){
+    var nm = ('חשבון ' + sh.label).replace(/[\[\]:*?\/\\]/g, ' ').slice(0, 31);
+    while (used[nm]) nm = nm.slice(0, 29) + '_' + Object.keys(used).length;
+    used[nm] = true;
+    var ws = XLSX.utils.aoa_to_sheet(sh.rows);
+    var w = [{ wch: 7 }, { wch: 22 }];
+    for (var i = 2; i < sh.rows[0].length; i++) w.push({ wch: 12 });
+    ws['!cols'] = w;
+    XLSX.utils.book_append_sheet(wb, ws, nm);
+  });
+  return sheets.length ? ' + ' + sheets.length + ' גיליונות חשבונות נוספים' : '';
+}
+
+async function exportAnnualPayments() {
   if (!data.tenants || !data.tenants.length) { toast('⚠️ אין דיירים', 'error'); return; }
 
   const cfg    = data.config || {};
@@ -8185,8 +8364,9 @@ function exportAnnualPayments() {
 
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'מעקב תשלומים ' + year);
+  const accNote = await annualAppendAccountSheets(wb, year);   // v2.14.75 (1ב)
   XLSX.writeFile(wb, 'מעקב-תשלומים-' + year + '.xlsx');
-  toast('📊 מעקב שנתי יוצא!', 'success');
+  toast('📊 מעקב שנתי יוצא!' + accNote, 'success');
 }
 // ────────────────────────────────────────────────────────────────
 

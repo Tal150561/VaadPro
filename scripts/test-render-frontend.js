@@ -3211,4 +3211,176 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: link + 🩺 report', gd.includes('🔗 החשבון של החבר מקושר להגדרה') && gd.includes('🩺 בדיקת תקינות'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.75 (1ב) — tenants file: extra-account columns + annual export per account.
+// EXECUTED page code; the round trip runs the REAL page importer against the REAL
+// server planner (one implementation for header names, link and cells).
+// ════════════════════════════════════════════════════════════════
+{
+  const S = require('./test-lib').loadServer();
+  const gd = readSource('public/vaadpro-guide.js');
+  const MONTHS_HE = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const colsDecl = (app.match(/^var TENANT_EXPORT_COLS = \[[\s\S]*?^\];/m) || [''])[0];
+  t.eq('precondition: TENANT_EXPORT_COLS found', colsDecl.length > 0, true);
+  const load = (names, globals) => runInSandbox(colsDecl + '\n' + extractFunctions(app, names) + '\nmodule.exports={' + names.join(',') + '};', globals || {});
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const store = () => ({
+    config: cfg,
+    accountTemplates: [{ id: 'tpl_ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true }],
+    tenants: [
+      { id: 1, name: 'אור', phone: '0501111111', keywords: 'אור', openingDebt: 0 },
+      { id: 2, name: 'בן', phone: '0502222222', keywords: 'בן', openingDebt: 230, extraAccounts: [{ id: 'b1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 120 }] },
+      { id: 3, name: 'גיל', phone: '0503333333', keywords: 'גיל', suspended: true, extraAccounts: [{ id: 'g1', label: 'ביטוח מבנה', amount: 55.5, openingDebt: -40, suspended: true }] }
+    ],
+    sentLog: {}, paymentHistory: {}
+  });
+
+  t.section('v2.14.75 (1ב) — export rows (EXECUTED tenantExportRows)');
+  {
+    const d = store();
+    const E = load(['tenantExportRows'], { data: d });
+    const plain = E.tenantExportRows();
+    t.eq('no account columns → exactly the pre-1ב file (11 columns)', [plain[0].length, plain[1].length], [11, 11]);
+    const acc = S.tenantFileAccountExport(d);
+    const rows = E.tenantExportRows(acc);
+    t.eq('header = 11 main + 3 per account', rows[0].slice(11), ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה']);
+    t.eq('cells per member from the server', rows.slice(1).map(r => r.slice(11)), [['', '', ''], ['פעיל', 50, 120], ['מושהה', 55.5, -40]]);
+    t.eq('main columns unchanged by the account columns', JSON.stringify(rows.map(r => r.slice(0, 11))), JSON.stringify(plain));
+    const N = load(['tfExportNote'], { data: d });
+    t.eq('note when extras exist but the columns could not be fetched', [N.tfExportNote(null).includes('ללא עמודות'), N.tfExportNote(acc)], [true, '']);
+    t.eq('…no note for a building without extras', load(['tfExportNote'], { data: { tenants: [{ id: 1 }] } }).tfExportNote(null), '');
+  }
+
+  t.section('v2.14.75 (1ב) — ROUND TRIP: page export → page importer → server planner = no change');
+  {
+    const d = store();
+    const E = load(['tenantExportRows', 'tenantHeaderToKey', 'parseMoneyCell', 'rowToFields', 'planTenantImport', 'tfAccountInput'], { data: d });
+    const aoa = E.tenantExportRows(S.tenantFileAccountExport(d)).map(r => r.map(v => v == null ? '' : String(v)));   // SheetJS raw:false
+    const plan = E.planTenantImport(d.tenants, aoa[0].map(E.tenantHeaderToKey), aoa.slice(1));
+    const inp = E.tfAccountInput(plan, aoa[0], aoa.slice(1));
+    t.eq('precondition: the 3 account columns are sent, main columns are not', inp.headers, ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה']);
+    t.eq('precondition: every member row goes with its id', inp.rows.map(r => r.tenantId), [1, 2, 3]);
+    const P = S.planTenantFileAccounts(d, inp);
+    t.eq('server plan: 3 columns recognized, nothing to change, no errors', [P.columns.recognized.length, P.items.length, P.errors.length, P.warnings.length], [3, 0, 0, 0]);
+    // one edit in "Excel": אור joins at 60 with opening 100
+    aoa[1][11] = 'פעיל'; aoa[1][12] = '60'; aoa[1][13] = '100';
+    const plan2 = E.planTenantImport(d.tenants, aoa[0].map(E.tenantHeaderToKey), aoa.slice(1));
+    const P2 = S.planTenantFileAccounts(d, E.tfAccountInput(plan2, aoa[0], aoa.slice(1)));
+    t.eq('…one edited row → exactly one create', P2.items.map(i => [i.name, i.action, i.changes]), [['אור', 'create', ['שיוך חדש', 'סכום 60', 'יתרת פתיחה 100']]]);
+    t.eq('main plan unaffected by the account columns (no new money-change lines)', plan2.updates.every(u => u.moneyChanges.length === 0), true);
+  }
+
+  t.section('v2.14.75 (1ב) — import input + preview (EXECUTED)');
+  {
+    const E = load(['tenantHeaderToKey', 'tfAccountInput'], {});
+    const header = ['שם', 'טלפון', 'ביטוח מבנה', 'הערות', ''];
+    const plan = { updates: [{ row: 2, id: 7, name: 'א', fields: {} }], creates: [{ row: 3, name: 'ב', fields: { suspended: true } }] };
+    const inp = E.tfAccountInput(plan, header, [['א', '050', 'פעיל', 'x', ''], ['ב', '052', 'מושהה', '', '']]);
+    t.eq('only columns the main importer does not know (empty header skipped)', inp.headers, ['ביטוח מבנה', 'הערות']);
+    t.eq('rows: update with id, new member without id (preview) + its main status', inp.rows.map(r => [r.row, r.tenantId, r.suspended, r.cells]), [[2, 7, false, ['פעיל', 'x']], [3, null, true, ['מושהה', '']]]);
+    plan.creates[0].newId = 99;
+    t.eq('after confirm the new member carries its new id', E.tfAccountInput(plan, header, [['א'], ['ב']]).rows[1].tenantId, 99);
+    t.eq('no unknown columns → null (no server call)', E.tfAccountInput(plan, ['שם', 'טלפון', 'סטטוס'], []), null);
+
+    const withExtras = { tenants: [{ id: 1, extraAccounts: [{ id: 'a' }] }] };
+    const R = load(['tfRenderAccountPlan'], { data: withExtras });
+    t.eq('no account plan, no error → nothing', R.tfRenderAccountPlan({}), '');
+    t.eq('server error + building with extras → warning (columns not imported)', R.tfRenderAccountPlan({ accError: 'x' }).includes('לא נבדקו'), true);
+    t.eq('server error + building WITHOUT extras → nothing (preview unchanged)', load(['tfRenderAccountPlan'], { data: { tenants: [] } }).tfRenderAccountPlan({ accError: 'x' }), '');
+    t.eq('building without definitions (templates 0) → nothing, even with unknown columns', R.tfRenderAccountPlan({ accPlan: { ok: true, templates: 0, columns: { unknown: ['הערות'] }, items: [], errors: [], warnings: [], counts: { create: 0, update: 0, delete: 0 } } }), '');
+    const h = R.tfRenderAccountPlan({ accPlan: { ok: true, templates: 1, counts: { create: 1, update: 1, delete: 1 },
+      columns: { recognized: [{ header: 'ביטוח מבנה' }], unknown: ['הערות'], computed: ['חשמל'], duplicate: [] },
+      errors: [{ row: 4, msg: 'ג — <רע>' }], warnings: [{ row: 5, msg: 'ד — אזהרה' }],
+      items: [{ name: 'א', label: 'ביטוח מבנה', action: 'create', changes: ['שיוך חדש', 'סכום 50'] }, { name: 'ב', label: 'ביטוח מבנה', action: 'update', changes: ['סכום: 50 → 65'] }, { name: 'ה', label: 'ביטוח מבנה', action: 'delete', changes: ['הסרת החשבון'] }] } });
+    t.eq('preview: counts line', h.includes('➕ שיוך: <strong>1</strong> · 🔄 עדכון: <strong>1</strong> · 🗑️ הסרה: <strong>1</strong>'), true);
+    t.eq('preview: recognized / unknown / computed columns', [h.includes('עמודות שזוהו: ביטוח מבנה'), h.includes('לא זוהו (לא ייובאו): הערות'), h.includes('חשבון מחושב עדיין לא נתמך בקובץ דיירים: חשמל')], [true, true, true]);
+    t.eq('preview: error escaped, warning, one line per item', [h.includes('❌ שורה 4: ג — &lt;רע&gt;'), h.includes('⚠️ שורה 5'), h.includes('➕ א · ביטוח מבנה — שיוך חדש · סכום 50'), h.includes('🗑️ ה · ביטוח מבנה — הסרת החשבון')], [true, true, true, true]);
+    const N = load(['tfAccountCommitNeeded'], {});
+    t.eq('commit needed only with changes AND a source', [N.tfAccountCommitNeeded({ accPlan: { counts: { create: 0, update: 1, delete: 0 } }, accSource: {} }), N.tfAccountCommitNeeded({ accPlan: { counts: { create: 0, update: 0, delete: 0 } }, accSource: {} }), N.tfAccountCommitNeeded({})], [true, false, false]);
+  }
+
+  t.section('v2.14.75 (1ב) — server calls (EXECUTED with a fake fetch)');
+  global.__crRuns = global.__crRuns || [];
+  global.__crRuns.push((async () => {
+    const calls = [];
+    const fetch = async (url, opts) => { calls.push({ url, body: opts && opts.body ? JSON.parse(opts.body) : null }); return { json: async () => ({ ok: true, dryRun: true, templates: 1, counts: { create: 1, update: 0, delete: 0 }, items: [], errors: [], warnings: [], columns: {} }) }; };
+    const E = load(['tenantHeaderToKey', 'tfAccountInput', 'tfAttachAccountPlan', 'tfCommitAccountPlan'], { fetch, API: '/api', JSON });
+    const header = ['שם', 'טלפון', 'ביטוח מבנה'];
+    const rows = [['ב', '052', 'פעיל']];
+    const plan = { updates: [], creates: [{ row: 2, name: 'ב', fields: {} }] };
+    await E.tfAttachAccountPlan(plan, header, rows);
+    t.eq('preview: POST /api/tenant-file-accounts with dryRun:true, new member without id', [calls[0].url, calls[0].body.dryRun, calls[0].body.rows[0].tenantId, calls[0].body.headers], ['/api/tenant-file-accounts', true, null, ['ביטוח מבנה']]);
+    t.eq('plan keeps the server answer + the source rows', [!!plan.accPlan, plan.accSource.dataRows === rows], [true, true]);
+    plan.creates[0].newId = 77;
+    await E.tfCommitAccountPlan(plan);
+    t.eq('commit: dryRun:false and the NEW member\'s id', [calls[1].body.dryRun, calls[1].body.rows[0].tenantId], [false, 77]);
+    const p2 = { updates: [{ row: 2, id: 1, name: 'א', fields: {} }], creates: [] };
+    await E.tfAttachAccountPlan(p2, ['שם', 'טלפון', 'סטטוס'], [['א', '050', '']]);
+    t.eq('file without account columns → NO server call, no plan', [calls.length, p2.accPlan, p2.accSource], [2, undefined, undefined]);
+    const bad = load(['tenantHeaderToKey', 'tfAccountInput', 'tfAttachAccountPlan'], { fetch: async () => { throw new Error('down'); }, API: '/api', JSON });
+    const p3 = { updates: [{ row: 2, id: 1, name: 'א', fields: {} }], creates: [] };
+    await bad.tfAttachAccountPlan(p3, header, rows);
+    t.eq('server down → accError (the preview warns; nothing is committed)', [!!p3.accError, p3.accPlan], [true, undefined]);
+  })());
+
+  t.section('v2.14.75 (1ב) — annual export: one sheet per account from the REAL collection report');
+  {
+    const d = store();
+    const mk = S.getMonthKey(cfg), em = S.getEffectiveMonth(cfg);
+    d.sentLog['2__acc__b1_' + em] = 'manual_paid_x_amount_30';                          // בן paid 30 of 50 this month
+    const rep = S.buildCollectionReport(d, { from: mk.slice(0, 4) + '-01', to: mk.slice(0, 4) + '-12', allRows: true });
+    const A = load(['annualAccountSheetsData'], { MONTHS_HE });
+    const sh = A.annualAccountSheetsData(rep);
+    t.eq('precondition: the report carries rows for the extra account', rep.members.some(m => (m.rows || []).some(r => r.account === 'x:ביטוח מבנה')), true);
+    t.eq('one sheet: ביטוח מבנה (main account NOT duplicated here)', sh.map(s => s.label), ['ביטוח מבנה']);
+    const hdr = sh[0].rows[0];
+    t.eq('header: דירה, שם, month pairs, 4 totals', [hdr[0], hdr[1], hdr[hdr.length - 4], hdr[hdr.length - 1]], ['דירה', 'שם', 'סה"כ חויב', 'יתרה נוכחית']);
+    const ben = sh[0].rows.find(r => r[1] === 'בן');
+    const mi = hdr.indexOf(MONTHS_HE[Number(mk.slice(5)) - 1] + ' – סטטוס');
+    t.eq('בן this month: partial, paid 30 (from the server cell)', [ben[mi], ben[mi + 1]], ['שולם חלקית', 30]);
+    const split = S.extraAccountSplit(d, d.tenants[1], d.tenants[1].extraAccounts[0], mk, em);
+    t.eq('בן balance = the single source (extraAccountSplit owedNow)', ben[ben.length - 1], split.owedNow);
+    const gil = sh[0].rows.find(r => r[1] === 'גיל');
+    t.eq('גיל: credit 40 shown negative (same sign as the main sheet)', gil[gil.length - 1], -40);
+    t.eq('member without the account is not listed', sh[0].rows.some(r => r[1] === 'אור'), false);
+    t.eq('no report / no extras → no sheets', [A.annualAccountSheetsData(null), A.annualAccountSheetsData({ members: [{ rows: [{ account: 'main' }] }], range: { months: [] } })], [[], []]);
+  }
+  global.__crRuns.push((async () => {
+    const appended = [], calls = [];
+    const XLSX = { utils: { aoa_to_sheet: rows => ({ rows }), book_append_sheet: (wb, ws, nm) => appended.push(nm) } };
+    const rep = { range: { months: ['2026-10'] }, members: [{ name: 'בן', unit: '2', rows: [{ month: '2026-10', account: 'x:ביטוח/מבנה', label: 'ביטוח/מבנה', charged: 50, paid: 50, gap: 0, status: 'paid' }], balance: { accounts: [] } }] };
+    const fetch = async url => { calls.push(url); return { json: async () => rep }; };
+    const mk = data => load(['annualAccountSheetsData', 'annualAppendAccountSheets'], { MONTHS_HE, XLSX, fetch, API: '/api', data });
+    const note0 = await mk({ tenants: [{ id: 1 }] }).annualAppendAccountSheets({}, 2026);
+    t.eq('building without extras → no request, no sheet, no note', [note0, calls.length, appended.length], ['', 0, 0]);
+    const note = await mk({ tenants: [{ id: 2, extraAccounts: [{ id: 'b1' }] }] }).annualAppendAccountSheets({}, 2026);
+    t.eq('consumes /api/collection-report for the whole year, rows=all', calls[0], '/api/collection-report?from=2026-01&to=2026-12&rows=all');
+    t.eq('sheet name sanitized ("/" is illegal in Excel)', appended, ['חשבון ביטוח מבנה']);
+    t.eq('toast note counts the sheets', note, ' + 1 גיליונות חשבונות נוספים');
+    const denied = load(['annualAccountSheetsData', 'annualAppendAccountSheets'], { MONTHS_HE, XLSX, API: '/api', data: { tenants: [{ id: 2, extraAccounts: [{ id: 'b1' }] }] },
+      fetch: async () => ({ json: async () => ({ error: 'דוח גבייה אינו כלול בחבילה' }) }) });
+    t.eq('plan without collection reports → main sheet only + a note', (await denied.annualAppendAccountSheets({}, 2026)).includes('ללא גיליונות החשבונות הנוספים'), true);
+  })());
+
+  t.section('v2.14.75 (1ב) — wiring + guide');
+  {
+    const confirmBody = (app.match(/async function confirmImport\(\) \{[\s\S]*?^\}/m) || [''])[0];
+    const iPost = confirmBody.indexOf("fetch(API+'/data'"), iAcc = confirmBody.indexOf('tfCommitAccountPlan(plan)'), iLoad = confirmBody.lastIndexOf('await loadData(); render();');
+    t.eq('confirm: accounts committed AFTER the members are saved, BEFORE the reload', iPost > 0 && iAcc > iPost && iLoad > iAcc, true);
+    t.eq('confirm: a new member records its id for its account columns', confirmBody.includes('c.newId = nt.id;'), true);
+    t.eq('confirm: the limit error stops before the accounts', confirmBody.indexOf('limitError') < iAcc, true);
+    t.eq('processImportFile: account plan fetched before the preview', /function processImportFile[\s\S]*?tfAttachAccountPlan\(plan,aoa\[0\],aoa\.slice\(1\)\)\.then\(function\(\)\{\s*if\(window\._importPlan===plan\) renderImportPreview/.test(app), true);
+    t.eq('preview includes the account block', /function renderImportPreview[\s\S]*?html\+=tfRenderAccountPlan\(plan\);/.test(app), true);
+    t.eq('both exports fetch the server columns', /async function exportTenantsCSV\(\)[\s\S]*?await tfFetchAccountCols\(\)/.test(app) && /async function exportTenantsExcel\(\)[\s\S]*?await tfFetchAccountCols\(\)/.test(app), true);
+    t.eq('annual export appends the account sheets before writing', /async function exportAnnualPayments\(\)[\s\S]*?await annualAppendAccountSheets\(wb, year\);[^\n]*\n\s*XLSX\.writeFile/.test(app), true);
+    t.eq('page never derives extra-account money for the annual sheets (consumes the report)', /function annualAccountSheetsData[\s\S]*?^\}/m.test(app) && !/extraAccounts|openingDebt|sentLog/.test((app.match(/^function annualAccountSheetsData[\s\S]*?^\}/m) || [''])[0]), true);
+    t.eq('guide: account columns, tri-state, "לא" keeps money', ['🧾 חשבונות נוספים בקובץ הדיירים', '&lt;שם החשבון&gt; – יתרת פתיחה', 'תא ריק = בלי שינוי', 'לא מוחק חשבון שיש בו כסף'].every(x => gd.includes(x)), true);
+    t.eq('guide: annual export sheet per account', gd.includes('גיליון נפרד לכל חשבון'), true);
+    t.eq('guide: column names come from the account name in settings, several accounts', gd.includes('כפי שהוגדר בהגדרות</strong> — לכל חשבון עמודות משלו') && gd.includes('&lt;שם החשבון&gt; – יתרת פתיחה') && gd.includes('קרן שיפוצים – סכום'), true);
+    t.eq('guide: no fixed example column in the tenants-file table', gd.includes('<code>ביטוח מבנה – יתרת פתיחה</code>'), false);
+    t.eq('guide: renamed account → export a new file', gd.includes('שיניתם שם של חשבון בהגדרות?'), true);
+    t.eq('guide: the old "suspension of extra accounts is not in the import" line is gone', gd.includes('אינה נכללת בייבוא'), false);
+  }
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

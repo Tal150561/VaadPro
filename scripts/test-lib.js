@@ -87,7 +87,10 @@ const SERVER_FNS = [
   'tplNameKey', 'accTemplateFor', 'accHasMoney', 'accLinkedToTemplate', 'accFromTemplate',
   'planApplyTemplate', 'commitApplyTemplate', 'planRemoveTemplate', 'commitRemoveTemplate',
   'planStartBilling', 'commitStartBilling', 'countLinkedToTemplate', 'stampTemplateIds',
-  'applyRequiredAccounts', 'validateCollection'
+  'applyRequiredAccounts', 'validateCollection',
+  // v2.14.75 (1ב) — tenants file: extra-account columns
+  'tfAccHeaders', 'tfParseAccountHeader', 'tfParseStatusCell', 'tfParseMoneyCell',
+  'tenantFileAccountExport', 'planTenantFileAccounts', 'commitTenantFileAccounts'
 ];
 
 function loadServer() {

@@ -4600,4 +4600,221 @@ const v2_14_64_async = async () => {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.75 (1ב) — tenants file: extra-account columns (פ9). Three columns per FIXED
+// definition, tri-state (absent column / empty cell = untouched), export → import = no-op,
+// "לא" never deletes money, new members get required accounts once (never a twin).
+// REAL route bodies; every "nothing happened" assertion also asserts its precondition.
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const routeBody = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head);
+    return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const run = (head, store, body) => {
+    const code = routeBody(head); let out; const saves = [];
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves.push(Object.keys(p)); Object.assign(store, J(p)); } });
+    const names = Object.keys(g);
+    new Function(...names, 'req', 'res', code)(...names.map(n => g[n]),
+      { params: {}, body: body || {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const POST = "app.post('/api/tenant-file-accounts', authMiddleware, (req, res) => {";
+  const GET = "app.get('/api/tenant-file-accounts', authMiddleware, (req, res) => {";
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const MK = S.getMonthKey(cfg), EMk = S.getEffectiveMonth(cfg);
+  const fx = () => ({
+    config: J(cfg),
+    accountTemplates: [
+      { id: 'tpl_ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true },
+      { id: 'tpl_w', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 30 },
+      { id: 'tpl_el', label: 'חשמל', type: 'formula', frequency: 'monthly', amount: 0 }
+    ],
+    tenants: [
+      { id: 1, name: 'אור', phone: '0501111111' },
+      { id: 2, name: 'בן', phone: '0502222222', extraAccounts: [{ id: 'b1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 120, active: true }] },
+      { id: 3, name: 'גיל', phone: '0503333333', extraAccounts: [{ id: 'g1', label: 'ביטוח מבנה', amount: 55.5, openingDebt: -40, suspended: true, suspensions: [{ from: '2026-09', to: null }] }] },
+      { id: 4, name: 'דנה', phone: '0504444444', extraAccounts: [{ id: 'd1', templateId: 'tpl_w', label: 'מים', amount: 30, openingDebt: 0 }, { id: 'd2', label: 'ביטוח מבנה', amount: 50, openingDebt: 60, active: false }] }
+    ],
+    sentLog: { '1_אוקטובר': 'bank_import_x_300' }, paymentHistory: { '1': [{ month: MK, paid: true, amount: 300 }] }
+  });
+  const accOf = (st, tid, tplId) => (st.tenants.find(t => String(t.id) === String(tid)).extraAccounts || []).find(a => S.accTemplateFor(a, st.accountTemplates) && S.accTemplateFor(a, st.accountTemplates).id === tplId);
+  const H = ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה'];
+  const row = (n, tid, cells, extra) => Object.assign({ row: n, tenantId: tid, name: 'x' + n, cells }, extra || {});
+
+  t.section('v2.14.75 (1ב) — headers + cells');
+  {
+    const T = fx().accountTemplates;
+    t.eq('exact name → status', S.tfParseAccountHeader(' ביטוח  מבנה ', T), { tplId: 'tpl_ins', field: 'status' });
+    t.eq('"– סכום" / "-סכום" / "_סכום" → amount', ['ביטוח מבנה – סכום', 'ביטוח מבנה-סכום', 'ביטוח מבנה_סכום'].map(h => S.tfParseAccountHeader(h, T).field), ['amount', 'amount', 'amount']);
+    t.eq('"– יתרת פתיחה" / "– חוב התחלתי" → openingDebt', ['ביטוח מבנה – יתרת פתיחה', 'מים - חוב התחלתי'].map(h => [S.tfParseAccountHeader(h, T).tplId, S.tfParseAccountHeader(h, T).field]), [['tpl_ins', 'openingDebt'], ['tpl_w', 'openingDebt']]);
+    t.eq('no separator ("ביטוח מבנהסכום") → not a column', S.tfParseAccountHeader('ביטוח מבנהסכום', T), null);
+    t.eq('unknown suffix / unknown name → null', [S.tfParseAccountHeader('מים – הערה', T), S.tfParseAccountHeader('גינה', T)], [null, null]);
+    t.eq('longest name wins ("מים חמים – סכום" ≠ "מים")', S.tfParseAccountHeader('מים חמים – סכום', T.concat([{ id: 'tpl_hw', label: 'מים חמים', type: 'fixed' }])).tplId, 'tpl_hw');
+    t.eq('status values', ['', 'פעיל', 'כן', 'מושהה', 'לא', 'לא פעיל'].map(v => S.tfParseStatusCell(v).value), [null, 'active', 'active', 'suspended', 'none', null]);
+    t.eq('unrecognized status → error', S.tfParseStatusCell('אולי').ok, false);
+    t.eq('money: "" → null (no change), "1,200 ₪" → 1200, "0" → 0', [S.tfParseMoneyCell('', true).value, S.tfParseMoneyCell('1,200 ₪', true).value, S.tfParseMoneyCell('0', false).value], [null, 1200, 0]);
+    t.eq('money: negative allowed only for the opening balance', [S.tfParseMoneyCell('-40', true).value, S.tfParseMoneyCell('-40', false).ok, S.tfParseMoneyCell('abc', true).ok], [-40, false, false]);
+  }
+
+  t.section('v2.14.75 (1ב) — GET: export columns + cells (read-only)');
+  {
+    const st = fx(); const before = JSON.stringify(st);
+    const e = run(GET, st).out;
+    t.eq('read-only', JSON.stringify(st), before);
+    t.eq('3 columns per FIXED definition (computed חשמל excluded)', e.headers, H.concat(['מים', 'מים – סכום', 'מים – יתרת פתיחה']));
+    t.eq('not linked → empty cells', e.byTenant['1'], ['', '', '', '', '', '']);
+    t.eq('linked active with debt', e.byTenant['2'].slice(0, 3), ['פעיל', 50, 120]);
+    t.eq('linked by NAME only, suspended, credit, decimal amount', e.byTenant['3'].slice(0, 3), ['מושהה', 55.5, -40]);
+    t.eq('inactive account → "לא פעיל" (never silently "פעיל")', e.byTenant['4'], ['לא פעיל', 50, 60, 'פעיל', 30, 0]);
+    t.eq('building without definitions → no columns', run(GET, { config: J(cfg), tenants: [{ id: 1 }] }).out.headers, []);
+  }
+
+  t.section('v2.14.75 (1ב) — ROUND TRIP: export → import = no change');
+  {
+    const st = fx(); const e = run(GET, st).out; const before = JSON.stringify(st);
+    // what Excel hands back (raw:false → strings)
+    const rows = st.tenants.map((x, i) => row(i + 2, x.id, e.byTenant[String(x.id)].map(v => String(v))));
+    const dry = run(POST, st, { headers: e.headers, rows }).out;
+    t.eq('precondition: columns recognized (6)', dry.columns.recognized.length, 6);
+    t.eq('plan: nothing to do, no errors', [dry.items.length, dry.errors.length, dry.warnings.length], [0, 0, 0]);
+    const c = run(POST, st, { headers: e.headers, rows, dryRun: false });
+    t.eq('commit: 0 writes, store byte-identical', [c.out.created + c.out.updated + c.out.deleted, c.saves.length, JSON.stringify(st) === before], [0, 0, true]);
+  }
+
+  t.section('v2.14.75 (1ב) — import: create / update / suspend / remove');
+  {
+    const st = fx(); const before = J(st);
+    const rows = [
+      row(2, 1, ['פעיל', '', '200']),          // אור: new link, template amount, opening 200
+      row(3, 2, ['', '65', '']),               // בן: amount only
+      row(4, 3, ['פעיל', '', '0']),            // גיל: un-suspend + opening 0
+      row(5, 4, ['', '', ''])                  // דנה: blank → untouched (inactive stays)
+    ];
+    const dry = run(POST, st, { headers: H, rows });
+    t.eq('dryRun is the DEFAULT → nothing saved', [dry.saves.length, JSON.stringify(st) === JSON.stringify(before)], [0, true]);
+    t.eq('plan counts', dry.out.counts, { create: 1, update: 2, delete: 0 });
+    t.eq('preview lines', dry.out.items.map(i => [i.name, i.action, i.changes]), [
+      ['אור', 'create', ['שיוך חדש', 'סכום 50', 'יתרת פתיחה 200']],
+      ['בן', 'update', ['סכום: 50 → 65']],
+      ['גיל', 'update', ['יתרת פתיחה: -40 → 0', 'סטטוס: מושהה → פעיל']]]);
+    const c = run(POST, st, { headers: H, rows, dryRun: false });
+    t.eq('commit: 1 created, 2 updated; writes ONLY tenants', [c.out.created, c.out.updated, c.saves], [1, 2, [['tenants']]]);
+    const a1 = accOf(st, 1, 'tpl_ins');
+    t.eq('אור: linked account from the definition, opening 200', [a1.templateId, a1.amount, a1.openingDebt, a1.active, a1.suspended], ['tpl_ins', 50, 200, true, undefined]);
+    t.eq('…the single source (extraAccountSplit) now shows prior 200 + month 50', (() => { const sp = S.extraAccountSplit(st, st.tenants[0], a1, MK, EMk); return [sp.prior, sp.charge, sp.owedNow]; })(), [200, 50, 250]);
+    t.eq('בן: amount 65, debt 120 kept', [accOf(st, 2, 'tpl_ins').amount, accOf(st, 2, 'tpl_ins').openingDebt], [65, 120]);
+    const g = accOf(st, 3, 'tpl_ins');
+    t.eq('גיל: un-suspended, period closed at the month before, templateId stamped', [g.suspended, g.suspensions, g.templateId], [undefined, [{ from: '2026-09', to: S.monthBeforeKey(MK) }], 'tpl_ins']);
+    t.eq('דנה (blank cells): untouched — inactive account stays inactive', JSON.stringify(st.tenants[3]), JSON.stringify(before.tenants[3]));
+    t.eq('sentLog / paymentHistory / main openingDebt byte-identical', JSON.stringify([st.sentLog, st.paymentHistory, st.tenants.map(x => x.openingDebt)]), JSON.stringify([before.sentLog, before.paymentHistory, before.tenants.map(x => x.openingDebt)]));
+    const snap = JSON.stringify(st);
+    const again = run(POST, st, { headers: H, rows, dryRun: false });
+    t.eq('same file again → NO-OP (idempotent)', [again.out.created + again.out.updated, again.saves.length, JSON.stringify(st) === snap], [0, 0, true]);
+  }
+  {
+    const st = fx();
+    const c = run(POST, st, { headers: H, rows: [row(2, 2, ['מושהה', '', '']), row(3, 1, ['מושהה', '45', ''])], dryRun: false }).out;
+    t.eq('"מושהה": בן suspended with a period; אור created suspended at 45', [accOf(st, 2, 'tpl_ins').suspended, accOf(st, 2, 'tpl_ins').suspensions, accOf(st, 1, 'tpl_ins').suspended, accOf(st, 1, 'tpl_ins').amount, c.created], [true, [{ from: MK, to: null }], true, 45, 1]);
+    t.eq('…created suspended by the FILE is not "▶ התחל גבייה" material (no byApply marker)', accOf(st, 1, 'tpl_ins').suspendedByApply, undefined);
+    t.eq('…suspended → exempt in the split (owes only the opening balance)', S.extraAccountSplit(st, st.tenants[1], accOf(st, 2, 'tpl_ins'), MK, EMk).status, 'exempt');
+  }
+  {
+    const st = fx(); st.tenants[0].extraAccounts = [{ id: 'o1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }];
+    t.eq('precondition: אור\'s account is clean, בן\'s has 120', [S.accHasMoney(st, 1, st.tenants[0].extraAccounts[0]), S.accHasMoney(st, 2, st.tenants[1].extraAccounts[0])], [false, true]);
+    const r = run(POST, st, { headers: H, rows: [row(2, 1, ['לא', '', '']), row(3, 2, ['לא', '', ''])], dryRun: false });
+    t.eq('"לא": clean account deleted; account with money NOT deleted (warning)', [r.out.deleted, accOf(st, 1, 'tpl_ins'), !!accOf(st, 2, 'tpl_ins'), r.out.warnings.length], [1, undefined, true, 1]);
+    t.eq('…the warning tells to write "מושהה"', /מושהה/.test(r.out.warnings[0].msg), true);
+    const stale = S.planTenantFileAccounts(st, { headers: H, rows: [row(2, 4, ['לא', '', ''])] });
+    t.eq('precondition: דנה\'s inactive ביטוח has 60 → planner already refuses', stale.items.length, 0);
+    const st2 = fx(); st2.tenants[0].extraAccounts = [{ id: 'o1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }];
+    const plan = S.planTenantFileAccounts(st2, { headers: H, rows: [row(2, 1, ['לא', '', ''])] });
+    t.eq('precondition: a stale plan says delete', plan.items.map(i => i.action), ['delete']);
+    st2.sentLog['1__acc__o1_' + EMk] = 'bank_import_x_50';                      // money arrives after the plan
+    const st3 = fx();
+    const cplan = S.planTenantFileAccounts(st3, { headers: H, rows: [row(2, 1, ['פעיל', '', ''])] });
+    t.eq('precondition: a stale plan says create for אור', cplan.items.map(i => i.action), ['create']);
+    st3.tenants[0].extraAccounts = [{ id: 'late', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }];
+    t.eq('commit belt: already linked meanwhile → no twin', [S.commitTenantFileAccounts(st3, cplan).created, st3.tenants[0].extraAccounts.length], [0, 1]);
+    t.eq('commit belt: money appeared → NOT deleted', [S.commitTenantFileAccounts(st2, plan).deleted, !!accOf(st2, 1, 'tpl_ins')], [0, true]);
+  }
+
+  t.section('v2.14.75 (1ב) — tri-state, errors and conflicts');
+  {
+    const st = fx(); const before = JSON.stringify(st);
+    const onlyOd = run(POST, st, { headers: ['ביטוח מבנה – יתרת פתיחה'], rows: [row(2, 2, ['10']), row(3, 1, ['70'])], dryRun: false }).out;
+    t.eq('opening-balance column ALONE: בן 120 → 10; amount/status untouched', [accOf(st, 2, 'tpl_ins').openingDebt, accOf(st, 2, 'tpl_ins').amount, accOf(st, 2, 'tpl_ins').suspended], [10, 50, undefined]);
+    t.eq('…a member without the account is NOT linked by a number alone (warning, nothing created)', [onlyOd.created, accOf(st, 1, 'tpl_ins'), onlyOd.warnings.length], [0, undefined, 1]);
+    const st2 = fx(); const b2 = JSON.stringify(st2);
+    const bad = run(POST, st2, { headers: H, rows: [row(2, 2, ['אולי', '', '']), row(3, 2, ['', '-5', '']), row(4, 2, ['לא', '', '5'])], dryRun: false }).out;
+    t.eq('bad status / negative amount / "לא"+value → 3 row errors, nothing written', [bad.errors.length, JSON.stringify(st2) === b2], [3, true]);
+    const st3 = fx(); st3.tenants[0].extraAccounts = [{ id: 'z', templateId: 'tpl_w', label: 'ביטוח מבנה', amount: 1, openingDebt: 0 }];
+    const cf = run(POST, st3, { headers: H, rows: [row(2, 1, ['פעיל', '', ''])], dryRun: false }).out;
+    t.eq('same-named account linked ELSEWHERE → error, never a twin', [cf.errors.length, cf.created, st3.tenants[0].extraAccounts.length], [1, 0, 1]);
+    const cols = run(POST, fx(), { headers: ['חשמל', 'גינה', 'ביטוח מבנה', 'ביטוח  מבנה'], rows: [] }).out.columns;
+    t.eq('computed / unknown / duplicate columns reported, not imported', [cols.computed, cols.unknown, cols.duplicate, cols.recognized.length], [['חשמל'], ['גינה'], ['ביטוח  מבנה'], 1]);
+    t.eq('unknown member id → row error', run(POST, fx(), { headers: H, rows: [row(2, 99, ['פעיל', '', ''])] }).out.errors.length, 1);
+    t.eq('zero amount → warning', run(POST, fx(), { headers: H, rows: [row(2, 1, ['פעיל', '0', ''])] }).out.warnings.length, 1);
+    t.eq('"פעיל" on an INACTIVE account reactivates it (the change says the balance will show)', run(POST, fx(), { headers: H, rows: [row(2, 4, ['פעיל', '', ''])] }).out.items[0].changes[0].includes('לא פעיל'), true);
+    t.eq('invalid request → refused', run(POST, fx(), { headers: 'x' }).out.ok, false);
+    void before;
+  }
+
+  t.section('v2.14.75 (1ב) — NEW members: required account once (POST /api/data → file columns)');
+  {
+    const st0 = src.indexOf('// ── v2.14.74 (1א): extra-account DEFINITIONS on the big write path');
+    const blk = src.slice(src.indexOf('try {', st0), src.indexOf("} catch (e) { console.error('[required accounts]'", st0)) + '} catch (e) { throw e; }';
+    const runSync = (disk, tenants) => { const body = { tenants };
+      new Function('req', 'loadTenantData', 'getMonthKey', 'applyRequiredAccounts', 'console', blk)
+        ({ body, user: { tenantId: 'B' } }, () => disk, S.getMonthKey, S.applyRequiredAccounts, console); return body.tenants; };
+    const st = fx();
+    const newRows = [row(6, null, ['פעיל', '70', '15'], { name: 'חדש' }), row(7, null, ['', '', ''], { name: 'רגיל' }), row(8, null, ['', '', '', 'פעיל', '', ''], { name: 'מים' })];
+    const H6 = H.concat(['מים', 'מים – סכום', 'מים – יתרת פתיחה']);
+    const dry = run(POST, st, { headers: H6, rows: newRows }).out;
+    t.eq('preview of a new member = an UPDATE of the required account it will get (not a 2nd create)', dry.items.filter(i => i.name === 'חדש').map(i => [i.action, i.isNew]), [['update', true]]);
+    t.eq('preview: non-required מים = create; blank row = nothing', dry.items.filter(i => i.name !== 'חדש').map(i => [i.name, i.label, i.action]), [['מים', 'מים', 'create']]);
+    const page = J(st.tenants).concat([{ id: 50, name: 'חדש', phone: '0505' }, { id: 51, name: 'רגיל', phone: '0506' }, { id: 52, name: 'מים', phone: '0507' }]);
+    st.tenants = runSync(J(st), page);                                           // REAL POST /api/data block
+    t.eq('precondition: POST /api/data gave each new member the required ביטוח', [50, 51, 52].map(id => !!accOf(st, id, 'tpl_ins')), [true, true, true]);
+    const commitRows = newRows.map((r, i) => Object.assign({}, r, { tenantId: [50, 51, 52][i] }));
+    const c = run(POST, st, { headers: H6, rows: commitRows, dryRun: false }).out;
+    const n = st.tenants.find(x => x.id === 50).extraAccounts;
+    t.eq('חדש: ONE ביטוח account, amount 70, opening 15', [n.length, n[0].amount, n[0].openingDebt], [1, 70, 15]);
+    t.eq('רגיל: required account untouched (template amount, 0)', [accOf(st, 51, 'tpl_ins').amount, accOf(st, 51, 'tpl_ins').openingDebt], [50, 0]);
+    t.eq('מים: ביטוח (required) + מים (file)', st.tenants.find(x => x.id === 52).extraAccounts.map(a => a.label), ['ביטוח מבנה', 'מים']);
+    t.eq('commit counts', [c.created, c.updated], [1, 1]);
+  }
+
+  t.section('v2.14.75 (1ב) — column names come from the SETTINGS (any names, several accounts)');
+  {
+    const st = { config: J(cfg), accountTemplates: [
+      { id: 'a', label: 'קרן שיפוצים', type: 'fixed', frequency: 'monthly', amount: 80 },
+      { id: 'b', label: 'גינון', type: 'fixed', frequency: 'quarterly', amount: 120 },
+      { id: 'c', label: 'חניה מקורה', type: 'fixed', frequency: 'monthly', amount: 40 }],
+      tenants: [{ id: 1, name: 'אור', extraAccounts: [{ id: 'x', templateId: 'a', label: 'קרן שיפוצים', amount: 80, openingDebt: 160 }] },
+                { id: 2, name: 'בן', extraAccounts: [{ id: 'y', templateId: 'c', label: 'חניה מקורה', amount: 40, openingDebt: 0, suspended: true }] }],
+      sentLog: {}, paymentHistory: {} };
+    const e = run(GET, st).out;
+    t.eq('3 accounts → 9 columns, each named by its definition', e.headers, ['קרן שיפוצים', 'קרן שיפוצים – סכום', 'קרן שיפוצים – יתרת פתיחה', 'גינון', 'גינון – סכום', 'גינון – יתרת פתיחה', 'חניה מקורה', 'חניה מקורה – סכום', 'חניה מקורה – יתרת פתיחה']);
+    t.eq('no column carries a fixed example name', e.headers.some(h => h.includes('ביטוח')), false);
+    t.eq('each account in its own cells', [e.byTenant['1'], e.byTenant['2']], [['פעיל', 80, 160, '', '', '', '', '', ''], ['', '', '', '', '', '', 'מושהה', 40, 0]]);
+    const rows = [{ row: 2, tenantId: 2, name: 'בן', cells: ['', '', '', 'פעיל', '', '300', 'פעיל', '', ''] }];
+    const c = run(POST, st, { headers: e.headers, rows, dryRun: false }).out;
+    t.eq('one row edits two different accounts independently', [c.created, c.updated, accOf(st, 2, 'b').openingDebt, accOf(st, 2, 'b').amount, accOf(st, 2, 'c').suspended, accOf(st, 1, 'a').openingDebt], [1, 1, 300, 120, undefined, 160]);
+    st.accountTemplates[1].label = 'גינון ופיתוח';                                   // renamed in settings
+    const e2 = run(GET, st).out;
+    t.eq('rename in settings → the export uses the NEW name (link kept by templateId)', [e2.headers[3], e2.byTenant['2'][3]], ['גינון ופיתוח', 'פעיל']);
+    const old = run(POST, st, { headers: e.headers, rows: [] }).out.columns;
+    t.eq('an OLD file with the old name → reported as unknown, not imported', old.unknown.includes('גינון') && !old.recognized.some(r => r.header === 'גינון'), true);
+  }
+
+  t.section('v2.14.75 (1ב) — building without extra accounts');
+  {
+    const st = { config: J(cfg), tenants: [{ id: 1, name: 'א' }] }; const b = JSON.stringify(st);
+    const r = run(POST, st, { headers: ['הערות'], rows: [row(2, 1, ['משהו'])], dryRun: false });
+    t.eq('no definitions → templates 0, nothing recognized, nothing written', [r.out.ok, r.saves.length, JSON.stringify(st) === b], [true, 0, true]);
+    t.eq('…dry plan reports templates: 0 (the page shows nothing)', run(POST, st, { headers: ['הערות'], rows: [] }).out.templates, 0);
+  }
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();
