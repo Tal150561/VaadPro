@@ -668,6 +668,7 @@ function vpLogout() {
           <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA למי שלא שילם החודש</button>
           <button class="btn btn-secondary btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()">🔗 שלח פורטל לנבחרים</button>
           <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
+          <button class="btn btn-secondary btn-sm" id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()">💳 החל חשבון נוסף על כולם</button>
           <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
         </div>
 
@@ -1225,7 +1226,9 @@ function vpLogout() {
         <div id="accountTemplatesList" style="margin-bottom:12px;"></div>
         <button class="btn btn-secondary btn-sm" onclick="addAccountTemplateRow()">➕ הוסף חשבון</button>
         <button class="btn btn-green btn-sm" onclick="saveAccountTemplates()" style="margin-right:8px;">💾 שמור תבניות</button>
-        <div class="hint" style="margin-top:8px;">לאחר שמירה, תוכל לשייך חשבונות לכל דייר מרשימת הדיירים</div>
+        <button class="btn btn-secondary btn-sm" onclick="runValidateCollection()" style="margin-right:8px;">🩺 בדיקת תקינות</button>
+        <div class="hint" style="margin-top:8px;">לאחר שמירה: <strong>👥 החל על חברים</strong> משייך את החשבון לכל החברים בלחיצה אחת, או שייכו לדייר בודד מרשימת הדיירים</div>
+        <div id="validateCollectionResult" style="margin-top:10px;"></div>
       </div>
     </div>
 
@@ -1842,6 +1845,19 @@ function vpLogout() {
   </div>
 
   <!-- TENANT ACCOUNTS MODAL -->
+  <!-- v2.14.74 (1א) — 👥 החל על חברים / הסר מכולם / ▶ התחל גבייה לכולם (preview → confirm) -->
+  <div class="modal-bg" id="tplApplyModal" style="display:none;" onclick="if(event.target===this)closeTplAction()">
+    <div class="modal" style="max-width:640px;">
+      <h2 id="tplApplyTitle"></h2>
+      <div id="tplApplyOpts"></div>
+      <div id="tplApplyBody" style="margin:12px 0;"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-green" id="tplApplyGo">✅ בצע</button>
+        <button class="btn btn-secondary" onclick="closeTplAction()">סגור</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="tenantAccountsModal" style="display:none;" onclick="if(event.target===this)closeTenantAccountsModal()">
     <div class="modal" style="max-width:560px;">
       <h2><span id="taModalTitleLabel">💳 חשבונות לדייר: </span><span id="taModalName" style="color:var(--accent);"></span></h2>
@@ -1893,7 +1909,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.73';
+const HTML_VERSION = '2.14.74';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -9609,15 +9625,29 @@ async function loadAccountsStatus() {
 // ── Render account templates list in settings ──────────────────
 function renderAccountTemplates() {
   const el = document.getElementById('accountTemplatesList');
+  const sc = document.getElementById('payAccShortcut');
+  if (sc) sc.style.display = accountTemplates.some(function(t){ return t && t.linked !== undefined; }) ? '' : 'none';
   if (!el) return;
   if (!accountTemplates.length) {
     el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);padding:8px 0;">עדיין אין תבניות חשבונות. לחץ ״הוסף חשבון״ ליצירת הראשון.</div>';
     return;
   }
-  el.innerHTML = accountTemplates.map((t, i) => `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+  // v2.14.74 (1א) — second row per template: "חובה לכל החברים", default payer, and the
+  // bulk actions. Counts (linked / pending) come from GET /api/account-templates.
+  // Handlers take the row INDEX only (no embedded data).
+  el.innerHTML = accountTemplates.map((t, i) => {
+    const saved = t.linked !== undefined;
+    const actions = saved
+      ? `<span style="font-size:0.75rem;color:var(--text2);">משויך ל-${t.linked} חברים</span>
+         <button class="btn btn-secondary btn-sm tpl-act-apply" onclick="openTplAction(${i},'apply')">👥 החל על חברים</button>
+         ${t.pending ? `<button class="btn btn-secondary btn-sm tpl-act-start" onclick="openTplAction(${i},'start')">▶ התחל גבייה לכולם (${t.pending})</button>` : ''}
+         ${t.linked ? `<button class="btn btn-danger-soft btn-sm tpl-act-remove" onclick="openTplAction(${i},'remove')">הסר מכולם</button>` : ''}`
+      : `<span style="font-size:0.75rem;color:var(--text3);">שמרו את התבניות כדי להחיל על חברים</span>`;
+    return `
+    <div style="padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);">
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;">
       <div><label style="font-size:0.75rem;">שם החשבון</label>
-        <input type="text" value="${t.label||''}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
+        <input type="text" value="${esc(t.label||'')}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
       <div><label style="font-size:0.75rem;">סכום ₪</label>
         <input type="number" value="${t.amount||0}" min="0" onchange="accountTemplates[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
       <div><label style="font-size:0.75rem;">תדירות</label>
@@ -9632,7 +9662,19 @@ function renderAccountTemplates() {
           <option value="formula" ${t.type==='formula'?'selected':''}>מחושב</option>
         </select></div>
       <button class="btn btn-danger-soft btn-sm" onclick="accountTemplates.splice(${i},1);renderAccountTemplates();" style="height:36px;">🗑️</button>
-    </div>`).join('');
+    </div>
+    <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;">
+      <label style="font-size:0.75rem;display:flex;align-items:center;gap:4px;cursor:pointer;" title="חבר חדש (ידני או מקובץ דיירים) יקבל את החשבון אוטומטית">
+        <input type="checkbox" class="tpl-required" ${t.requiredForAll===true?'checked':''} onchange="accountTemplates[${i}].requiredForAll=this.checked"> חובה לכל החברים</label>
+      <label style="font-size:0.75rem;">משלם:
+        <select onchange="accountTemplates[${i}].defaultPayer=this.value" style="width:auto;">
+          <option value="owner" ${t.defaultPayer!=='tenant'?'selected':''}>בעלים</option>
+          <option value="tenant" ${t.defaultPayer==='tenant'?'selected':''}>שוכר</option>
+        </select></label>
+      ${actions}
+    </div>
+    </div>`;
+  }).join('');
 }
 
 function addAccountTemplateRow() {
@@ -9652,9 +9694,163 @@ async function saveAccountTemplates() {
       body: JSON.stringify({ templates: accountTemplates })
     });
     const d = await r.json();
-    if (d.ok) toast('✅ תבניות נשמרו', 'success');
-    else toast('שגיאה: ' + d.error, 'error');
+    if (d.ok) { toast('✅ תבניות נשמרו', 'success'); loadAccountTemplates(); }
+    else {
+      toast('שגיאה: ' + d.error, 'error');
+      // v2.14.74 — a refused delete (linked template) → restore the server's list
+      if (d.linked) loadAccountTemplates();
+    }
   } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+// ══ v2.14.74 (1א) — bulk actions on an account definition ════════════════
+// Preview first (server dryRun), then one confirm. All numbers/lists come from the
+// server plan — the page only shows them (CONSUME). Writes only account DEFINITIONS.
+let tplAct = null;   // { mode, tplId, label, plan, amounts, opts }
+const TPL_ACT_URL = { apply: 'apply', remove: 'remove', start: 'start-billing' };
+
+function openTplAction(i, mode) {
+  const t = accountTemplates[i];
+  if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
+  tplAct = { mode: mode, tplId: t.id, label: t.label, plan: null, amounts: {}, opts: { startSuspended: false, includeSuspended: false } };
+  const title = { apply: '👥 החלת ', remove: 'הסרת ', start: '▶ התחלת גבייה: ' }[mode] || '';
+  document.getElementById('tplApplyTitle').textContent = title + (t.label || '') + (mode === 'apply' ? ' על חברים' : mode === 'remove' ? ' מכל החברים' : '');
+  const opts = document.getElementById('tplApplyOpts');
+  opts.innerHTML = mode !== 'apply' ? '' :
+    '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;margin-bottom:4px;cursor:pointer;"><input type="checkbox" id="tplOptSusp"> ⏸ התחל מושהה — לא לחייב עד שאלחץ "▶ התחל גבייה לכולם"</label>' +
+    '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;cursor:pointer;"><input type="checkbox" id="tplOptInclSusp"> לכלול גם חברים מושהים</label>';
+  if (mode === 'apply') {
+    document.getElementById('tplOptSusp').addEventListener('change', function(){ tplAct.opts.startSuspended = this.checked; tplActRefresh(); });
+    document.getElementById('tplOptInclSusp').addEventListener('change', function(){ tplAct.opts.includeSuspended = this.checked; tplActRefresh(); });
+  }
+  document.getElementById('tplApplyBody').innerHTML = '<div style="color:var(--text2);">⏳ מחשב תצוגה מקדימה…</div>';
+  document.getElementById('tplApplyModal').style.display = 'flex';
+  const go = document.getElementById('tplApplyGo');
+  go.onclick = function(){ tplActCommit(); };
+  tplActRefresh();
+}
+
+function closeTplAction() {
+  document.getElementById('tplApplyModal').style.display = 'none';
+  tplAct = null;
+}
+
+function tplActBody(mode) {
+  const b = { dryRun: true };
+  if (mode === 'apply') { b.startSuspended = tplAct.opts.startSuspended; b.includeSuspended = tplAct.opts.includeSuspended; b.amounts = tplAct.amounts; }
+  return b;
+}
+
+async function tplActRefresh() {
+  if (!tplAct) return;
+  const mode = tplAct.mode;
+  try {
+    const r = await fetch(API + '/account-templates/' + encodeURIComponent(tplAct.tplId) + '/' + TPL_ACT_URL[mode], {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tplActBody(mode)) });
+    const d = await r.json();
+    if (!tplAct) return;
+    if (!d.ok) { document.getElementById('tplApplyBody').innerHTML = '<div style="color:var(--danger);">' + esc(d.error || 'שגיאה') + '</div>'; tplAct.plan = null; return; }
+    tplAct.plan = d;
+    document.getElementById('tplApplyBody').innerHTML = renderTplPlan(mode, d);
+    const tbl = document.getElementById('tplApplyAmounts');
+    if (tbl) tbl.addEventListener('change', function(ev){
+      const inp = ev.target; if (!inp || !inp.dataset || !inp.dataset.tid) return;
+      tplAct.amounts[inp.dataset.tid] = inp.value; tplActRefresh();
+    });
+  } catch(e) { document.getElementById('tplApplyBody').innerHTML = '<div style="color:var(--danger);">שגיאת רשת</div>'; }
+}
+
+function tplNames(list, max) {
+  max = max || 40;
+  const n = (list || []).map(function(x){ return esc(x.name); });
+  return n.slice(0, max).join(', ') + (n.length > max ? ' ועוד ' + (n.length - max) : '');
+}
+
+function renderTplPlan(mode, p) {
+  const box = 'padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;line-height:1.7;';
+  if (mode === 'apply') {
+    const mkLbl = p.mk ? p.mk.slice(5) + '/' + p.mk.slice(0, 4) : '';
+    let h = '<div class="tpl-plan-summary" style="' + box + '">' +
+      '➕ יתווסף ל-<strong>' + p.add.length + '</strong> חברים · סה״כ לחיוב: <strong>₪' + p.totalPerCharge + '</strong><br>' +
+      '✔️ כבר משויכים (ידלגו): ' + p.already.length +
+      ' · ⏸ חברים מושהים' + (p.includeSuspended ? ' (נכללים)' : ' (ידלגו)') + ': ' + (p.includeSuspended ? 0 : p.skippedSuspended.length) +
+      (p.conflicts.length ? ' · ⚠️ חשבון בשם זהה שלא מקושר: ' + p.conflicts.length + ' (' + tplNames(p.conflicts, 10) + ')' : '') + '<br>' +
+      (p.startSuspended
+        ? '⏸ החשבון ייווצר <strong>מושהה</strong> — לא יחויב עד "▶ התחל גבייה לכולם".'
+        : '📅 החיוב מתחיל מהחודש הפעיל (' + mkLbl + ') ונכנס לחוב בסגירת החודש. כדי להתחיל מאוחר יותר — סמנו "התחל מושהה".') +
+      '</div>';
+    if (p.add.length) {
+      h += '<div style="max-height:280px;overflow:auto;margin-top:10px;"><table id="tplApplyAmounts" style="width:100%;font-size:0.83rem;"><tr><th style="text-align:right;">חבר</th><th style="text-align:right;">סכום ₪ (ניתן לשנות)</th></tr>' +
+        p.add.map(function(a){ return '<tr><td>' + esc(a.name) + '</td><td><input type="number" min="0" step="0.01" data-tid="' + esc(a.tid) + '" value="' + a.amount + '" style="width:110px;"></td></tr>'; }).join('') +
+        '</table></div>';
+    }
+    return h;
+  }
+  if (mode === 'remove') {
+    return '<div class="tpl-plan-summary" style="' + box + '">' +
+      '🗑️ יימחק אצל <strong>' + p.del.length + '</strong> חברים (ללא יתרה ותשלומים)' + (p.del.length ? ': ' + tplNames(p.del) : '') + '<br>' +
+      '⏸ יושהה אצל <strong>' + p.suspend.length + '</strong> חברים — יש יתרה או תשלומים, ולכן החשבון לא נמחק: החוב/הזכות נשמרים ונראים, ולא נוסף חיוב חדש' + (p.suspend.length ? ': ' + tplNames(p.suspend) : '') + '<br>' +
+      (p.keep.length ? 'כבר מושהים (ללא שינוי): ' + p.keep.length : '') + '</div>';
+  }
+  return '<div class="tpl-plan-summary" style="' + box + '">▶ הגבייה תתחיל אצל <strong>' + p.start.length + '</strong> חברים, מהחודש הפעיל' + (p.start.length ? ': ' + tplNames(p.start) : '') +
+    '<br><span style="color:var(--text2);">רק חשבונות שנוצרו מושהים ב"החל על חברים". השהיה שסומנה ידנית לחבר מסוים לא משתנה.</span></div>';
+}
+
+async function tplActCommit() {
+  if (!tplAct || !tplAct.plan) { toast('אין תצוגה מקדימה תקינה', 'error'); return; }
+  const mode = tplAct.mode, p = tplAct.plan;
+  const n = mode === 'apply' ? p.add.length + p.relink.length : mode === 'remove' ? p.del.length + p.suspend.length : p.start.length;
+  if (!n) { toast('אין מה לבצע', 'error'); return; }
+  // each plan shape has only its own lists → build only this mode's question
+  const q = mode === 'apply' ? 'להוסיף את "' + tplAct.label + '" ל-' + p.add.length + ' חברים?'
+          : mode === 'remove' ? 'למחוק אצל ' + p.del.length + ' ולהשהות אצל ' + p.suspend.length + ' חברים?'
+          : 'להתחיל גבייה אצל ' + p.start.length + ' חברים?';
+  if (!confirm(q)) return;
+  const body = tplActBody(mode); body.dryRun = false;
+  try {
+    const r = await fetch(API + '/account-templates/' + encodeURIComponent(tplAct.tplId) + '/' + TPL_ACT_URL[mode], {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) { toast('שגיאה: ' + (d.error || ''), 'error'); return; }
+    toast(mode === 'apply' ? '✅ נוסף ל-' + d.added + ' חברים' : mode === 'remove' ? '✅ נמחק: ' + d.deleted + ' · הושהה: ' + d.suspended : '✅ הגבייה התחילה אצל ' + d.started + ' חברים', 'success');
+    closeTplAction();
+    await loadData(); await loadAccountTemplates(); await loadAccountsStatus(); render();
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
+function goAccountTemplates() {
+  switchTab('settings');
+  const b = document.getElementById('secAccBody');
+  if (b && b.style.display !== 'block') toggleSection('secAcc');
+  const c = document.getElementById('accountTemplatesCard');
+  if (c && c.scrollIntoView) c.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// 🩺 v2.14.74 — read-only health report (GET /api/validate-collection)
+async function runValidateCollection() {
+  const el = document.getElementById('validateCollectionResult');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text2);font-size:0.83rem;">⏳ בודק…</div>';
+  try {
+    const r = await fetch(API + '/validate-collection');
+    const d = await r.json();
+    el.innerHTML = renderValidateCollection(d);
+  } catch(e) { el.innerHTML = '<div style="color:var(--danger);">שגיאת רשת</div>'; }
+}
+
+function renderValidateCollection(d) {
+  if (!d || !d.ok) return '<div style="color:var(--danger);">' + esc((d && d.error) || 'שגיאה') + '</div>';
+  const s = d.summary || {};
+  let h = '<div class="vc-summary" style="font-size:0.83rem;margin-bottom:6px;">🩺 ' + s.members + ' חברים · ' + s.templates + ' חשבונות מוגדרים · ' + s.accounts + ' חשבונות חברים — ' +
+    (d.issues.length ? '<strong>' + (s.errors || 0) + ' שגיאות, ' + (s.warnings || 0) + ' אזהרות</strong>' : '<span style="color:var(--accent);">✅ לא נמצאו בעיות</span>') + '</div>';
+  const ic = { error: '⛔', warn: '⚠️', info: 'ℹ️' };
+  d.issues.forEach(function(i){
+    const items = i.items.slice(0, 30).map(esc).join(', ') + (i.items.length > 30 ? ' ועוד ' + (i.items.length - 30) : '');
+    h += '<div class="vc-issue vc-' + esc(i.severity) + '" style="padding:8px 10px;margin-bottom:6px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.82rem;">' +
+      (ic[i.severity] || '') + ' <strong>' + esc(i.title) + '</strong> (' + i.items.length + ')<div style="color:var(--text2);margin-top:2px;">' + items + '</div>' +
+      (i.hint ? '<div style="color:var(--text2);margin-top:2px;">💡 ' + esc(i.hint) + '</div>' : '') + '</div>';
+  });
+  return h;
 }
 
 // ── Open tenant accounts modal ─────────────────────────────────
@@ -9731,7 +9927,7 @@ function renderTenantAccountsModal() {
             <option value="quarterly" ${acc.frequency==='quarterly'?'selected':''}>רבעוני</option>
             <option value="yearly" ${acc.frequency==='yearly'?'selected':''}>שנתי</option>
           </select></div>
-        <button class="btn btn-danger-soft btn-sm" onclick="taModalAccounts.splice(${i},1);renderTenantAccountsModal();" style="height:36px;margin-top:18px;">🗑️</button>
+        <button class="btn btn-danger-soft btn-sm" onclick="taRemoveRow(${i})" style="height:36px;margin-top:18px;">🗑️</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
         <div><label style="font-size:0.75rem;">משלם</label>
@@ -9758,12 +9954,26 @@ function renderTenantAccountsModal() {
   }).join('');
 }
 
+// v2.14.74 (1א-5A) — an account with a balance / payment history is never deleted
+// (the server refuses too). hasMoney comes from GET /api/tenant-accounts.
+function taRemoveRow(i) {
+  const a = taModalAccounts[i];
+  if (!a) return;
+  if (a.hasMoney === true) {
+    toast('לא ניתן למחוק "' + (a.label || '') + '" — יש בו יתרה או תשלומים. סמנו "⏸ השהה גבייה" כדי להפסיק לחייב.', 'error');
+    return;
+  }
+  taModalAccounts.splice(i, 1);
+  renderTenantAccountsModal();
+}
+
 function addTenantAccountRow() {
   // Offer to clone from templates if any exist
   if (accountTemplates.length) {
     // סנן תבניות שכבר קיימות אצל הדייר
     const existingLabels = taModalAccounts.map(a => a.label.trim().toLowerCase());
-    const availableTemplates = accountTemplates.filter(t => !existingLabels.includes(t.label.trim().toLowerCase()));
+    const existingTpl = taModalAccounts.map(a => a.templateId).filter(Boolean);
+    const availableTemplates = accountTemplates.filter(t => !existingTpl.includes(t.id) && !existingLabels.includes(t.label.trim().toLowerCase()));
 
     if (!availableTemplates.length) {
       toast('כל החשבונות הזמינים כבר שויכו לדייר זה', 'error');
@@ -9793,7 +10003,7 @@ function addTenantAccountRow() {
       if (!tpl) { bar.remove(); return; }
       const already = taModalAccounts.some(a => a.label.trim().toLowerCase() === tpl.label.trim().toLowerCase());
       if (already) { toast('חשבון זה כבר קיים לדייר', 'error'); bar.remove(); return; }
-      taModalAccounts.push({ id: 'acc_' + Date.now(), label: tpl.label, type: tpl.type, frequency: tpl.frequency, amount: tpl.amount, openingDebt: 0, matchKeywords: '', payer: 'owner', active: true });
+      taModalAccounts.push({ id: 'acc_' + Date.now(), templateId: tpl.id, label: tpl.label, type: tpl.type, frequency: tpl.frequency, amount: tpl.amount, openingDebt: 0, matchKeywords: '', payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true });
       bar.remove();
       renderTenantAccountsModal();
     });

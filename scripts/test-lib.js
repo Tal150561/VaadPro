@@ -82,7 +82,12 @@ const SERVER_FNS = [
   // v2.14.69 — suspension periods
   'monthBeforeKey', 'splitWallMonthKey', 'normalizeSuspensionPeriods', 'crSuspendedIn', 'crSuspensionUndated',
   // v2.14.70 — the charge frozen into a payment record (suspended month → 0)
-  'paymentRateForMonth'
+  'paymentRateForMonth',
+  // v2.14.74 (1א) — account definitions: templateId link, apply to all, validation
+  'tplNameKey', 'accTemplateFor', 'accHasMoney', 'accLinkedToTemplate', 'accFromTemplate',
+  'planApplyTemplate', 'commitApplyTemplate', 'planRemoveTemplate', 'commitRemoveTemplate',
+  'planStartBilling', 'commitStartBilling', 'countLinkedToTemplate', 'stampTemplateIds',
+  'applyRequiredAccounts', 'validateCollection'
 ];
 
 function loadServer() {

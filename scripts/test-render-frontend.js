@@ -3113,4 +3113,102 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: multi-line decisions explained', gd73.includes('✍️ כתיבת החלטות'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.74 (1א) — account definitions UI: template row (required / payer / bulk
+// actions), preview renderers, 🗑️ guard, 🩺 report, commit request. EXECUTED.
+// ════════════════════════════════════════════════════════════════
+{
+  const app = readSource('public/app.html'), gd = readSource('public/vaadpro-guide.js'), pkg = JSON.parse(readSource('package.json'));
+  t.section('v2.14.74 — template row (EXECUTED renderAccountTemplates)');
+  t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
+  {
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc']);
+    const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
+    const S = runInSandbox('var accountTemplates;\n' + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
+      { document: { getElementById: id => els[id] || null } });
+    S.run([{ id: 'tpl_a', label: 'ביטוח <b>', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true, linked: 3, pending: 2 },
+           { id: 'tpl_new', label: 'חדש', type: 'fixed', frequency: 'monthly', amount: 0 }]);
+    const h = els.accountTemplatesList.innerHTML;
+    t.eq('"חובה לכל החברים" checkbox, checked from requiredForAll', /class="tpl-required" checked/.test(h), true);
+    t.eq('linked count shown from the server field', h.includes('משויך ל-3 חברים'), true);
+    t.eq('bulk actions take the row INDEX only', ["openTplAction(0,'apply')", "openTplAction(0,'start')", "openTplAction(0,'remove')"].every(x => h.includes(x)), true);
+    t.eq('"▶ התחל גבייה לכולם" shows the pending count', h.includes('▶ התחל גבייה לכולם (2)'), true);
+    t.eq('unsaved row: no actions, a hint instead', [h.includes("openTplAction(1,"), h.includes('שמרו את התבניות כדי להחיל על חברים')], [false, true]);
+    t.eq('label is HTML-escaped', [h.includes('ביטוח &lt;b&gt;'), h.includes('ביטוח <b>')], [true, false]);
+    t.eq('payments-tab shortcut shown once a saved template exists', els.payAccShortcut.style.display, '');
+    S.run([{ id: 'tpl_new', label: 'x', type: 'fixed', frequency: 'monthly', amount: 1 }]);
+    t.eq('…hidden when none is saved', els.payAccShortcut.style.display, 'none');
+    S.run([{ id: 'tpl_b', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 30, linked: 0, pending: 0 }]);
+    t.eq('nobody linked → no "הסר מכולם"/"התחל גבייה"', [els.accountTemplatesList.innerHTML.includes("'remove'"), els.accountTemplatesList.innerHTML.includes("'start'")], [false, false]);
+  }
+
+  t.section('v2.14.74 — preview renderers consume the server plan (EXECUTED renderTplPlan)');
+  {
+    const S = runInSandbox(extractFunctions(app, ['renderTplPlan', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan};', {});
+    const P = { mk: '2026-10', add: [{ tid: '1', name: 'אור', amount: 50 }, { tid: '4', name: 'דנה', amount: 75 }], already: [{ name: 'בן' }], skippedSuspended: [{ name: 'גיל' }], conflicts: [], relink: [], totalPerCharge: 125, startSuspended: false, includeSuspended: false };
+    const h = S.renderTplPlan('apply', P);
+    t.eq('apply: counts + total from the plan', [h.includes('יתווסף ל-<strong>2</strong>'), h.includes('₪125'), h.includes('כבר משויכים (ידלגו): 1'), h.includes('(ידלגו): 1')], [true, true, true, true]);
+    t.eq('apply: start month stated (active month 10/2026)', h.includes('מהחודש הפעיל (10/2026)'), true);
+    t.eq('apply: per-member amount inputs keyed by data-tid', [h.includes('data-tid="1" value="50"'), h.includes('data-tid="4" value="75"')], [true, true]);
+    t.eq('apply + start suspended: explained', S.renderTplPlan('apply', Object.assign({}, P, { startSuspended: true })).includes('ייווצר <strong>מושהה</strong>'), true);
+    const r = S.renderTplPlan('remove', { del: [{ name: 'אור' }], suspend: [{ name: 'בן' }, { name: 'דנה' }], keep: [] });
+    t.eq('remove: delete vs ⏸ split shown with names', [r.includes('יימחק אצל <strong>1</strong>'), r.includes('יושהה אצל <strong>2</strong>'), r.includes('בן, דנה')], [true, true, true]);
+    t.eq('start: count + manual-⏸ note', [S.renderTplPlan('start', { start: [{ name: 'אור' }] }).includes('<strong>1</strong> חברים'), S.renderTplPlan('start', { start: [] }).includes('ידנית')], [true, true]);
+  }
+
+  t.section('v2.14.74 — commit sends dryRun:false + the options (EXECUTED tplActCommit)');
+  {
+    const urlConst = (app.match(/const TPL_ACT_URL = \{[^}]*\};/) || [''])[0];
+    t.eq('TPL_ACT_URL constant present', !!urlConst, true);
+    const calls = [], toasts = [];
+    const S = runInSandbox('var tplAct;' + urlConst + '\n' + extractFunctions(app, ['tplActCommit', 'tplActBody']) + '\nmodule.exports={set:function(x){tplAct=x;},commit:tplActCommit};', {
+      API: '/api', confirm: () => true, toast: (m, k) => toasts.push([m, k]), closeTplAction() {}, loadData: async () => {}, loadAccountTemplates: async () => {}, loadAccountsStatus: async () => {}, render() {},
+      fetch: async (u, o) => { calls.push([u, JSON.parse(o.body)]); return { json: async () => ({ ok: true, added: 2 }) }; } });
+    S.set({ mode: 'apply', tplId: 'tpl_a', label: 'ביטוח', plan: { add: [{}, {}], relink: [] }, amounts: { '4': '75' }, opts: { startSuspended: true, includeSuspended: false } });
+    global.__crRuns = global.__crRuns || [];
+    global.__crRuns.push(S.commit().then(() => {
+      t.eq('commit → /account-templates/tpl_a/apply with dryRun:false + options + amounts', calls[0], ['/api/account-templates/tpl_a/apply', { dryRun: false, startSuspended: true, includeSuspended: false, amounts: { '4': '75' } }]);
+      t.eq('success toast from the server count', toasts[0][0], '✅ נוסף ל-2 חברים');
+    }));
+    const calls2 = [];
+    const S2 = runInSandbox('var tplAct;' + urlConst + '\n' + extractFunctions(app, ['tplActCommit', 'tplActBody']) + '\nmodule.exports={set:function(x){tplAct=x;},commit:tplActCommit};', {
+      API: '/api', confirm: () => true, toast() {}, closeTplAction() {}, fetch: async (u, o) => { calls2.push(u); return { json: async () => ({ ok: true }) }; } });
+    S2.set({ mode: 'remove', tplId: 'tpl_a', plan: { del: [], suspend: [], keep: [] }, opts: {} });
+    global.__crRuns.push(S2.commit().then(() => t.eq('nothing to do → no request', calls2.length, 0)));
+  }
+
+  t.section('v2.14.74 — 🗑️ guard in the member modal (EXECUTED taRemoveRow)');
+  {
+    const toasts = []; let rendered = 0;
+    const S = runInSandbox('var taModalAccounts;' + extractFunctions(app, ['taRemoveRow']) + '\nmodule.exports={set:function(a){taModalAccounts=a;},get:function(){return taModalAccounts;},rm:taRemoveRow};',
+      { toast: (m, k) => toasts.push(k), renderTenantAccountsModal: () => { rendered++; } });
+    S.set([{ id: 'a', label: 'ביטוח', hasMoney: true }, { id: 'b', label: 'מים', hasMoney: false }]);
+    S.rm(0);
+    t.eq('account with money → refused (error toast), list unchanged', [toasts[0], S.get().length], ['error', 2]);
+    S.rm(1);
+    t.eq('clean account → removed', [S.get().map(a => a.id), rendered], [['a'], 1]);
+    t.eq('the 🗑️ button calls taRemoveRow (not a raw splice)', [app.includes('onclick="taRemoveRow(${i})"'), app.includes('onclick="taModalAccounts.splice(${i},1);renderTenantAccountsModal();"')], [true, false]);
+    t.eq('"הוסף מתבנית" stores templateId + default payer', app.includes("templateId: tpl.id, label: tpl.label") && app.includes("payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner'"), true);
+  }
+
+  t.section('v2.14.74 — 🩺 report (EXECUTED renderValidateCollection)');
+  {
+    const S = runInSandbox(extractFunctions(app, ['renderValidateCollection', 'esc']) + '\nmodule.exports={renderValidateCollection};', {});
+    const h = S.renderValidateCollection({ ok: true, summary: { members: 4, templates: 1, accounts: 3, errors: 1, warnings: 0 },
+      issues: [{ code: 'hiddenDebt', severity: 'error', title: 'חשבון "לא פעיל" עם יתרה', items: ['דנה · <חניה>'], hint: 'השהו' }] });
+    t.eq('summary line from the server counts', h.includes('4 חברים · 1 חשבונות מוגדרים · 3 חשבונות חברים') && h.includes('1 שגיאות, 0 אזהרות'), true);
+    t.eq('issue rendered with severity class, escaped items, hint', [h.includes('vc-issue vc-error'), h.includes('דנה · &lt;חניה&gt;'), h.includes('💡 השהו')], [true, true, true]);
+    t.eq('no issues → ✅', S.renderValidateCollection({ ok: true, summary: { members: 1, templates: 0, accounts: 0 }, issues: [] }).includes('✅ לא נמצאו בעיות'), true);
+  }
+
+  t.section('v2.14.74 — markup + guide');
+  t.eq('modal #tplApplyModal with title / options / body / go', ['id="tplApplyModal"', 'id="tplApplyTitle"', 'id="tplApplyOpts"', 'id="tplApplyBody"', 'id="tplApplyGo"'].every(x => app.includes(x)), true);
+  t.eq('🩺 button + result area in the accounts card', app.includes('onclick="runValidateCollection()"') && app.includes('id="validateCollectionResult"'), true);
+  t.eq('payments-tab shortcut → goAccountTemplates()', app.includes('id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()"'), true);
+  t.eq('modal is not inside a tab panel wrapper (depth-0 panels kept)', app.indexOf('id="tplApplyModal"') > app.lastIndexOf('<div class="tab-panel"'), true);
+  t.eq('guide: apply / start suspended / required', ['👥 החל על חברים — חשבון לכולם', 'התחל מושהה', '▶ התחל גבייה לכולם', 'חובה לכל החברים'].every(x => gd.includes(x)), true);
+  t.eq('guide: remove with balance → ⏸, "פעיל" hides the balance', gd.includes('חשבון עם יתרה לא נמחק') && gd.includes('מסתיר את החשבון ואת היתרה'), true);
+  t.eq('guide: link + 🩺 report', gd.includes('🔗 החשבון של החבר מקושר להגדרה') && gd.includes('🩺 בדיקת תקינות'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

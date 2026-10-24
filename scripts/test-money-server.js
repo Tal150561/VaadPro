@@ -4029,8 +4029,9 @@ const v2_14_64_async = async () => {
   const ta = src.indexOf("app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {");
   const taBody = src.slice(ta + "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {".length, src.indexOf('\n});\n', ta));
   const runTA = (store, accounts) => { let out;
-    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'req', 'res', taBody)
-      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods,
+    // v2.14.74: the handler now also uses accHasMoney / accTemplateFor / crAccountKey (deletion guard, templateId)
+    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'accHasMoney', 'accTemplateFor', 'crAccountKey', 'req', 'res', taBody)
+      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods, S.accHasMoney, S.accTemplateFor, S.crAccountKey,
        { user: { tenantId: 'B' }, params: { tenantId: '7' }, body: { accounts } }, { json: o => { out = o; } });
     return out; };
   const st = { config: { manualMonth: 'אוקטובר' }, tenants: [{ id: 7, name: 'ת', extraAccounts: [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0 }] }] };
@@ -4362,6 +4363,240 @@ const v2_14_64_async = async () => {
     const open = B.analyzeBankRowsServer(rows, map, J(tenants), {}, '2026-10', cfg, new Set(), {}, null, ['2026-09'], ['2026-07']);
     t.eq('extra wall comes from closedMonthsExtra (July) — NOT the main marker (Sep): Aug + Sep filled',
       keysOf(open).filter(k => /_(אוגוסט|ספטמבר)$/.test(k)).length, 2);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.74 (1א) — account DEFINITIONS: templateId link (ה1-A), apply to all (ש2-A),
+// start suspended (C), remove with balance → ⏸ (5A), template deletion guard (6A),
+// required accounts for new members, פ15, validation report. REAL route bodies.
+// Every assertion that a write did NOT happen also asserts its precondition.
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const routeBody = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head);
+    return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const run = (head, store, params, body) => {
+    const code = routeBody(head); let out; const saves = [];
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves.push(Object.keys(p)); Object.assign(store, J(p)); } });
+    const names = Object.keys(g);
+    new Function(...names, 'req', 'res', code)(...names.map(n => g[n]),
+      { params: params || {}, body: body || {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const APPLY = "app.post('/api/account-templates/:id/apply', authMiddleware, (req, res) => {";
+  const REMOVE = "app.post('/api/account-templates/:id/remove', authMiddleware, (req, res) => {";
+  const START = "app.post('/api/account-templates/:id/start-billing', authMiddleware, (req, res) => {";
+  const TPLS = "app.post('/api/account-templates', authMiddleware, (req, res) => {";
+  const TA_POST = "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const TA_GET = "app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const VALID = "app.get('/api/validate-collection', authMiddleware, (req, res) => {";
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const MK = S.getMonthKey(cfg), EMk = S.getEffectiveMonth(cfg);
+  const TPL = { id: 'tpl_ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true };
+  const fx = () => ({
+    config: J(cfg), accountTemplates: [J(TPL)],
+    tenants: [
+      { id: 1, name: 'אור', phone: '0501111111' },
+      { id: 2, name: 'בן', phone: '0502222222', extraAccounts: [{ id: 'acc_old', label: ' ביטוח  מבנה ', amount: 50, openingDebt: 120, active: true }] },
+      { id: 3, name: 'גיל', phone: '0503333333', suspended: true },
+      { id: 4, name: 'דנה', phone: '0504444444', extraAccounts: [{ id: 'w', label: 'מים', amount: 30, openingDebt: 0 }] }
+    ],
+    sentLog: { '1_אוקטובר': 'bank_import_x_300_payer_a' }, paymentHistory: { '1': [{ month: MK, paid: true, amount: 300 }] }
+  });
+  const accOf = (st, tid, tplId) => (st.tenants.find(t => String(t.id) === String(tid)).extraAccounts || []).find(a => a.templateId === tplId);
+
+  t.section('v2.14.74 (1א) — accTemplateFor: the link (ה1-A) + lazy name migration');
+  {
+    const L = [{ id: 'a', label: 'ביטוח מבנה' }, { id: 'b', label: 'מים' }];
+    t.eq('name-only account → linked by normalized name (spaces/case)', S.accTemplateFor({ label: '  ביטוח   מבנה ' }, L).id, 'a');
+    t.eq('templateId wins after a rename', S.accTemplateFor({ templateId: 'a', label: 'שם ישן' }, [{ id: 'a', label: 'ביטוח חדש' }]).id, 'a');
+    t.eq('stale templateId → falls back to the name', S.accTemplateFor({ templateId: 'gone', label: 'מים' }, L).id, 'b');
+    t.eq('duplicate template names → ambiguous → null (never guessed)', S.accTemplateFor({ label: 'מים' }, [{ id: 'x', label: 'מים' }, { id: 'y', label: ' מים' }]), null);
+    t.eq('no templates → null', S.accTemplateFor({ label: 'מים' }, []), null);
+  }
+
+  t.section('v2.14.74 (1א) — accHasMoney: what blocks a delete');
+  {
+    const d = { sentLog: { '7__acc__a_אוקטובר': 'bank_import_x_50', '7__acc__r_אוקטובר': 'sent_2026-10-01' }, paymentHistory: { '7__acc__h': [{ month: '2026-09', paid: false, amount: 50 }], '7__acc__w': [{ type: 'wa_sent', month: '2026-09' }] } };
+    t.eq('openingDebt ≠ 0 (debt)', S.accHasMoney(d, 7, { id: 'z', openingDebt: 40 }), true);
+    t.eq('openingDebt < 0 (credit)', S.accHasMoney(d, 7, { id: 'z', openingDebt: -10 }), true);
+    t.eq('a recorded payment in sentLog', S.accHasMoney(d, 7, { id: 'a', openingDebt: 0 }), true);
+    t.eq('payment history record', S.accHasMoney(d, 7, { id: 'h', openingDebt: 0 }), true);
+    t.eq('a reminder marker only → clean', S.accHasMoney(d, 7, { id: 'r', openingDebt: 0 }), false);
+    t.eq('wa_sent record only → clean', S.accHasMoney(d, 7, { id: 'w', openingDebt: 0 }), false);
+    t.eq('another member\'s key does not count', S.accHasMoney(d, 77, { id: 'a', openingDebt: 0 }), false);
+  }
+
+  t.section('v2.14.74 (1א) — 👥 החל על חברים: dryRun, commit, idempotent, money untouched');
+  {
+    const st = fx(); const before = J(st);
+    const dry = run(APPLY, st, { id: 'tpl_ins' }, {}).out;
+    t.eq('dryRun is the DEFAULT (no dryRun field) → nothing saved', JSON.stringify(st), JSON.stringify(before));
+    t.eq('preview: add = אור + דנה', dry.add.map(a => a.name), ['אור', 'דנה']);
+    t.eq('preview: בן already has it (by name) → skipped + relink', [dry.already.map(a => a.name), dry.relink.map(r => r.tid)], [['בן'], ['2']]);
+    t.eq('preview: suspended member skipped by default', dry.skippedSuspended.map(a => a.name), ['גיל']);
+    t.eq('preview: total per charge 2×50', dry.totalPerCharge, 100);
+    const c = run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false });
+    t.eq('commit: 2 added, 1 relinked', [c.out.added, c.out.relinked], [2, 1]);
+    t.eq('commit writes ONLY tenants', c.saves, [['tenants']]);
+    const a1 = accOf(st, 1, 'tpl_ins');
+    t.eq('new account = template, opening 0, active, owner', [a1.label, a1.amount, a1.openingDebt, a1.active, a1.payer, a1.frequency, a1.suspended], ['ביטוח מבנה', 50, 0, true, 'owner', 'monthly', undefined]);
+    t.eq('בן: SAME account, templateId stamped, debt 120 untouched', [st.tenants[1].extraAccounts.length, st.tenants[1].extraAccounts[0].id, st.tenants[1].extraAccounts[0].templateId, st.tenants[1].extraAccounts[0].openingDebt], [1, 'acc_old', 'tpl_ins', 120]);
+    t.eq('דנה keeps her מים account + gets ביטוח', st.tenants[3].extraAccounts.map(a => a.label), ['מים', 'ביטוח מבנה']);
+    t.eq('גיל (suspended member) untouched', st.tenants[2].extraAccounts, undefined);
+    t.eq('sentLog / paymentHistory / main openingDebt byte-identical', JSON.stringify([st.sentLog, st.paymentHistory, st.tenants.map(x => x.openingDebt)]), JSON.stringify([before.sentLog, before.paymentHistory, before.tenants.map(x => x.openingDebt)]));
+    t.eq('the new account is charged from the active month (split: unpaid 50)', (() => { const sp = S.extraAccountSplit(st, st.tenants[0], a1, MK, EMk); return [sp.charge, sp.status]; })(), [50, 'unpaid']);
+    const snap = JSON.stringify(st);
+    const again = run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false });
+    t.eq('second run is a NO-OP (idempotent by templateId)', [again.out.added, again.out.relinked, again.saves.length, JSON.stringify(st) === snap], [0, 0, 0, true]);
+  }
+  {
+    const st = fx();
+    run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false, includeSuspended: true, amounts: { '4': 75, '1': '-5' } });
+    t.eq('amounts: per-member override 75; invalid (-5) → template 50', [accOf(st, 4, 'tpl_ins').amount, accOf(st, 1, 'tpl_ins').amount], [75, 50]);
+    t.eq('includeSuspended → גיל gets the account', !!accOf(st, 3, 'tpl_ins'), true);
+    t.eq('unknown template → error, nothing saved', run(APPLY, st, { id: 'nope' }, { dryRun: false }).saves.length, 0);
+    st.accountTemplates.push({ id: 'tpl_el', label: 'חשמל', type: 'formula', frequency: 'monthly', amount: 0 });
+    t.eq('computed (formula) account → refused in 1א', run(APPLY, st, { id: 'tpl_el' }, { dryRun: false }).out.ok, false);
+  }
+  {
+    const st = fx(); st.accountTemplates.push({ id: 'tpl_dup', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 30 });
+    st.accountTemplates.push({ id: 'tpl_dup2', label: 'מים ', type: 'fixed', frequency: 'monthly', amount: 30 });
+    const dry = run(APPLY, st, { id: 'tpl_dup' }, {}).out;
+    t.eq('duplicate names: a member who already has a same-named account is a conflict, never a twin', [dry.conflicts.map(c => c.name), dry.add.map(a => a.name)], [['דנה'], ['אור', 'בן']]);
+  }
+
+  {
+    const st = fx(); st.tenants[0].extraAccounts = [{ id: 'r1', templateId: 'tpl_ins', label: 'שם שהשתנה', amount: 50, openingDebt: 0 }];
+    const dry = run(APPLY, st, { id: 'tpl_ins' }, {}).out;
+    t.eq('linked by templateId under ANOTHER name → already (not added, not a conflict)', [dry.already.map(a => a.name), dry.add.map(a => a.name), dry.conflicts.length], [['אור', 'בן'], ['דנה'], 0]);
+    const stale = S.planApplyTemplate(st, 'tpl_ins', {});
+    run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false });
+    t.eq('commit belt: a STALE plan (computed before the commit) adds nothing twice', [S.commitApplyTemplate(st, stale).added, st.tenants[3].extraAccounts.filter(a => a.templateId === 'tpl_ins').length], [0, 1]);
+  }
+
+  t.section('v2.14.74 (1א) — start suspended (C) + ▶ התחל גבייה לכולם');
+  {
+    const st = fx();
+    run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false, startSuspended: true });
+    const a1 = accOf(st, 1, 'tpl_ins');
+    t.eq('precondition: account created suspended, marked byApply, period from the active month', [a1.suspended, a1.suspendedByApply, a1.suspensions], [true, true, [{ from: MK, to: null }]]);
+    t.eq('suspended → split exempt, owes 0', (() => { const sp = S.extraAccountSplit(st, st.tenants[0], a1, MK, EMk); return [sp.status, sp.owedNow]; })(), ['exempt', 0]);
+    const close = lib.loadCloseExtra();
+    const dc = J(st); close(dc, dc.tenants[0], MK);
+    t.eq('REAL close skips it → openingDebt stays 0', accOf(dc, 1, 'tpl_ins').openingDebt, 0);
+    accOf(st, 4, 'tpl_ins').suspendedByApply = undefined;                       // דנה: a MANUAL suspension
+    delete accOf(st, 4, 'tpl_ins').suspendedByApply;
+    const dry = run(START, st, { id: 'tpl_ins' }, {}).out;
+    t.eq('preview lists only apply-suspended accounts (not a manual ⏸)', dry.start.map(s => s.name), ['אור']);
+    const c = run(START, st, { id: 'tpl_ins' }, { dryRun: false }).out;
+    t.eq('started 1', c.started, 1);
+    t.eq('released: flag + marker gone; same-month period dropped', [accOf(st, 1, 'tpl_ins').suspended, accOf(st, 1, 'tpl_ins').suspendedByApply, accOf(st, 1, 'tpl_ins').suspensions], [undefined, undefined, undefined]);
+    t.eq('…now charged (split unpaid 50)', S.extraAccountSplit(st, st.tenants[0], accOf(st, 1, 'tpl_ins'), MK, EMk).status, 'unpaid');
+    t.eq('manual ⏸ (דנה) NOT lifted', accOf(st, 4, 'tpl_ins').suspended, true);
+  }
+
+  t.section('v2.14.74 (1א) — הסר מכולם: clean → deleted, with balance → ⏸ (never "inactive")');
+  {
+    const st = fx();
+    run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false });
+    st.sentLog['4__acc__' + accOf(st, 4, 'tpl_ins').id + '_' + EMk] = 'manual_paid_x_amount_50';
+    const dry = run(REMOVE, st, { id: 'tpl_ins' }, {}).out;
+    t.eq('preview: delete אור, suspend בן (debt) + דנה (payment)', [dry.del.map(r => r.name), dry.suspend.map(r => r.name)], [['אור'], ['בן', 'דנה']]);
+    const c = run(REMOVE, st, { id: 'tpl_ins' }, { dryRun: false }).out;
+    t.eq('commit: 1 deleted, 2 suspended', [c.deleted, c.suspended], [1, 2]);
+    t.eq('אור: account gone', accOf(st, 1, 'tpl_ins'), undefined);
+    const b = st.tenants[1].extraAccounts[0];
+    t.eq('בן: suspended, still ACTIVE, debt 120 kept and still visible', [b.suspended, b.active !== false, b.openingDebt, S.extraAccountSplit(st, st.tenants[1], b, MK, EMk).owedNow], [true, true, 120, 120]);
+    t.eq('…with a suspension period', b.suspensions, [{ from: MK, to: null }]);
+  }
+
+  t.section('v2.14.74 (1א) — POST /api/account-templates: names, deletion guard (6A), rename keeps the link');
+  {
+    const st = fx(); run(APPLY, st, { id: 'tpl_ins' }, { dryRun: false });
+    const keep = JSON.stringify(st);
+    const del = run(TPLS, st, {}, { templates: [] });
+    t.eq('deleting a template linked to 3 members → refused with the count, nothing saved', [del.out.ok, del.out.linked, del.saves.length, JSON.stringify(st) === keep], [false, 3, 0, true]);
+    t.eq('duplicate names → refused', run(TPLS, st, {}, { templates: [J(TPL), Object.assign(J(TPL), { id: 'tpl_2', label: 'ביטוח  מבנה' })] }).out.ok, false);
+    const free = fx(); free.tenants.forEach(x => { delete x.extraAccounts; });
+    t.eq('precondition: nobody linked', S.countLinkedToTemplate(free, free.accountTemplates[0], free.accountTemplates), 0);
+    t.eq('…then deleting it is allowed', run(TPLS, free, {}, { templates: [] }).out.ok, true);
+    const rn = fx();
+    t.eq('precondition: בן linked by NAME only', [rn.tenants[1].extraAccounts[0].templateId, S.accTemplateFor(rn.tenants[1].extraAccounts[0], rn.accountTemplates).id], [undefined, 'tpl_ins']);
+    const r = run(TPLS, rn, {}, { templates: [Object.assign(J(TPL), { label: 'ביטוח דירה' })] });
+    t.eq('rename: templateId stamped from the OLD list → link survives', [r.out.stamped, S.accTemplateFor(rn.tenants[1].extraAccounts[0], rn.accountTemplates).id], [1, 'tpl_ins']);
+    t.eq('flags sanitized (requiredForAll kept, junk payer dropped)', (() => { const x = fx(); run(TPLS, x, {}, { templates: [Object.assign(J(TPL), { defaultPayer: 'zz' })] }); return [x.accountTemplates[0].requiredForAll, 'defaultPayer' in x.accountTemplates[0]]; })(), [true, false]);
+  }
+
+  t.section('v2.14.74 (1א) — POST /api/tenant-accounts: delete guard, פ15, templateId kept');
+  {
+    const st = fx();
+    const blocked = run(TA_POST, st, { tenantId: '2' }, { accounts: [] });
+    t.eq('deleting בן\'s account (debt 120) → refused, account kept', [blocked.out.ok, blocked.saves.length, st.tenants[1].extraAccounts.length], [false, 0, 1]);
+    const ok = run(TA_POST, st, { tenantId: '4' }, { accounts: [] });
+    t.eq('precondition: דנה\'s מים is clean', S.accHasMoney(fx(), 4, fx().tenants[3].extraAccounts[0]), false);
+    t.eq('…deleting a clean account is allowed', [ok.out.ok, st.tenants[3].extraAccounts.length], [true, 0]);
+    const p15 = fx();
+    t.eq('precondition: stored openingDebt 120', p15.tenants[1].extraAccounts[0].openingDebt, 120);
+    run(TA_POST, p15, { tenantId: '2' }, { accounts: [{ id: 'acc_old', label: 'ביטוח מבנה', amount: 50 }] });
+    t.eq('פ15: posted WITHOUT openingDebt → keeps 120 (was NaN → null)', p15.tenants[1].extraAccounts[0].openingDebt, 120);
+    t.eq('…and the name link becomes templateId', p15.tenants[1].extraAccounts[0].templateId, 'tpl_ins');
+    run(TA_POST, p15, { tenantId: '2' }, { accounts: [{ id: 'acc_old', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }] });
+    t.eq('an explicit 0 is still saved as 0', p15.tenants[1].extraAccounts[0].openingDebt, 0);
+    const ap = fx(); run(APPLY, ap, { id: 'tpl_ins' }, { dryRun: false, startSuspended: true });
+    const a = accOf(ap, 1, 'tpl_ins');
+    run(TA_POST, ap, { tenantId: '1' }, { accounts: [Object.assign(J(a), { label: 'שם אחר' })] });
+    t.eq('modal save keeps templateId (rename-safe) + suspendedByApply', [accOf(ap, 1, 'tpl_ins') && accOf(ap, 1, 'tpl_ins').label, accOf(ap, 1, 'tpl_ins').suspendedByApply], ['שם אחר', true]);
+    const g = run(TA_GET, fx(), { tenantId: '2' }).out;
+    t.eq('GET exposes hasMoney (🗑️ guard in the modal)', g.accounts[0].hasMoney, true);
+  }
+
+  t.section('v2.14.74 (1א) — POST /api/data: new member gets required accounts; existing keep theirs');
+  {
+    const st0 = src.indexOf('// ── v2.14.74 (1א): extra-account DEFINITIONS on the big write path');
+    const blk = src.slice(src.indexOf('try {', st0), src.indexOf("} catch (e) { console.error('[required accounts]'", st0)) + '} catch (e) { throw e; }';
+    const runSync = (disk, tenants) => { const body = { tenants };
+      new Function('req', 'loadTenantData', 'getMonthKey', 'applyRequiredAccounts', 'console', blk)
+        ({ body, user: { tenantId: 'B' } }, () => disk, S.getMonthKey, S.applyRequiredAccounts, console); return body.tenants; };
+    const disk = fx(); run(APPLY, disk, { id: 'tpl_ins' }, { dryRun: false });
+    const page = J(disk.tenants).map(x => { delete x.extraAccounts; return x; });   // a page that never loaded them
+    page.push({ id: 9, name: 'חדש', phone: '0509999999' }, { id: 10, name: 'מושהה', phone: '0501010101', suspended: true });
+    const out = runSync(disk, page);
+    t.eq('existing members posted WITHOUT extraAccounts keep the stored ones', out.slice(0, 4).map(x => (x.extraAccounts || []).length), disk.tenants.map(x => (x.extraAccounts || []).length));
+    const n9 = out.find(x => x.id === 9).extraAccounts;
+    t.eq('new member → required account (template, 50, linked)', [n9.length, n9[0].templateId, n9[0].amount, n9[0].openingDebt], [1, 'tpl_ins', 50, 0]);
+    t.eq('new member created suspended → account suspended (no byApply marker)', [out.find(x => x.id === 10).extraAccounts[0].suspended, out.find(x => x.id === 10).extraAccounts[0].suspendedByApply], [true, undefined]);
+    const noReq = fx(); delete noReq.accountTemplates[0].requiredForAll;
+    t.eq('template NOT required → new member gets nothing', runSync(noReq, [{ id: 9, name: 'חדש' }])[0].extraAccounts, undefined);
+    const plain = { config: J(cfg), tenants: [{ id: 1, name: 'א', customAmount: 230 }] };
+    const pg = [{ id: 1, name: 'א', customAmount: 250 }, { id: 2, name: 'ב' }]; const pgBefore = JSON.stringify(pg);
+    t.eq('building WITHOUT extra accounts: posted tenants byte-identical (main path untouched)', JSON.stringify(runSync(plain, pg)), pgBefore);
+    const posted = [{ id: 2, name: 'בן', extraAccounts: [] }];
+    t.eq('an explicit extraAccounts array is respected (not carried over)', runSync(fx(), posted)[0].extraAccounts, []);
+  }
+
+  t.section('v2.14.74 (1א) — 🩺 GET /api/validate-collection (read-only)');
+  {
+    const st = fx();
+    st.accountTemplates.push({ id: 'tpl_z', label: 'קרן', type: 'fixed', frequency: 'monthly', amount: 0 });
+    st.tenants[3].extraAccounts.push({ id: 'off', label: 'חניה', amount: 20, openingDebt: 60, active: false });
+    st.tenants[3].extraAccounts.push({ id: 'z0', label: 'קרן', amount: 0, openingDebt: 0, payer: 'tenant' });
+    const before = JSON.stringify(st);
+    const v = run(VALID, st).out;
+    const by = c => (v.issues.find(i => i.code === c) || { items: [] }).items;
+    t.eq('read-only: store byte-identical', JSON.stringify(st), before);
+    t.eq('missing required: אור, גיל, דנה (בן linked by name)', by('missingRequired'), ['אור', 'גיל', 'דנה']);
+    t.eq('hidden debt: inactive חניה with ₪60', by('hiddenDebt'), ['דנה · חניה (₪60)']);
+    t.eq('unlinked: מים, חניה', by('unlinked'), ['דנה · מים', 'דנה · חניה']);
+    t.eq('zero template + zero active account', [by('zeroTemplate'), by('zeroAccount')], [['קרן'], ['דנה · קרן']]);
+    t.eq('payer = tenant without a tenant phone', by('payerNoPhone'), ['דנה · קרן']);
+    t.eq('name-only links reported as info', by('nameOnlyLink'), ['בן · ביטוח מבנה', 'דנה · קרן']);
+    t.eq('summary counts errors', [v.summary.members, v.summary.templates, v.summary.errors], [4, 2, 2]);
+    const clean = { config: J(cfg), tenants: [{ id: 1, name: 'א', phone: '050' }] };
+    t.eq('building without extras → no issues', S.validateCollection(clean).issues, []);
   }
 }
 

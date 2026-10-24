@@ -2220,6 +2220,23 @@ app.post('/api/data', authMiddleware, (req, res) => {
         });
       });
     } catch (e) { console.error('[suspension periods]', e.message); }
+    // ── v2.14.74 (1א): extra-account DEFINITIONS on the big write path ──────
+    // (a) a posted EXISTING member without an extraAccounts field keeps the stored ones
+    //     (a page that just added a member and hasn't reloaded must not wipe accounts the
+    //     server attached); (b) a NEW member gets every "חובה לכל החברים" account.
+    //     Buildings without extra accounts: nothing to carry, nothing to add → unchanged.
+    try {
+      const prevX = loadTenantData(req.user.tenantId);
+      const mkX = getMonthKey(prevX.config || {});
+      const tplsX = prevX.accountTemplates || [];
+      const prevByIdX = new Map((prevX.tenants || []).map(x => [String(x.id), x]));
+      req.body.tenants.forEach(nt => {
+        if (!nt || typeof nt !== 'object') return;
+        const pt = prevByIdX.get(String(nt.id));
+        if (pt) { if (nt.extraAccounts === undefined && Array.isArray(pt.extraAccounts)) nt.extraAccounts = pt.extraAccounts; return; }
+        if (tplsX.some(t => t && t.requiredForAll === true)) applyRequiredAccounts(tplsX, nt, mkX);
+      });
+    } catch (e) { console.error('[required accounts]', e.message); }
     // ── Column A (v2.13.16): maintain personalTariffs on fee change ──────
     // The tenants tab edits a scalar customAmount. Per the locked model, a fee
     // change must CLOSE the tenant's open personalTariffs interval and OPEN a new
@@ -9242,11 +9259,279 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
 // sentLog for extra accounts uses key: tenantId + '__acc__' + accountId + '_' + month
 // ════════════════════════════════════════════════════════════════
 
+// ── v2.14.74 (1א) — account DEFINITIONS: templateId link, apply to all, validation ──
+// The building template (d.accountTemplates) is the account's definition; a member's
+// account points at it with `templateId` (decision ה1-A, 2026-10-24). Keys of sentLog /
+// paymentHistory stay tid__acc__<acc.id> → no history migration. LAZY migration: an
+// account without a (valid) templateId is linked to the ONE template with the same
+// normalized name; the link is stamped only by an explicit action (template save, apply,
+// the member's accounts modal save) — never by a bulk write at boot.
+// ⚠️ None of this touches money: extraAccountSplit / closeExtraAccountsUnpaid unchanged.
+function tplNameKey(label) {
+  return crAccountKey(label).toLowerCase();
+}
+
+// The template this member account belongs to, or null (unlinked / ambiguous name).
+function accTemplateFor(acc, templates) {
+  const list = Array.isArray(templates) ? templates.filter(t => t && t.id) : [];
+  if (!acc || !list.length) return null;
+  if (acc.templateId) {
+    const byId = list.find(t => t.id === acc.templateId);
+    if (byId) return byId;
+  }
+  const k = tplNameKey(acc.label);
+  const byName = list.filter(t => tplNameKey(t.label) === k);
+  return byName.length === 1 ? byName[0] : null;
+}
+
+// Does this extra account carry money (balance, payment history or a recorded payment)?
+// Such an account is never deleted — it is suspended instead (decision 1א-5A): an
+// `active:false` account disappears from extraAccountSplit / close → its debt would hide.
+function accHasMoney(d, tid, acc) {
+  if (!acc) return false;
+  const od = parseFloat(acc.openingDebt);
+  if (isFinite(od) && od !== 0) return true;
+  const phKey = String(tid) + '__acc__' + acc.id;
+  const ph = ((d && d.paymentHistory) || {})[phKey];
+  if (Array.isArray(ph) && ph.some(r => r && r.type !== 'wa_sent')) return true;
+  const sl = (d && d.sentLog) || {};
+  const pre = phKey + '_';
+  return Object.keys(sl).some(k => k.startsWith(pre) && sentLogIsPayment(sl[k]));
+}
+
+// The member account linked to `tpl` (by id, else by unique name), or null.
+function accLinkedToTemplate(tenant, tpl, templates) {
+  const accs = (tenant && Array.isArray(tenant.extraAccounts)) ? tenant.extraAccounts : [];
+  return accs.find(a => { const m = accTemplateFor(a, templates); return !!m && m.id === tpl.id; }) || null;
+}
+
+// A new member account built from a template. opts: {amount, suspended, byApply, id}
+function accFromTemplate(tpl, tenant, mk, opts) {
+  opts = opts || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const ov = parseFloat(opts.amount);
+  const amount = (opts.amount !== undefined && opts.amount !== null && opts.amount !== '' && isFinite(ov) && ov >= 0)
+    ? r2(ov) : r2(parseFloat(tpl.amount) || 0);
+  const taken = new Set(((tenant && tenant.extraAccounts) || []).map(a => a && a.id));
+  let id = opts.id || ('acc_' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36));
+  while (taken.has(id)) id += 'x';
+  const acc = {
+    id, templateId: tpl.id, label: crAccountKey(tpl.label), type: tpl.type || 'fixed',
+    frequency: tpl.frequency || 'monthly', amount, openingDebt: 0, matchKeywords: '', formulaNote: '',
+    payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true
+  };
+  if (opts.suspended === true) {
+    acc.suspended = true;
+    if (opts.byApply === true) acc.suspendedByApply = true;   // released by "▶ התחל גבייה לכולם"
+    normalizeSuspensionPeriods(null, acc, mk);
+  }
+  return acc;
+}
+
+// Dry plan of "החל על חברים". opts: {startSuspended, includeSuspended, amounts:{tid:amount}}
+function planApplyTemplate(d, tplId, opts) {
+  opts = opts || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'החלה על כל החברים זמינה כרגע לחשבון קבוע בלבד' };
+  const k = tplNameKey(tpl.label);
+  const amounts = (opts.amounts && typeof opts.amounts === 'object') ? opts.amounts : {};
+  const add = [], already = [], skippedSuspended = [], relink = [], conflicts = [];
+  for (const t of (d.tenants || [])) {
+    const tid = String(t.id), name = t.name || tid;
+    const linked = accLinkedToTemplate(t, tpl, templates);
+    if (linked) {
+      already.push({ tid, name });
+      if (linked.templateId !== tpl.id) relink.push({ tid, accId: linked.id });
+      continue;
+    }
+    // same name but not linkable (duplicate names / linked elsewhere) → never add a twin
+    if (((t.extraAccounts) || []).some(a => a && tplNameKey(a.label) === k)) { conflicts.push({ tid, name }); continue; }
+    if (t.suspended === true && opts.includeSuspended !== true) { skippedSuspended.push({ tid, name }); continue; }
+    const ov = amounts[tid];
+    const pv = parseFloat(ov);
+    const amount = (ov !== undefined && ov !== null && ov !== '' && isFinite(pv) && pv >= 0) ? r2(pv) : r2(parseFloat(tpl.amount) || 0);
+    add.push({ tid, name, amount });
+  }
+  const totalPerCharge = r2(add.reduce((s, a) => s + a.amount, 0));
+  return { ok: true, tpl: { id: tpl.id, label: tpl.label, amount: parseFloat(tpl.amount) || 0, frequency: tpl.frequency || 'monthly' },
+    mk: getMonthKey(d.config || {}), startSuspended: opts.startSuspended === true, includeSuspended: opts.includeSuspended === true,
+    add, already, skippedSuspended, relink, conflicts, totalPerCharge };
+}
+
+function commitApplyTemplate(d, plan) {
+  const tpl = (d.accountTemplates || []).find(t => t && t.id === plan.tpl.id);
+  const byId = new Map((d.tenants || []).map(t => [String(t.id), t]));
+  let added = 0, relinked = 0;
+  plan.relink.forEach(r => {
+    const t = byId.get(r.tid); const a = t && (t.extraAccounts || []).find(x => x.id === r.accId);
+    if (a) { a.templateId = tpl.id; relinked++; }
+  });
+  plan.add.forEach(p => {
+    const t = byId.get(p.tid); if (!t) return;
+    if (accLinkedToTemplate(t, tpl, d.accountTemplates)) return;            // idempotent belt
+    if (!Array.isArray(t.extraAccounts)) t.extraAccounts = [];
+    t.extraAccounts.push(accFromTemplate(tpl, t, plan.mk, { amount: p.amount, suspended: plan.startSuspended, byApply: true }));
+    added++;
+  });
+  return { added, relinked };
+}
+
+// Dry plan of "הסר מכולם": clean accounts are deleted; an account with money is suspended.
+function planRemoveTemplate(d, tplId) {
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות' };
+  const del = [], suspend = [], keep = [];
+  for (const t of (d.tenants || [])) {
+    const a = accLinkedToTemplate(t, tpl, templates);
+    if (!a) continue;
+    const row = { tid: String(t.id), name: t.name || String(t.id), accId: a.id };
+    if (!accHasMoney(d, t.id, a)) del.push(row);
+    else if (a.suspended === true) keep.push(row);
+    else suspend.push(row);
+  }
+  return { ok: true, tpl: { id: tpl.id, label: tpl.label }, mk: getMonthKey(d.config || {}), del, suspend, keep };
+}
+
+function commitRemoveTemplate(d, plan) {
+  const byId = new Map((d.tenants || []).map(t => [String(t.id), t]));
+  let deleted = 0, suspended = 0;
+  plan.del.forEach(r => {
+    const t = byId.get(r.tid); if (!t || !Array.isArray(t.extraAccounts)) return;
+    const a = t.extraAccounts.find(x => x.id === r.accId);
+    if (!a || accHasMoney(d, t.id, a)) return;                               // belt: money appeared
+    t.extraAccounts = t.extraAccounts.filter(x => x.id !== r.accId); deleted++;
+  });
+  plan.suspend.forEach(r => {
+    const t = byId.get(r.tid); const a = t && (t.extraAccounts || []).find(x => x.id === r.accId);
+    if (!a || a.suspended === true) return;
+    const prev = Object.assign({}, a);
+    a.suspended = true; normalizeSuspensionPeriods(prev, a, plan.mk); suspended++;
+  });
+  return { deleted, suspended };
+}
+
+// "▶ התחל גבייה לכולם" — releases ONLY accounts that "החל על חברים" created suspended.
+// A suspension the operator set by hand is never lifted here.
+function planStartBilling(d, tplId) {
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות' };
+  const start = [];
+  for (const t of (d.tenants || [])) {
+    const a = accLinkedToTemplate(t, tpl, templates);
+    if (a && a.suspended === true && a.suspendedByApply === true) start.push({ tid: String(t.id), name: t.name || String(t.id), accId: a.id });
+  }
+  return { ok: true, tpl: { id: tpl.id, label: tpl.label }, mk: getMonthKey(d.config || {}), start };
+}
+
+function commitStartBilling(d, plan) {
+  const byId = new Map((d.tenants || []).map(t => [String(t.id), t]));
+  let started = 0;
+  plan.start.forEach(r => {
+    const t = byId.get(r.tid); const a = t && (t.extraAccounts || []).find(x => x.id === r.accId);
+    if (!a || a.suspended !== true || a.suspendedByApply !== true) return;
+    const prev = Object.assign({}, a);
+    delete a.suspended; delete a.suspendedByApply;
+    normalizeSuspensionPeriods(prev, a, plan.mk); started++;
+  });
+  return { started };
+}
+
+// Members whose account is linked to a template (template-deletion guard, 1א-6A).
+function countLinkedToTemplate(d, tpl, templates) {
+  return (d.tenants || []).filter(t => !!accLinkedToTemplate(t, tpl, templates)).length;
+}
+
+// Stamp templateId on accounts linked by NAME only (lazy migration, explicit action).
+function stampTemplateIds(d, templates) {
+  let n = 0;
+  for (const t of (d.tenants || [])) {
+    for (const a of (t.extraAccounts || [])) {
+      const m = accTemplateFor(a, templates);
+      if (m && a.templateId !== m.id) { a.templateId = m.id; n++; }
+    }
+  }
+  return n;
+}
+
+// A NEW member (POST /api/data, manual add or tenants-file import) gets every
+// "חובה לכל החברים" template. A member created suspended gets it suspended too.
+function applyRequiredAccounts(templates, tenant, mk) {
+  const list = (Array.isArray(templates) ? templates : []).filter(t => t && t.id && t.requiredForAll === true && (t.type || 'fixed') === 'fixed');
+  let added = 0;
+  for (const tpl of list) {
+    if (accLinkedToTemplate(tenant, tpl, templates)) continue;
+    if ((tenant.extraAccounts || []).some(a => a && tplNameKey(a.label) === tplNameKey(tpl.label))) continue;
+    if (!Array.isArray(tenant.extraAccounts)) tenant.extraAccounts = [];
+    tenant.extraAccounts.push(accFromTemplate(tpl, tenant, mk, { suspended: tenant.suspended === true }));
+    added++;
+  }
+  return added;
+}
+
+// GET /api/validate-collection — READ-ONLY health report before billing (basic, 1א).
+function validateCollection(d) {
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tenants = d.tenants || [];
+  const issues = [];
+  const push = (code, severity, title, items, hint) => { if (items.length) issues.push({ code, severity, title, items, hint: hint || '' }); };
+  // templates
+  const seen = {}; templates.forEach(t => { const k = tplNameKey(t.label); (seen[k] = seen[k] || []).push(crAccountKey(t.label)); });
+  push('dupTemplateNames', 'error', 'שם חשבון מופיע פעמיים בהגדרות', Object.values(seen).filter(v => v.length > 1).map(v => v[0]),
+    'חשבונות בלי קישור לא יזוהו. תנו לכל חשבון שם ייחודי.');
+  push('zeroTemplate', 'warn', 'חשבון בהגדרות עם סכום ₪0', templates.filter(t => (t.type || 'fixed') === 'fixed' && !((parseFloat(t.amount) || 0) > 0)).map(t => crAccountKey(t.label)));
+  // required accounts missing
+  templates.filter(t => t.requiredForAll === true).forEach(tpl => {
+    push('missingRequired', 'error', 'חשבון חובה חסר: ' + crAccountKey(tpl.label),
+      tenants.filter(t => !accLinkedToTemplate(t, tpl, templates)).map(t => t.name || String(t.id)),
+      'השתמשו ב"👥 החל על חברים" בהגדרות › חשבונות נוספים.');
+  });
+  const unlinked = [], nameOnly = [], zeroAcc = [], hidden = [], payerNoPhone = [];
+  tenants.forEach(t => {
+    const nm = t.name || String(t.id);
+    (t.extraAccounts || []).forEach(a => {
+      if (!a) return;
+      const lbl = crAccountKey(a.label);
+      const m = accTemplateFor(a, templates);
+      if (templates.length && !m) unlinked.push(nm + ' · ' + lbl);
+      else if (m && a.templateId !== m.id) nameOnly.push(nm + ' · ' + lbl);
+      const odebt = parseFloat(a.openingDebt) || 0;
+      const unpaidHist = (((d.paymentHistory || {})[String(t.id) + '__acc__' + a.id]) || []).some(r => r && !r.paid && r.type !== 'wa_sent');
+      if (a.active === false) { if (odebt !== 0 || unpaidHist) hidden.push(nm + ' · ' + lbl + ' (₪' + odebt + ')'); return; }
+      if (a.suspended !== true && (a.type || 'fixed') === 'fixed' && !((parseFloat(a.amount) || 0) > 0)) zeroAcc.push(nm + ' · ' + lbl);
+      if (a.payer === 'tenant' && !(t.tenant && String(t.tenant.phone || '').trim())) payerNoPhone.push(nm + ' · ' + lbl);
+    });
+  });
+  push('hiddenDebt', 'error', 'חשבון "לא פעיל" עם יתרה — היתרה לא מוצגת ולא נגבית', hidden,
+    'החזירו את החשבון לפעיל וסמנו "⏸ השהה גבייה" במקום — כך היתרה נשמרת ונראית.');
+  push('zeroAccount', 'warn', 'חשבון פעיל עם סכום ₪0 — לא יחויב לעולם', zeroAcc);
+  push('unlinked', 'warn', 'חשבון חבר שלא מקושר לאף חשבון בהגדרות', unlinked,
+    'לא ייכלל ב"החל על חברים" / "הסר מכולם". השוו את השם לשם שבהגדרות.');
+  push('payerNoPhone', 'info', 'משלם = שוכר, אבל אין טלפון שוכר (נשלח לטלפון הראשי)', payerNoPhone);
+  push('nameOnlyLink', 'info', 'מקושר לפי שם בלבד — יקושר קבוע בשמירה הבאה', nameOnly);
+  push('memberNoPhone', 'warn', 'חבר בלי טלפון', tenants.filter(t => !String(t.phone || '').trim()).map(t => t.name || String(t.id)));
+  const accounts = tenants.reduce((s, t) => s + ((t.extraAccounts || []).length), 0);
+  return { ok: true, summary: { members: tenants.length, templates: templates.length, accounts,
+    errors: issues.filter(i => i.severity === 'error').length, warnings: issues.filter(i => i.severity === 'warn').length }, issues };
+}
+
 // ── Account Templates (config-level) ──────────────────────────
 // GET /api/account-templates — returns building-level account template list
 app.get('/api/account-templates', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
-  res.json({ ok: true, templates: d.accountTemplates || [] });
+  // v2.14.74 (1א) — display counts per template (members linked / created-suspended
+  // waiting for "▶ התחל גבייה"). Computed here, stripped again on save.
+  const tpls = d.accountTemplates || [];
+  const out = tpls.map(t => {
+    if (!t || !t.id) return t;
+    const ps = planStartBilling(d, t.id);
+    return Object.assign({}, t, { linked: countLinkedToTemplate(d, t, tpls), pending: ps.ok ? ps.start.length : 0 });
+  });
+  res.json({ ok: true, templates: out });
 });
 
 // POST /api/account-templates — save building-level account templates
@@ -9259,8 +9544,74 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
     if (!['fixed', 'formula'].includes(t.type)) return res.json({ ok: false, error: 'סוג חשבון לא תקין: ' + t.type });
     if (!['monthly', 'quarterly', 'yearly'].includes(t.frequency)) return res.json({ ok: false, error: 'תדירות לא תקינה: ' + t.frequency });
   }
-  saveTenantData(req.user.tenantId, { accountTemplates: templates });
-  res.json({ ok: true });
+  // ── v2.14.74 (1א) ─────────────────────────────────────────────
+  // (a) names unique — the lazy name-link needs it; (b) flags sanitized;
+  // (c) a template linked to members cannot be deleted (decision 6A);
+  // (d) accounts linked by NAME get templateId stamped from the OLD list, so a rename
+  //     keeps the link (ה1-A). Money untouched.
+  const d = loadTenantData(req.user.tenantId);
+  const keys = templates.map(t => tplNameKey(t.label));
+  const dupK = keys.find((k, i) => keys.indexOf(k) !== i);
+  if (dupK !== undefined) return res.json({ ok: false, error: 'שם חשבון מופיע פעמיים: ' + crAccountKey(templates[keys.indexOf(dupK)].label) });
+  templates.forEach(t => {
+    delete t.linked; delete t.pending;                       // display-only (GET), never stored
+    if (t.requiredForAll === true) t.requiredForAll = true; else delete t.requiredForAll;
+    if (t.defaultPayer !== 'tenant') delete t.defaultPayer;
+  });
+  const prevT = d.accountTemplates || [];
+  for (const p of prevT) {
+    if (!p || templates.some(t => t.id === p.id)) continue;
+    const n = countLinkedToTemplate(d, p, prevT);
+    if (n > 0) return res.json({ ok: false, error: 'לא ניתן למחוק את "' + crAccountKey(p.label) + '" — משויך ל-' + n + ' חברים. השתמשו קודם ב"הסר מכולם".', linked: n, templateId: p.id });
+  }
+  const stamped = stampTemplateIds(d, prevT);
+  const payload = { accountTemplates: templates };
+  if (stamped > 0) payload.tenants = d.tenants;
+  saveTenantData(req.user.tenantId, payload);
+  res.json({ ok: true, stamped });
+});
+
+// ── v2.14.74 (1א) — "👥 החל על חברים" / "הסר מכולם" / "▶ התחל גבייה לכולם" ──
+// Each: dryRun (DEFAULT — only an explicit dryRun:false writes) → preview; commit → write.
+// Writes ONLY tenant.extraAccounts DEFINITIONS (add / suspend / delete a clean account /
+// stamp templateId). Never openingDebt, sentLog or paymentHistory.
+app.post('/api/account-templates/:id/apply', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planApplyTemplate(d, req.params.id, { startSuspended: b.startSuspended === true, includeSuspended: b.includeSuspended === true, amounts: b.amounts });
+  if (!plan.ok) return res.json(plan);
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitApplyTemplate(d, plan);
+  if (r.added || r.relinked) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, added: r.added, relinked: r.relinked, already: plan.already.length, skippedSuspended: plan.skippedSuspended.length, conflicts: plan.conflicts.length });
+});
+
+app.post('/api/account-templates/:id/remove', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planRemoveTemplate(d, req.params.id);
+  if (!plan.ok) return res.json(plan);
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitRemoveTemplate(d, plan);
+  if (r.deleted || r.suspended) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, deleted: r.deleted, suspended: r.suspended, kept: plan.keep.length });
+});
+
+app.post('/api/account-templates/:id/start-billing', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planStartBilling(d, req.params.id);
+  if (!plan.ok) return res.json(plan);
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitStartBilling(d, plan);
+  if (r.started) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, started: r.started });
+});
+
+// GET /api/validate-collection — read-only health report (1א basic)
+app.get('/api/validate-collection', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json(validateCollection(d));
 });
 
 // ── Per-Tenant Account Overrides ──────────────────────────────
@@ -9279,8 +9630,9 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     const history = (d.paymentHistory || {})[phKey] || [];
     const historyDebt = history.filter(r => !r.paid && r.type !== 'wa_sent' && r.month !== mkA).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
     const sp = extraAccountSplit(d, tenant, acc, mkA, emA);
-    if (!sp) return { ...acc, totalDebt: 0, historyDebt };
-    return { ...acc, totalDebt: sp.owedPrior, historyDebt,
+    const hasMoney = accHasMoney(d, tid, acc);   // v2.14.74 — 🗑️ blocked when true
+    if (!sp) return { ...acc, totalDebt: 0, historyDebt, hasMoney };
+    return { ...acc, totalDebt: sp.owedPrior, historyDebt, hasMoney,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,
       creditApplied: sp.creditApplied, monthDue: sp.monthDue, charge: sp.charge, paidNow: sp.paidNow, status: sp.status };
   });
@@ -9297,15 +9649,28 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
   if (!Array.isArray(accounts)) return res.json({ ok: false, error: 'accounts must be array' });
   // Preserve existing openingDebt values — only update amount/label fields
   const existing = d.tenants[tenantIdx].extraAccounts || [];
+  // v2.14.74 (1א-5A) — an account with a balance / payment history is never deleted
+  // (it would take its debt and history with it). The modal offers ⏸ instead.
+  const goneWithMoney = existing.filter(e => e && !accounts.some(a => a && a.id === e.id) && accHasMoney(d, tid, e));
+  if (goneWithMoney.length) {
+    return res.json({ ok: false, error: 'לא ניתן למחוק חשבון עם יתרה או היסטוריית תשלומים: ' + goneWithMoney.map(e => crAccountKey(e.label)).join(', ') + ' — סמנו "⏸ השהה גבייה" במקום.', blocked: goneWithMoney.map(e => e.id) });
+  }
+  const tplsA = d.accountTemplates || [];
   const merged = accounts.map(acc => {
     const prev = existing.find(e => e.id === acc.id);
+    // v2.14.74 (פ15) — `parseFloat(x) ?? y` never fell back (NaN is not nullish): an
+    // account posted without openingDebt was saved as NaN (→ null). Explicit finite check.
+    const odSent = parseFloat(acc.openingDebt), odPrev = prev ? parseFloat(prev.openingDebt) : NaN;
+    // v2.14.74 (ה1-A) — templateId kept (was dropped by this field list); lazy name link.
+    const tplA = accTemplateFor({ templateId: acc.templateId || (prev && prev.templateId), label: acc.label }, tplsA);
     return {
       id:          acc.id,
+      ...(tplA ? { templateId: tplA.id } : {}),
       label:       acc.label,
       type:        acc.type || 'fixed',
       frequency:   acc.frequency || 'monthly',
       amount:      parseFloat(acc.amount) || 0,
-      openingDebt: prev ? (parseFloat(acc.openingDebt) ?? parseFloat(prev.openingDebt) ?? 0) : (parseFloat(acc.openingDebt) || 0),
+      openingDebt: isFinite(odSent) ? odSent : (isFinite(odPrev) ? odPrev : 0),
       matchKeywords: acc.matchKeywords || '',
       formulaNote: acc.formulaNote || '',
       payer:       (acc.payer === 'owner' || acc.payer === 'tenant') ? acc.payer : (prev && prev.payer) || 'owner', // שלב 1: מי משלם
@@ -9320,6 +9685,7 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     const sent = accounts[i] || {};
     if (sent.suspended === true) m.suspended = true;
     const prev = existing.find(e => e.id === m.id);
+    if (m.suspended === true && prev && prev.suspendedByApply === true) m.suspendedByApply = true;   // v2.14.74
     if (Array.isArray(sent.suspensions)) m.suspensions = sent.suspensions;
     normalizeSuspensionPeriods(prev, m, mkA);
   });
