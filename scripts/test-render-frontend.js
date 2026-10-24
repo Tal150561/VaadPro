@@ -3122,7 +3122,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.section('v2.14.74 — template row (EXECUTED renderAccountTemplates)');
   t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
   {
-    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc']);
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth']);
     const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
     const S = runInSandbox('var accountTemplates;\n' + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
       { document: { getElementById: id => els[id] || null } });
@@ -3380,6 +3380,91 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('guide: no fixed example column in the tenants-file table', gd.includes('<code>ביטוח מבנה – יתרת פתיחה</code>'), false);
     t.eq('guide: renamed account → export a new file', gd.includes('שיניתם שם של חשבון בהגדרות?'), true);
     t.eq('guide: the old "suspension of extra accounts is not in the import" line is gone', gd.includes('אינה נכללת בייבוא'), false);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.76 (1ג) — 📅 dated amount UI. EXECUTED page code against the REAL server
+// view / plan (S.amountTimelineView / planTemplateTariff / planMemberTariff) — the page
+// only shows server numbers (CONSUME); handlers carry no data.
+// ════════════════════════════════════════════════════════════════
+{
+  const S = require('./test-lib').loadServer();
+  const app = readSource('public/app.html'), gd = readSource('public/vaadpro-guide.js');
+  const J = o => JSON.parse(JSON.stringify(o));
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const MK = S.getMonthKey(cfg), N1 = S.crMonthAdd(MK, 1);
+  const st = () => ({ config: J(cfg), accountTemplates: [{ id: 'ins', label: 'ביטוח <b>', type: 'fixed', frequency: 'monthly', amount: 50 }],
+    tenants: [{ id: 1, name: 'אור', extraAccounts: [{ id: 'a', templateId: 'ins', label: 'ביטוח <b>', amount: 50, openingDebt: 0 }] },
+              { id: 2, name: 'בן', extraAccounts: [{ id: 'b', templateId: 'ins', label: 'ביטוח <b>', amount: 55, openingDebt: 0 }] }],
+    sentLog: {}, paymentHistory: {}, closedMonthsExtra: [] });
+  const P = runInSandbox(extractFunctions(app, ['esc', 'amtFmtMonth', 'amtSegHtml', 'amtRenderView', 'amtRenderPlan', 'tplNames', 'tplAmountCell', 'taAmountCell', 'amtBuildBody'])
+    + '\nvar amtCtx=null;\nmodule.exports={esc,amtFmtMonth,amtSegHtml,amtRenderView,amtRenderPlan,tplAmountCell,taAmountCell,amtBuildBody,setCtx:function(c){amtCtx=c;}};',
+    { document: { getElementById: id => P_ELS[id] || null } });
+  var P_ELS = {};
+
+  t.section('v2.14.76 (1ג) — amount cells');
+  {
+    const lk = P.tplAmountCell({ id: 'ins', amount: 50, linked: 2, dated: false, nextChange: { from: N1, rate: 60 } }, 0);
+    t.eq('linked definition: amount read-only + 📅 (index only), next change shown', [lk.includes('tpl-amt-ro'), lk.includes("openAmtModal('tpl',0)"), lk.includes('type="number"'), lk.includes('מ-' + P.amtFmtMonth(N1) + ': ₪60')], [true, true, false, true]);
+    const fr = P.tplAmountCell({ id: 'n', amount: 10, linked: 0 }, 3);
+    t.eq('saved unlinked undated: editable input + 📅 button', [fr.includes('type="number"'), fr.includes("openAmtModal('tpl',3)")], [true, true]);
+    t.eq('unsaved definition: input, no 📅', P.tplAmountCell({ id: 'x', amount: 0 }, 1).includes('openAmtModal'), false);
+    const m = P.taAmountCell({ id: 'a', amount: 50, saved: true, amountSource: 'definition', nextChange: { from: N1, rate: 60 } }, 2);
+    t.eq('member saved account: read-only, 📅 by index, source + next change', [m.includes('ta-amt-ro'), m.includes("openAmtModal('member',2)"), m.includes('type="number"'), m.includes('לפי ההגדרה')], [true, true, false, true]);
+    t.eq('member NEW row: editable input', P.taAmountCell({ id: 'q', amount: 7 }, 0).includes('type="number"'), true);
+  }
+
+  t.section('v2.14.76 (1ג) — 📅 modal renders the SERVER view and plan');
+  {
+    const d = st();
+    S.commitTemplateTariff(d, S.planTemplateTariff(d, 'ins', { amount: 60, fromMonth: N1 }));
+    const v = S.amountTimelineView(d, { tpl: 'ins' });
+    const h = P.amtRenderView(v);
+    t.eq('title escapes the label', h.title.includes('ביטוח &lt;b&gt;'), true);
+    t.eq('current amount + linked + personal from the server', [h.current.includes('₪50'), h.current.includes('משויך ל-2 חברים'), h.current.includes('1 עם סכום אישי')], [true, true, true]);
+    t.eq('timeline: 2 segments, planned one cancellable via data-amt-op', [(h.timeline.match(/class="amt-seg"/g) || []).length, h.timeline.includes('⏳ מתוכנן'), h.timeline.includes('data-amt-op="cancel"')], [2, true, true]);
+    t.eq('form: month bounded by the server (min/max) and defaults to it', [h.form.includes('min="' + MK + '"'), h.form.includes('max="' + v.maxMonth + '"'), h.form.includes('value="' + v.defaultFrom + '"')], [true, true, true]);
+    t.eq('include-personal option shown only when there are personal members', h.form.includes('amtInclPersonal'), true);
+    t.eq('no inline data in handlers', /onclick="[^"]*(\{|₪|\d{4}-\d{2})/.test(h.form + h.timeline), false);
+    const pd = st(); pd.sentLog['1__acc__a_' + S.HEBREW_MONTHS[Number(MK.slice(5)) - 1]] = 'bank_import_X_50_payer_x';
+    const vp = S.amountTimelineView(pd, { tpl: 'ins' });
+    t.eq('someone paid this month → the month field starts at next month + hint', [vp.defaultFrom, P.amtRenderView(vp).form.includes('value="' + N1 + '"'), P.amtRenderView(vp).form.includes('כבר שילמו')], [N1, true, true]);
+    const plan = S.planTemplateTariff(st(), 'ins', { amount: 70, fromMonth: N1 });
+    const ph = P.amtRenderPlan('tpl', plan);
+    t.eq('plan: old → new, follow count, personal kept, after-timeline', [ph.includes('₪50 → ₪70'), ph.includes('יעברו לסכום החדש: <strong>1</strong>'), ph.includes('לא ישתנו: 1'), ph.includes('אחרי השינוי')], [true, true, true, true]);
+    const bl = S.planTemplateTariff(pd, 'ins', { amount: 70, fromMonth: MK });
+    t.eq('blocked plan: error + who paid', [bl.ok, P.amtRenderPlan('tpl', bl).includes('כבר שילמו: אור')], [false, true]);
+    const mv = S.amountTimelineView(d, { tid: '2', acc: 'b' });
+    t.eq('member view: personal → revert button offered', P.amtRenderView(mv).form.includes('data-amt-op="revert"'), true);
+    t.eq('member view following the definition → no revert button', P.amtRenderView(S.amountTimelineView(d, { tid: '1', acc: 'a' })).form.includes('data-amt-op="revert"'), false);
+    const mp = S.planMemberTariff(d, '2', 'b', { op: 'revert', fromMonth: N1 });
+    t.eq('member revert plan renders ₪55 → ₪60', P.amtRenderPlan('member', mp).includes('₪55 → ₪60'), true);
+    t.eq('noop plan says so', P.amtRenderPlan('tpl', S.planTemplateTariff(d, 'ins', { amount: 60, fromMonth: N1 })).includes('אין שינוי'), true);
+  }
+
+  t.section('v2.14.76 (1ג) — request body (EXECUTED amtBuildBody)');
+  {
+    P.setCtx({ view: { cancelFrom: N1 } });
+    P_ELS.amtFrom = { value: N1 }; P_ELS.amtNewRate = { value: '65' }; P_ELS.amtInclPersonal = { checked: true };
+    t.eq('set: amount + month + include personal, dryRun', P.amtBuildBody('set'), { op: 'set', amount: 65, fromMonth: N1, includePersonal: true, dryRun: true });
+    t.eq('cancel: the server\'s cancellable month', P.amtBuildBody('cancel'), { op: 'cancel', fromMonth: N1, dryRun: true });
+    P_ELS.amtNewRate = { value: '' };
+    t.eq('empty amount → inline error, no request', !!P.amtBuildBody('set').error, true);
+    t.eq('revert needs no amount', P.amtBuildBody('revert'), { op: 'revert', fromMonth: N1, dryRun: true });
+    P_ELS.amtFrom = { value: '' };
+    t.eq('no month → inline error', !!P.amtBuildBody('set').error, true);
+  }
+
+  t.section('v2.14.76 (1ג) — wiring + guide');
+  {
+    t.eq('modal markup present, above the accounts modal', /id="amtModal" style="display:none;z-index:110;"/.test(app) && ['amtTitle', 'amtTimeline', 'amtForm', 'amtPlan', 'amtGo'].every(x => app.includes('id="' + x + '"')), true);
+    t.eq('one delegated listener on the modal', /addEventListener\('click', amtOnClick\)/.test(app), true);
+    t.eq('commit sends dryRun:false only after a preview', /async function amtCommit\(\)[\s\S]*?!amtCtx\.plan[\s\S]*?dryRun: false/.test(app), true);
+    t.eq('template save restores the list on amountLocked', app.includes('if (d.linked || d.amountLocked) loadAccountTemplates();'), true);
+    t.eq('member modal amount uses taAmountCell', app.includes('${taAmountCell(acc, i)}'), true);
+    t.eq('guide: 📅 box with anchor, both scopes, month rule, paid rule, cancel', ['id="vpg-acc-dated"', '📅 סכום מתוארך', 'לכל החברים', 'לחבר אחד', 'חזור לסכום ההגדרה', 'החודש הפעיל או חודש עתידי', 'כבר שילמו החודש?', 'שינוי מתוכנן'].every(x => gd.includes(x)), true);
+    t.eq('guide: tenants-file amount = from the active month', gd.includes('בחשבון קיים, סכום חדש חל <strong>מהחודש הפעיל</strong>'), true);
   }
 }
 

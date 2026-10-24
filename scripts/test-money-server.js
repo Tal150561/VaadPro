@@ -1817,7 +1817,7 @@ t.section('v2.14.8 — extra-accounts double-run is a NO-OP');
 {
   const { readSource, extractFunctions, runInSandbox } = require('./test-lib');
   const src = readSource('server.js');
-  const code = extractFunctions(src, ['closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid'])
+  const code = extractFunctions(src, ['closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid'].concat(require('./test-lib').EXTRA_AMOUNT_FNS))
     + '\nmodule.exports={closeExtraAccountsForBuilding};';
   const mod = runInSandbox(code, {});
 
@@ -3656,7 +3656,7 @@ const v2_14_64_async = async () => {
   // WA {חשבונות} block — the REAL buildAccountsBlock with its real dependencies
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
   const WA = lib.runInSandbox(months + '\n' + lib.extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock', 'extraAccountSplit', 'extraMonthKeyFor',
-    'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount']) + 'module.exports={buildAccountsBlock};');
+    'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount'].concat(lib.EXTRA_AMOUNT_FNS)) + 'module.exports={buildAccountsBlock};');
   const block = (d, accs) => WA.buildAccountsBlock(d, { id: 9, name: 'x', extraAccounts: accs }, EM).block;
   t.section('v2.14.64 — WA {חשבונות}: byte-identical where it was right, fixed where it was wrong');
   t.eq('unpaid → "• חשמל: *100 ₪*" (unchanged)', block(base(), [A({})]), '\n• חשמל: *100 ₪*');
@@ -3794,7 +3794,7 @@ const v2_14_64_async = async () => {
   const CU = (buildings, nowDate) => {
     const saved = [], backups = [];
     const code = months + '\n' + lib.extractFunctions(src, ['monthBeforeKey', 'monthCloseCatchUpDue', 'catchUpMonthClose',
-      'closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate'])
+      'closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'pickRateFromIntervals', 'resolveTariffRate'].concat(require('./test-lib').EXTRA_AMOUNT_FNS))
       + 'module.exports={catchUpMonthClose,monthCloseCatchUpDue,monthBeforeKey};';
     const m = lib.runInSandbox(code, {
       loadUsers: () => Object.keys(buildings).map(id => ({ tenantId: id })),
@@ -4030,8 +4030,9 @@ const v2_14_64_async = async () => {
   const taBody = src.slice(ta + "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {".length, src.indexOf('\n});\n', ta));
   const runTA = (store, accounts) => { let out;
     // v2.14.74: the handler now also uses accHasMoney / accTemplateFor / crAccountKey (deletion guard, templateId)
-    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'accHasMoney', 'accTemplateFor', 'crAccountKey', 'req', 'res', taBody)
-      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods, S.accHasMoney, S.accTemplateFor, S.crAccountKey,
+    // v2.14.76: + extraAmountForMonth / tplAmountForMonth (saved amount kept, dated seed for new accounts)
+    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'accHasMoney', 'accTemplateFor', 'crAccountKey', 'extraAmountForMonth', 'tplAmountForMonth', 'req', 'res', taBody)
+      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods, S.accHasMoney, S.accTemplateFor, S.crAccountKey, S.extraAmountForMonth, S.tplAmountForMonth,
        { user: { tenantId: 'B' }, params: { tenantId: '7' }, body: { accounts } }, { json: o => { out = o; } });
     return out; };
   const st = { config: { manualMonth: 'אוקטובר' }, tenants: [{ id: 7, name: 'ת', extraAccounts: [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0 }] }] };
@@ -4696,7 +4697,7 @@ const v2_14_64_async = async () => {
     t.eq('plan counts', dry.out.counts, { create: 1, update: 2, delete: 0 });
     t.eq('preview lines', dry.out.items.map(i => [i.name, i.action, i.changes]), [
       ['אור', 'create', ['שיוך חדש', 'סכום 50', 'יתרת פתיחה 200']],
-      ['בן', 'update', ['סכום: 50 → 65']],
+      ['בן', 'update', ['סכום: 50 → 65 (מ-10/2026)']],
       ['גיל', 'update', ['יתרת פתיחה: -40 → 0', 'סטטוס: מושהה → פעיל']]]);
     const c = run(POST, st, { headers: H, rows, dryRun: false });
     t.eq('commit: 1 created, 2 updated; writes ONLY tenants', [c.out.created, c.out.updated, c.saves], [1, 2, [['tenants']]]);
@@ -4814,6 +4815,263 @@ const v2_14_64_async = async () => {
     const r = run(POST, st, { headers: ['הערות'], rows: [row(2, 1, ['משהו'])], dryRun: false });
     t.eq('no definitions → templates 0, nothing recognized, nothing written', [r.out.ok, r.saves.length, JSON.stringify(st) === b], [true, 0, true]);
     t.eq('…dry plan reports templates: 0 (the page shows nothing)', run(POST, st, { headers: ['הערות'], rows: [] }).out.templates, 0);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.76 (1ג) — DATED AMOUNTS for extra accounts (spec 1.7, פ4). Locked: ג1-A
+// personal › definition › legacy · ג2-A the protected close reads the dated amount ·
+// ג3-A month resolution, active/future only · ג4-B active month refused once paid ·
+// ג5-A acc.amount = mirror · ג6-A member change by month + back to the definition.
+// REAL route bodies + the REAL close / analyzer; every "unchanged" asserts its precondition.
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const lib = require('./test-lib');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const routeBody = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head);
+    return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const run = (head, store, body, params, query) => {
+    const code = routeBody(head); let out; const saves = [];
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves.push(Object.keys(p)); Object.assign(store, J(p)); } });
+    const names = Object.keys(g);
+    new Function(...names, 'req', 'res', code)(...names.map(n => g[n]),
+      { params: params || {}, body: body || {}, query: query || {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const TPL = "app.post('/api/account-templates/:id/tariff', authMiddleware, (req, res) => {";
+  const MEM = "app.post('/api/tenant-accounts/:tenantId/:accountId/tariff', authMiddleware, (req, res) => {";
+  const TL = "app.get('/api/amount-timeline', authMiddleware, (req, res) => {";
+  const TSAVE = "app.post('/api/account-templates', authMiddleware, (req, res) => {";
+  const TGET = "app.get('/api/account-templates', authMiddleware, (req, res) => {";
+  const TACC = "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const TACCG = "app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const MARK = "app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, res) => {";
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const MK = S.getMonthKey(cfg);                    // the active month
+  const N1 = S.crMonthAdd(MK, 1), N2 = S.crMonthAdd(MK, 2), N3 = S.crMonthAdd(MK, 3), P1 = S.crMonthAdd(MK, -1);
+  const heb = mk => S.HEBREW_MONTHS[Number(mk.slice(5)) - 1];
+  const amt = (d, tid, accId, mk) => S.extraAmountForMonth(d, d.tenants.find(x => String(x.id) === String(tid)).extraAccounts.find(a => a.id === accId), mk);
+  const fx = () => ({
+    config: J(cfg),
+    accountTemplates: [{ id: 'ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50 }],
+    tenants: [
+      { id: 1, name: 'אור', extraAccounts: [{ id: 'a', templateId: 'ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }] },
+      { id: 2, name: 'בן', extraAccounts: [{ id: 'b', templateId: 'ins', label: 'ביטוח מבנה', amount: 55, openingDebt: 0 }] },   // own amount (1א per-member edit)
+      { id: 3, name: 'גיל', extraAccounts: [{ id: 'g', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }] },                     // linked by name
+      { id: 4, name: 'דנה' }
+    ],
+    sentLog: {}, paymentHistory: {}, closedMonthsExtra: [P1]
+  });
+
+  t.section('v2.14.76 (1ג) — intervals by month (pure)');
+  {
+    const base = [{ rate: 100, startDate: '2000-01-01', endDate: null }];
+    const a = S.extraIntervalsFrom(base, { rate: 120 }, '2027-01');
+    t.eq('change from 01/2027 closes the old interval at the new start', a, [{ rate: 100, startDate: '2000-01-01', endDate: '2027-01-01' }, { rate: 120, startDate: '2027-01-01', endDate: null }]);
+    const tp = { amount: 100, amountTariffs: a };
+    t.eq('12/2026 = 100 · 01/2027 = 120 · 1999-era month = 100 (retroactive seed)', [S.tplAmountForMonth(tp, '2026-12'), S.tplAmountForMonth(tp, '2027-01'), S.tplAmountForMonth(tp, '2001-05')], [100, 120, 100]);
+    const b = S.extraIntervalsFrom(a, { rate: 90 }, '2026-11');
+    t.eq('an earlier change REPLACES the planned one after it', b.map(x => [x.rate, x.startDate, x.endDate]), [[100, '2000-01-01', '2026-11-01'], [90, '2026-11-01', null]]);
+    const c = S.extraIntervalsFrom(S.extraIntervalsFrom(base, { rate: 110 }, '2027-02'), { rate: 130 }, '2027-03');
+    t.eq('a ONE-MONTH interval still owns its month (no zero-life misfire)', [S.tplAmountForMonth({ amountTariffs: c }, '2027-01'), S.tplAmountForMonth({ amountTariffs: c }, '2027-02'), S.tplAmountForMonth({ amountTariffs: c }, '2027-03')], [100, 110, 130]);
+    t.eq('cancel the LAST planned change → the previous interval reopens', S.extraCancelFrom(c, '2027-03').map(x => [x.rate, x.endDate]), [[100, '2027-02-01'], [110, null]]);
+    t.eq('cancel of a change that is not the last → refused (null)', S.extraCancelFrom(c, '2027-02'), null);
+    const d = { accountTemplates: [{ id: 'T', label: 'X', amount: 100, amountTariffs: S.extraIntervalsFrom(base, { rate: 140 }, '2027-03') }] };
+    const acc = { id: 'q', templateId: 'T', label: 'X', amount: 80, amountTariffs: S.extraIntervalsFrom([{ rate: 80, startDate: '2000-01-01', endDate: null }], { follow: true }, '2027-01') };
+    t.eq('personal 80 → back to the definition from 01/2027 → follows its later change', [S.extraAmountForMonth(d, acc, '2026-12'), S.extraAmountForMonth(d, acc, '2027-01'), S.extraAmountForMonth(d, acc, '2027-03')], [80, 100, 140]);
+    t.eq('sources: personal / definition', [S.extraAmountSource(d, acc, '2026-12'), S.extraAmountSource(d, acc, '2027-01')], ['personal', 'definition']);
+    t.eq('legacy account (no dates anywhere) → acc.amount, exactly as before', S.extraAmountForMonth({}, { id: 'z', amount: 37 }, '2019-01'), 37);
+    t.eq('legacy zero/empty amount → 0 (same as parseFloat || 0)', [S.extraAmountForMonth({}, { id: 'z', amount: '' }, MK), S.extraAmountForMonth({}, { id: 'z' }, MK)], [0, 0]);
+  }
+
+  t.section('v2.14.76 (1ג) — change for everyone (REAL route)');
+  {
+    const st = fx(); const before = JSON.stringify(st);
+    const dry = run(TPL, st, { amount: 60, fromMonth: N1 }, { id: 'ins' });
+    t.eq('dryRun is the DEFAULT → nothing saved', [dry.out.ok, dry.out.dryRun, dry.saves.length, JSON.stringify(st) === before], [true, true, 0, true]);
+    t.eq('plan: אור + גיל follow (50 → 60), בן keeps his own 55', [dry.out.follow.map(f => [f.name, f.from, f.to]), dry.out.personal.map(p => [p.name, p.amount])], [[['אור', 50, 60], ['גיל', 50, 60]], [['בן', 55]]]);
+    t.eq('plan: first change seeds the definition + בן\'s own amount', [dry.out.seedTemplate, dry.out.seedPersonal], [true, ['2']]);
+    const c = run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('commit writes accountTemplates + tenants', [c.out.changed, c.saves], [true, [['accountTemplates', 'tenants']]]);
+    t.eq('אור: active month 50, next month 60', [amt(st, 1, 'a', MK), amt(st, 1, 'a', N1), amt(st, 1, 'a', N3)], [50, 60, 60]);
+    t.eq('גיל (name link): follows too + templateId stamped', [amt(st, 3, 'g', N1), st.tenants[2].extraAccounts[0].templateId], [60, 'ins']);
+    t.eq('בן: keeps 55 before AND after', [amt(st, 2, 'b', MK), amt(st, 2, 'b', N1)], [55, 55]);
+    t.eq('PAST months keep their amount (retroactive seed 2000-01)', [amt(st, 1, 'a', P1), amt(st, 1, 'a', '2024-03')], [50, 50]);
+    t.eq('ג5 mirror: tpl.amount / acc.amount = the ACTIVE month (50)', [st.accountTemplates[0].amount, st.tenants[0].extraAccounts[0].amount], [50, 50]);
+    const again = run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('same change again → no-op (idempotent)', [again.out.changed, again.saves.length], [false, 0]);
+    const tl = run(TL, st, null, null, { tpl: 'ins' }).out;
+    t.eq('timeline (server): 50 until this month, 60 from next; cancellable', [tl.segments.map(s => [s.from, s.to, s.rate]), tl.cancelFrom], [[['2000-01', MK, 50], [N1, null, 60]], N1]);
+    const can = run(TPL, st, { op: 'cancel', fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('cancel the planned change → 50 again from next month', [can.out.changed, amt(st, 1, 'a', N1)], [true, 50]);
+  }
+
+  t.section('v2.14.76 (1ג) — ג3 / ג4 guards');
+  {
+    const st = fx();
+    const past = run(TPL, st, { amount: 60, fromMonth: S.crMonthAdd(MK, -2), dryRun: false }, { id: 'ins' });   // not closed — refused for being past
+    t.eq('a past month → refused, nothing saved', [past.out.ok, past.saves.length, /העבר לא משתנה/.test(past.out.error)], [false, 0, true]);
+    t.eq('more than 24 months ahead → refused', run(TPL, st, { amount: 60, fromMonth: S.crMonthAdd(MK, 25) }, { id: 'ins' }).out.ok, false);
+    t.eq('bad amount / bad month → refused', [run(TPL, st, { amount: -1, fromMonth: N1 }, { id: 'ins' }).out.ok, run(TPL, st, { amount: 60, fromMonth: '2026-13' }, { id: 'ins' }).out.ok], [false, false]);
+    const stc = fx(); stc.closedMonthsExtra.push(MK);
+    t.eq('the active month already closed → refused', run(TPL, stc, { amount: 60, fromMonth: MK }, { id: 'ins' }).out.ok, false);
+    const free = fx();
+    const ok = run(TPL, free, { amount: 60, fromMonth: MK, dryRun: false }, { id: 'ins' });
+    t.eq('active month, nobody paid yet → allowed; the split charges 60 now', [ok.out.changed, S.extraAccountSplit(free, free.tenants[0], free.tenants[0].extraAccounts[0], MK, heb(MK)).charge], [true, 60]);
+    const adv = fx(); run(TPL, adv, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    adv.config.manualMonth = heb(N1);                                    // the month rolls over; nothing rewrote the mirror
+    t.eq('precondition: active month is now N1, the mirror still 50', [S.getMonthKey(adv.config), adv.tenants[0].extraAccounts[0].amount], [N1, 50]);
+    t.eq('the SPLIT charges the dated 60 in N1 (never the stale mirror)', S.extraAccountSplit(adv, adv.tenants[0], adv.tenants[0].extraAccounts[0], N1, heb(N1)).charge, 60);
+    const paid = fx(); paid.sentLog['1__acc__a_' + heb(MK)] = 'bank_import_X_50_payer_x';
+    t.eq('precondition: אור paid the active month', S.extraPaidInMonth(paid, 1, paid.tenants[0].extraAccounts[0], MK), true);
+    const bl = run(TPL, paid, { amount: 60, fromMonth: MK, dryRun: false }, { id: 'ins' });
+    t.eq('ג4-B: someone paid this month → refused, NOTHING saved, suggests next month', [bl.out.ok, bl.out.code, bl.out.paidBlocked.map(p => p.name), bl.out.suggest, bl.saves.length], [false, 'paidThisMonth', ['אור'], N1, 0]);
+    t.eq('…next month is allowed', run(TPL, paid, { amount: 60, fromMonth: N1 }, { id: 'ins' }).out.ok, true);
+    const ph = fx(); ph.paymentHistory['3__acc__g'] = [{ month: MK, paid: true, amount: 50, paidAmount: 50, type: 'manual' }];
+    t.eq('ג4-B also reads a paid history record', run(TPL, ph, { amount: 60, fromMonth: MK }, { id: 'ins' }).out.code, 'paidThisMonth');
+    const ip = fx();
+    const inc = run(TPL, ip, { amount: 60, fromMonth: N1, includePersonal: true, dryRun: false }, { id: 'ins' });
+    t.eq('"include personal": בן follows from next month, keeps 55 before', [inc.out.changed, amt(ip, 2, 'b', MK), amt(ip, 2, 'b', N1)], [true, 55, 60]);
+    t.eq('formula definition → refused', run(TPL, Object.assign(fx(), { accountTemplates: [{ id: 'ins', label: 'ביטוח מבנה', type: 'formula', frequency: 'monthly', amount: 0 }] }), { amount: 1, fromMonth: N1 }, { id: 'ins' }).out.ok, false);
+  }
+
+  t.section('v2.14.76 (1ג) — one member (REAL route)');
+  {
+    const st = fx();
+    run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    const m = run(MEM, st, { amount: 70, fromMonth: N2, dryRun: false }, { tenantId: '1', accountId: 'a' });
+    t.eq('אור 70 from N2: N1 = 60 (definition), N2 = 70 (own)', [m.out.changed, amt(st, 1, 'a', N1), amt(st, 1, 'a', N2)], [true, 60, 70]);
+    t.eq('other members unchanged', amt(st, 3, 'g', N2), 60);
+    const r = run(MEM, st, { op: 'revert', fromMonth: N3, dryRun: false }, { tenantId: '1', accountId: 'a' });
+    t.eq('↩ back to the definition from N3', [r.out.changed, amt(st, 1, 'a', N2), amt(st, 1, 'a', N3), S.extraAmountSource(st, st.tenants[0].extraAccounts[0], N3)], [true, 70, 60, 'definition']);
+    const tl = run(TL, st, null, null, { tid: '1', acc: 'a' }).out;
+    t.eq('member timeline (server)', tl.segments.map(s => [s.from, s.rate, s.source]), [['2000-01', 50, 'definition'], [N1, 60, 'definition'], [N2, 70, 'personal'], [N3, 60, 'definition']]);
+    const c = run(MEM, st, { op: 'cancel', fromMonth: N3, dryRun: false }, { tenantId: '1', accountId: 'a' });
+    t.eq('cancel the planned revert → 70 continues', [c.out.changed, amt(st, 1, 'a', N3)], [true, 70]);
+    const und = fx();
+    t.eq('revert while the definition has no dates → refused (explains)', run(MEM, und, { op: 'revert', fromMonth: N1 }, { tenantId: '1', accountId: 'a' }).out.ok, false);
+    const leg = fx(); leg.tenants[3].extraAccounts = [{ id: 'w', label: 'מים', amount: 30, openingDebt: 0 }];
+    run(MEM, leg, { amount: 35, fromMonth: N1, dryRun: false }, { tenantId: '4', accountId: 'w' });
+    t.eq('unlinked account: own dates, past keeps 30', [amt(leg, 4, 'w', MK), amt(leg, 4, 'w', N1)], [30, 35]);
+    const pd = fx(); pd.sentLog['2__acc__b_' + heb(MK)] = 'manual_paid_X_amount_55';
+    const bl = run(MEM, pd, { amount: 40, fromMonth: MK, dryRun: false }, { tenantId: '2', accountId: 'b' });
+    t.eq('ג4-B for one member: paid this month → refused, nothing saved', [bl.out.ok, bl.out.code, bl.saves.length], [false, 'paidThisMonth', 0]);
+  }
+
+  t.section('v2.14.76 (1ג, ג2-A) — the PROTECTED close charges the closed month\'s dated amount (REAL)');
+  {
+    const close = lib.loadCloseExtra();
+    const st = fx();
+    run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    const acc = st.tenants[0].extraAccounts[0];
+    t.eq('precondition: the mirror still says 50, N1 is 60', [acc.amount, amt(st, 1, 'a', N1)], [50, 60]);
+    close(st, st.tenants[0], N1);
+    t.eq('close of N1 (unpaid) accrues 60, not the mirror 50', acc.openingDebt, 60);
+    close(st, st.tenants[0], MK);
+    t.eq('close of the active month (unpaid) accrues 50', acc.openingDebt, 110);
+    const b = st.tenants[1]; close(st, b, N1);
+    t.eq('בן (own 55) accrues 55 in N1', b.extraAccounts[0].openingDebt, 55);
+    const leg = { tenants: [{ id: 9, extraAccounts: [{ id: 'l', label: 'x', amount: 40, openingDebt: 0 }] }], paymentHistory: {} };
+    close(leg, leg.tenants[0], MK);
+    t.eq('legacy account without dates → same as before (live amount 40)', leg.tenants[0].extraAccounts[0].openingDebt, 40);
+  }
+
+  t.section('v2.14.76 (1ג) — report: a change never rewrites past months');
+  {
+    const st = fx();
+    st.paymentHistory['1__acc__a'] = [{ month: P1, paid: true, amount: 45, paidAmount: 50, type: 'bank' }];
+    const rep = () => S.buildCollectionReport(st, { from: P1, to: N2, mkNow: MK, emNow: heb(MK) });
+    const cell = (r, m) => { const a = r.accounts.find(x => x.key === 'x:ביטוח מבנה'); return a && a.months ? a.months.find(x => x.month === m) : null; };
+    const charged = r => r.accounts.find(x => x.key === 'x:ביטוח מבנה').charged;
+    const past = () => S.buildCollectionReport(st, { from: P1, to: MK, mkNow: MK, emNow: heb(MK) });
+    const r0 = past();
+    t.eq('precondition: P1..MK charged > 0', charged(r0) > 0, true);
+    run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    run(MEM, st, { amount: 80, fromMonth: N1, dryRun: false }, { tenantId: '1', accountId: 'a' });
+    t.eq('P1..MK report is IDENTICAL after the change (past never rewritten)', JSON.stringify(past().accounts), JSON.stringify(r0.accounts));
+    const c = { closed: new Set(), closedExtra: new Set([P1]), sentLogFloor: MK, mkNow: MK };
+    t.eq('closed PAID month: the FROZEN charge (45) wins over the dated amount (50)', [S.crExtraMonth(st, st.tenants[0], st.tenants[0].extraAccounts[0], P1, c).charged, amt(st, 1, 'a', P1)], [45, 50]);
+    t.eq('N1 report month: 80 (own) / 60 (definition)', [S.crExtraMonth(st, st.tenants[0], st.tenants[0].extraAccounts[0], N1, c).charged, S.crExtraMonth(st, st.tenants[2], st.tenants[2].extraAccounts[0], N1, c).charged], [80, 60]);
+  }
+
+  t.section('v2.14.76 (1ג) — payments freeze the month\'s dated amount (agent + manual)');
+  {
+    const B = lib.loadBankAnalyzer();
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+    const tpls = [{ id: 'ins', label: 'ביטוח', amount: 50, amountTariffs: [{ rate: 50, startDate: '2000-01-01', endDate: '2026-09-01' }, { rate: 70, startDate: '2026-09-01', endDate: null }] }];
+    const tn = () => [{ id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', templateId: 'ins', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }] }];
+    const r = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '70', '05/09/2026']], mapping, tn(), {}, '2026-09', { amount: 217 }, new Set(), {}, {}, [], ['2026-07'], tpls);
+    t.eq('agent: the September record freezes 70 (dated), not the mirror 50', r.newPaymentHistory['Z__acc__a1'][0].amount, 70);
+    const r8 = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '50', '05/08/2026']], mapping, tn(), {}, '2026-08', { amount: 217 }, new Set(), {}, {}, [], ['2026-07'], tpls);
+    t.eq('agent: an August payment freezes 50', r8.newPaymentHistory['Z__acc__a1'][0].amount, 50);
+    const rl = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '50', '05/09/2026']], mapping, tn(), {}, '2026-09', { amount: 217 }, new Set(), {}, {}, [], ['2026-07']);
+    t.eq('agent without templates (old caller) → the account amount, as before', rl.newPaymentHistory['Z__acc__a1'][0].amount, 50);
+    const st = fx(); run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    st.config.manualMonth = heb(N1);                                      // mirror still 50
+    const mk = run(MARK, st, {}, { tenantId: '1', accountId: 'a' });
+    const rec = st.paymentHistory['1__acc__a'].find(x => x.month === N1);
+    t.eq('manual "סמן ששילם": frozen + default paid = the dated 60', [mk.out.ok, rec.amount, rec.paidAmount], [true, 60, 60]);
+  }
+
+  t.section('v2.14.76 (1ג) — save paths keep dates (definitions, member modal, tenants file)');
+  {
+    const st = fx(); run(TPL, st, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    const g = run(TGET, st).out.templates[0];
+    t.eq('GET definitions: amount = active month, dated, next change', [g.amount, g.dated, g.nextChange], [50, true, { from: N1, rate: 60 }]);
+    const page = J(g); delete page.amountTariffs;                       // a page never sends the dates back
+    const sv = run(TSAVE, st, { templates: [page] });
+    t.eq('settings save without dates → dates KEPT, display fields not stored', [sv.out.ok, st.accountTemplates[0].amountTariffs.length, 'dated' in st.accountTemplates[0], 'nextChange' in st.accountTemplates[0]], [true, 2, false, false]);
+    const ed = J(page); ed.amount = 99;
+    const rf = run(TSAVE, st, { templates: [ed] });
+    t.eq('settings: editing a dated amount → refused (points to 📅), nothing saved', [rf.out.ok, rf.out.amountLocked, rf.saves.length], [false, 'ins', 0]);
+    const lk = fx(); const e2 = J(lk.accountTemplates[0]); e2.amount = 70;
+    t.eq('settings: a LINKED undated definition → refused too', run(TSAVE, lk, { templates: [e2] }).out.ok, false);
+    const fr = { config: J(cfg), tenants: [], accountTemplates: [{ id: 'n', label: 'חדש', type: 'fixed', frequency: 'monthly', amount: 10 }] };
+    const e3 = J(fr.accountTemplates[0]); e3.amount = 12;
+    t.eq('settings: an unlinked undated definition → still editable', [run(TSAVE, fr, { templates: [e3] }).out.ok, fr.accountTemplates[0].amount], [true, 12]);
+
+    const accs = run(TACCG, st, null, { tenantId: '1' }).out.accounts;
+    t.eq('member GET: amount = active month, source, next change', [accs[0].amount, accs[0].amountSource, accs[0].nextChange], [50, 'definition', { from: N1, rate: 60 }]);
+    const sent = J(accs); sent[0].amount = 99;
+    const sa = run(TACC, st, { accounts: sent }, { tenantId: '1' });
+    t.eq('member modal save: a saved amount is NOT changed by the form (reported)', [sa.out.ok, sa.out.amountIgnored, amt(st, 1, 'a', MK), amt(st, 1, 'a', N1)], [true, ['ביטוח מבנה'], 50, 60]);
+    const lg = fx(); lg.tenants[3].extraAccounts = [{ id: 'w', label: 'מים', amount: 30, openingDebt: 0 }];
+    const lgs = run(TACC, lg, { accounts: [{ id: 'w', label: 'מים', amount: 99, openingDebt: 0 }] }, { tenantId: '4' });
+    t.eq('legacy saved account: the form cannot rewrite its amount (history safe)', [lgs.out.amountIgnored, lg.tenants[3].extraAccounts[0].amount, amt(lg, 4, 'w', P1)], [['מים'], 30, 30]);
+    t.eq('…dates survive the form save', st.tenants[0].extraAccounts[0].amountTariffs === undefined ? 'follows' : 'own', 'follows');
+    const d4 = run(TACC, st, { accounts: [{ id: 'n4', templateId: 'ins', label: 'ביטוח מבנה', amount: 45 }] }, { tenantId: '4' });
+    t.eq('new account on a DATED definition with 45 → its own 45 for every month', [d4.out.ok, amt(st, 4, 'n4', P1), amt(st, 4, 'n4', N2)], [true, 45, 45]);
+    run(TACC, st, { accounts: [{ id: 'n4', templateId: 'ins', label: 'ביטוח מבנה', amount: 45 }, { id: 'n5', templateId: 'ins', label: 'x', amount: 50 }] }, { tenantId: '4' });
+
+    const ap = fx(); run(TPL, ap, { amount: 60, fromMonth: N1, dryRun: false }, { id: 'ins' });
+    const t4 = ap.tenants[3]; t4.extraAccounts = [S.accFromTemplate(ap.accountTemplates[0], t4, MK, {})];
+    t.eq('apply (accFromTemplate) at the definition amount → follows (no own dates)', [t4.extraAccounts[0].amountTariffs, S.extraAmountForMonth(ap, t4.extraAccounts[0], N1)], [undefined, 60]);
+    const o = S.accFromTemplate(ap.accountTemplates[0], t4, MK, { amount: 40, id: 'o' });
+    t.eq('apply with a different amount → own amount for every month', [S.extraAmountForMonth(ap, o, MK), S.extraAmountForMonth(ap, o, N1)], [40, 40]);
+  }
+
+  t.section('v2.14.76 (1ג) — tenants file "סכום" = a change from the active month');
+  {
+    const POST = "app.post('/api/tenant-file-accounts', authMiddleware, (req, res) => {";
+    const GET = "app.get('/api/tenant-file-accounts', authMiddleware, (req, res) => {";
+    const st = fx();
+    const e = run(GET, st).out;
+    const rows = [{ row: 2, tenantId: 1, name: 'אור', cells: ['', '65', ''] }];
+    const c = run(POST, st, { headers: e.headers, rows, dryRun: false }).out;
+    t.eq('file 65 for אור → updated; previous month keeps 50', [c.updated, amt(st, 1, 'a', MK), amt(st, 1, 'a', P1)], [1, 65, 50]);
+    t.eq('export → import of the SAME file = no-op (round trip)', run(POST, st, { headers: run(GET, st).out.headers, rows: [{ row: 2, tenantId: 1, name: 'אור', cells: run(GET, st).out.byTenant['1'].map(String) }] }).out.items.length, 0);
+    const pd = fx(); pd.sentLog['1__acc__a_' + heb(MK)] = 'bank_import_X_50_payer_x';
+    const p = run(POST, pd, { headers: e.headers, rows, dryRun: false }).out;
+    t.eq('paid this month → warning, amount NOT changed (ג4-B)', [p.updated, amt(pd, 1, 'a', MK), p.warnings.some(w => /כבר שולם החודש/.test(w.msg))], [0, 50, true]);
+  }
+
+  t.section('v2.14.76 (1ג) — a building without extra accounts is untouched');
+  {
+    const st = { config: J(cfg), tenants: [{ id: 1, name: 'א' }], sentLog: {}, paymentHistory: {} }; const b = JSON.stringify(st);
+    t.eq('template route on a building without definitions → refused, nothing written', [run(TPL, st, { amount: 1, fromMonth: N1, dryRun: false }, { id: 'x' }).out.ok, JSON.stringify(st) === b], [false, true]);
+    t.eq('timeline of an unknown account → error, read-only', [run(TL, st, null, null, { tid: '1', acc: 'q' }).out.ok, JSON.stringify(st) === b], [false, true]);
   }
 }
 

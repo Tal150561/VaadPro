@@ -3232,9 +3232,9 @@ function crExtraMonth(d, t, acc, M, c) {
   const tid = String(t.id);
   const mon = Number(M.slice(5));
   const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
-  const amount = parseFloat(acc.amount) || 0;
+  const amount = extraAmountForMonth(d, acc, M);   // v2.14.76 (1ג) — the month's dated amount, never today's
   const useSentLog = !c.closedExtra.has(M) && M >= c.sentLogFloor && M <= c.mkNow;
-  let paid = 0, source = null;
+  let paid = 0, source = null, frozen = null;
   if (useSentLog) {
     const v = (d.sentLog || {})[tid + '__acc__' + acc.id + '_' + HEBREW_MONTHS[mon - 1]];
     if (sentLogIsPayment(v)) {
@@ -3245,9 +3245,13 @@ function crExtraMonth(d, t, acc, M, c) {
   } else {
     const hist = (d.paymentHistory || {})[tid + '__acc__' + acc.id] || [];
     const rec = hist.find(r => r.month === M && r.type !== 'wa_sent' && r.paid);
-    if (rec) { paid = parseFloat(rec.paidAmount ?? rec.amount ?? amount) || 0; source = rec.type === 'bank' ? 'bank' : 'manual'; }
+    if (rec) {
+      paid = parseFloat(rec.paidAmount ?? rec.amount ?? amount) || 0; source = rec.type === 'bank' ? 'bank' : 'manual';
+      if (rec.amount != null && !isNaN(parseFloat(rec.amount))) frozen = parseFloat(rec.amount);   // 1ג: closed paid month = frozen charge
+    }
   }
-  let charged = (billing && amount > 0) ? amount : 0;
+  const chargeAmt = frozen !== null ? frozen : amount;
+  let charged = (billing && chargeAmt > 0) ? chargeAmt : 0;
   if (charged === 0 && paid <= 0) return null;
   let status = paid <= 0 ? 'unpaid' : (paid < charged ? 'partial' : 'paid');
   if (crSuspendedIn(acc, M) && status !== 'paid') { charged = 0; status = 'exempt'; }   // v2.14.69: by period
@@ -3257,6 +3261,344 @@ function crExtraMonth(d, t, acc, M, c) {
 // Grouping key for an extra account across members: trimmed, single-spaced label.
 function crAccountKey(label) {
   return String(label || '').trim().replace(/\s+/g, ' ') || 'חשבון נוסף';
+}
+
+// ══ v2.14.76 (1ג) — DATED AMOUNTS for extra accounts (spec 1.7, פ4) ═══════════════
+// Locked with Tal 2026-10-24: ג1-A personal › definition › acc.amount (legacy) · ג2-A the
+// protected close reads this resolver (one line) · ג3-A month resolution, active or a
+// future month only · ג4-B a change FROM THE ACTIVE MONTH is refused while an affected
+// member already paid that month (choose next month) · ג5-A acc.amount / tpl.amount are a
+// MIRROR of the active month for display — money paths never read them once dated
+// amounts exist · ג6-A per-member change by month + "back to the definition".
+// Intervals: [{rate, startDate:'YYYY-MM-01', endDate|null}] — same shape and the same
+// monthInInterval as the main account; a change CLOSES the previous interval at the new
+// start (latest start wins, exactly like closeAndOpenInterval). A member interval may be
+// {follow:true} = "the definition's amount from here on" (used by ↩ חזור להגדרה).
+// A first change seeds from 2000-01-01, so the months before it keep their amount.
+function extraIvAt(intervals, monthKey) {
+  if (!Array.isArray(intervals) || !intervals.length) return null;
+  let best = null;
+  for (const iv of intervals) {
+    if (!iv || !monthInInterval(monthKey, iv)) continue;
+    const usable = iv.follow === true || (iv.rate != null && iv.rate !== '' && isFinite(parseFloat(iv.rate)));
+    if (!usable) continue;
+    if (!best || String(iv.startDate) > String(best.startDate)) best = iv;
+  }
+  return best;
+}
+
+// The definition's amount for a month (its dated amounts, else its single amount).
+function tplAmountForMonth(tpl, monthKey) {
+  if (!tpl) return 0;
+  const iv = extraIvAt(tpl.amountTariffs, monthKey);
+  if (iv && iv.follow !== true) return parseFloat(iv.rate);
+  return parseFloat(tpl.amount) || 0;
+}
+
+// THE amount of an extra account for a month. Every money path reads this.
+function extraAmountForMonth(d, acc, monthKey) {
+  if (!acc) return 0;
+  const own = extraIvAt(acc.amountTariffs, monthKey);
+  if (own && own.follow !== true) return parseFloat(own.rate);
+  const tpl = accTemplateFor(acc, (d && d.accountTemplates) || []);
+  if (tpl) {
+    const iv = extraIvAt(tpl.amountTariffs, monthKey);
+    if (iv && iv.follow !== true) return parseFloat(iv.rate);
+  }
+  return parseFloat(acc.amount) || 0;
+}
+
+// Where the month's amount comes from: 'personal' | 'definition' | 'fixed' (legacy scalar).
+function extraAmountSource(d, acc, monthKey) {
+  const own = extraIvAt(acc && acc.amountTariffs, monthKey);
+  if (own && own.follow !== true) return 'personal';
+  const tpl = accTemplateFor(acc, (d && d.accountTemplates) || []);
+  if (tpl && (() => { const iv = extraIvAt(tpl.amountTariffs, monthKey); return iv && iv.follow !== true; })()) return 'definition';
+  return 'fixed';
+}
+
+// New interval list: everything starting at/after fromMk is replaced, the interval that
+// covers fromMk is closed at its start, and `entry` ({rate} | {follow:true}) opens there.
+function extraIntervalsFrom(intervals, entry, fromMk) {
+  const start = String(fromMk).slice(0, 7) + '-01';
+  const out = [];
+  (Array.isArray(intervals) ? intervals : []).forEach(iv => {
+    if (!iv || !iv.startDate) return;
+    if (String(iv.startDate).slice(0, 7) >= start.slice(0, 7)) return;
+    const c = Object.assign({}, iv);
+    if (c.endDate == null || c.endDate === '' || String(c.endDate).slice(0, 7) >= start.slice(0, 7)) c.endDate = start;
+    out.push(c);
+  });
+  out.push(entry && entry.follow === true
+    ? { follow: true, startDate: start, endDate: null }
+    : { rate: Math.round(parseFloat(entry.rate) * 100) / 100, startDate: start, endDate: null });
+  return out;
+}
+
+// Cancel a PLANNED change: only the last interval, only when it starts at fromMk.
+// The interval before it is reopened. null → nothing to cancel.
+function extraCancelFrom(intervals, fromMk) {
+  const list = (Array.isArray(intervals) ? intervals : []).filter(iv => iv && iv.startDate);
+  if (list.length < 2) return null;
+  const sorted = list.slice().sort((a, b) => String(a.startDate) < String(b.startDate) ? -1 : 1);
+  const last = sorted[sorted.length - 1];
+  if (String(last.startDate).slice(0, 7) !== String(fromMk).slice(0, 7)) return null;
+  const out = sorted.slice(0, -1).map(iv => Object.assign({}, iv));
+  const prev = out[out.length - 1];
+  if (prev.endDate != null && String(prev.endDate).slice(0, 7) === String(fromMk).slice(0, 7)) prev.endDate = null;
+  return out;
+}
+
+// Did this member account record a payment for month mk? (ג4-B guard)
+function extraPaidInMonth(d, tid, acc, mk) {
+  if (!acc) return false;
+  const phKey = String(tid) + '__acc__' + acc.id;
+  const heb = HEBREW_MONTHS[Number(String(mk).slice(5)) - 1];
+  if (sentLogIsPayment(((d && d.sentLog) || {})[phKey + '_' + heb])) return true;
+  return (((d && d.paymentHistory) || {})[phKey] || []).some(r => r && r.month === mk && r.paid && r.type !== 'wa_sent');
+}
+
+// ג3-A — a change starts in the active month or a future month (≤ 24 months), never in a closed month.
+function extraValidateFromMonth(d, fromMk) {
+  const mkNow = getMonthKey((d && d.config) || {});
+  const m = String(fromMk || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) return { ok: false, error: 'בחרו חודש התחלה' };
+  if (m < mkNow) return { ok: false, error: 'לא ניתן לשנות סכום לחודש שעבר — העבר לא משתנה. בחרו את החודש הפעיל או חודש עתידי.' };
+  if (m > crMonthAdd(mkNow, 24)) return { ok: false, error: 'ניתן לתכנן שינוי עד שנתיים קדימה' };
+  if (Array.isArray(d && d.closedMonthsExtra) && d.closedMonthsExtra.includes(m)) return { ok: false, error: 'החודש כבר נסגר — העבר לא משתנה' };
+  return { ok: true, mkNow };
+}
+
+function extraFmtMonth(mk) { return String(mk).slice(5, 7) + '/' + String(mk).slice(0, 4); }
+
+// First personal intervals for an account that has none: follow the definition when it
+// is dated AND the account's amount equals it; otherwise freeze the account's own amount.
+function extraSeedOwn(d, acc, tpl, mkNow) {
+  if (Array.isArray(acc.amountTariffs) && acc.amountTariffs.length) return false;
+  const r2 = n => Math.round(n * 100) / 100;
+  const tplDated = !!(tpl && Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length);
+  const own = r2(parseFloat(acc.amount) || 0);
+  acc.amountTariffs = (tplDated && own === r2(tplAmountForMonth(tpl, mkNow)))
+    ? [{ follow: true, startDate: '2000-01-01', endDate: null }]
+    : [{ rate: own, startDate: '2000-01-01', endDate: null }];
+  return true;
+}
+
+// Timeline for display (server-side, CONSUMED by the page). acc null → definition only.
+function extraAmountTimeline(d, acc, tpl) {
+  const mkNow = getMonthKey((d && d.config) || {});
+  const starts = new Set(['2000-01']);
+  [(acc && acc.amountTariffs) || [], (tpl && tpl.amountTariffs) || []].forEach(list => {
+    (Array.isArray(list) ? list : []).forEach(iv => { if (iv && iv.startDate) starts.add(String(iv.startDate).slice(0, 7)); });
+  });
+  const months = Array.from(starts).sort();
+  const segs = [];
+  months.forEach(m => {
+    const rate = Math.round((acc ? extraAmountForMonth(d, acc, m) : tplAmountForMonth(tpl, m)) * 100) / 100;
+    const source = acc ? extraAmountSource(d, acc, m) : 'definition';
+    const last = segs[segs.length - 1];
+    if (last && last.rate === rate && last.source === source) return;
+    segs.push({ from: m, rate, source });
+  });
+  segs.forEach((s, i) => {
+    s.to = segs[i + 1] ? crMonthAdd(segs[i + 1].from, -1) : null;
+    s.current = s.from <= mkNow && (s.to === null || s.to >= mkNow);
+    s.future = s.from > mkNow;
+  });
+  return segs;
+}
+
+// The planned change that can still be cancelled (last interval, starts after the active month).
+function extraCancellable(intervals, mkNow) {
+  const list = (Array.isArray(intervals) ? intervals : []).filter(iv => iv && iv.startDate);
+  if (list.length < 2) return null;
+  const last = list.slice().sort((a, b) => String(a.startDate) < String(b.startDate) ? -1 : 1).pop();
+  const m = String(last.startDate).slice(0, 7);
+  return m > mkNow ? m : null;
+}
+
+// ── Change for everyone on the definition (POST /api/account-templates/:id/tariff) ──
+// body: {op:'set', amount, fromMonth, includePersonal} | {op:'cancel', fromMonth}
+function planTemplateTariff(d, tplId, body) {
+  body = body || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'סכום מתוארך זמין לחשבון קבוע בלבד' };
+  const op = body.op === 'cancel' ? 'cancel' : 'set';
+  const v = extraValidateFromMonth(d, body.fromMonth);
+  if (!v.ok) return v;
+  const mkNow = v.mkNow, fromMonth = String(body.fromMonth);
+  const tplDated = Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length > 0;
+  const curTplNow = r2(tplAmountForMonth(tpl, mkNow));
+  let amount = null, intervalsAfter;
+  if (op === 'cancel') {
+    if (!tplDated || extraCancellable(tpl.amountTariffs, mkNow) !== fromMonth) return { ok: false, error: 'אין שינוי מתוכנן שמתחיל ב-' + extraFmtMonth(fromMonth) };
+    intervalsAfter = extraCancelFrom(tpl.amountTariffs, fromMonth);
+  } else {
+    const a = parseFloat(body.amount);
+    if (body.amount === '' || body.amount == null || !isFinite(a) || a < 0) return { ok: false, error: 'סכום לא תקין' };
+    amount = r2(a);
+    const base = tplDated ? tpl.amountTariffs : [{ rate: r2(parseFloat(tpl.amount) || 0), startDate: '2000-01-01', endDate: null }];
+    intervalsAfter = extraIntervalsFrom(base, { rate: amount }, fromMonth);
+  }
+  const replaced = (tplDated && op === 'set') ? tpl.amountTariffs.filter(iv => iv && String(iv.startDate).slice(0, 7) >= fromMonth
+    && !(String(iv.startDate).slice(0, 7) === fromMonth && parseFloat(iv.rate) === amount && (iv.endDate == null || iv.endDate === '')))
+    .map(iv => ({ rate: iv.rate, from: String(iv.startDate).slice(0, 7) })) : [];
+  const virtTpl = Object.assign({}, tpl, { amountTariffs: intervalsAfter });
+  const includePersonal = body.includePersonal === true;
+  const follow = [], personal = [], seedPersonal = [], paidBlocked = [], revertPersonal = [];
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (!acc) continue;
+    const tid = String(t.id), name = t.name || tid;
+    const hasOwn = Array.isArray(acc.amountTariffs) && acc.amountTariffs.length > 0;
+    const own = hasOwn ? extraIvAt(acc.amountTariffs, fromMonth) : null;
+    const accNow = r2(parseFloat(acc.amount) || 0);
+    let isPersonal;
+    if (hasOwn) isPersonal = !!(own && own.follow !== true);
+    else isPersonal = accNow !== curTplNow;
+    if (!hasOwn && isPersonal) seedPersonal.push(tid);
+    const fromAmt = r2(extraAmountForMonth(d, acc, fromMonth));
+    if (isPersonal && !(includePersonal && op === 'set')) { personal.push({ tid, name, amount: fromAmt }); continue; }
+    if (isPersonal) revertPersonal.push(tid);
+    const toAmt = r2(tplAmountForMonth(virtTpl, fromMonth));
+    follow.push({ tid, name, from: fromAmt, to: toAmt, suspended: acc.suspended === true });
+    if (fromMonth === mkNow && fromAmt !== toAmt && extraPaidInMonth(d, tid, acc, mkNow)) paidBlocked.push({ tid, name });
+  }
+  if (paidBlocked.length) {
+    return { ok: false, code: 'paidThisMonth', paidBlocked, suggest: crMonthAdd(mkNow, 1),
+      error: paidBlocked.length + ' חברים כבר שילמו את ' + extraFmtMonth(mkNow) + ' לפי הסכום הקודם, ולכן אי אפשר לשנות את החודש הפעיל. בחרו ' + extraFmtMonth(crMonthAdd(mkNow, 1)) + ' או חודש מאוחר יותר.' };
+  }
+  const oldAmount = r2(tplAmountForMonth(tpl, fromMonth));
+  const noop = (op === 'set' && oldAmount === amount && !replaced.length && !revertPersonal.length)
+    || (tplDated && JSON.stringify(intervalsAfter) === JSON.stringify(tpl.amountTariffs) && !seedPersonal.length && !revertPersonal.length);
+  return { ok: true, op, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, fromMonth, amount, oldAmount, noop,
+    seedTemplate: !tplDated, seedPersonal, revertPersonal, includePersonal, replaced,
+    follow, personal, intervalsAfter,
+    timelineAfter: extraAmountTimeline(d, null, virtTpl) };
+}
+
+function commitTemplateTariff(d, plan) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === plan.tplId);
+  if (!tpl || !plan.ok || plan.noop) return { changed: false, members: 0 };
+  const mkNow = plan.mkNow;
+  const linked = [];
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (acc) linked.push({ t, acc });
+  }
+  // Seed BEFORE the definition becomes dated: a member on a different amount keeps it.
+  linked.forEach(({ t, acc }) => {
+    if (plan.seedPersonal.includes(String(t.id)) && !(Array.isArray(acc.amountTariffs) && acc.amountTariffs.length)) {
+      acc.amountTariffs = [{ rate: r2(parseFloat(acc.amount) || 0), startDate: '2000-01-01', endDate: null }];
+    }
+    if (acc.templateId !== tpl.id) acc.templateId = tpl.id;
+  });
+  if (!(Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length)) {
+    tpl.amountTariffs = [{ rate: r2(parseFloat(tpl.amount) || 0), startDate: '2000-01-01', endDate: null }];
+  }
+  tpl.amountTariffs = plan.op === 'cancel' ? (extraCancelFrom(tpl.amountTariffs, plan.fromMonth) || tpl.amountTariffs)
+                                           : extraIntervalsFrom(tpl.amountTariffs, { rate: plan.amount }, plan.fromMonth);
+  linked.forEach(({ t, acc }) => {
+    if (plan.revertPersonal.includes(String(t.id))) acc.amountTariffs = extraIntervalsFrom(acc.amountTariffs, { follow: true }, plan.fromMonth);
+  });
+  tpl.amount = r2(tplAmountForMonth(tpl, mkNow));                                   // ג5 mirror
+  linked.forEach(({ acc }) => { acc.amount = r2(extraAmountForMonth(d, acc, mkNow)); });
+  return { changed: true, members: plan.follow.length };
+}
+
+// ── One member (POST /api/tenant-accounts/:tid/:accId/tariff) ──
+// body: {op:'set', amount, fromMonth} | {op:'revert', fromMonth} | {op:'cancel', fromMonth}
+function planMemberTariff(d, tid, accId, body) {
+  body = body || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const t = (d.tenants || []).find(x => String(x.id) === String(tid));
+  if (!t) return { ok: false, error: 'חבר לא נמצא' };
+  const acc = (t.extraAccounts || []).find(a => a && String(a.id) === String(accId));
+  if (!acc) return { ok: false, error: 'החשבון לא נמצא — שמרו את החשבונות ונסו שוב' };
+  if ((acc.type || 'fixed') !== 'fixed') return { ok: false, error: 'סכום מתוארך זמין לחשבון קבוע בלבד' };
+  const op = ['revert', 'cancel'].includes(body.op) ? body.op : 'set';
+  const v = extraValidateFromMonth(d, body.fromMonth);
+  if (!v.ok) return v;
+  const mkNow = v.mkNow, fromMonth = String(body.fromMonth);
+  const tpl = accTemplateFor(acc, d.accountTemplates || []);
+  const tplDated = !!(tpl && Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length);
+  const virt = Object.assign({}, acc, { amountTariffs: (acc.amountTariffs || []).map(iv => Object.assign({}, iv)) });
+  extraSeedOwn(d, virt, tpl, mkNow);
+  let amount = null;
+  if (op === 'cancel') {
+    if (extraCancellable(acc.amountTariffs, mkNow) !== fromMonth) return { ok: false, error: 'אין שינוי מתוכנן שמתחיל ב-' + extraFmtMonth(fromMonth) };
+    virt.amountTariffs = extraCancelFrom(acc.amountTariffs, fromMonth);
+  } else if (op === 'revert') {
+    if (!tplDated) return { ok: false, error: 'להגדרה עדיין אין סכום מתוארך. כדי להשוות לסכום ההגדרה, קבעו ₪' + r2(parseFloat(tpl ? tpl.amount : 0) || 0) + ' מהחודש הרצוי.' };
+    virt.amountTariffs = extraIntervalsFrom(virt.amountTariffs, { follow: true }, fromMonth);
+  } else {
+    const a = parseFloat(body.amount);
+    if (body.amount === '' || body.amount == null || !isFinite(a) || a < 0) return { ok: false, error: 'סכום לא תקין' };
+    amount = r2(a);
+    virt.amountTariffs = extraIntervalsFrom(virt.amountTariffs, { rate: amount }, fromMonth);
+  }
+  const fromAmt = r2(extraAmountForMonth(d, acc, fromMonth));
+  const toAmt = r2(extraAmountForMonth(d, virt, fromMonth));
+  if (op !== 'cancel' && fromMonth === mkNow && fromAmt !== toAmt && extraPaidInMonth(d, tid, acc, mkNow)) {
+    return { ok: false, code: 'paidThisMonth', suggest: crMonthAdd(mkNow, 1),
+      error: (t.name || tid) + ' כבר שילם את ' + extraFmtMonth(mkNow) + ' לפי הסכום הקודם, ולכן אי אפשר לשנות את החודש הפעיל. בחרו ' + extraFmtMonth(crMonthAdd(mkNow, 1)) + ' או חודש מאוחר יותר.' };
+  }
+  const later = (acc.amountTariffs || []).some(iv => iv && String(iv.startDate).slice(0, 7) > fromMonth);
+  const noop = (op !== 'cancel' && fromAmt === toAmt && !later && extraAmountSource(d, acc, fromMonth) === extraAmountSource(d, virt, fromMonth))
+    || JSON.stringify(virt.amountTariffs) === JSON.stringify(acc.amountTariffs || null);
+  return { ok: true, op, tid: String(t.id), accId: acc.id, name: t.name || String(t.id), label: crAccountKey(acc.label),
+    mkNow, fromMonth, amount, from: fromAmt, to: toAmt, noop, intervalsAfter: virt.amountTariffs,
+    timelineAfter: extraAmountTimeline(d, virt, tpl) };
+}
+
+function commitMemberTariff(d, plan) {
+  if (!plan.ok || plan.noop) return { changed: false };
+  const t = (d.tenants || []).find(x => String(x.id) === String(plan.tid));
+  const acc = t && (t.extraAccounts || []).find(a => a && String(a.id) === String(plan.accId));
+  if (!acc) return { changed: false };
+  acc.amountTariffs = plan.intervalsAfter.map(iv => Object.assign({}, iv));
+  const tpl = accTemplateFor(acc, d.accountTemplates || []);
+  if (tpl && acc.templateId !== tpl.id) acc.templateId = tpl.id;
+  acc.amount = Math.round(extraAmountForMonth(d, acc, plan.mkNow) * 100) / 100;   // ג5 mirror
+  return { changed: true };
+}
+
+// Read-only view for 📅 (GET /api/amount-timeline). q: {tpl} | {tid, acc}
+function amountTimelineView(d, q) {
+  const mkNow = getMonthKey((d && d.config) || {});
+  const templates = (d && d.accountTemplates) || [];
+  const base = { ok: true, mkNow, nextMonth: crMonthAdd(mkNow, 1), maxMonth: crMonthAdd(mkNow, 24) };
+  if (q && q.tpl) {
+    const tpl = templates.find(t => t && t.id === q.tpl);
+    if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+    let personal = 0, linked = 0, paidNow = 0;
+    (d.tenants || []).forEach(t => {
+      const a = accLinkedToTemplate(t, tpl, templates); if (!a) return;
+      linked++;
+      if (extraPaidInMonth(d, t.id, a, mkNow)) paidNow++;
+      if (extraAmountSource(d, a, mkNow) === 'personal' || (!(a.amountTariffs || []).length && !(tpl.amountTariffs || []).length
+          && Math.round((parseFloat(a.amount) || 0) * 100) !== Math.round((parseFloat(tpl.amount) || 0) * 100))) personal++;
+    });
+    return Object.assign(base, { scope: 'tpl', tplId: tpl.id, label: crAccountKey(tpl.label), amountNow: Math.round(tplAmountForMonth(tpl, mkNow) * 100) / 100,
+      dated: Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length > 0, linked, personal, paidNow,
+      defaultFrom: paidNow > 0 ? crMonthAdd(mkNow, 1) : mkNow,   // ג4-B: someone paid → next month
+      segments: extraAmountTimeline(d, null, tpl), cancelFrom: extraCancellable(tpl.amountTariffs, mkNow) });
+  }
+  const t = (d.tenants || []).find(x => q && String(x.id) === String(q.tid));
+  const acc = t && (t.extraAccounts || []).find(a => a && String(a.id) === String(q.acc));
+  if (!acc) return { ok: false, error: 'החשבון לא נמצא — שמרו את החשבונות ונסו שוב' };
+  const tpl = accTemplateFor(acc, templates);
+  return Object.assign(base, { scope: 'member', tid: String(t.id), accId: acc.id, name: t.name || String(t.id), label: crAccountKey(acc.label),
+    amountNow: Math.round(extraAmountForMonth(d, acc, mkNow) * 100) / 100, source: extraAmountSource(d, acc, mkNow),
+    canRevert: !!(tpl && Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length), tplLabel: tpl ? crAccountKey(tpl.label) : null,
+    paidThisMonth: extraPaidInMonth(d, t.id, acc, mkNow),
+    defaultFrom: extraPaidInMonth(d, t.id, acc, mkNow) ? crMonthAdd(mkNow, 1) : mkNow,
+    segments: extraAmountTimeline(d, acc, tpl), cancelFrom: extraCancellable(acc.amountTariffs, mkNow) });
 }
 
 // ── v2.14.64 — extra-account split AS OF NOW: THE single source for extras (0c) ──
@@ -3285,7 +3627,7 @@ function extraAccountSplit(d, t, acc, mkNow, emNow) {
     if (r && !r.paid && r.type !== 'wa_sent' && r.month !== mkNow) histDebt += parseFloat(r.amount) || 0;
   });
   const prior = r2(banked + histDebt);
-  const amount = parseFloat(acc.amount) || 0;
+  const amount = extraAmountForMonth(d, acc, mkNow);   // v2.14.76 (1ג) — dated amount of the active month
   const mon = Number(String(mkNow).slice(5));
   const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
   const closedNow = Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(mkNow);
@@ -5769,7 +6111,7 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
     // the whole payment legitimately becomes credit). The real invariant is that
     // the PAID amount is positive; that is checked after `paid` is resolved below.
     const charge = isExtra
-      ? (parseFloat(acc.amount) || 0)
+      ? extraAmountForMonth(d, acc, month)   // v2.14.76 (1ג) — the month's dated amount
       : resolveTariffRate(tenant, d.defaultTariffs, month, (tenant.customAmount) || (d.config && d.config.amount) || 300);
 
     // paymentHistory key + record space (main vs extra).
@@ -7753,7 +8095,7 @@ app.get('/api/portal/:token', (req, res) => {
     ok: true,
     tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId),
       extraAccounts: (tenant.extraAccounts || []).map(a => ({
-        id: a.id, label: a.label, amount: a.amount, frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false,
+        id: a.id, label: a.label, amount: extraAmountForMonth(d, a, getMonthKey(d.config || {})), frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false,
         suspended: a.suspended === true
       }))
     },
@@ -8548,7 +8890,8 @@ function resolveRowCandidates(candidates) {
 // summing them all into the chosen month (which read as a phantom overpayment
 // credit). Single-month files are unchanged. `em`/`monthKey` remain the FALLBACK
 // month for rows with no parseable date, and the reported `month` for the UI.
-function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints, paymentHistory, defaultTariffs, closedMonths, closedMonthsExtra) {
+function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config, importedFingerprints, paymentHistory, defaultTariffs, closedMonths, closedMonthsExtra, accountTemplates) {
+  const _amtCtx = { accountTemplates: Array.isArray(accountTemplates) ? accountTemplates : [] };   // v2.14.76 (1ג)
   // GUARDRAIL 3 (v2.14.39): the agent import path is UNATTENDED — it never does the
   // closed-month reverse-accrual (that requires human approval in the UI). It only
   // needs to NOT silently write onto a closed month. We pass isClosed into the split
@@ -8972,9 +9315,10 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           const phKey = String(tenant.id) + '__acc__' + acc.id;
           const grouped0Acc = groupMatchesByMonth(accMatches, fallbackMk);
           // ── v2.14.38: lump-sum split for extra accounts (symmetric with main). ──
-          // Charge = acc.amount (extra accounts have no tariff history). isPaid reads
-          // the extra-account sentLog key (phKey_<heb>). No split ⇒ unchanged.
-          const accCharge = parseFloat(acc.amount) || 0;
+          // v2.14.76 (1ג) — charge = the account's DATED amount for each month (was the
+          // live acc.amount). isPaid reads the extra-account sentLog key (phKey_<heb>).
+          const accChargeFor = (mk) => extraAmountForMonth(_amtCtx, acc, mk);
+          const accCharge = accChargeFor(fallbackMk);
           const accNote = (accMatches[0] && accMatches[0].note) || '';
           const isPaidAccMonth = (mk) => {
             const heb = hebOfMk(mk);
@@ -8985,7 +9329,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
           const isClosedAccMonth = (mk) => _closedExtra.has(mk) || mk <= _wallExtra; // + v2.14.72 wall
           const { buckets } = accCharge > 0
             ? splitOverpayAcrossMonths(grouped0Acc.buckets, {
-                chargeForMonth: () => accCharge, isPaid: isPaidAccMonth, isClosed: isClosedAccMonth, note: accNote
+                chargeForMonth: accChargeFor, isPaid: isPaidAccMonth, isClosed: isClosedAccMonth, note: accNote
               })
             : grouped0Acc;
           for (const [mk, b] of buckets) {
@@ -9013,7 +9357,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
             newPaymentHistory[phKey].push({
               month: mk,
               paid: true,
-              amount: acc.amount || 0,
+              amount: accChargeFor(mk),   // v2.14.76 (1ג) — freeze the month's dated amount
               paidAmount: accPaid,   // v2.14.58: the month's TOTAL (upserted by mergeExtraPaymentHistory)
               date: new Date().toISOString().split('T')[0],
               type: 'bank_import',
@@ -9115,7 +9459,7 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
 
     const { matched, unmatched, newSentLog, newPaymentHistory, updatedTenants, month, newFingerprints, duplicateWarnings, alreadyImportedSkips, closedMonthHits, ambiguousMatchHits } = analyzeBankRowsServer(
       rows, d.bankMapping, d.tenants || [], d.sentLog || {}, monthKey, d.config, importedFp, d.paymentHistory || {}, d.defaultTariffs,
-      d.closedMonths, d.closedMonthsExtra
+      d.closedMonths, d.closedMonthsExtra, d.accountTemplates
     );
 
     // רשום paymentHistory לדיירים רגילים שזוהו
@@ -9310,8 +9654,9 @@ function accFromTemplate(tpl, tenant, mk, opts) {
   opts = opts || {};
   const r2 = n => Math.round(n * 100) / 100;
   const ov = parseFloat(opts.amount);
+  const base = r2(tplAmountForMonth(tpl, mk));   // v2.14.76 (1ג) — the definition's amount for the start month
   const amount = (opts.amount !== undefined && opts.amount !== null && opts.amount !== '' && isFinite(ov) && ov >= 0)
-    ? r2(ov) : r2(parseFloat(tpl.amount) || 0);
+    ? r2(ov) : base;
   const taken = new Set(((tenant && tenant.extraAccounts) || []).map(a => a && a.id));
   let id = opts.id || ('acc_' + Date.now().toString(36) + Math.floor(Math.random() * 1e6).toString(36));
   while (taken.has(id)) id += 'x';
@@ -9320,6 +9665,11 @@ function accFromTemplate(tpl, tenant, mk, opts) {
     frequency: tpl.frequency || 'monthly', amount, openingDebt: 0, matchKeywords: '', formulaNote: '',
     payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true
   };
+  // v2.14.76 (1ג) — on a DATED definition, a different amount is this member's own
+  // amount (from the start, like a new main-account tariff); equal = follows the definition.
+  if (Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length && amount !== base) {
+    acc.amountTariffs = [{ rate: amount, startDate: '2000-01-01', endDate: null }];
+  }
   if (opts.suspended === true) {
     acc.suspended = true;
     if (opts.byApply === true) acc.suspendedByApply = true;   // released by "▶ התחל גבייה לכולם"
@@ -9352,11 +9702,11 @@ function planApplyTemplate(d, tplId, opts) {
     if (t.suspended === true && opts.includeSuspended !== true) { skippedSuspended.push({ tid, name }); continue; }
     const ov = amounts[tid];
     const pv = parseFloat(ov);
-    const amount = (ov !== undefined && ov !== null && ov !== '' && isFinite(pv) && pv >= 0) ? r2(pv) : r2(parseFloat(tpl.amount) || 0);
+    const amount = (ov !== undefined && ov !== null && ov !== '' && isFinite(pv) && pv >= 0) ? r2(pv) : r2(tplAmountForMonth(tpl, getMonthKey(d.config || {})));
     add.push({ tid, name, amount });
   }
   const totalPerCharge = r2(add.reduce((s, a) => s + a.amount, 0));
-  return { ok: true, tpl: { id: tpl.id, label: tpl.label, amount: parseFloat(tpl.amount) || 0, frequency: tpl.frequency || 'monthly' },
+  return { ok: true, tpl: { id: tpl.id, label: tpl.label, amount: tplAmountForMonth(tpl, getMonthKey(d.config || {})), frequency: tpl.frequency || 'monthly' },
     mk: getMonthKey(d.config || {}), startSuspended: opts.startSuspended === true, includeSuspended: opts.includeSuspended === true,
     add, already, skippedSuspended, relink, conflicts, totalPerCharge };
 }
@@ -9502,7 +9852,7 @@ function validateCollection(d) {
       const odebt = parseFloat(a.openingDebt) || 0;
       const unpaidHist = (((d.paymentHistory || {})[String(t.id) + '__acc__' + a.id]) || []).some(r => r && !r.paid && r.type !== 'wa_sent');
       if (a.active === false) { if (odebt !== 0 || unpaidHist) hidden.push(nm + ' · ' + lbl + ' (₪' + odebt + ')'); return; }
-      if (a.suspended !== true && (a.type || 'fixed') === 'fixed' && !((parseFloat(a.amount) || 0) > 0)) zeroAcc.push(nm + ' · ' + lbl);
+      if (a.suspended !== true && (a.type || 'fixed') === 'fixed' && !(extraAmountForMonth(d, a, getMonthKey(d.config || {})) > 0)) zeroAcc.push(nm + ' · ' + lbl);
       if (a.payer === 'tenant' && !(t.tenant && String(t.tenant.phone || '').trim())) payerNoPhone.push(nm + ' · ' + lbl);
     });
   });
@@ -9588,7 +9938,7 @@ function tenantFileAccountExport(d) {
       const a = accLinkedToTemplate(t, tpl, all);
       if (!a) { row.push('', '', ''); return; }
       row.push(a.active === false ? 'לא פעיל' : (a.suspended === true ? 'מושהה' : 'פעיל'));
-      row.push(parseFloat(a.amount) || 0);
+      row.push(extraAmountForMonth(d, a, getMonthKey(d.config || {})));   // v2.14.76 — active month's amount
       row.push(Math.round((parseFloat(a.openingDebt) || 0) * 100) / 100);
     });
     byTenant[String(t.id)] = row;
@@ -9668,7 +10018,7 @@ function planTenantFileAccounts(d, input) {
           warnings.push({ row, msg: name + ' · ' + label + ' — הוזנו סכום או יתרה, אבל החבר לא משויך לחשבון. כדי לשייך כתבו "פעיל" או "מושהה" בעמודה "' + label + '".' });
           continue;
         }
-        const amt = amount !== null ? amount : r2(parseFloat(tpl.amount) || 0);
+        const amt = amount !== null ? amount : r2(tplAmountForMonth(tpl, mk));
         const changes = ['שיוך חדש' + (status === 'suspended' ? ' (מושהה)' : ''), 'סכום ' + amt];
         if (opening !== null && opening !== 0) changes.push('יתרת פתיחה ' + opening);
         if (!(amt > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
@@ -9676,10 +10026,16 @@ function planTenantFileAccounts(d, input) {
         continue;
       }
       const ch = [], set = {};
-      const curAmt = r2(parseFloat(acc.amount) || 0);
+      const curAmt = r2(extraAmountForMonth(d, acc, mk));   // v2.14.76 (1ג) — active month's dated amount
       if (amount !== null && curAmt !== amount) {
-        ch.push('סכום: ' + curAmt + ' → ' + amount); set.amount = amount;
-        if (!(amount > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
+        // ג6-A: a file amount = a change FROM THE ACTIVE MONTH (earlier months keep theirs);
+        // ג4-B: refused when the member already paid the active month.
+        if (!isNew && extraPaidInMonth(d, t.id, acc, mk)) {
+          warnings.push({ row, msg: name + ' · ' + label + ' — כבר שולם החודש לפי ₪' + curAmt + ', הסכום לא שונה. כדי לשנות מחודש הבא: 💳 חשבונות › 📅 סכום מתוארך.' });
+        } else {
+          ch.push('סכום: ' + curAmt + ' → ' + amount + ' (מ-' + extraFmtMonth(mk) + ')'); set.amount = amount;
+          if (!(amount > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
+        }
       }
       const curOd = r2(parseFloat(acc.openingDebt) || 0);
       if (opening !== null && curOd !== opening) { ch.push('יתרת פתיחה: ' + curOd + ' → ' + opening); set.openingDebt = opening; }
@@ -9721,7 +10077,11 @@ function commitTenantFileAccounts(d, plan) {
       if (!acc) continue;
       const prev = Object.assign({}, acc);
       const s = it.set || {};
-      if (s.amount !== undefined) acc.amount = s.amount;
+      if (s.amount !== undefined) {
+        // v2.14.76 (1ג) — dated change from the active month, never a rewrite of the past
+        const mp = planMemberTariff(d, t.id, acc.id, { op: 'set', amount: s.amount, fromMonth: plan.mk });
+        if (mp.ok) commitMemberTariff(d, mp);
+      }
       if (s.openingDebt !== undefined) acc.openingDebt = s.openingDebt;
       if (s.reactivate === true) acc.active = true;
       if (s.suspended === true) acc.suspended = true;
@@ -9747,7 +10107,12 @@ app.get('/api/account-templates', authMiddleware, (req, res) => {
   const out = tpls.map(t => {
     if (!t || !t.id) return t;
     const ps = planStartBilling(d, t.id);
-    return Object.assign({}, t, { linked: countLinkedToTemplate(d, t, tpls), pending: ps.ok ? ps.start.length : 0 });
+    // v2.14.76 (1ג) — display-only: the active month's amount + the next planned change.
+    const mkT = getMonthKey(d.config || {});
+    const nx = extraAmountTimeline(d, null, t).find(x => x.future);
+    return Object.assign({}, t, { linked: countLinkedToTemplate(d, t, tpls), pending: ps.ok ? ps.start.length : 0,
+      amount: Math.round(tplAmountForMonth(t, mkT) * 100) / 100, dated: Array.isArray(t.amountTariffs) && t.amountTariffs.length > 0,
+      nextChange: nx ? { from: nx.from, rate: nx.rate } : null });
   });
   res.json({ ok: true, templates: out });
 });
@@ -9771,8 +10136,24 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
   const keys = templates.map(t => tplNameKey(t.label));
   const dupK = keys.find((k, i) => keys.indexOf(k) !== i);
   if (dupK !== undefined) return res.json({ ok: false, error: 'שם חשבון מופיע פעמיים: ' + crAccountKey(templates[keys.indexOf(dupK)].label) });
+  // v2.14.76 (1ג) — dated amounts live on the SERVER: kept from the stored definition (never
+  // taken from the page). The amount of a definition that is dated or linked to members
+  // changes only through 📅 (by month) — a silent edit here would rewrite the past.
+  const mkS = getMonthKey(d.config || {});
+  for (const t of templates) {
+    const old = (d.accountTemplates || []).find(p => p && p.id === t.id);
+    delete t.amountTariffs;
+    if (!old) continue;
+    if (Array.isArray(old.amountTariffs) && old.amountTariffs.length) t.amountTariffs = old.amountTariffs;
+    const was = Math.round(tplAmountForMonth(old, mkS) * 100) / 100;
+    const sent = Math.round((parseFloat(t.amount) || 0) * 100) / 100;
+    if (sent !== was && (t.amountTariffs || countLinkedToTemplate(d, old, d.accountTemplates || []) > 0)) {
+      return res.json({ ok: false, error: 'הסכום של "' + crAccountKey(old.label) + '" משתנה דרך 📅 סכום מתוארך (מחודש מסוים) — כך החודשים הקודמים נשארים בסכום שלהם.', amountLocked: t.id });
+    }
+    if (t.amountTariffs) t.amount = was;                                 // mirror of the active month
+  }
   templates.forEach(t => {
-    delete t.linked; delete t.pending;                       // display-only (GET), never stored
+    delete t.linked; delete t.pending; delete t.dated; delete t.nextChange;   // display-only (GET), never stored
     if (t.requiredForAll === true) t.requiredForAll = true; else delete t.requiredForAll;
     if (t.defaultPayer !== 'tenant') delete t.defaultPayer;
   });
@@ -9868,9 +10249,11 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     const history = (d.paymentHistory || {})[phKey] || [];
     const historyDebt = history.filter(r => !r.paid && r.type !== 'wa_sent' && r.month !== mkA).reduce((s, r) => s + (parseFloat(r.amount) || 0), 0);
     const sp = extraAccountSplit(d, tenant, acc, mkA, emA);
-    const hasMoney = accHasMoney(d, tid, acc);   // v2.14.74 — 🗑️ blocked when true
-    if (!sp) return { ...acc, totalDebt: 0, historyDebt, hasMoney };
-    return { ...acc, totalDebt: sp.owedPrior, historyDebt, hasMoney,
+    const hasMoney = accHasMoney(d, tid, acc);   // v2.14.76 (1ג) — amount = the active month's dated amount
+    const dated = { amount: Math.round(extraAmountForMonth(d, acc, mkA) * 100) / 100, amountSource: extraAmountSource(d, acc, mkA), saved: true,
+      nextChange: (() => { const tl = extraAmountTimeline(d, acc, accTemplateFor(acc, d.accountTemplates || [])); const f = tl.find(x => x.future); return f ? { from: f.from, rate: f.rate } : null; })() };
+    if (!sp) return { ...acc, ...dated, totalDebt: 0, historyDebt, hasMoney };
+    return { ...acc, ...dated, totalDebt: sp.owedPrior, historyDebt, hasMoney,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,
       creditApplied: sp.creditApplied, monthDue: sp.monthDue, charge: sp.charge, paidNow: sp.paidNow, status: sp.status };
   });
@@ -9907,7 +10290,10 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
       label:       acc.label,
       type:        acc.type || 'fixed',
       frequency:   acc.frequency || 'monthly',
-      amount:      parseFloat(acc.amount) || 0,
+      // v2.14.76 (1ג, ג6-A) — a SAVED account's amount changes only through 📅 (by month);
+      // this form keeps the stored amount + dated history. A NEW account takes the sent amount.
+      amount:      prev ? (parseFloat(prev.amount) || 0) : (parseFloat(acc.amount) || 0),
+      ...(prev && Array.isArray(prev.amountTariffs) && prev.amountTariffs.length ? { amountTariffs: prev.amountTariffs } : {}),
       openingDebt: isFinite(odSent) ? odSent : (isFinite(odPrev) ? odPrev : 0),
       matchKeywords: acc.matchKeywords || '',
       formulaNote: acc.formulaNote || '',
@@ -9927,6 +10313,21 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     if (Array.isArray(sent.suspensions)) m.suspensions = sent.suspensions;
     normalizeSuspensionPeriods(prev, m, mkA);
   });
+  // v2.14.76 (1ג) — a new account on a DATED definition with a different amount = its own amount.
+  const amountIgnored = [];
+  merged.forEach((m, i) => {
+    const prev = existing.find(e => e.id === m.id);
+    if (prev) {
+      const sentAmt = parseFloat((accounts[i] || {}).amount);
+      if (isFinite(sentAmt) && Math.round(sentAmt * 100) !== Math.round(extraAmountForMonth(d, prev, mkA) * 100)) amountIgnored.push(crAccountKey(m.label));
+      return;
+    }
+    const tplN = accTemplateFor(m, tplsA);
+    if (tplN && Array.isArray(tplN.amountTariffs) && tplN.amountTariffs.length) {
+      const base = Math.round(tplAmountForMonth(tplN, mkA) * 100) / 100;
+      if (Math.round(m.amount * 100) / 100 !== base) m.amountTariffs = [{ rate: Math.round(m.amount * 100) / 100, startDate: '2000-01-01', endDate: null }];
+    }
+  });
   d.tenants[tenantIdx].extraAccounts = merged;
   // שלב 1: שמירת סלוטי בעלים/שוכר (אם נשלחו) — שדות שם/טלפון/אימייל לכל סלוט
   const cleanSlot = (o) => {
@@ -9940,7 +10341,37 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
   if (req.body.owner  !== undefined) d.tenants[tenantIdx].owner  = cleanSlot(req.body.owner);
   if (req.body.tenant !== undefined) d.tenants[tenantIdx].tenant = cleanSlot(req.body.tenant);
   saveTenantData(req.user.tenantId, { tenants: d.tenants });
-  res.json({ ok: true });
+  res.json({ ok: true, amountIgnored });
+});
+
+// ── v2.14.76 (1ג) — 📅 dated amount: timeline + change by month ────────────────────────
+// GET /api/amount-timeline?tpl=<id>  |  ?tid=<tenant>&acc=<account>  — read-only, for the page.
+app.get('/api/amount-timeline', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json(amountTimelineView(d, req.query || {}));
+});
+
+// POST /api/account-templates/:id/tariff — everyone on the definition. dryRun DEFAULT;
+// dryRun:false RE-PLANS against the stored data, then writes accountTemplates + tenants.
+app.post('/api/account-templates/:id/tariff', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planTemplateTariff(d, req.params.id, b);
+  if (!plan.ok || b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitTemplateTariff(d, plan);
+  if (r.changed) saveTenantData(req.user.tenantId, { accountTemplates: d.accountTemplates, tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, changed: r.changed, members: r.members, fromMonth: plan.fromMonth });
+});
+
+// POST /api/tenant-accounts/:tenantId/:accountId/tariff — one member. Same contract.
+app.post('/api/tenant-accounts/:tenantId/:accountId/tariff', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planMemberTariff(d, req.params.tenantId, req.params.accountId, b);
+  if (!plan.ok || b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitMemberTariff(d, plan);
+  if (r.changed) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, changed: r.changed, fromMonth: plan.fromMonth });
 });
 
 // POST /api/mark-account-paid/:tenantId/:accountId — manual payment for extra account
@@ -9955,7 +10386,8 @@ app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, re
 
   const mk = getMonthKey(d.config);
   const { paidAmount } = req.body;
-  const paid = parseFloat(paidAmount) || acc.amount || 0;
+  const amtMk = extraAmountForMonth(d, acc, mk);   // v2.14.76 (1ג) — dated amount (falsy-0 paid = פ10, 1ד)
+  const paid = parseFloat(paidAmount) || amtMk || 0;
   const phKey = tid + '__acc__' + accId;
   if (!d.paymentHistory) d.paymentHistory = {};
   if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
@@ -9963,7 +10395,7 @@ app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, re
   // Deduplicate: don't overwrite if already paid this month
   const existing = d.paymentHistory[phKey].findIndex(r => r.month === mk);
   const record = {
-    month: mk, paid: true, amount: acc.amount || 0,
+    month: mk, paid: true, amount: amtMk,
     paidAmount: paid, date: new Date().toISOString().split('T')[0],
     type: 'manual', name: tenant.name
   };
@@ -10025,7 +10457,7 @@ app.get('/api/accounts-status', authMiddleware, (req, res) => {
       // owedPrior / creditLeft / status instead of re-deriving from amount.
       const sp = extraAccountSplit(d, tenant, acc, mk, em);
       return {
-        id: acc.id, label: acc.label, amount: acc.amount,
+        id: acc.id, label: acc.label, amount: extraAmountForMonth(d, acc, mk),   // v2.14.76 — active month's dated amount
         frequency: acc.frequency, active: acc.active !== false,
         suspended: acc.suspended === true,
         paidThisMonth, totalDebt: sp ? sp.owedPrior : 0, historyDebt, openingDebt,
@@ -10060,7 +10492,7 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
 
     const phKey = tid + '__acc__' + acc.id;
     if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
-    const amount = parseFloat(acc.amount) || 0;
+    const amount = extraAmountForMonth(d, acc, prevKey);   // v2.14.76 (1ג, ג2-A) — the closed month's dated amount
     if (amount <= 0) continue;
 
     const existing = d.paymentHistory[phKey].find(r => r.month === prevKey);

@@ -1858,6 +1858,21 @@ function vpLogout() {
     </div>
   </div>
 
+  <!-- v2.14.76 (1ג) — 📅 dated amount (definition or one member): timeline → preview → confirm -->
+  <div class="modal-bg" id="amtModal" style="display:none;z-index:110;" onclick="if(event.target===this)closeAmtModal()">
+    <div class="modal" style="max-width:560px;max-height:90vh;overflow-y:auto;">
+      <h2 id="amtTitle"></h2>
+      <div id="amtCurrent" style="font-size:0.9rem;"></div>
+      <div id="amtTimeline" style="display:grid;gap:6px;margin:10px 0;"></div>
+      <div id="amtForm"></div>
+      <div id="amtPlan" style="margin:10px 0;"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-green" id="amtGo">✅ אשר שינוי</button>
+        <button class="btn btn-secondary" onclick="closeAmtModal()">סגור</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="tenantAccountsModal" style="display:none;" onclick="if(event.target===this)closeTenantAccountsModal()">
     <div class="modal" style="max-width:560px;">
       <h2><span id="taModalTitleLabel">💳 חשבונות לדייר: </span><span id="taModalName" style="color:var(--accent);"></span></h2>
@@ -1909,7 +1924,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.75';
+const HTML_VERSION = '2.14.76';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -9828,8 +9843,7 @@ function renderAccountTemplates() {
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;">
       <div><label style="font-size:0.75rem;">שם החשבון</label>
         <input type="text" value="${esc(t.label||'')}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
-      <div><label style="font-size:0.75rem;">סכום ₪</label>
-        <input type="number" value="${t.amount||0}" min="0" onchange="accountTemplates[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
+      <div><label style="font-size:0.75rem;">סכום ₪</label>${tplAmountCell(t, i)}</div>
       <div><label style="font-size:0.75rem;">תדירות</label>
         <select onchange="accountTemplates[${i}].frequency=this.value" style="width:100%;">
           <option value="monthly" ${t.frequency==='monthly'?'selected':''}>חודשי</option>
@@ -9857,6 +9871,19 @@ function renderAccountTemplates() {
   }).join('');
 }
 
+// v2.14.76 (1ג) — a definition that is DATED or linked to members changes its amount only
+// through 📅 (by month); the number shown is the active month's amount from the server.
+function tplAmountCell(t, i) {
+  const locked = t && t.linked !== undefined && (t.dated === true || (t.linked || 0) > 0);
+  const nx = t && t.nextChange ? '<div class="tpl-amt-next" style="font-size:0.7rem;color:var(--text2);">מ-' + amtFmtMonth(t.nextChange.from) + ': ₪' + t.nextChange.rate + '</div>' : '';
+  if (locked) {
+    return '<div style="display:flex;gap:6px;align-items:center;height:36px;"><strong class="tpl-amt-ro">₪' + (t.amount || 0) + '</strong>' +
+      '<button class="btn btn-secondary btn-sm tpl-act-amt" title="שינוי סכום מחודש מסוים" onclick="openAmtModal(\'tpl\',' + i + ')">📅</button></div>' + nx;
+  }
+  return '<input type="number" value="' + (t.amount || 0) + '" min="0" onchange="accountTemplates[' + i + '].amount=parseFloat(this.value)||0" style="width:100%;">' +
+    (t && t.linked !== undefined ? '<button class="btn btn-secondary btn-sm tpl-act-amt" style="margin-top:4px;" onclick="openAmtModal(\'tpl\',' + i + ')">📅 סכום מתוארך</button>' : '') + nx;
+}
+
 function addAccountTemplateRow() {
   accountTemplates.push({ id: 'tpl_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0 });
   renderAccountTemplates();
@@ -9878,7 +9905,8 @@ async function saveAccountTemplates() {
     else {
       toast('שגיאה: ' + d.error, 'error');
       // v2.14.74 — a refused delete (linked template) → restore the server's list
-      if (d.linked) loadAccountTemplates();
+      // v2.14.76 — a refused amount edit (dated/linked) → restore too; the change goes through 📅
+      if (d.linked || d.amountLocked) loadAccountTemplates();
     }
   } catch(e) { toast('שגיאת רשת', 'error'); }
 }
@@ -9998,6 +10026,168 @@ async function tplActCommit() {
   } catch(e) { toast('שגיאת רשת', 'error'); }
 }
 
+// ══ v2.14.76 (1ג) — 📅 dated amount ═══════════════════════════════════════
+// Every number, list and rule comes from the server (GET /api/amount-timeline and the
+// dryRun plan) — the page only shows them (CONSUME). Handlers carry no data: buttons use
+// data-amt-op + one delegated listener.
+let amtWired = false;
+let amtCtx = null;   // { scope, tplId | tid+accId, q, view, body, plan }
+
+function amtFmtMonth(mk) { return mk ? String(mk).slice(5, 7) + '/' + String(mk).slice(0, 4) : ''; }
+
+function amtSegHtml(segs, cancelFrom) {
+  const srcL = { personal: 'אישי', definition: 'הגדרה', fixed: 'קבוע' };
+  return (segs || []).map(function(sg){
+    const range = (sg.from === '2000-01' ? 'מההתחלה' : 'מ-' + amtFmtMonth(sg.from)) + (sg.to ? ' עד ' + amtFmtMonth(sg.to) : ' והלאה');
+    const tag = sg.current ? ' <span style="color:var(--accent);font-size:0.75rem;">● נוכחי</span>' : (sg.future ? ' <span style="color:var(--warn);font-size:0.75rem;">⏳ מתוכנן</span>' : '');
+    const cancel = (cancelFrom && sg.from === cancelFrom) ? ' <button class="btn btn-danger-soft btn-sm" data-amt-op="cancel">✖ בטל שינוי מתוכנן</button>' : '';
+    return '<div class="amt-seg" style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:0.85rem;">' +
+      '<span><strong>₪' + sg.rate + '</strong>' + (sg.source && srcL[sg.source] ? ' <span style="color:var(--text2);font-size:0.75rem;">(' + srcL[sg.source] + ')</span>' : '') + tag + '</span>' +
+      '<span style="color:var(--text2);">' + range + cancel + '</span></div>';
+  }).join('');
+}
+
+function amtRenderView(v) {
+  if (!v || !v.ok) return { title: '📅 סכום מתוארך', current: '<div style="color:var(--danger);">' + esc((v && v.error) || 'שגיאה') + '</div>', timeline: '', form: '' };
+  const isTpl = v.scope === 'tpl';
+  const title = '📅 סכום מתוארך — ' + esc(v.label) + (isTpl ? ' (כל החברים)' : ' · ' + esc(v.name));
+  const current = 'סכום החודש הפעיל (' + amtFmtMonth(v.mkNow) + '): <strong style="color:var(--accent);">₪' + v.amountNow + '</strong>' +
+    (isTpl ? ' · משויך ל-' + v.linked + ' חברים' + (v.personal ? ' · ' + v.personal + ' עם סכום אישי' : '') : '');
+  let form = '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:end;">' +
+    '<div><label style="font-size:0.75rem;">סכום חדש ₪</label><input type="number" id="amtNewRate" min="0" step="0.01" style="width:100%;"></div>' +
+    '<div><label style="font-size:0.75rem;">החל מחודש</label><input type="month" id="amtFrom" min="' + v.mkNow + '" max="' + v.maxMonth + '" value="' + (v.defaultFrom || v.mkNow) + '" style="width:100%;"></div></div>' +
+    '<div id="amtErr" style="color:var(--danger);font-size:0.8rem;min-height:1em;"></div>';
+  if (isTpl && v.personal > 0) form += '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;cursor:pointer;"><input type="checkbox" id="amtInclPersonal"> להחיל גם על ' + v.personal + ' חברים עם סכום אישי (יחזרו לסכום ההגדרה)</label>';
+  if (isTpl ? v.paidNow > 0 : v.paidThisMonth) form += '<div style="font-size:0.78rem;color:var(--text2);">💡 ' + (isTpl ? v.paidNow + ' חברים כבר שילמו' : 'כבר שולם') + ' את ' + amtFmtMonth(v.mkNow) + ' — שינוי יכול להתחיל מ-' + amtFmtMonth(v.nextMonth) + '.</div>';
+  form += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><button class="btn btn-secondary btn-sm" data-amt-op="set">🔍 תצוגה מקדימה</button>' +
+    (!isTpl && v.canRevert && v.source === 'personal' ? '<button class="btn btn-secondary btn-sm" data-amt-op="revert">↩ חזור לסכום ההגדרה מהחודש שנבחר</button>' : '') + '</div>' +
+    '<div style="font-size:0.75rem;color:var(--text2);margin-top:6px;">חודשים קודמים נשארים בסכום שלהם. אפשר לבחור את החודש הפעיל או חודש עתידי.</div>';
+  return { title: title, current: current, timeline: amtSegHtml(v.segments, v.cancelFrom), form: form };
+}
+
+function amtRenderPlan(scope, p) {
+  const box = 'padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;line-height:1.7;';
+  if (!p) return '';
+  if (!p.ok) {
+    return '<div class="amt-plan-err" style="' + box + 'color:var(--danger);">⛔ ' + esc(p.error || 'שגיאה') +
+      (p.paidBlocked && p.paidBlocked.length ? '<div style="color:var(--text2);">כבר שילמו: ' + tplNames(p.paidBlocked, 20) + '</div>' : '') + '</div>';
+  }
+  if (p.noop) return '<div class="amt-plan" style="' + box + '">אין שינוי — זה כבר הסכום מהחודש הזה.</div>';
+  let h = '<div class="amt-plan" style="' + box + '">';
+  if (p.op === 'cancel') h += '✖ השינוי המתוכנן מ-' + amtFmtMonth(p.fromMonth) + ' יבוטל.';
+  else if (scope === 'tpl') {
+    h += 'מ-' + amtFmtMonth(p.fromMonth) + ': <strong>₪' + p.oldAmount + ' → ₪' + p.amount + '</strong><br>' +
+      '👥 יעברו לסכום החדש: <strong>' + p.follow.length + '</strong> חברים' + (p.follow.length ? ' (' + tplNames(p.follow, 15) + ')' : '') + '<br>' +
+      (p.personal.length ? '🔒 עם סכום אישי — לא ישתנו: ' + p.personal.length + ' (' + tplNames(p.personal, 15) + ')<br>' : '') +
+      (p.replaced && p.replaced.length ? '⚠️ מחליף שינוי מתוכנן: ' + p.replaced.map(function(r){ return '₪' + r.rate + ' מ-' + amtFmtMonth(r.from); }).join(', ') + '<br>' : '');
+  } else {
+    h += (p.op === 'revert' ? '↩ חזרה לסכום ההגדרה' : 'שינוי סכום') + ' מ-' + amtFmtMonth(p.fromMonth) + ': <strong>₪' + p.from + ' → ₪' + p.to + '</strong>';
+  }
+  return h + '</div><div style="font-size:0.78rem;color:var(--text2);margin:8px 0 4px;">אחרי השינוי:</div><div style="display:grid;gap:6px;">' + amtSegHtml(p.timelineAfter, null) + '</div>';
+}
+
+function amtUrl() {
+  return amtCtx.scope === 'tpl'
+    ? API + '/account-templates/' + encodeURIComponent(amtCtx.tplId) + '/tariff'
+    : API + '/tenant-accounts/' + encodeURIComponent(amtCtx.tid) + '/' + encodeURIComponent(amtCtx.accId) + '/tariff';
+}
+
+function openAmtModal(scope, i) {
+  if (scope === 'tpl') {
+    const t = accountTemplates[i];
+    if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
+    amtCtx = { scope: 'tpl', tplId: t.id, q: 'tpl=' + encodeURIComponent(t.id) };
+  } else {
+    const a = taModalAccounts[i];
+    if (!a || a.saved !== true) { toast('שמרו את החשבונות קודם', 'error'); return; }
+    amtCtx = { scope: 'member', tid: String(taModalTenantId), accId: a.id, q: 'tid=' + encodeURIComponent(taModalTenantId) + '&acc=' + encodeURIComponent(a.id) };
+  }
+  document.getElementById('amtTitle').textContent = '📅 סכום מתוארך';
+  document.getElementById('amtCurrent').innerHTML = '<div style="color:var(--text2);">⏳ טוען…</div>';
+  ['amtTimeline', 'amtForm', 'amtPlan'].forEach(function(id){ document.getElementById(id).innerHTML = ''; });
+  document.getElementById('amtModal').style.display = 'flex';
+  document.getElementById('amtGo').onclick = function(){ amtCommit(); };
+  if (!amtWired) { document.getElementById('amtModal').addEventListener('click', amtOnClick); amtWired = true; }
+  amtLoad();
+}
+
+function closeAmtModal() {
+  document.getElementById('amtModal').style.display = 'none';
+  amtCtx = null;
+}
+
+async function amtLoad() {
+  if (!amtCtx) return;
+  let v;
+  try { const r = await fetch(API + '/amount-timeline?' + amtCtx.q); v = await r.json(); }
+  catch(e) { v = { ok: false, error: 'שגיאת רשת' }; }
+  if (!amtCtx) return;
+  amtCtx.view = v; amtCtx.plan = null; amtCtx.body = null;
+  const h = amtRenderView(v);
+  document.getElementById('amtTitle').innerHTML = h.title;
+  document.getElementById('amtCurrent').innerHTML = h.current;
+  document.getElementById('amtTimeline').innerHTML = h.timeline;
+  document.getElementById('amtForm').innerHTML = h.form;
+  document.getElementById('amtPlan').innerHTML = '';
+}
+
+// Delegated: [data-amt-op] in the timeline (cancel) or the form (set / revert).
+function amtOnClick(ev) {
+  const b = ev.target && ev.target.closest ? ev.target.closest('[data-amt-op]') : null;
+  if (!b) return;
+  amtPreview(b.getAttribute('data-amt-op'));
+}
+
+function amtBuildBody(op) {
+  const v = amtCtx.view || {};
+  if (op === 'cancel') return { op: 'cancel', fromMonth: v.cancelFrom, dryRun: true };
+  const from = (document.getElementById('amtFrom') || {}).value || '';
+  if (!from) return { error: 'בחרו חודש התחלה' };
+  if (op === 'revert') return { op: 'revert', fromMonth: from, dryRun: true };
+  const raw = String((document.getElementById('amtNewRate') || {}).value || '').trim();
+  const n = parseFloat(raw);
+  if (raw === '' || !isFinite(n) || n < 0) return { error: 'הזינו סכום (0 ומעלה)' };
+  const inc = document.getElementById('amtInclPersonal');
+  return { op: 'set', amount: n, fromMonth: from, includePersonal: !!(inc && inc.checked), dryRun: true };
+}
+
+async function amtPreview(op) {
+  if (!amtCtx) return;
+  const body = amtBuildBody(op);
+  const err = document.getElementById('amtErr');
+  if (body.error) { if (err) err.textContent = body.error; return; }
+  if (err) err.textContent = '';
+  let p;
+  try { const r = await fetch(amtUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); p = await r.json(); }
+  catch(e) { p = { ok: false, error: 'שגיאת רשת' }; }
+  if (!amtCtx) return;
+  amtCtx.body = body; amtCtx.plan = (p && p.ok && !p.noop) ? p : null;
+  document.getElementById('amtPlan').innerHTML = amtRenderPlan(amtCtx.scope, p);
+}
+
+async function amtCommit() {
+  if (!amtCtx || !amtCtx.plan || !amtCtx.body) { toast('הציגו תצוגה מקדימה תקינה קודם', 'error'); return; }
+  const p = amtCtx.plan;
+  const q = p.op === 'cancel' ? 'לבטל את השינוי המתוכנן מ-' + amtFmtMonth(p.fromMonth) + '?'
+          : amtCtx.scope === 'tpl' ? 'לשנות ל-₪' + p.amount + ' מ-' + amtFmtMonth(p.fromMonth) + ' עבור ' + p.follow.length + ' חברים?'
+          : 'לשנות ל-₪' + p.to + ' מ-' + amtFmtMonth(p.fromMonth) + '?';
+  if (!confirm(q)) return;
+  const body = Object.assign({}, amtCtx.body, { dryRun: false });
+  const scope = amtCtx.scope, tid = amtCtx.tid;
+  try {
+    const r = await fetch(amtUrl(), { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('amtPlan').innerHTML = amtRenderPlan(scope, d); return; }
+    toast(d.changed ? '✅ הסכום עודכן מ-' + amtFmtMonth(d.fromMonth) : 'אין שינוי', 'success');
+  } catch(e) { toast('שגיאת רשת', 'error'); return; }
+  await amtLoad();
+  if (scope === 'tpl') { await loadAccountTemplates(); }
+  else if (taModalTenantId != null && String(taModalTenantId) === String(tid)) {
+    await openTenantAccounts(tid, document.getElementById('taModalName').textContent);
+  }
+  await loadAccountsStatus(); render();
+}
+
 function goAccountTemplates() {
   switchTab('settings');
   const b = document.getElementById('secAccBody');
@@ -10099,8 +10289,7 @@ function renderTenantAccountsModal() {
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:end;">
         <div><label style="font-size:0.75rem;">שם החשבון</label>
           <input type="text" value="${acc.label||''}" onchange="taModalAccounts[${i}].label=this.value" style="width:100%;"></div>
-        <div><label style="font-size:0.75rem;">סכום ₪</label>
-          <input type="number" value="${acc.amount||0}" min="0" onchange="taModalAccounts[${i}].amount=parseFloat(this.value)||0" style="width:100%;"></div>
+        <div><label style="font-size:0.75rem;">סכום ₪</label>${taAmountCell(acc, i)}</div>
         <div><label style="font-size:0.75rem;">תדירות</label>
           <select onchange="taModalAccounts[${i}].frequency=this.value" style="width:100%;">
             <option value="monthly" ${acc.frequency==='monthly'?'selected':''}>חודשי</option>
@@ -10132,6 +10321,19 @@ function renderTenantAccountsModal() {
       </div>
     </div>`;
   }).join('');
+}
+
+// v2.14.76 (1ג, ג6-A) — a SAVED account's amount changes only by month (📅); the server
+// ignores an edit here. A new (unsaved) row takes the typed amount.
+function taAmountCell(acc, i) {
+  if (!acc || acc.saved !== true) {
+    return '<input type="number" value="' + ((acc && acc.amount) || 0) + '" min="0" onchange="taModalAccounts[' + i + '].amount=parseFloat(this.value)||0" style="width:100%;">';
+  }
+  const src = { personal: 'סכום אישי', definition: 'לפי ההגדרה', fixed: 'סכום קבוע' }[acc.amountSource] || '';
+  const nx = acc.nextChange ? ' · מ-' + amtFmtMonth(acc.nextChange.from) + ': ₪' + acc.nextChange.rate : '';
+  return '<div style="display:flex;gap:6px;align-items:center;height:36px;"><strong class="ta-amt-ro">₪' + (acc.amount || 0) + '</strong>' +
+    '<button class="btn btn-secondary btn-sm ta-act-amt" title="שינוי סכום מחודש מסוים" onclick="openAmtModal(\'member\',' + i + ')">📅</button></div>' +
+    '<div style="font-size:0.7rem;color:var(--text2);">' + src + nx + '</div>';
 }
 
 // v2.14.74 (1א-5A) — an account with a balance / payment history is never deleted

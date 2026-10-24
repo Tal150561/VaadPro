@@ -90,8 +90,17 @@ const SERVER_FNS = [
   'applyRequiredAccounts', 'validateCollection',
   // v2.14.75 (1ב) — tenants file: extra-account columns
   'tfAccHeaders', 'tfParseAccountHeader', 'tfParseStatusCell', 'tfParseMoneyCell',
-  'tenantFileAccountExport', 'planTenantFileAccounts', 'commitTenantFileAccounts'
+  'tenantFileAccountExport', 'planTenantFileAccounts', 'commitTenantFileAccounts',
+  // v2.14.76 (1ג) — dated amounts for extra accounts
+  'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'extraAmountSource', 'extraIntervalsFrom',
+  'extraCancelFrom', 'extraPaidInMonth', 'extraValidateFromMonth', 'extraFmtMonth', 'extraSeedOwn',
+  'extraAmountTimeline', 'extraCancellable', 'planTemplateTariff', 'commitTemplateTariff',
+  'planMemberTariff', 'commitMemberTariff', 'amountTimelineView'
 ];
+
+// v2.14.76 (1ג) — every money path of an extra account resolves its amount through
+// extraAmountForMonth. Loaders that extract a single money function pull these in too.
+const EXTRA_AMOUNT_FNS = ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'];
 
 function loadServer() {
   const src = readSource('server.js');
@@ -120,7 +129,7 @@ function loadBankAnalyzer() {
   const splitMonths = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
     + (splitMonths ? splitMonths[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'monthBeforeKey', 'splitWallMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer'])
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'monthBeforeKey', 'splitWallMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'])
     + 'module.exports={getMonthKey,splitWallMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,parseSentLogAmount,accumulatePaidAmount,mergeExtraPaymentHistory,analyzeBankRowsServer};';
   return runInSandbox(code);
 }
@@ -136,7 +145,7 @@ function loadBankAnalyzer() {
 // v2.14.31 — extract the REAL closeExtraAccountsUnpaid for suspension tests.
 function loadCloseExtra() {
   const src = readSource('server.js');
-  const code = extractFunctions(src, ['closeExtraAccountsUnpaid'])
+  const code = extractFunctions(src, ['closeExtraAccountsUnpaid'].concat(EXTRA_AMOUNT_FNS))
     + 'module.exports={closeExtraAccountsUnpaid};';
   const mod = runInSandbox(code, {});
   return mod.closeExtraAccountsUnpaid;
@@ -348,7 +357,7 @@ function loadApplyClosedMonth(building, reqBody) {
     }
   };
   const code = months + '\n'
-    + extractFunctions(src, ['monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate'])
+    + extractFunctions(src, ['pickRateFromIntervals', 'resolveTariffRate'].concat(EXTRA_AMOUNT_FNS))   // v2.14.76 (1ג)
     + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);
@@ -466,7 +475,7 @@ async function loadSendOneRoute(d, tenantId) {
   const S = loadServer();
   const months60 = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
   const X = runInSandbox(months60 + '\n' + extractFunctions(src, ['resolvePayerPhone', 'buildAccountsBlock', 'extraAccountSplit', 'extraMonthKeyFor',
-      'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount'])
+      'getMonthKey', 'hebMonthToMonthKey', 'sentLogIsPayment', 'parseSentLogAmount'].concat(EXTRA_AMOUNT_FNS))
     + 'module.exports={resolvePayerPhone,buildAccountsBlock};');
   let msg = null;
   const g = Object.assign({}, S, X, {
@@ -611,6 +620,7 @@ function runDataSync(S, disk, posted) {
 }
 
 module.exports = {
+  EXTRA_AMOUNT_FNS,
   readSource, extractFunctions, runInSandbox, extractFunctionParsed, runManualImport, runDataSync,
   loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute, loadSendOneRoute,
   extractHtmlRegion, makeRunner

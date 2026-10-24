@@ -58,6 +58,7 @@ function load(src) {
   const ctx = { module: { exports: {} }, console: quiet, Math, parseFloat, String, Array, Object, Number, JSON };
   vm.createContext(ctx);
   vm.runInContext(MONTHS_SRC + '\n' + extract(src, 'closeMonthUnpaidForBuilding') + '\n' + extract(src, 'closeExtraAccountsUnpaid') +
+    ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'].map(n => '\n' + extract(src, n)).join('') +   // v2.14.76 (1ג)
     '\nmodule.exports={closeMonthUnpaidForBuilding,closeExtraAccountsUnpaid,HEBREW_MONTHS};', ctx);
   return ctx.module.exports;
 }
