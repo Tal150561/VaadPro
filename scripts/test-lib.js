@@ -100,7 +100,8 @@ const SERVER_FNS = [
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
 // extraAmountForMonth. Loaders that extract a single money function pull these in too.
-const EXTRA_AMOUNT_FNS = ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'];
+// v2.14.77 (1ד) — + crSuspendedIn: the close and the payment-freeze sites test suspension BY PERIOD.
+const EXTRA_AMOUNT_FNS = ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn'];
 
 function loadServer() {
   const src = readSource('server.js');
@@ -129,7 +130,7 @@ function loadBankAnalyzer() {
   const splitMonths = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);
   const code = (months ? months[0] + '\n' : '')
     + (splitMonths ? splitMonths[0] + '\n' : '')
-    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'monthBeforeKey', 'splitWallMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'])
+    + extractFunctions(src, ['getEffectiveMonth', 'getMonthKey', 'monthBeforeKey', 'splitWallMonthKey', 'applyPaymentToDebt', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth', 'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'kwMatchCount', 'scoreTenantRowMatch', 'compareScore', 'resolveRowCandidates', 'parseSentLogAmount', 'accumulatePaidAmount', 'mergeExtraPaymentHistory', 'analyzeBankRowsServer', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn'])
     + 'module.exports={getMonthKey,splitWallMonthKey,applyPaymentToDebt,bankRowFingerprint,bankRowMonthKey,groupMatchesByMonth,splitOverpayAcrossMonths,resolveTariffRate,parseSentLogAmount,accumulatePaidAmount,mergeExtraPaymentHistory,analyzeBankRowsServer};';
   return runInSandbox(code);
 }

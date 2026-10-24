@@ -9357,7 +9357,7 @@ function analyzeBankRowsServer(rows, mapping, tenants, sentLog, monthKey, config
             newPaymentHistory[phKey].push({
               month: mk,
               paid: true,
-              amount: accChargeFor(mk),   // v2.14.76 (1ג) — freeze the month's dated amount
+              amount: crSuspendedIn(acc, mk) ? 0 : accChargeFor(mk),   // v2.14.76 (1ג) dated amount · v2.14.77 (1ד, ד5-A) suspended month → 0, as paymentRateForMonth
               paidAmount: accPaid,   // v2.14.58: the month's TOTAL (upserted by mergeExtraPaymentHistory)
               date: new Date().toISOString().split('T')[0],
               type: 'bank_import',
@@ -10385,9 +10385,17 @@ app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, re
   if (!acc) return res.json({ ok: false, error: 'חשבון לא נמצא' });
 
   const mk = getMonthKey(d.config);
-  const { paidAmount } = req.body;
-  const amtMk = extraAmountForMonth(d, acc, mk);   // v2.14.76 (1ג) — dated amount (falsy-0 paid = פ10, 1ד)
-  const paid = parseFloat(paidAmount) || amtMk || 0;
+  const { paidAmount } = req.body || {};
+  // v2.14.76 (1ג) dated amount · v2.14.77 (1ד, ד5-A) a suspended month freezes 0, as the
+  // main account's paymentRateForMonth — the whole payment then becomes credit at close.
+  const amtMk = crSuspendedIn(acc, mk) ? 0 : extraAmountForMonth(d, acc, mk);
+  // v2.14.77 (1ד, ד6-A — parity with the main markPaid): an explicit amount, partial allowed;
+  // 0 / negative / not a number is REFUSED (was: falsy-0 fell back to the full amount, פ10).
+  // No amount sent at all → the month's amount (old API callers).
+  const noAmount = paidAmount === undefined || paidAmount === null || paidAmount === '';
+  const paidIn = noAmount ? amtMk : parseFloat(paidAmount);
+  if (!(paidIn > 0)) return res.json({ ok: false, error: 'סכום לא תקין' });
+  const paid = Math.round(paidIn * 100) / 100;
   const phKey = tid + '__acc__' + accId;
   if (!d.paymentHistory) d.paymentHistory = {};
   if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
@@ -10481,41 +10489,72 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
 
   for (const acc of accounts) {
     if (acc.active === false) continue;
-    // ⏸ v2.14.31 — per-account collection suspension (design 2C: each account
-    // suspended independently). A main-account suspension does NOT suspend the
-    // extra account and vice-versa. Existing acc.openingDebt is kept (3A).
-    if (acc.suspended === true) continue;
-    // Check frequency: only charge if this month is a billing month
+    // ⭐ v2.14.77 (1ד) — CLOSE PARITY with closeMonthUnpaidForBuilding (Tal, 2026-10-24:
+    // ד1-A … ד4-A). A month that carries NO charge — suspended BY PERIOD (ד4-A,
+    // crSuspendedIn; legacy flag-only suspension still means every month), not a billing
+    // month (quarterly 3/6/9/12, yearly January), or a zero amount — skips the CHARGE, not
+    // the PAYMENT (ד3-A): until v2.14.76 a `continue` here dropped the whole month, so a
+    // payment made in it (shown as credit while the month was open) vanished at close.
+    // Main gets the same outcome from the live derivation (calcShortfallFromSentLog);
+    // extraAccountSplit reads only the open month, so for an extra account the credit
+    // must be banked HERE. Design 2C kept: each account is suspended independently.
     const [year, month] = prevKey.split('-').map(Number);
-    if (acc.frequency === 'quarterly' && (month % 3 !== 0)) continue; // bill on 3,6,9,12
-    if (acc.frequency === 'yearly'    && month !== 1) continue;       // bill on January
+    const billing = !(acc.frequency === 'quarterly' && (month % 3 !== 0))   // bill on 3,6,9,12
+                 && !(acc.frequency === 'yearly'    && month !== 1);        // bill on January
+    const dated = extraAmountForMonth(d, acc, prevKey);   // v2.14.76 (1ג, ג2-A) — the closed month's dated amount
+    const amount = (billing && !crSuspendedIn(acc, prevKey) && dated > 0) ? dated : 0;
 
     const phKey = tid + '__acc__' + acc.id;
-    if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
-    const amount = extraAmountForMonth(d, acc, prevKey);   // v2.14.76 (1ג, ג2-A) — the closed month's dated amount
-    if (amount <= 0) continue;
-
-    const existing = d.paymentHistory[phKey].find(r => r.month === prevKey);
+    const hist = d.paymentHistory[phKey] || [];
+    const existing = hist.find(r => r.month === prevKey);
     if (existing) {
       if (!existing.paid) {
         // Unpaid — accumulate to account's openingDebt
         // ⭐ v2.14.62 — credit consumed, not wiped (main == extra). See closeMonthUnpaidForBuilding.
-        acc.openingDebt = Math.round(
-          ((parseFloat(acc.openingDebt) || 0) + amount) * 100
-        ) / 100;
-        d.paymentHistory[phKey] = d.paymentHistory[phKey].filter(r => r.month !== prevKey);
-        closed++;
+        if (amount > 0) {
+          acc.openingDebt = Math.round(
+            ((parseFloat(acc.openingDebt) || 0) + amount) * 100
+          ) / 100;
+          closed++;
+        }
+        // The unpaid record is dropped either way: extraAccountSplit counts every unpaid
+        // record of a past month as debt (histDebt), so leaving one in a no-charge month
+        // would bill a month that carries no charge.
+        d.paymentHistory[phKey] = hist.filter(r => r.month !== prevKey);
       } else {
-        // Paid — check for overpayment credit
-        const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? amount);
-        const overpay = Math.round((paidAmt - amount) * 100) / 100;
+        // Paid — the SAME three branches as the main account (ד1-A), against the amount
+        // FROZEN on the record (ד2-A, Column A) — a no-charge month expects 0, so every
+        // shekel paid in it becomes credit (ד3-A).
+        const expected = amount > 0 ? (parseFloat(existing.amount ?? amount) || amount) : 0;
+        const paidAmt = parseFloat(existing.paidAmount ?? existing.amount ?? expected);
+        const overpay = Math.round((paidAmt - expected) * 100) / 100;
         if (overpay > 0) {
+          const debtBefore = parseFloat(acc.openingDebt) || 0;
           acc.openingDebt = Math.round(
             ((parseFloat(acc.openingDebt) || 0) - overpay) * 100
           ) / 100;
+          // Transparency note + double-count stamp, exactly as the main account (v2.14.12 / bug #4).
+          const priorDebtPaid = Math.round(Math.max(0, Math.min(overpay, debtBefore)) * 100) / 100;
+          const newCredit     = Math.round(Math.max(0, overpay - Math.max(0, debtBefore)) * 100) / 100;
+          existing.debtOffset = {
+            monthCharge: expected,
+            surplus: overpay,
+            priorDebtPaid: priorDebtPaid,
+            newCredit: newCredit
+          };
+          existing.creditBanked = true;
+        } else if (overpay < 0) {
+          // Partial payment — the shortfall accrues (until v2.14.76 it was lost silently).
+          const shortfall = Math.abs(overpay);
+          acc.openingDebt = Math.round(
+            ((parseFloat(acc.openingDebt) || 0) + shortfall) * 100
+          ) / 100;
+          existing.shortfallBanked = true;
+          closed++;
         }
+        // Full payment (overpay === 0) — nothing to do.
       }
-    } else {
+    } else if (amount > 0) {
       // No record — unpaid, accumulate
       // ⭐ v2.14.62 — credit consumed, not wiped (main == extra). See closeMonthUnpaidForBuilding.
       acc.openingDebt = Math.round(

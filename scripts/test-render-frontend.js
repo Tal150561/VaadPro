@@ -3468,4 +3468,30 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.77 (1ד, ד6-A) — "סמן ששילם" for an extra account: same rule as markPaid.
+// REAL promptAccountPaid with prompt/toast/markAccountPaid stubbed.
+// ════════════════════════════════════════════════════════════════
+{
+  const app77 = readSource('public/app.html');
+  const gd77 = readSource('public/vaadpro-guide.js');
+  t.section('v2.14.77 (1ד) — promptAccountPaid refuses 0 / negative / text');
+  const runPrompt = answer => {
+    const calls = [], toasts = [];
+    const m = runInSandbox(extractFunctions(app77, ['promptAccountPaid']) + 'module.exports={promptAccountPaid};', {
+      prompt: () => answer, toast: msg => toasts.push(msg), markAccountPaid: (tid, aid, amt) => calls.push([tid, aid, amt]) });
+    m.promptAccountPaid('1', 'a', 50);
+    return { calls, toasts };
+  };
+  for (const bad of ['0', '-5', 'abc', '']) {
+    const r = runPrompt(bad);
+    t.eq('answer ' + JSON.stringify(bad) + ' → toast, NO request (was: fell back to the full 50)', [r.calls.length, r.toasts.some(x => /סכום לא תקין/.test(x))], [0, true]);
+  }
+  t.eq('partial 20 → request with 20', runPrompt('20').calls, [['1', 'a', 20]]);
+  t.eq('cancel → nothing', runPrompt(null).calls.length, 0);
+  t.eq('guide: close-parity box with anchor + the four cases + no-charge credit + manual rule',
+    ['id="vpg-acc-close"', 'סגירת חודש בחשבון נוסף', 'שילם חלקית', 'ההפרש מצטבר לחוב', 'כל התשלום הופך לזכות', 'לפי תקופות ההשהיה', 'סכום 0 או שלילי נדחה'].every(x => gd77.includes(x)), true);
+  t.eq('guide: suspended extra-account bullet points to the credit rule', gd77.includes('תשלום שהתקבל בחודש מושהה נשמר <strong>כזכות</strong>'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

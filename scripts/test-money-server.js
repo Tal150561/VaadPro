@@ -5075,4 +5075,197 @@ const v2_14_64_async = async () => {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.77 (1ד) — CLOSE PARITY for extra accounts (spec 1.3, פ5, פ10, פ12). Locked
+// (Tal 2026-10-24): ד1-A four cases + creditBanked/shortfallBanked/debtOffset · ד2-A
+// frozen record amount · ד3-A a no-charge month skips the CHARGE, not the payment ·
+// ד4-A suspension by PERIOD · ד5-A suspended month freezes 0 (agent + manual) ·
+// ד6-A manual mark = main markPaid (explicit amount, ≤0 refused) · ד7-A no rewrite.
+// REAL protected close, REAL main close, REAL analyzer, REAL route body.
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const lib = require('./test-lib');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const close = lib.loadCloseExtra();
+  const quietMain = () => { const m = lib.loadCloseMonth({ tenants: [] }); return m.runForBuilding; };
+  const mainClose = quietMain();
+  const P = '2026-09', HEB_P = 'ספטמבר';
+
+  t.section('v2.14.77 (1ד, ד1-A) — the four close cases are IDENTICAL to the main account');
+  {
+    // [label, openingDebt before, record or null, ...]
+    const cases = [
+      ['unpaid, no record',           0,    null],
+      ['unpaid, credit before',       -500, null],
+      ['unpaid record (paid:false)',  100,  { paid: false, amount: 300 }],
+      ['full payment',                100,  { paid: true, amount: 300, paidAmount: 300 }],
+      ['overpay, no prior debt',      0,    { paid: true, amount: 300, paidAmount: 450 }],
+      ['overpay, prior debt 100',     100,  { paid: true, amount: 300, paidAmount: 450 }],
+      ['overpay > prior debt',        100,  { paid: true, amount: 300, paidAmount: 800 }],
+      ['partial payment',             0,    { paid: true, amount: 300, paidAmount: 120 }],
+      ['partial, with credit',        -50,  { paid: true, amount: 300, paidAmount: 200 }]
+    ];
+    for (const [label, od, rec] of cases) {
+      const recM = rec ? Object.assign({ month: P, type: 'bank' }, J(rec)) : null;
+      const m = { config: { amount: 300 }, tenants: [{ id: 'm', name: 'm', customAmount: 300, openingDebt: od }],
+        paymentHistory: { m: recM ? [recM] : [] }, sentLog: { ['m_' + HEB_P]: 'bank_import_X_' + (rec ? rec.paidAmount : 0) + '_payer_x' }, closedMonths: [] };
+      const cm = mainClose(m, P, HEB_P);
+      const recX = rec ? Object.assign({ month: P, type: 'bank_import' }, J(rec)) : null;
+      const x = { tenants: [{ id: 'x', name: 'x', extraAccounts: [{ id: 'a', label: 'ביטוח', amount: 300, openingDebt: od }] }],
+        paymentHistory: { 'x__acc__a': recX ? [recX] : [] } };
+      const cx = close(x, x.tenants[0], P);
+      const mRec = (m.paymentHistory.m || []).find(r => r.month === P) || null;
+      const xRec = (x.paymentHistory['x__acc__a'] || []).find(r => r.month === P) || null;
+      const view = r => r ? { creditBanked: !!r.creditBanked, shortfallBanked: !!r.shortfallBanked, debtOffset: r.debtOffset || null } : null;
+      t.eq('parity — ' + label + ': openingDebt, closed count, record + stamps',
+        [x.tenants[0].extraAccounts[0].openingDebt, cx, view(xRec)],
+        [m.tenants[0].openingDebt, cm.closed, view(mRec)]);
+    }
+    // precondition for the partial case: the money really moved (not vacuous parity on 0)
+    const x = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 50, openingDebt: 0 }] }],
+      paymentHistory: { 'x__acc__a': [{ month: P, paid: true, amount: 50, paidAmount: 30, type: 'bank_import' }] } };
+    close(x, x.tenants[0], P);
+    t.eq('partial 30/50 → shortfall 20 banked + stamp (was: lost)', [x.tenants[0].extraAccounts[0].openingDebt, x.paymentHistory['x__acc__a'][0].shortfallBanked], [20, true]);
+  }
+
+  t.section('v2.14.77 (1ד, ד2-A) — the paid branch reads the FROZEN record amount');
+  {
+    const x = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 50, openingDebt: 0 }] }],
+      paymentHistory: { 'x__acc__a': [{ month: P, paid: true, amount: 45, paidAmount: 50, type: 'bank_import' }] } };
+    t.eq('precondition: the dated amount (50) differs from the frozen 45', lib.loadServer().extraAmountForMonth(x, x.tenants[0].extraAccounts[0], P), 50);
+    close(x, x.tenants[0], P);
+    t.eq('paid 50 on a frozen 45 → credit 5 (not "full")', [x.tenants[0].extraAccounts[0].openingDebt, x.paymentHistory['x__acc__a'][0].creditBanked], [-5, true]);
+    const u = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 50, openingDebt: 0 }] }], paymentHistory: { 'x__acc__a': [{ month: P, paid: false, amount: 45 }] } };
+    close(u, u.tenants[0], P);
+    t.eq('unpaid record → the dated amount, as the main account (live, not the record)', u.tenants[0].extraAccounts[0].openingDebt, 50);
+  }
+
+  t.section('v2.14.77 (1ד, ד3-A) — a no-charge month skips the CHARGE, not the payment');
+  {
+    const mk = (acc, rec) => ({ tenants: [{ id: 'x', extraAccounts: [Object.assign({ id: 'a', label: 'ב', openingDebt: 0 }, acc)] }],
+      paymentHistory: { 'x__acc__a': rec ? [Object.assign({ month: P, type: 'bank_import' }, rec)] : [] } });
+    const od = b => b.tenants[0].extraAccounts[0].openingDebt;
+    // suspended by period (פ12)
+    const s1 = mk({ amount: 300, suspended: true, suspensions: [{ from: '2026-08', to: null }] }, { paid: true, amount: 300, paidAmount: 100 });
+    t.eq('suspended month, paid 100 on a (pre-1ד) frozen 300 → credit 100, not shortfall 200', [close(s1, s1.tenants[0], P), od(s1), s1.paymentHistory['x__acc__a'][0].creditBanked], [0, -100, true]);
+    const s0 = mk({ amount: 300, suspended: true, suspensions: [{ from: '2026-08', to: null }] }, { paid: true, amount: 0, paidAmount: 100 });
+    close(s0, s0.tenants[0], P);
+    t.eq('suspended month, frozen 0 (ד5-A record) paid 100 → credit 100', od(s0), -100);
+    const s2 = mk({ amount: 300, suspended: true, suspensions: [{ from: '2026-08', to: null }] }, null);
+    t.eq('suspended month, no payment → nothing accrues', [close(s2, s2.tenants[0], P), od(s2)], [0, 0]);
+    const s3 = mk({ amount: 300, suspended: true, suspensions: [{ from: '2026-08', to: null }] }, { paid: false, amount: 300 });
+    close(s3, s3.tenants[0], P);
+    t.eq('suspended month, unpaid record → no debt AND the record is dropped (split would bill it)', [od(s3), s3.paymentHistory['x__acc__a'].length], [0, 0]);
+    // non-billing month (quarterly) — paid in February
+    const q = mk({ amount: 300, frequency: 'quarterly' }, null);
+    q.paymentHistory['x__acc__a'] = [{ month: '2026-02', paid: true, amount: 300, paidAmount: 300, type: 'bank_import' }];
+    close(q, q.tenants[0], '2026-02');
+    t.eq('quarterly paid in February (not a billing month) → credit 300 (was: lost)', od(q), -300);
+    close(q, q.tenants[0], '2026-03');
+    t.eq('…March (billing) unpaid → the 300 consumes the credit → 0', od(q), 0);
+    const y = mk({ amount: 600, frequency: 'yearly' }, { paid: true, amount: 600, paidAmount: 600 });
+    close(y, y.tenants[0], P);
+    t.eq('yearly paid in September → credit 600', od(y), -600);
+    const z = mk({ amount: 0 }, { paid: true, amount: 0, paidAmount: 40 });
+    close(z, z.tenants[0], P);
+    t.eq('zero-amount month paid 40 → credit 40', od(z), -40);
+    const zn = mk({ amount: 0 }, null);
+    t.eq('zero-amount month, no payment → nothing', [close(zn, zn.tenants[0], P), od(zn)], [0, 0]);
+    const qn = mk({ amount: 300, frequency: 'quarterly' }, null);
+    t.eq('non-billing month, no payment → nothing (unchanged behaviour)', [close(qn, qn.tenants[0], '2026-02'), od(qn)], [0, 0]);
+    const ina = mk({ amount: 300, active: false }, { paid: true, amount: 300, paidAmount: 500 });
+    close(ina, ina.tenants[0], P);
+    t.eq('inactive account → still skipped entirely (unchanged)', od(ina), 0);
+  }
+
+  t.section('v2.14.77 (1ד, ד4-A) — suspension is read BY PERIOD at close');
+  {
+    const b = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 300, openingDebt: 0, suspended: true, suspensions: [{ from: '2026-10', to: null }] }] }], paymentHistory: {} };
+    t.eq('precondition: suspended NOW (flag true), period starts October', b.tenants[0].extraAccounts[0].suspended, true);
+    close(b, b.tenants[0], P);
+    t.eq('September (before the period) is still charged — the flag alone used to exempt it', b.tenants[0].extraAccounts[0].openingDebt, 300);
+    const ended = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 300, openingDebt: 0, suspensions: [{ from: '2026-08', to: '2026-09' }] }] }], paymentHistory: {} };
+    close(ended, ended.tenants[0], P);
+    t.eq('suspension ended in September (flag now off) → September still exempt', ended.tenants[0].extraAccounts[0].openingDebt, 0);
+    const legacy = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 300, openingDebt: 0, suspended: true }] }], paymentHistory: {} };
+    close(legacy, legacy.tenants[0], P);
+    t.eq('legacy flag-only suspension (no periods) → every month exempt, as before', legacy.tenants[0].extraAccounts[0].openingDebt, 0);
+  }
+
+  t.section('v2.14.77 (1ד) — double close is a NO-OP (REAL closeExtraAccountsForBuilding)');
+  {
+    const code = lib.extractFunctions(src, ['closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid'].concat(lib.EXTRA_AMOUNT_FNS)) + '\nmodule.exports={closeExtraAccountsForBuilding};';
+    const F = lib.runInSandbox(code, {}).closeExtraAccountsForBuilding;
+    const b = { tenants: [{ id: 'x', extraAccounts: [{ id: 'a', amount: 50, openingDebt: 0 }, { id: 'c', amount: 50, openingDebt: 0 }] }],
+      paymentHistory: { 'x__acc__a': [{ month: P, paid: true, amount: 50, paidAmount: 30 }], 'x__acc__c': [{ month: P, paid: true, amount: 50, paidAmount: 80 }] } };
+    F(b, P); const snap = JSON.stringify(b);
+    t.eq('first run: partial → 20, overpay → credit 30', b.tenants[0].extraAccounts.map(a => a.openingDebt), [20, -30]);
+    t.eq('second run changes NOTHING', [F(b, P).changed, JSON.stringify(b) === snap], [false, true]);
+  }
+
+  t.section('v2.14.77 (1ד) — CHAIN: agent import (partial) → REAL close → split of the next month');
+  {
+    const S2 = lib.loadServer();
+    const B = lib.loadBankAnalyzer();
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+    const tenants = [{ id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+      extraAccounts: [{ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח', openingDebt: 0 }] }];
+    const r = B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '30', '05/09/2026']], mapping, tenants, {}, P, { amount: 217 }, new Set(), {}, {}, [], ['2026-07']);
+    const d = { config: { amount: 217, manualMonth: 'אוקטובר' }, tenants, sentLog: r.newSentLog, paymentHistory: r.newPaymentHistory, closedMonthsExtra: [] };
+    const rec = d.paymentHistory['Z__acc__a1'].find(x => x.month === P);
+    t.eq('precondition: the import wrote a partial record (30 of 50)', [rec.amount, rec.paidAmount], [50, 30]);
+    close(d, d.tenants[0], P); d.closedMonthsExtra.push(P);
+    const sp = S2.extraAccountSplit(d, d.tenants[0], d.tenants[0].extraAccounts[0], '2026-10', 'אוקטובר');
+    t.eq('October split: prior debt 20 (the September shortfall) + October 50', [sp.prior, sp.owedPrior, sp.owedCurrent], [20, 20, 50]);
+  }
+
+  t.section('v2.14.77 (1ד, ד5-A) — a payment in a suspended month freezes 0 (agent)');
+  {
+    const B = lib.loadBankAnalyzer();
+    const mapping = { colName: 0, colAmount: 1, colDate: 2, colNote: -1 };
+    const tn = susp => [{ id: 'Z', name: 'לא-מזוהה-ראשי', phone: '0500000000', keywords: '', customAmount: 217, openingDebt: 0,
+      extraAccounts: [Object.assign({ id: 'a1', label: 'ביטוח', amount: 50, active: true, matchKeywords: 'ביטוח' }, susp)] }];
+    const run1 = susp => B.analyzeBankRowsServer([['שם', 'סכום', 'תאריך'], ['ביטוח מבנה', '50', '05/09/2026']], mapping, tn(susp), {}, P, { amount: 217 }, new Set(), {}, {}, [], ['2026-07']).newPaymentHistory['Z__acc__a1'][0].amount;
+    t.eq('not suspended → 50 (unchanged)', run1({}), 50);
+    t.eq('suspended from August → 0', run1({ suspended: true, suspensions: [{ from: '2026-08', to: null }] }), 0);
+    t.eq('suspension starts in October → September still 50 (by period)', run1({ suspended: true, suspensions: [{ from: '2026-10', to: null }] }), 50);
+  }
+
+  t.section('v2.14.77 (1ד, ד5-A + ד6-A) — manual "סמן ששילם" (REAL route)');
+  {
+    const head = "app.post('/api/mark-account-paid/:tenantId/:accountId', authMiddleware, (req, res) => {";
+    const st0 = src.indexOf(head);
+    const body = src.slice(st0 + head.length, src.indexOf('\n});\n', st0));
+    const S3 = lib.loadServer();
+    const run = (store, reqBody) => { let out; let saved = 0;
+      const g = Object.assign({}, S3, { loadTenantData: () => store, saveTenantData: (id, p) => { saved++; Object.assign(store, J(p)); } });
+      const names = Object.keys(g);
+      new Function(...names, 'req', 'res', body)(...names.map(n => g[n]), { params: { tenantId: '1', accountId: 'a' }, body: reqBody, user: { tenantId: 'B' } }, { json: o => { out = o; } });
+      return { out, saved }; };
+    const fx = acc => ({ config: { amount: 300, manualMonth: 'אוקטובר' }, tenants: [{ id: 1, name: 'אור', extraAccounts: [Object.assign({ id: 'a', label: 'ביטוח', amount: 50, openingDebt: 0 }, acc || {})] }], sentLog: {}, paymentHistory: {} });
+    const rec = st => (st.paymentHistory['1__acc__a'] || [])[0];
+    for (const bad of [0, '0', -5, 'abc']) {
+      const st = fx(); const r = run(st, { paidAmount: bad });
+      t.eq('paidAmount ' + JSON.stringify(bad) + ' → refused, nothing saved (was: 0 → full amount)', [r.out.ok, r.saved, rec(st)], [false, 0, undefined]);
+    }
+    const p = fx(); run(p, { paidAmount: 20 });
+    t.eq('partial 20 → record amount 50, paid 20, sentLog carries 20', [rec(p).amount, rec(p).paidAmount, /_amount_20$/.test(p.sentLog['1__acc__a_אוקטובר'])], [50, 20, true]);
+    const n = fx(); run(n, {});
+    t.eq('no amount sent (old caller) → the month amount, as before', [rec(n).paidAmount], [50]);
+    const s = fx({ suspended: true, suspensions: [{ from: '2026-09', to: null }] }); run(s, { paidAmount: 50 });
+    t.eq('suspended month → frozen 0, paid 50 (all credit at close)', [rec(s).amount, rec(s).paidAmount], [0, 50]);
+    const sn = fx({ suspended: true, suspensions: [{ from: '2026-09', to: null }] }); const rn = run(sn, {});
+    t.eq('suspended month + no amount → refused (nothing to default to)', [rn.out.ok, rn.saved], [false, 0]);
+    const k = fx(); run(k, { paidAmount: 20 }); close(k, k.tenants[0], '2026-10');
+    t.eq('…then the REAL close banks the 30 shortfall', [k.tenants[0].extraAccounts[0].openingDebt, rec(k).shortfallBanked], [30, true]);
+  }
+
+  t.section('v2.14.77 (1ד) — the MAIN account is untouched');
+  {
+    const orig = src.match(/^function closeMonthUnpaidForBuilding\s*\([\s\S]*?^\}/m)[0];
+    t.eq('main close does not reference extra-account helpers', /crSuspendedIn|extraAmountForMonth/.test(orig), false);
+  }
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();
