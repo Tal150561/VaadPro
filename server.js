@@ -2530,6 +2530,21 @@ function buildImportUndo(prev, patch, meta) {
     rec.fingerprintsDropped = before.filter(f => !aSet.has(f));
     if (rec.fingerprintsAdded.length || rec.fingerprintsDropped.length) changed = true;
   }
+  // v2.14.78 (1ה, ו2-B) — the per-account fingerprint store. Present only in an account
+  // import's patch → main imports produce exactly the record they produced before.
+  if (patch.importedBankFingerprintsAcc && typeof patch.importedBankFingerprintsAcc === 'object') {
+    const pA = prev.importedBankFingerprintsAcc || {}, nA = patch.importedBankFingerprintsAcc;
+    for (const id of new Set([...Object.keys(pA), ...Object.keys(nA)])) {
+      const b = Array.isArray(pA[id]) ? pA[id] : [], a = Array.isArray(nA[id]) ? nA[id] : [];
+      const bS = new Set(b), aS = new Set(a);
+      const add = a.filter(f => !bS.has(f)), drop = b.filter(f => !aS.has(f));
+      if (add.length || drop.length) {
+        (rec.fpAccAdded = rec.fpAccAdded || {})[id] = add;
+        (rec.fpAccDropped = rec.fpAccDropped || {})[id] = drop;
+        changed = true;
+      }
+    }
+  }
   for (const q of ['pendingClosedMonthPayments', 'pendingAmbiguousMatches']) {
     if (patch[q] !== undefined && !same(prev[q], patch[q])) {
       rec.queues[q] = { before: clone(prev[q]), after: clone(patch[q]) };
@@ -2581,6 +2596,15 @@ function planImportUndo(d) {
   const added = new Set(u.fingerprintsAdded || []);
   const fps = (u.fingerprintsDropped || []).concat((d.importedBankFingerprints || []).filter(f => !added.has(f)));
   const patch = { sentLog, paymentHistory, importedBankFingerprints: fps, lastImportUndo: null };
+  if (u.fpAccAdded || u.fpAccDropped) {   // v2.14.78 (1ה) — the account's own fingerprints
+    const cur = (d.importedBankFingerprintsAcc && typeof d.importedBankFingerprintsAcc === 'object') ? d.importedBankFingerprintsAcc : {};
+    const outA = Object.assign({}, cur);
+    for (const id of new Set([...Object.keys(u.fpAccAdded || {}), ...Object.keys(u.fpAccDropped || {})])) {
+      const addS = new Set((u.fpAccAdded || {})[id] || []);
+      outA[id] = ((u.fpAccDropped || {})[id] || []).concat((Array.isArray(cur[id]) ? cur[id] : []).filter(f => !addS.has(f)));
+    }
+    patch.importedBankFingerprintsAcc = outA;
+  }
   for (const q of Object.keys(u.queues || {})) patch[q] = u.queues[q].before === null ? [] : u.queues[q].before;
   if (Object.prototype.hasOwnProperty.call(u, 'lastBankSyncImportBefore')) patch.lastBankSyncImport = u.lastBankSyncImportBefore;
   const summary = {
@@ -2588,7 +2612,8 @@ function planImportUndo(d) {
     tenants: (u.tenantIds || []).length,
     names: (u.tenantIds || []).map(nameOf),
     sentLogKeys: Object.keys(u.sentLogAfter || {}).length,
-    fingerprints: (u.fingerprintsAdded || []).length
+    fingerprints: (u.fingerprintsAdded || []).length + Object.values(u.fpAccAdded || {}).reduce((n, a) => n + a.length, 0),
+    accountLabel: u.accountLabel || null
   };
   return { ok: true, patch, summary };
 }
@@ -2691,6 +2716,7 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
     sentLog: {},
     paymentHistory: {},
     importedBankFingerprints: [],
+    importedBankFingerprintsAcc: {},   // v2.14.78 (1ה) — per-account dedup memory
     lastBankSyncImport: null,
     // v2.14.8 — a payment reset must also forget which months were "closed",
     // otherwise a stale marker makes a fresh manual close a NO-OP (no accrual)
@@ -2801,6 +2827,7 @@ app.post('/api/admin/reset-building-full', superAdminMiddleware, (req, res) => {
     sentLog: {},
     paymentHistory: {},
     importedBankFingerprints: [],
+    importedBankFingerprintsAcc: {},   // v2.14.78 (1ה)
     lastBankSyncImport: null,
     closedMonths: [],
     closedMonthsExtra: [],
@@ -2831,14 +2858,15 @@ app.post('/api/admin/reset-building-full', superAdminMiddleware, (req, res) => {
 app.post('/api/clear-import-fingerprints', authMiddleware, (req, res) => {
   const dryRun = !!(req.body && req.body.dryRun);
   const d = loadTenantData(req.user.tenantId);
-  const count = Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints.length : 0;
+  const count = (Array.isArray(d.importedBankFingerprints) ? d.importedBankFingerprints.length : 0)
+    + Object.values(d.importedBankFingerprintsAcc || {}).reduce((n, a) => n + (Array.isArray(a) ? a.length : 0), 0);   // v2.14.78 (1ה)
 
   if (dryRun) {
     console.log(`[clear-import-fingerprints] tenant=${req.user.tenantId} DRY RUN — ${count} fingerprints`);
     return res.json({ ok: true, dryRun: true, fingerprints: count });
   }
   const backupFile = createBackup('pre-clear-fingerprints');
-  saveTenantData(req.user.tenantId, { importedBankFingerprints: [] });
+  saveTenantData(req.user.tenantId, { importedBankFingerprints: [], importedBankFingerprintsAcc: {} });
   console.log(`[clear-import-fingerprints] tenant=${req.user.tenantId} DONE — cleared ${count}. backup=${backupFile ? path.basename(backupFile) : '(failed)'}`);
   res.json({ ok: true, dryRun: false, cleared: count, backupFile: backupFile ? path.basename(backupFile) : null });
 });
@@ -6115,15 +6143,20 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
       : resolveTariffRate(tenant, d.defaultTariffs, month, (tenant.customAmount) || (d.config && d.config.amount) || 300);
 
     // paymentHistory key + record space (main vs extra).
+    // v2.14.78 (1ה, ו6-A): ONE store for both — an extra account's record goes to
+    // paymentHistory[tid__acc__id], the key every reader uses (split, report, portal,
+    // accHasMoney). Before, it went to a separate d.extraPaymentHistory nobody read.
     const phKey = isExtra ? (tid + '__acc__' + acc.id) : tid;
-    const store = isExtra ? (d.extraPaymentHistory || (d.extraPaymentHistory = {})) : (d.paymentHistory || (d.paymentHistory = {}));
+    const store = d.paymentHistory || (d.paymentHistory = {});
     if (!store[phKey]) store[phKey] = [];
     const recs = store[phKey];
 
     // ── RECEIPT GUARD (the load-bearing safety property) ──────────────
     // If ANY record for this month already carries a reverse-accrual receipt,
     // this payment was already applied → NO-OP. Idempotent by construction.
-    const already = recs.find(r => r.month === month && r.debtOffset && r.debtOffset.reversedFrom === month);
+    // v2.14.78: an extra account's receipt may still sit in the legacy store.
+    const legacyRecs = isExtra && d.extraPaymentHistory && Array.isArray(d.extraPaymentHistory[phKey]) ? d.extraPaymentHistory[phKey] : [];
+    const already = recs.concat(legacyRecs).find(r => r.month === month && r.debtOffset && r.debtOffset.reversedFrom === month);
     if (already) {
       return res.json({ ok: true, applied: false, alreadyApplied: true, month, charge, openingDebt: tenant.openingDebt, note: 'כבר נזקף — לא בוצעה פעולה נוספת' });
     }
@@ -6187,7 +6220,6 @@ app.post('/api/apply-closed-month-payment', authMiddleware, (req, res) => {
     }
 
     const savePatch = { sentLog: d.sentLog, paymentHistory: d.paymentHistory, tenants: d.tenants };
-    if (isExtra) savePatch.extraPaymentHistory = d.extraPaymentHistory;
     if (Array.isArray(d.pendingClosedMonthPayments)) savePatch.pendingClosedMonthPayments = d.pendingClosedMonthPayments;
     saveTenantData(req.user.tenantId, savePatch);
 
@@ -6217,9 +6249,61 @@ app.post('/api/apply-ambiguous-match', authMiddleware, (req, res) => {
     const queue = Array.isArray(d.pendingAmbiguousMatches) ? d.pendingAmbiguousMatches : [];
     // rowKey identifies the queued row (rowIdx+amount+date+payer+scope), same shape
     // the agent de-dupes on, so it is stable across reloads.
-    const keyOf = h => [h.rowIdx, h.amount, h.date || '', h.payerName || '', h.scope || 'main'].join('|');
+    // v2.14.78 (1ה): ambiguousRowKey — main rows byte-identical to the old key; an
+    // extra-account row (scope 'extra') also carries its templateId.
+    const keyOf = ambiguousRowKey;
     const row = queue.find(h => keyOf(h) === rowKey);
     if (!row) return res.json({ ok: true, applied: false, notFound: true, note: 'השורה כבר טופלה או הוסרה' });
+
+    // ── v2.14.78 (1ה, ו5-A): a row from an EXTRA ACCOUNT's file ──────────
+    // Same rules as the main branch below, on the account's keys: the chosen member must
+    // have the account; the account's OWN fingerprints decide "already written"; a CLOSED
+    // month is never written — the row moves to the closed-month queue (operator approval).
+    if (row.scope === 'extra' && row.templateId) {
+      const tplR = (d.accountTemplates || []).find(t => t && t.id === row.templateId);
+      const fpAcc = accFpList(d, row.templateId).slice();
+      const fpA  = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '', '');
+      const fpAL = bankRowFingerprint(row.date, row.amount, row.rawText || row.payerName || '');
+      const writtenA = bankFpAlreadySeen(new Set(fpAcc), bankFpPrefixes(fpAcc), fpA, fpAL);
+      let appliedA = false, queuedClosed = false, tenantA = null;
+      const patchA = {};
+      if (decision !== 'ignore' && !writtenA) {
+        tenantA = (d.tenants || []).find(t => String(t.id) === String(tenantId));
+        if (!tenantA) return res.status(404).json({ ok: false, error: 'דייר לא נמצא' });
+        const accA = tplR ? accLinkedToTemplate(tenantA, tplR, d.accountTemplates || []) : null;
+        if (!accA || accA.active === false) return res.status(400).json({ ok: false, error: 'לחבר הזה אין חשבון ' + (row.accountLabel || '') + ' פעיל — שייכו אותו קודם, או בחרו חבר אחר.' });
+        const mk = bankRowMonthKey(row.date) || getMonthKey(d.config);
+        if ((d.closedMonthsExtra || []).includes(mk)) {
+          const q = Array.isArray(d.pendingClosedMonthPayments) ? d.pendingClosedMonthPayments : [];
+          const k = [tenantA.id, mk, 'extra', accA.id].join('|');
+          if (!q.some(h => [h.tenantId, h.month, h.scope || 'main', h.accountId || ''].join('|') === k)) {
+            q.push({ detectedAt: new Date().toISOString(), source: 'ambiguous', tenantId: tenantA.id, name: tenantA.name + ' (' + (row.accountLabel || '') + ')',
+              month: mk, scope: 'extra', accountId: accA.id, templateId: row.templateId, amount: row.amount, charge: row.amount,
+              payerName: row.payerName || '', note: row.note || '', prevDebt: Math.round((parseFloat(accA.openingDebt) || 0) * 100) / 100 });
+          }
+          patchA.pendingClosedMonthPayments = q;
+          queuedClosed = true;
+        } else {
+          const phKey = String(tenantA.id) + '__acc__' + accA.id;
+          const slKey = phKey + '_' + HEBREW_MONTHS[parseInt(String(mk).split('-')[1]) - 1];
+          const accrued = accumulatePaidAmount((d.sentLog || {})[slKey], row.amount);
+          d.sentLog = Object.assign({}, d.sentLog || {});
+          d.sentLog[slKey] = `bank_import_${new Date().toISOString()}_${accrued}_payer_${row.payerName || ''}`;
+          const add = {}; add[phKey] = [{ month: mk, paid: true, amount: crSuspendedIn(accA, mk) ? 0 : extraAmountForMonth(d, accA, mk),
+            paidAmount: accrued, date: new Date().toISOString().split('T')[0], type: 'bank_import', name: tenantA.name, payerName: row.payerName || '' }];
+          patchA.sentLog = d.sentLog;
+          patchA.paymentHistory = mergeExtraPaymentHistory(d.paymentHistory || (d.paymentHistory = {}), add);
+          appliedA = true;
+        }
+        fpAcc.push(fpA);
+        patchA.importedBankFingerprintsAcc = Object.assign({}, d.importedBankFingerprintsAcc || {}, { [row.templateId]: fpAcc.length > 5000 ? fpAcc.slice(fpAcc.length - 5000) : fpAcc });
+      }
+      d.pendingAmbiguousMatches = queue.filter(h => keyOf(h) !== rowKey);
+      patchA.pendingAmbiguousMatches = d.pendingAmbiguousMatches;
+      saveTenantData(req.user.tenantId, patchA);
+      return res.json({ ok: true, applied: appliedA, queuedClosed, alreadyWritten: writtenA, decision: decision || 'assign',
+                        tenantName: tenantA ? tenantA.name : null, remaining: d.pendingAmbiguousMatches.length });
+    }
 
     // Shared-fingerprint overlap guard: if a manual import already wrote this row,
     // its fingerprint is present → do NOT write again, just drop from the queue.
@@ -9442,6 +9526,23 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     const rows = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '' });
     const monthKey = req.body.monthKey || null;
 
+    // v2.14.78 (1ה, ו5-A) — a file for ONE extra account (targetTemplateId). Its own
+    // engine, its own fingerprints, its own mapping (tpl.bankMapping, else the building's).
+    // Without the parameter nothing below changes.
+    if (req.body.targetTemplateId) {
+      const tplA = (d.accountTemplates || []).find(t => t && t.id === req.body.targetTemplateId);
+      if (!tplA) return res.status(400).json({ ok: false, error: 'targetTemplateId לא נמצא בהגדרות החשבונות' });
+      const rA = runAccountBankImport(d, { templateId: tplA.id, rows, mapping: tplA.bankMapping || d.bankMapping, monthKey },
+        { source: 'agent', queueAmbiguous: true, receipt: accAgentReceipt });
+      if (!rA.plan.ok) return res.status(400).json(rA.plan);
+      saveTenantData(req.user.tenantId, rA.patch);
+      const pA = rA.plan;
+      return res.json({ ok: true, targetTemplateId: pA.templateId, accountLabel: pA.label, month: pA.month,
+        matched: pA.matched.length, unmatched: pA.unpaid.length, matchedTenants: accAgentReceipt(pA).matchedTenants, unmatchedTenants: pA.unpaid,
+        alreadyImported: pA.alreadyImported.length, alreadyImportedTenants: pA.alreadyImported, duplicateWarnings: pA.duplicates,
+        closedMonthHits: pA.closedHits, ambiguousMatchHits: pA.ambiguous, noAccount: pA.noAccount, mappingWarning: pA.mappingWarning });
+    }
+
     // Cross-import dedup: fingerprints of transactions imported in prior runs.
     // Re-importing the same file (or an overlapping month file) will skip any row
     // whose fingerprint is already here, so nothing is counted twice.
@@ -9584,6 +9685,462 @@ app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => 
     console.error('[import-bank]', err);
     res.status(500).json({ ok: false, error: err.message });
   }
+});
+
+
+// ════════════════════════════════════════════════════════════════════
+// v2.14.78 (1ה) — A BANK FILE PER EXTRA ACCOUNT (spec 1.2, פ2, פ3, פ6)
+// Decisions locked with Tal 2026-10-24 (all recommendations):
+//   ו1-A  a SIBLING engine. analyzeBankRowsServer (agent, main) and the page's
+//         analyzeBankRows stay BYTE-IDENTICAL. Built from the SAME shared parts:
+//         scoreTenantRowMatch / resolveRowCandidates (who paid), bankRowFingerprint +
+//         bankFpAlreadySeen (dedup), groupMatchesByMonth + splitOverpayAcrossMonths +
+//         the split wall (which month), extraAmountForMonth + crSuspendedIn (the
+//         frozen charge, 1ג/1ד), accumulatePaidAmount (v2.14.58).
+//   ו2-B  fingerprints in a SEPARATE store per definition,
+//         d.importedBankFingerprintsAcc[templateId] (cap 5000 EACH). The main list and
+//         its 5000 cap are never read or written here (300 members × 2 accounts × 12
+//         months would have evicted main fingerprints within a year). A payment of the
+//         same date+amount+name in the main file and in an account file is two payments.
+//   ו3-A  EVERY member is scored with the main engine (name, keywords, phone, apt) plus
+//         the account's matchKeywords as extra keywords. A winner who has no such
+//         account (or an inactive one) is LISTED, never written; nothing is guessed.
+//   ו4-A  the page parses + maps the file, the server previews (dryRun) and RE-PLANS
+//         on commit. Same rules as the main manual import: month selector (fallback
+//         for undated rows), the split question (split:false = the whole amount on the
+//         selected month), a CLOSED selected month sends every member's FULL amount to
+//         approval, ambiguous rows need a decision, an open month ACCUMULATES.
+//   ו5-A  the agent passes targetTemplateId to /api/import-bank → this engine; it never
+//         guesses: ambiguous rows → pendingAmbiguousMatches (scope 'extra'), closed-month
+//         money → pendingClosedMonthPayments.
+//   ו6-A  money for a CLOSED month is never written here — it goes to the queue and is
+//         applied only by /api/apply-closed-month-payment (operator approval).
+// Writes ONLY sentLog + paymentHistory (tid__acc__id keys), the account's fingerprints
+// and the queues. openingDebt moves only at month close (closeExtraAccountsUnpaid).
+// ════════════════════════════════════════════════════════════════════
+
+// Rows with an amount. ⚠️ Same parsing as analyzeBankRowsServer (amount column or the
+// heuristic scan, bankAmount ± bankTolerance filter) — copied, because that function is
+// tracked byte-identical (ו1-A). A parity test runs both on the same file.
+function accBankParseRows(rows, mapping) {
+  mapping = mapping || {};
+  const iName   = parseInt(mapping.colName   ?? -1);
+  const iAmount = parseInt(mapping.colAmount ?? -1);
+  const iDate   = parseInt(mapping.colDate   ?? -1);
+  const iNote   = parseInt(mapping.colNote   ?? -1);
+  const iRef    = parseInt(mapping.colRef    ?? -1);
+  const ta      = mapping.bankAmount ? parseFloat(mapping.bankAmount) : null;
+  const tol     = parseFloat(mapping.bankTolerance ?? 5);
+  const filterByAmount = ta !== null && !isNaN(ta) && ta > 0;
+  const min = filterByAmount ? ta - tol : -Infinity;
+  const max = filterByAmount ? ta + tol :  Infinity;
+  const mr = [];
+  (Array.isArray(rows) ? rows : []).slice(1).forEach((row, rowIdx) => {
+    if (!Array.isArray(row)) return;
+    let matchAmount = null;
+    if (iAmount >= 0) {
+      const cell = row[iAmount];
+      if (cell !== null && cell !== '' && cell !== undefined) {
+        const n = parseFloat(String(cell).replace(/[,\s₪]/g, ''));
+        if (!isNaN(n) && n > 0) {
+          if (filterByAmount) { if (n >= min && n <= max) matchAmount = n; }
+          else matchAmount = n;
+        }
+      }
+    } else {
+      row.forEach(cell => {
+        if (matchAmount !== null || (!cell && cell !== 0)) return;
+        const n = parseFloat(String(cell).replace(/[,\s₪]/g, ''));
+        if (isNaN(n) || n <= 0 || n < 10 || n > 500000) return;
+        if (n >= 1900 && n <= 2100) return;
+        if (Number.isInteger(n) && n <= 31) return;
+        if (filterByAmount) { if (n >= min && n <= max) matchAmount = n; }
+        else matchAmount = n;
+      });
+    }
+    if (matchAmount !== null) {
+      mr.push({
+        row, amount: matchAmount, rowIdx,
+        nameVal: iName >= 0 ? String(row[iName] || '') : row.join(' '),
+        dateVal: iDate >= 0 ? String(row[iDate] || '') : '',
+        noteVal: iNote >= 0 ? String(row[iNote] || '') : '',
+        refVal:  iRef  >= 0 ? String(row[iRef]  || '') : ''
+      });
+    }
+  });
+  return { mr, cols: { iName, iAmount, iDate, iNote, iRef } };
+}
+
+// ⚠️ Same as the nested extractAptNumbersFromNote in analyzeBankRowsServer / app.html
+// (requireDira, 1–3 standalone digits). Kept in sync by the parity test.
+function accBankAptNumbers(note) {
+  if (!note) return [];
+  const s = String(note);
+  if (!/דיר[הת]/.test(s)) return [];
+  const nums = s.match(/(?:^|[^\d])(\d{1,3})(?![\d])/g);
+  if (!nums) return [];
+  return nums.map(x => x.replace(/\D/g, '')).filter(Boolean);
+}
+
+// A mapped column that is empty on EVERY data row → the file's structure differs from
+// the saved mapping. Warn before writing anything (never a silent import).
+function accBankMappingWarning(rows, cols) {
+  const data = (Array.isArray(rows) ? rows : []).slice(1).filter(r => Array.isArray(r));
+  if (!data.length) return 'אין שורות נתונים בקובץ';
+  const names = { iName: 'שם / תיאור', iAmount: 'סכום', iDate: 'תאריך' };
+  const empty = Object.keys(names).filter(k => cols[k] >= 0 &&
+    data.every(r => r[cols[k]] === undefined || r[cols[k]] === null || String(r[cols[k]]).trim() === ''));
+  return empty.length ? 'העמודות ' + empty.map(k => '"' + names[k] + '"').join(', ') + ' ריקות בכל השורות — ייתכן שמבנה הקובץ שונה מהמבנה השמור לחשבון.' : null;
+}
+
+// The account's own fingerprint list (ו2-B). Never the main importedBankFingerprints.
+function accFpList(d, templateId) {
+  const m = d && d.importedBankFingerprintsAcc;
+  const a = (m && typeof m === 'object') ? m[templateId] : null;
+  return Array.isArray(a) ? a : [];
+}
+
+// Identity of a queued ambiguous row. Main rows: byte-identical to the v2.14.41 key;
+// an account row appends its templateId (two account files can't collide).
+function ambiguousRowKey(h) {
+  return [h.rowIdx, h.amount, h.date || '', h.payerName || '', h.scope || 'main']
+    .concat(h.templateId ? [h.templateId] : []).join('|');
+}
+
+// PURE. input: { templateId, rows, mapping, monthKey, split, decisions, nowIso }.
+// Returns the preview AND the exact writes (plan.writes) — commit re-plans and applies.
+function planAccountBankImport(d, input) {
+  input = input || {};
+  const r2 = n => Math.round((parseFloat(n) || 0) * 100) / 100;
+  const templates = Array.isArray(d.accountTemplates) ? d.accountTemplates : [];
+  const tpl = templates.find(t => t && t.id === input.templateId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות › חשבונות נוספים' };
+  if (tpl.type === 'formula') return { ok: false, error: 'חשבון מחושב — קליטת קובץ בנק תתווסף בשלב 2' };
+  const rows = Array.isArray(input.rows) ? input.rows : [];
+  if (rows.length < 2) return { ok: false, error: 'הקובץ ריק' };
+  const mapping = input.mapping || tpl.bankMapping || d.bankMapping || {};
+  const config = d.config || {};
+  const fallbackMk = /^\d{4}-\d{2}$/.test(String(input.monthKey || '')) ? String(input.monthKey) : getMonthKey(config);
+  const hebOf = mk => HEBREW_MONTHS[parseInt(String(mk).split('-')[1]) - 1];
+  const closedExtra = new Set(Array.isArray(d.closedMonthsExtra) ? d.closedMonthsExtra : []);
+  const wallExtra = splitWallMonthKey(d.closedMonthsExtra, config);
+  const selectedClosed = closedExtra.has(fallbackMk);
+  const split = input.split !== false;
+  const decisions = (input.decisions && typeof input.decisions === 'object') ? input.decisions : {};
+  const nowIso = input.nowIso || new Date().toISOString();
+  const today = nowIso.split('T')[0];
+  const label = crAccountKey(tpl.label);
+  const parsed = accBankParseRows(rows, mapping);
+  const prior = accFpList(d, tpl.id);
+  const priorSet = new Set(prior);
+  const priorPrefixes = bankFpPrefixes(prior);
+  const consumed = new Set();
+  const newFp = [];
+  const fields = (Array.isArray(d.tenants) ? d.tenants : []).map(t => {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    const kw = (t.keywords ? String(t.keywords).split(',') : [])
+      .concat(acc && acc.matchKeywords ? String(acc.matchKeywords).split(',') : [])
+      .map(k => k.trim().toLowerCase()).filter(Boolean);
+    return { id: t.id, tenant: t, acc, kw,
+      ps: String(t.phone || '').replace(/\D/g, '').slice(-7),
+      nameParts: String(t.name || '').trim().toLowerCase().split(/\s+/).filter(p => p.length > 1),
+      aptNum: t.aptNumber != null ? String(t.aptNumber).replace(/\D/g, '') : '' };
+  });
+  const byId = new Map(fields.map(f => [String(f.id), f]));
+  const live = f => !!(f && f.acc && f.acc.active !== false);
+  const out = { ok: true, templateId: tpl.id, label, month: hebOf(fallbackMk), monthKey: fallbackMk, selectedClosed, split,
+    matched: [], noAccount: [], unpaid: [], unrecognized: [], alreadyImported: [], duplicates: [], ambiguous: [], closedHits: [],
+    splitMonths: null, lumpSplits: [], mappingWarning: accBankMappingWarning(rows, parsed.cols), rowsWithAmount: parsed.mr.length,
+    writes: { sentLog: {}, history: {}, fingerprints: newFp }, counts: {} };
+  const perMember = new Map();
+  const priorSkip = new Set();
+  const fpOf  = m => bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '), m.refVal);
+  const fpLeg = m => bankRowFingerprint(m.dateVal, m.amount, m.nameVal || m.row.join(' '));
+  const claim = (f, m, matchType) => {
+    const fp = fpOf(m);
+    if (bankFpAlreadySeen(priorSet, priorPrefixes, fp, fpLeg(m))) {
+      priorSkip.add(String(f.id));
+      out.alreadyImported.push({ tenantId: f.id, name: f.tenant.name, amount: m.amount, date: m.dateVal || '' });
+      return;
+    }
+    if (consumed.has(fp)) { out.duplicates.push({ tenantId: f.id, name: f.tenant.name, amount: m.amount, date: m.dateVal || '' }); return; }
+    consumed.add(fp); newFp.push(fp);
+    if (!perMember.has(String(f.id))) perMember.set(String(f.id), { f, rows: [] });
+    perMember.get(String(f.id)).rows.push({ amount: m.amount, matchType, payerName: m.nameVal, date: m.dateVal, note: m.noteVal });
+  };
+
+  parsed.mr.forEach(m => {
+    const rt = (m.nameVal || m.row.join(' ')).toLowerCase();
+    const rtDigits = m.row.join(' ').toLowerCase().replace(/\D/g, '');
+    const noteApts = accBankAptNumbers(m.noteVal);
+    const cands = [];
+    fields.forEach(tf => {
+      const aptBlocked = noteApts.some(n =>
+        n !== tf.aptNum && fields.some(o => {
+          if (o.id === tf.id || o.aptNum !== n) return false;
+          return kwMatchCount(o.kw, rt) > 0 ||
+                 (o.ps && rtDigits.indexOf(o.ps) >= 0) ||
+                 (o.nameParts.length >= 2 && o.nameParts.every(p => rt.indexOf(p) >= 0));
+        })) && !(tf.aptNum && noteApts.indexOf(tf.aptNum) >= 0);
+      const sc = scoreTenantRowMatch(tf, rt, rtDigits, noteApts, aptBlocked);
+      if (sc) cands.push({ id: tf.id, name: tf.tenant.name, score: sc, f: tf });
+    });
+    if (!cands.length) { out.unrecognized.push({ amount: m.amount, date: m.dateVal || '', payerName: m.nameVal || '' }); return; }
+    const v = resolveRowCandidates(cands);
+    if (v.ambiguous) {
+      if (bankFpAlreadySeen(priorSet, priorPrefixes, fpOf(m), fpLeg(m))) {
+        out.alreadyImported.push({ tenantId: null, name: m.nameVal || '', amount: m.amount, date: m.dateVal || '', ambiguous: true });
+        return;
+      }
+      const h = { rowIdx: m.rowIdx, amount: m.amount, date: m.dateVal || '', note: m.noteVal || '', payerName: m.nameVal || '',
+        rawText: (m.nameVal || m.row.join(' ')), scope: 'extra', templateId: tpl.id, accountLabel: label,
+        candidates: v.top.map(c => ({ id: c.id, name: c.name, tier: c.score.tier, kwCount: c.score.kwCount, hasAccount: live(c.f) })) };
+      h.rowKey = ambiguousRowKey(h);
+      const dec = decisions[h.rowKey];
+      if (dec === 'ignore') h.decision = 'ignore';
+      else if (dec !== undefined && dec !== null && dec !== '') {
+        const f = byId.get(String(dec));
+        if (f && live(f) && h.candidates.some(c => String(c.id) === String(dec))) { h.decision = 'assign'; h.assignTo = f.id; claim(f, m, 'manual'); }
+        else h.decision = 'invalid';
+      }
+      out.ambiguous.push(h);
+      return;
+    }
+    const f = byId.get(String(v.winner));
+    if (!live(f)) {
+      out.noAccount.push({ tenantId: f.id, name: f.tenant.name, amount: m.amount, date: m.dateVal || '', reason: f.acc ? 'inactive' : 'none' });
+      return;
+    }
+    claim(f, m, v.top[0].score.matchType);
+  });
+
+  const sl = Object.assign({}, d.sentLog || {});
+  const hist = out.writes.history;
+  const multiMonths = new Set();
+  perMember.forEach(({ f, rows: ms }) => {
+    const acc = f.acc;
+    const phKey = String(f.id) + '__acc__' + acc.id;
+    const total = r2(ms.reduce((s, x) => s + x.amount, 0));
+    const payer = (ms[0] && ms[0].payerName) || '';
+    const note = (ms[0] && ms[0].note) || '';
+    const chargeFor = mk => extraAmountForMonth(d, acc, mk);
+    const entry = { tenantId: f.id, accountId: acc.id, name: f.tenant.name, amount: total, count: ms.length,
+      matchType: ms[0].matchType, priorPaid: 0, lumpSplit: false, months: [] };
+    const hit = (mk, sum, p) => {
+      out.closedHits.push({ tenantId: f.id, name: f.tenant.name + ' (' + label + ')', month: mk, scope: 'extra', accountId: acc.id,
+        templateId: tpl.id, amount: r2(sum), charge: r2(sum), payerName: p || '', note, prevDebt: r2(acc.openingDebt) });
+      entry.months.push({ mk, sum: r2(sum), closed: true });
+    };
+    const write = (mk, sum, p) => {
+      const key = phKey + '_' + hebOf(mk);
+      entry.priorPaid = r2(entry.priorPaid + (parseSentLogAmount(sl[key]) || 0));
+      const paidTotal = accumulatePaidAmount(sl[key], sum);
+      sl[key] = `bank_import_${nowIso}_${paidTotal}_payer_${p || ''}`;
+      out.writes.sentLog[key] = sl[key];
+      if (!hist[phKey]) hist[phKey] = [];
+      const rec = { month: mk, paid: true, amount: crSuspendedIn(acc, mk) ? 0 : chargeFor(mk), paidAmount: paidTotal,
+        date: today, type: 'bank_import', name: f.tenant.name, payerName: p || '' };
+      const i = hist[phKey].findIndex(r => r.month === mk);
+      if (i >= 0) hist[phKey][i] = rec; else hist[phKey].push(rec);
+      entry.months.push({ mk, sum: r2(sum), closed: false });
+    };
+    if (selectedClosed) { hit(fallbackMk, total, payer); out.matched.push(entry); return; }
+    const grouped = groupMatchesByMonth(ms, fallbackMk);
+    let buckets = grouped.buckets;
+    if (chargeFor(fallbackMk) > 0) {
+      const sp = splitOverpayAcrossMonths(grouped.buckets, {
+        chargeForMonth: chargeFor,
+        isPaid: mk => sentLogIsPayment(sl[phKey + '_' + hebOf(mk)]),
+        isClosed: mk => closedExtra.has(mk) || mk <= wallExtra,
+        note
+      });
+      buckets = sp.buckets;
+      entry.lumpSplit = !!sp.split && buckets.size > 1;
+    }
+    if (buckets.size > 1) {
+      if (entry.lumpSplit) {
+        const parts = Array.from(buckets.entries()).map(([mk, b]) => ({ mk, sum: b.sum })).sort((a, b) => a.mk < b.mk ? -1 : 1);
+        out.lumpSplits.push({ name: f.tenant.name, amount: total, parts });
+      } else buckets.forEach((_b, mk) => multiMonths.add(mk));
+    }
+    if (buckets.size > 1 && !split) write(fallbackMk, total, payer);
+    else buckets.forEach((b, mk) => { if (closedExtra.has(mk)) hit(mk, b.sum, b.payerName || payer); else write(mk, b.sum, b.payerName || payer); });
+    out.matched.push(entry);
+  });
+
+  out.splitMonths = multiMonths.size ? Array.from(multiMonths).sort() : null;
+  fields.forEach(f => {
+    if (live(f) && !perMember.has(String(f.id)) && !priorSkip.has(String(f.id))) out.unpaid.push({ tenantId: f.id, name: f.tenant.name });
+  });
+  out.counts = {
+    matched: out.matched.length,
+    payments: out.matched.reduce((s, x) => s + x.count, 0),
+    written: Object.keys(out.writes.sentLog).length,
+    closed: out.closedHits.length,
+    noAccount: out.noAccount.length,
+    unrecognized: out.unrecognized.length,
+    alreadyImported: out.alreadyImported.length,
+    duplicates: out.duplicates.length,
+    ambiguousOpen: out.ambiguous.filter(h => !h.decision || h.decision === 'invalid').length
+  };
+  return out;
+}
+
+// The plan WITHOUT its writes (what the page sees).
+function accPlanView(plan) {
+  const v = Object.assign({}, plan);
+  delete v.writes;
+  return v;
+}
+
+// PURE. The save patch for a plan. opts.source 'manual'|'agent'; opts.queueAmbiguous
+// (agent) parks every undecided ambiguous row in pendingAmbiguousMatches.
+function commitAccountBankImport(d, plan, opts) {
+  opts = opts || {};
+  const patch = {};
+  const w = plan.writes;
+  const at = opts.nowIso || new Date().toISOString();
+  if (Object.keys(w.sentLog).length) {
+    patch.sentLog = Object.assign({}, d.sentLog || {}, w.sentLog);
+    patch.paymentHistory = mergeExtraPaymentHistory(JSON.parse(JSON.stringify(d.paymentHistory || {})), w.history);
+  }
+  if (w.fingerprints.length) {
+    const all = accFpList(d, plan.templateId).concat(w.fingerprints);
+    const store = Object.assign({}, (d.importedBankFingerprintsAcc && typeof d.importedBankFingerprintsAcc === 'object') ? d.importedBankFingerprintsAcc : {});
+    store[plan.templateId] = all.length > 5000 ? all.slice(all.length - 5000) : all;
+    patch.importedBankFingerprintsAcc = store;
+  }
+  if (plan.closedHits.length) {
+    const prevQ = Array.isArray(d.pendingClosedMonthPayments) ? d.pendingClosedMonthPayments : [];
+    const keyOf = h => [h.tenantId, h.month, h.scope || 'main', h.accountId || ''].join('|');
+    const seen = new Set(prevQ.map(keyOf));
+    const merged = prevQ.slice();
+    for (const h of plan.closedHits) {
+      if (seen.has(keyOf(h))) continue;
+      seen.add(keyOf(h));
+      merged.push(Object.assign({ detectedAt: at, source: opts.source || 'manual' }, h));
+    }
+    if (merged.length !== prevQ.length) patch.pendingClosedMonthPayments = merged;
+  }
+  if (opts.queueAmbiguous) {
+    const open = plan.ambiguous.filter(h => !h.decision);
+    if (open.length) {
+      const prevA = Array.isArray(d.pendingAmbiguousMatches) ? d.pendingAmbiguousMatches : [];
+      const seenA = new Set(prevA.map(ambiguousRowKey));
+      const mergedA = prevA.slice();
+      for (const h of open) {
+        if (seenA.has(ambiguousRowKey(h))) continue;
+        seenA.add(ambiguousRowKey(h));
+        const q = Object.assign({ detectedAt: at, source: opts.source || 'agent', month: plan.month }, h);
+        delete q.rowKey; delete q.decision; delete q.assignTo;
+        mergedA.push(q);
+      }
+      if (mergedA.length !== prevA.length) patch.pendingAmbiguousMatches = mergedA;
+    }
+  }
+  return patch;
+}
+
+// Plan + patch + the undo record (one level, shared with the main imports — פ17).
+function runAccountBankImport(d, input, opts) {
+  opts = opts || {};
+  const plan = planAccountBankImport(d, input);
+  if (!plan.ok) return { plan, patch: null };
+  const prev = JSON.parse(JSON.stringify({
+    sentLog: d.sentLog || {}, paymentHistory: d.paymentHistory || {},
+    importedBankFingerprints: d.importedBankFingerprints || [],
+    importedBankFingerprintsAcc: d.importedBankFingerprintsAcc || {},
+    pendingClosedMonthPayments: d.pendingClosedMonthPayments === undefined ? null : d.pendingClosedMonthPayments,
+    pendingAmbiguousMatches: d.pendingAmbiguousMatches === undefined ? null : d.pendingAmbiguousMatches,
+    lastBankSyncImport: d.lastBankSyncImport === undefined ? null : d.lastBankSyncImport,
+    closedMonths: d.closedMonths || [], closedMonthsExtra: d.closedMonthsExtra || []
+  }));
+  const patch = commitAccountBankImport(d, plan, opts);
+  if (typeof opts.receipt === 'function') patch.lastBankSyncImport = opts.receipt(plan);
+  try {
+    const u = buildImportUndo(prev, patch, { source: opts.source || 'manual', month: plan.month });
+    if (u) { u.templateId = plan.templateId; u.accountLabel = plan.label; patch.lastImportUndo = u; }
+  } catch (e) { console.error('[undo-snapshot account]', e.message); }   // never block an import
+  return { plan, patch };
+}
+
+// The agent's receipt (lastBankSyncImport) for an account file — same fields the banner reads.
+function accAgentReceipt(plan) {
+  return {
+    timestamp: new Date().toISOString(), month: plan.month, templateId: plan.templateId, accountLabel: plan.label,
+    matched: plan.matched.length, unmatched: plan.unpaid.length,
+    matchedTenants: plan.matched.map(m => ({ tenantId: m.tenantId, name: m.name + ' (' + plan.label + ')', amount: m.amount,
+      matchType: 'extra_account', accountId: m.accountId, accountLabel: plan.label })),
+    unmatchedTenants: plan.unpaid,
+    alreadyImported: plan.alreadyImported.length, alreadyImportedTenants: plan.alreadyImported,
+    noAccount: plan.noAccount
+  };
+}
+
+// ── POST /api/import-bank-account — v2.14.78 (1ה, manual) ──────────────────
+// Body: { templateId, rows, mapping, monthKey, split, decisions, dryRun }. dryRun is the
+// DEFAULT (preview); only dryRun:false writes, after RE-PLANNING against the stored data.
+// The page never sends money — only the parsed rows, the mapping and its decisions.
+app.post('/api/import-bank-account', authMiddleware, (req, res) => {
+  try {
+    const b = req.body || {};
+    if (!Array.isArray(b.rows) || b.rows.length > 20001 || b.rows.some(r => !Array.isArray(r) || r.length > 200)) {
+      return res.status(400).json({ ok: false, error: 'קובץ לא תקין (עד 20,000 שורות)' });
+    }
+    const d = loadTenantData(req.user.tenantId);
+    const input = { templateId: b.templateId, rows: b.rows, mapping: b.mapping, monthKey: b.monthKey, split: b.split, decisions: b.decisions };
+    if (b.dryRun !== false) {
+      const plan = planAccountBankImport(d, input);
+      return res.json(plan.ok ? Object.assign({ dryRun: true }, accPlanView(plan)) : plan);
+    }
+    const r = runAccountBankImport(d, input, { source: 'manual' });
+    if (!r.plan.ok) return res.json(r.plan);
+    const saved = Object.keys(r.patch).length > 0;
+    if (saved) saveTenantData(req.user.tenantId, r.patch);
+    return res.json(Object.assign({ dryRun: false, saved }, accPlanView(r.plan)));
+  } catch (e) {
+    console.error('[import-bank-account]', e.message);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── POST /api/account-templates/:id/bank-mapping — v2.14.78 (1ה, ו4) ─────────
+// The column mapping of THIS account's bank file, saved on the definition (server, building
+// level → every browser and the agent see the same). Empty = the building's mapping.
+function sanitizeBankMapping(m) {
+  if (!m || typeof m !== 'object') return null;
+  const out = {};
+  for (const k of ['colName', 'colAmount', 'colDate', 'colNote', 'colRef']) {
+    const n = parseInt(m[k]);
+    out[k] = String(isFinite(n) && n >= -1 && n < 200 ? n : -1);
+  }
+  const ba = parseFloat(m.bankAmount);
+  out.bankAmount = isFinite(ba) && ba > 0 ? String(ba) : '';
+  const bt = parseFloat(m.bankTolerance);
+  out.bankTolerance = String(isFinite(bt) && bt >= 0 ? bt : 5);
+  return out;
+}
+app.post('/api/account-templates/:id/bank-mapping', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const list = Array.isArray(d.accountTemplates) ? d.accountTemplates : [];
+  const tpl = list.find(t => t && t.id === req.params.id);
+  if (!tpl) return res.json({ ok: false, error: 'החשבון לא נמצא — שמרו קודם את ההגדרות' });
+  const m = sanitizeBankMapping(req.body && req.body.mapping);
+  if (m) tpl.bankMapping = m; else delete tpl.bankMapping;
+  saveTenantData(req.user.tenantId, { accountTemplates: list });
+  res.json({ ok: true, mapping: tpl.bankMapping || null });
+});
+
+// ── POST /api/dismiss-closed-month-payment — v2.14.78 (1ה, ו6-A) ─────────────
+// "התעלם" on a PERSISTED closed-month queue row (main or extra): drops it, writes no money.
+app.post('/api/dismiss-closed-month-payment', authMiddleware, (req, res) => {
+  const { tenantId, month, scope, accountId } = req.body || {};
+  const d = loadTenantData(req.user.tenantId);
+  const q = Array.isArray(d.pendingClosedMonthPayments) ? d.pendingClosedMonthPayments : [];
+  const kept = q.filter(h => !(String(h.tenantId) === String(tenantId) && h.month === month &&
+    (h.scope || 'main') === (scope || 'main') && String(h.accountId || '') === String(accountId || '')));
+  if (kept.length !== q.length) saveTenantData(req.user.tenantId, { pendingClosedMonthPayments: kept });
+  res.json({ ok: true, removed: q.length - kept.length, remaining: kept.length });
 });
 
 
@@ -10143,6 +10700,8 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
   for (const t of templates) {
     const old = (d.accountTemplates || []).find(p => p && p.id === t.id);
     delete t.amountTariffs;
+    delete t.bankMapping;                                                  // v2.14.78 (1ה) — saved only via /bank-mapping
+    if (old && old.bankMapping) t.bankMapping = old.bankMapping;
     if (!old) continue;
     if (Array.isArray(old.amountTariffs) && old.amountTariffs.length) t.amountTariffs = old.amountTariffs;
     const was = Math.round(tplAmountForMonth(old, mkS) * 100) / 100;

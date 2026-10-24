@@ -3494,4 +3494,118 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('guide: suspended extra-account bullet points to the credit rule', gd77.includes('תשלום שהתקבל בחודש מושהה נשמר <strong>כזכות</strong>'), true);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.78 (1ה) — bank file per extra account: EXECUTED page code against the REAL
+// server plan (S.planAccountBankImport). The page shows server numbers only (CONSUME),
+// sends rows + mapping + decisions, and its handlers carry no data.
+// ════════════════════════════════════════════════════════════════
+{
+  const S = require('./test-lib').loadServer();
+  const app = readSource('public/app.html'), gd = readSource('public/vaadpro-guide.js');
+  const J = o => JSON.parse(JSON.stringify(o));
+  const VP = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  const ELS = {};
+  const P = runInSandbox(extractFunctions(app, ['esc', 'bankTargetTemplates', 'bankTargetOptionsHtml', 'accMonthTxt', 'accPreviewHtml', 'accDecisionsFrom', 'accSplitQuestion', 'pcqHtml', '_ambRowKey', 'accImportRequest', 'accImportCommit', 'bankTargetId', 'bankMappingFromForm'])
+    + '\nmodule.exports={esc,bankTargetTemplates,bankTargetOptionsHtml,accMonthTxt,accPreviewHtml,accDecisionsFrom,accSplitQuestion,pcqHtml,_ambRowKey,accImportRequest,accImportCommit};',
+    { VP_MONTHS: VP, document: { getElementById: id => ELS[id] || null, querySelectorAll: () => ELS.__amb || [] } });
+  const d0 = () => ({ config: { amount: 300, manualMonth: 'אוקטובר' },
+    accountTemplates: [{ id: 'T1', label: 'ביטוח <b>', type: 'fixed', frequency: 'monthly', amount: 50 }],
+    tenants: [{ id: 1, name: 'אור כהן', phone: '0501111111', keywords: 'כהן', extraAccounts: [{ id: 'a1', templateId: 'T1', label: 'ביטוח <b>', amount: 50, openingDebt: 0 }] },
+              { id: 2, name: 'דנה כהן', phone: '0502222222', keywords: 'כהן', extraAccounts: [{ id: 'a2', templateId: 'T1', label: 'ביטוח <b>', amount: 50, openingDebt: 0 }] },
+              { id: 3, name: 'משה פרץ', phone: '0503333333', extraAccounts: [] }],
+    sentLog: {}, paymentHistory: {}, closedMonthsExtra: ['2026-09'] });
+  const H = ['שם', 'סכום', 'תאריך'];
+  const rows = [H, ['אור כהן', '50', '05/10/2026'], ['כהן', '50', '06/10/2026'], ['משה פרץ', '50', '06/10/2026'], ['אור כהן', '50', '05/09/2026']];
+  const plan = S.accPlanView(S.planAccountBankImport(d0(), { templateId: 'T1', rows, mapping: { colName: 0, colAmount: 1, colDate: 2 }, monthKey: '2026-10' }));
+
+  t.section('v2.14.78 (1ה) — account selector');
+  {
+    const list = [{ id: 'T1', label: 'ביטוח <b>', type: 'fixed', linked: 3 }, { id: 'F', label: 'חשמל', type: 'formula', linked: 0 }, { id: 'N', label: 'חדש', type: 'fixed' }];
+    t.eq('only SAVED fixed definitions (formula + unsaved excluded)', P.bankTargetTemplates(list).map(x => x.id), ['T1']);
+    const h = P.bankTargetOptionsHtml(list, 'ערבות הדדית', 'T1');
+    t.eq('main account first (value ""), label escaped, selection kept', [h.indexOf('value=""') < h.indexOf('value="T1"'), h.includes('ערבות הדדית (ברירת מחדל)'), h.includes('ביטוח &lt;b&gt;'), h.includes('value="T1" selected')], [true, true, true, true]);
+    t.eq('no extra accounts → main only (the box stays hidden)', P.bankTargetTemplates([]).length, 0);
+  }
+
+  t.section('v2.14.78 (1ה) — preview renders the SERVER plan');
+  {
+    const h = P.accPreviewHtml(plan, false);
+    t.eq('precondition: the plan has matched / ambiguous / no-account / closed', [plan.counts.matched, plan.ambiguous.length, plan.noAccount.length, plan.counts.closed], [1, 1, 1, 1]);
+    t.eq('label escaped, month from the server', [h.includes('ביטוח &lt;b&gt;'), h.includes('אוקטובר 2026')], [true, true]);
+    t.eq('the closed-month part is marked "לאישור"', h.includes('ספטמבר 2026 50 ₪ 🔒 לאישור'), true);
+    t.eq('no-account member listed (not written)', [h.includes('אין להם חשבון'), h.includes('משה פרץ 50 ₪')], [true, true]);
+    t.eq('ambiguous row → a select with its rowKey, candidates with the account + ignore', [h.includes('data-acc-amb="' + P.esc(plan.ambiguous[0].rowKey) + '"'), (h.match(/<option value="[12]"/g) || []).length, h.includes('value="ignore"')], [true, 2, true]);
+    t.eq('confirm + cancel buttons, no inline data in handlers', [h.includes('onclick="accImportCommit()"'), h.includes('onclick="accImportCancel()"'), /onclick="[^"]*[({\d₪]/.test(h.replace(/accImportCommit\(\)|accImportCancel\(\)/g, ''))], [true, true, false]);
+    const na = P.accPreviewHtml(Object.assign({}, plan, { ambiguous: [{ rowKey: 'k', amount: 5, candidates: [{ id: 7, name: 'בלי חשבון', hasAccount: false }, { id: 8, name: 'עם חשבון', hasAccount: true }] }] }), false);
+    t.eq('a candidate WITHOUT the account is not offered', [na.includes('בלי חשבון'), na.includes('עם חשבון')], [false, true]);
+    const done = P.accPreviewHtml(plan, true);
+    t.eq('receipt (done): no buttons, no selects', [done.includes('accImportCommit'), done.includes('data-acc-amb')], [false, false]);
+    const w = P.accPreviewHtml(Object.assign({}, plan, { mappingWarning: 'עמודה <x> ריקה' }), false);
+    t.eq('mapping warning shown + escaped', w.includes('עמודה &lt;x&gt; ריקה'), true);
+  }
+
+  t.section('v2.14.78 (1ה) — decisions, split question, keys');
+  {
+    const el = (k, v) => ({ getAttribute: () => k, value: v });
+    t.eq('decisions: only rows with a choice', P.accDecisionsFrom([el('k1', '2'), el('k2', ''), el('k3', 'ignore')]), { k1: '2', k3: 'ignore' });
+    t.eq('rows dated in two months (one closed) → asked, as in the main import', /2 חודשים/.test(P.accSplitQuestion(plan) || ''), true);
+    const one = S.accPlanView(S.planAccountBankImport(d0(), { templateId: 'T1', rows: rows.slice(0, 2), mapping: { colName: 0, colAmount: 1, colDate: 2 }, monthKey: '2026-10' }));
+    t.eq('one month only → no question', P.accSplitQuestion(one), null);
+    const q = P.accSplitQuestion({ splitMonths: ['2026-09', '2026-10'], lumpSplits: [{ name: 'אור', amount: 100, parts: [{ mk: '2026-09', sum: 50 }, { mk: '2026-10', sum: 50 }] }] });
+    t.eq('question names both kinds + the Cancel meaning', [q.includes('2 חודשים'), q.includes('אור 100₪ → ספטמבר 2026 50₪'), q.includes('ביטול = לרשום הכל בחודש הנבחר')], [true, true, true]);
+    t.eq('closed selected month → no question', P.accSplitQuestion({ selectedClosed: true, splitMonths: ['x'] }), null);
+    const hm = { rowIdx: 3, amount: 50, date: 'd', payerName: 'p' }, he = Object.assign({ scope: 'extra', templateId: 'T1' }, hm);
+    t.eq('page _ambRowKey == server ambiguousRowKey (main + extra)', [P._ambRowKey(hm) === S.ambiguousRowKey(hm), P._ambRowKey(he) === S.ambiguousRowKey(he), P._ambRowKey(he).endsWith('|extra|T1')], [true, true, true]);
+  }
+
+  t.section('v2.14.78 (1ה) — EXECUTED accImportCommit request');
+  {
+    const sent = []; let confirms = 0;
+    ELS.bankTarget = { value: 'T1' }; ELS.bankMonth = { value: '2026-10' }; ELS.bankResult = { style: {}, innerHTML: '' };
+    ['colName', 'colAmount', 'colDate', 'colNote', 'colRef'].forEach((k, i) => { ELS[k] = { value: String(i < 3 ? i : -1) }; });
+    ELS.bankAmount = { value: '' }; ELS.bankTolerance = { value: '5' };
+    ELS.__amb = [{ getAttribute: () => plan.ambiguous[0].rowKey, value: '2' }];
+    const W = {};
+    const g = runInSandbox(extractFunctions(app, ['esc', 'accMonthTxt', 'accPreviewHtml', 'accDecisionsFrom', 'accSplitQuestion', 'accImportRequest', 'accImportCommit', 'bankTargetId', 'bankMappingFromForm'])
+      + '\nmodule.exports={accImportRequest,accImportCommit};', {
+      VP_MONTHS: VP, API: '/api', bankRows: rows, window: W,
+      document: { getElementById: id => ELS[id] || null, querySelectorAll: () => ELS.__amb },
+      confirm: () => { confirms++; return false; }, toast: () => {}, resetDropZone: () => {}, loadData: async () => {}, render: () => {},
+      fetch: async (u, o) => { sent.push({ u, b: JSON.parse(o.body) }); return { json: async () => Object.assign({ ok: true, dryRun: false }, plan) }; } });
+    const req = g.accImportRequest();
+    t.eq('request: account + rows + mapping + month (no money)', [req.templateId, req.rows.length, req.mapping.colDate, req.monthKey, 'amount' in req], ['T1', 5, '2', '2026-10', false]);
+    W._pendingAccImport = { req, plan: Object.assign({}, plan, { lumpSplits: [{ name: 'אור', amount: 100, parts: [{ mk: '2026-09', sum: 50 }, { mk: '2026-10', sum: 50 }] }] }) };
+    (global.__crRuns = global.__crRuns || []).push(g.accImportCommit().then(() => {
+      const b = sent[0] && sent[0].b;
+      t.eq('commit → /import-bank-account with dryRun:false, the split answer (Cancel=false), the decisions', [sent[0].u, b.dryRun, b.split, b.decisions, confirms], ['/api/import-bank-account', false, false, { [plan.ambiguous[0].rowKey]: '2' }, 1]);
+      t.eq('after commit: pending cleared, receipt rendered (no buttons)', [W._pendingAccImport, ELS.bankResult.innerHTML.includes('✅ נרשם'), ELS.bankResult.innerHTML.includes('accImportCommit')], [null, true, false]);
+    }));
+    const W2 = {}; const sent2 = [];
+    const g2 = runInSandbox(extractFunctions(app, ['accImportCommit', 'accSplitQuestion']) + '\nmodule.exports={accImportCommit};', { window: W2, toast: () => {}, fetch: async (u, o) => { sent2.push(o); return { json: async () => ({}) }; } });
+    (global.__crRuns = global.__crRuns || []).push(g2.accImportCommit().then(() => t.eq('no preview → no request', sent2.length, 0)));
+  }
+
+  t.section('v2.14.78 (1ה, ו6-A) — persisted closed-month queue panel');
+  {
+    t.eq('empty queue → nothing', P.pcqHtml([], 'ערבות'), '');
+    const h = P.pcqHtml([{ tenantId: 1, name: 'אור (ביטוח)', month: '2026-09', scope: 'extra', accountId: 'a1', amount: 50, note: '<i>' },
+                         { tenantId: 2, name: 'דנה', month: '2026-08', amount: 230 }], 'ערבות הדדית');
+    t.eq('count + rows + main label on a main row only', [h.includes('🔒 2 תשלומים'), (h.match(/class="pcq-row"/g) || []).length, h.includes('דנה</b> (ערבות הדדית)'), h.includes('אור (ביטוח)</b> (')], [true, 2, true, false]);
+    t.eq('buttons carry only an op + index (no data in handlers)', [h.includes('data-pcq-op="apply" data-pcq-idx="0"'), h.includes('data-pcq-op="dismiss" data-pcq-idx="1"'), /onclick=/.test(h)], [true, true, false]);
+    t.eq('note escaped', h.includes('&lt;i&gt;'), true);
+  }
+
+  t.section('v2.14.78 (1ה) — wiring + guide');
+  {
+    t.eq('selector markup inside the mapping panel, hidden by default', /id="bankTargetBox" style="display:none;[\s\S]*?id="bankTarget" onchange="onBankTargetChange\(\)"/.test(app), true);
+    t.eq('🔍 / 💾 go through the target wrappers', [app.includes('onclick="runBankAnalysisForTarget()"'), app.includes('onclick="saveBankMappingForTarget()"')], [true, true]);
+    t.eq('main path: the wrapper calls the UNCHANGED runBankAnalysis', /function runBankAnalysisForTarget\(\)\{\s*if \(!bankTargetId\(\)\) \{ runBankAnalysis\(\); return; \}/.test(app), true);
+    t.eq('selector populated when the mapping panel opens', app.includes("populateBankTarget().catch(function(){});"), true);
+    t.eq('closed queue rendered on every loadData, one delegated listener', [app.includes('try { renderPendingClosedQueue(); }'), app.includes("box.addEventListener('click', pcqOnClick)")], [true, true]);
+    t.eq('agent queue: extra rows checked against THEIR account fingerprints', app.includes("if (h.scope === 'extra' && h.templateId) return (Array.isArray(fpAcc[h.templateId])"), true);
+    t.eq('guide: account bank file box + closed queue + undo note + settings pointer',
+      ['id="vpg-acc-bank"', '📂 לאיזה חשבון שייך הקובץ', 'שילם, אבל אין לו את החשבון', 'זיכרון ייבוא משלו', 'id="vpg-closed-queue"', 'רשימה קבועה', 'id="vpg-undo-acc"', 'אחד לכל הבניין', 'id="vpg-acc-bankfile"'].every(x => gd.includes(x)), true);
+  }
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

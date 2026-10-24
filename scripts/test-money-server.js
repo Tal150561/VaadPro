@@ -2311,7 +2311,8 @@ t.section('v2.14.19 — debt and credit are mutually exclusive (both lines never
     const r = loadApplyClosedMonth(b, { tenantId: 'R', month: '2026-07', scope: 'extra', accountId: 'A1' });
     t.eq('extra applied=true', r.result && r.result.applied, true);
     t.eq('extra acc.openingDebt 50→0', b.tenants[0].extraAccounts[0].openingDebt, 0);
-    const rec = (b.extraPaymentHistory['R__acc__A1'] || []).find(x => x.month === '2026-07');
+    // v2.14.78 (1ה, ו6-A): the record lives in paymentHistory (the store every reader uses), not d.extraPaymentHistory.
+    const rec = (b.paymentHistory['R__acc__A1'] || []).find(x => x.month === '2026-07');
     t.eq('extra record has receipt', !!(rec && rec.debtOffset && rec.debtOffset.reversedFrom === '2026-07'), true);
     t.eq('extra sentLog key set', !!(String(b.sentLog['R__acc__A1_יולי'] || '').startsWith('manual_paid')), true);
     // idempotency on extra too
@@ -5265,6 +5266,292 @@ const v2_14_64_async = async () => {
   {
     const orig = src.match(/^function closeMonthUnpaidForBuilding\s*\([\s\S]*?^\}/m)[0];
     t.eq('main close does not reference extra-account helpers', /crSuspendedIn|extraAmountForMonth/.test(orig), false);
+  }
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.78 (1ה) — A BANK FILE PER EXTRA ACCOUNT (spec 1.2, פ2, פ3, פ6). Locked (Tal
+// 2026-10-24): ו1-A sibling engine (main engines byte-identical) · ו2-B fingerprints per
+// account · ו3-A every member scored, no-account winner listed · ו4-A preview + re-plan ·
+// ו5-A agent targetTemplateId → queues · ו6-A closed month never written + one store.
+// REAL planner, REAL close, REAL main analyzer (parity), REAL route bodies.
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const lib = require('./test-lib');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const close = lib.loadCloseExtra();
+  const MAP = { colName: 0, colAmount: 1, colDate: 2, colNote: 3 };
+  const NOW = '2026-10-20T10:00:00.000Z';
+  const fx = (over) => Object.assign({
+    config: { amount: 300, manualMonth: 'אוקטובר' },
+    accountTemplates: [{ id: 'T1', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50 },
+                       { id: 'T2', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 80 }],
+    tenants: [
+      { id: 1, name: 'אור כהן', phone: '0501111111', keywords: '', openingDebt: 0, extraAccounts: [{ id: 'a1', label: 'ביטוח מבנה', templateId: 'T1', amount: 50, openingDebt: 0 }, { id: 'w1', label: 'מים', templateId: 'T2', amount: 80, openingDebt: 0 }] },
+      { id: 2, name: 'דנה לוי', phone: '0502222222', keywords: '', openingDebt: 0, extraAccounts: [{ id: 'a2', label: 'ביטוח מבנה', templateId: 'T1', amount: 50, openingDebt: 0 }] },
+      { id: 3, name: 'משה פרץ', phone: '0503333333', keywords: '', openingDebt: 0, extraAccounts: [] },
+      { id: 4, name: 'רות שמש', phone: '0504444444', keywords: '', openingDebt: 0, extraAccounts: [{ id: 'a4', label: 'ביטוח מבנה', templateId: 'T1', amount: 50, openingDebt: 0, active: false }] },
+      { id: 5, name: 'גיל בר', phone: '0505555555', keywords: 'גילי', openingDebt: 0, extraAccounts: [{ id: 'a5', label: 'ביטוח מבנה', amount: 50, openingDebt: 0, matchKeywords: 'בר ביטוח' }] }
+    ],
+    sentLog: {}, paymentHistory: {}, closedMonths: ['2026-09'], closedMonthsExtra: ['2026-09'], importedBankFingerprints: []
+  }, over || {});
+  const H = ['שם', 'סכום', 'תאריך', 'הערה'];
+  const plan = (d, rows, o) => S.planAccountBankImport(d, Object.assign({ templateId: 'T1', rows: [H].concat(rows), mapping: MAP, monthKey: '2026-10', nowIso: NOW }, o || {}));
+  const commit = (d, rows, o, co) => { const r = S.runAccountBankImport(d, Object.assign({ templateId: 'T1', rows: [H].concat(rows), mapping: MAP, monthKey: '2026-10', nowIso: NOW }, o || {}), co || { source: 'manual' });
+    if (r.patch) Object.assign(d, J(r.patch)); return r; };
+  const ids = arr => arr.map(x => x.tenantId);
+
+  t.section('v2.14.78 (1ה) — the account engine: who paid, who has no account');
+  {
+    const d = fx();
+    const p = plan(d, [['אור כהן', '50', '05/10/2026', ''], ['משה פרץ', '50', '06/10/2026', ''], ['רות שמש', '50', '06/10/2026', ''],
+                       ['לא ידוע בכלל', '70', '06/10/2026', ''], ['בר ביטוח', '50', '07/10/2026', '']]);
+    t.eq('matched: אור (name) + גיל via the ACCOUNT matchKeywords (ו3-A)', [ids(p.matched), p.matched.map(m => m.matchType)], [[1, 5], ['name', 'keyword']]);
+    t.eq('גיל linked by NAME (no templateId) — lazy link works', p.matched[1].accountId, 'a5');
+    t.eq('a member WITHOUT the account is listed, never written (ו3-A)', p.noAccount.map(x => [x.tenantId, x.reason]), [[3, 'none'], [4, 'inactive']]);
+    t.eq('a row nobody matches → unrecognized', p.unrecognized.map(x => x.amount), [70]);
+    t.eq('unpaid = linked ACTIVE members with no payment (דנה only)', ids(p.unpaid), [2]);
+    t.eq('writes: sentLog on the account keys only', Object.keys(p.writes.sentLog).sort(), ['1__acc__a1_אוקטובר', '5__acc__a5_אוקטובר']);
+    t.eq('frozen record amount = the dated amount (50)', p.writes.history['1__acc__a1'][0].amount, 50);
+    t.eq('no-account rows are NOT fingerprinted (importable after linking)', p.writes.fingerprints.length, 2);
+    t.eq('the plan never touches main sentLog keys', Object.keys(p.writes.sentLog).some(k => !k.includes('__acc__')), false);
+  }
+
+  t.section('v2.14.78 (1ה, פ3 / ו2-B) — fingerprints per account');
+  {
+    const d = fx();
+    const row = ['אור כהן', '50', '05/10/2026', ''];
+    d.importedBankFingerprints = [S.bankRowFingerprint('05/10/2026', 50, 'אור כהן', '')];   // the SAME transaction in the MAIN file
+    const r = commit(d, [row]);
+    t.eq('THE BUG פ3: a payment identical to a MAIN row is still written to the account', r.plan.counts.written, 1);
+    t.eq('the main fingerprint list is not touched', d.importedBankFingerprints.length, 1);
+    t.eq('the account keeps its own list', d.importedBankFingerprintsAcc.T1.length, 1);
+    const p2 = S.planAccountBankImport(d, { templateId: 'T2', rows: [H, ['אור כהן', '50', '05/10/2026', '']], mapping: MAP, monthKey: '2026-10' });
+    t.eq('…and the same transaction in ANOTHER account file is a separate payment', p2.counts.written, 1);
+    const p3 = plan(d, [row]);
+    t.eq('re-import of the same account file → already imported, nothing written', [p3.counts.alreadyImported, p3.counts.written, p3.unpaid.some(u => u.tenantId === 1)], [1, 0, false]);
+    const p4 = plan(fx(), [row, row]);
+    t.eq('duplicate inside the file → counted once + warned', [p4.counts.written, p4.duplicates.length, p4.matched[0].amount], [1, 1, 50]);
+    const big = fx({ importedBankFingerprintsAcc: { T1: Array.from({ length: 5000 }, (_, i) => 'x' + i), T2: ['keep'] } });
+    commit(big, [row]);
+    t.eq('cap 5000 PER account; other accounts untouched', [big.importedBankFingerprintsAcc.T1.length, big.importedBankFingerprintsAcc.T1[4999], big.importedBankFingerprintsAcc.T2], [5000, S.bankRowFingerprint('05/10/2026', 50, 'אור כהן', ''), ['keep']]);
+  }
+
+  t.section('v2.14.78 (1ה) — open month accumulates · split · suspension');
+  {
+    const d = fx({ sentLog: { '1__acc__a1_אוקטובר': bank(20, 'אור') } });
+    const p = plan(d, [['אור כהן', '30', '15/10/2026', '']]);
+    t.eq('open month ACCUMULATES 20 + 30 = 50 (v2.14.58 parity)', [S.parseSentLogAmount(p.writes.sentLog['1__acc__a1_אוקטובר']), p.matched[0].priorPaid], [50, 20]);
+    const ds = fx({ closedMonthsExtra: ['2026-08'] });
+    const sp = plan(ds, [['אור כהן', '100', '05/10/2026', '']]);
+    t.eq('a lump 100 (2×50) backfills the open unpaid September → Sep 50 + Oct 50', [sp.lumpSplits.length, Object.keys(sp.writes.sentLog).sort()], [1, ['1__acc__a1_אוקטובר', '1__acc__a1_ספטמבר']]);
+    const ns = plan(ds, [['אור כהן', '100', '05/10/2026', '']], { split: false });
+    t.eq('split:false (Cancel) → the whole 100 on the selected month', [Object.keys(ns.writes.sentLog), S.parseSentLogAmount(ns.writes.sentLog['1__acc__a1_אוקטובר'])], [['1__acc__a1_אוקטובר'], 100]);
+    const wall = plan(fx(), [['אור כהן', '100', '05/10/2026', '']]);
+    t.eq('the wall: a closed September is never backfilled → 100 stays on October (credit)', [wall.lumpSplits.length, Object.keys(wall.writes.sentLog)], [0, ['1__acc__a1_אוקטובר']]);
+    const nc = plan(fx({ closedMonthsExtra: [] }), [['אור כהן', '100', '05/10/2026', '']]);
+    t.eq('the wall with NO closed month (after 🧹): September is inside the opening balance → not backfilled', [nc.lumpSplits.length, Object.keys(nc.writes.sentLog)], [0, ['1__acc__a1_אוקטובר']]);
+    const mr = plan(ds, [['אור כהן', '50', '05/09/2026', ''], ['אור כהן', '50', '05/10/2026', '']]);
+    t.eq('rows dated in two months → splitMonths reported for the question', mr.splitMonths, ['2026-09', '2026-10']);
+    const su = fx(); su.tenants[0].extraAccounts[0].suspended = true; su.tenants[0].extraAccounts[0].suspensions = [{ from: '2026-10', to: null }];
+    t.eq('suspended month → frozen 0 (ד5-A parity)', plan(su, [['אור כהן', '50', '05/10/2026', '']]).writes.history['1__acc__a1'][0].amount, 0);
+  }
+
+  t.section('v2.14.78 (1ה, ו6-A) — closed months: never written, queued');
+  {
+    const d = fx();
+    const r = commit(d, [['אור כהן', '50', '05/09/2026', ''], ['דנה לוי', '50', '05/10/2026', '']]);
+    t.eq('a row dated in a CLOSED month → queue hit, not written', [r.plan.closedHits.map(h => [h.tenantId, h.month, h.scope, h.accountId]), Object.keys(r.plan.writes.sentLog)],
+      [[[1, '2026-09', 'extra', 'a1']], ['2__acc__a2_אוקטובר']]);
+    t.eq('the hit is persisted in pendingClosedMonthPayments', d.pendingClosedMonthPayments.map(h => [h.tenantId, h.month, h.source]), [[1, '2026-09', 'manual']]);
+    t.eq('its fingerprint is stored (re-import does not queue it twice)', plan(d, [['אור כהן', '50', '05/09/2026', '']]).counts.alreadyImported, 1);
+    const sel = fx();
+    const rs = commit(sel, [['אור כהן', '50', '05/10/2026', ''], ['דנה לוי', '100', '05/10/2026', '']], { monthKey: '2026-09' });
+    t.eq('selected month CLOSED → every member\'s FULL amount to approval, nothing written', [rs.plan.closedHits.map(h => [h.month, h.amount]), rs.plan.counts.written], [[['2026-09', 50], ['2026-09', 100]], 0]);
+    commit(sel, [['אור כהן', '50', '06/10/2026', '']], { monthKey: '2026-09' });
+    t.eq('queue de-duped on member+month+account', sel.pendingClosedMonthPayments.filter(h => h.tenantId === 1).length, 1);
+  }
+
+  t.section('v2.14.78 (1ה) — ambiguous rows: never guessed');
+  {
+    const d = fx();
+    d.tenants[0].keywords = 'כהן'; d.tenants[1].keywords = 'כהן';
+    const rows = [['כהן', '50', '05/10/2026', '']];
+    const p = plan(d, rows);
+    const h = p.ambiguous[0];
+    t.eq('a tie → ambiguous, both candidates with hasAccount', [p.ambiguous.length, h.candidates.map(c => [c.id, c.hasAccount]), p.counts.written, p.writes.fingerprints.length], [1, [[1, true], [2, true]], 0, 0]);
+    t.eq('row key carries the account (main key unchanged)', [h.rowKey.endsWith('|extra|T1'), S.ambiguousRowKey({ rowIdx: 0, amount: 5, date: 'x', payerName: 'p' })], [true, '0|5|x|p|main']);
+    const a = plan(d, rows, { decisions: { [h.rowKey]: 2 } });
+    t.eq('decision → written to the CHOSEN member + fingerprinted', [Object.keys(a.writes.sentLog), a.writes.fingerprints.length], [['2__acc__a2_אוקטובר'], 1]);
+    t.eq('a member who is not a candidate → invalid, nothing written', plan(d, rows, { decisions: { [h.rowKey]: 5 } }).ambiguous[0].decision, 'invalid');
+    t.eq('ignore → nothing written', plan(d, rows, { decisions: { [h.rowKey]: 'ignore' } }).counts.written, 0);
+    const ag = fx(); ag.tenants[0].keywords = 'כהן'; ag.tenants[1].keywords = 'כהן';
+    commit(ag, rows, {}, { source: 'agent', queueAmbiguous: true });
+    t.eq('agent → the row is parked in pendingAmbiguousMatches (scope extra, templateId)', ag.pendingAmbiguousMatches.map(x => [x.scope, x.templateId, x.amount]), [['extra', 'T1', 50]]);
+    commit(ag, rows, {}, { source: 'agent', queueAmbiguous: true });
+    t.eq('a second agent run does not queue it twice', ag.pendingAmbiguousMatches.length, 1);
+  }
+
+  t.section('v2.14.78 (1ה) — PARITY: same rows → same member as the MAIN engine');
+  {
+    const B = lib.loadBankAnalyzer();
+    const tn = [
+      { id: 1, name: 'אורי לוי', phone: '0501111111', keywords: 'לוי', aptNumber: 6, customAmount: 50, openingDebt: 0 },
+      { id: 2, name: 'אורי לוי', phone: '0502222222', keywords: 'לוי', aptNumber: 12, customAmount: 50, openingDebt: 0 },
+      { id: 3, name: 'שרה גל', phone: '0543334444', keywords: '', aptNumber: 3, customAmount: 50, openingDebt: 0 },
+      { id: 4, name: 'בן קרטר', phone: '0505555555', keywords: 'בן,קרטר', aptNumber: 4, customAmount: 50, openingDebt: 0 },
+      { id: 5, name: 'רון קרטר', phone: '0506666666', keywords: 'קרטר', aptNumber: 5, customAmount: 50, openingDebt: 0 }
+    ];
+    const rows = [H, ['אורי לוי', '50', '03/10/2026', '6 וועד בית דירה'], ['אורי לוי', '50', '04/10/2026', 'דירה 12'],
+      ['העברה 3334444', '50', '05/10/2026', ''], ['בן קרטר', '50', '06/10/2026', ''], ['קרטר', '50', '07/10/2026', ''], ['אורי לוי', '50', '08/10/2026', '']];
+    const main = B.analyzeBankRowsServer(rows, MAP, J(tn), {}, '2026-10', { amount: 50 }, new Set(), {}, null, [], [], []);
+    const acc = S.planAccountBankImport({ config: { amount: 50, manualMonth: 'אוקטובר' }, accountTemplates: [{ id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50 }],
+      tenants: J(tn).map(x => Object.assign(x, { extraAccounts: [{ id: 'a' + x.id, label: 'ביטוח', templateId: 'T1', amount: 50, openingDebt: 0 }] })),
+      sentLog: {}, paymentHistory: {}, closedMonthsExtra: [] }, { templateId: 'T1', rows, mapping: MAP, monthKey: '2026-10' });
+    const sum = list => list.map(m => [m.tenantId, m.amount]).sort((a, b) => a[0] - b[0]);
+    t.eq('precondition: the file exercises apt-note, phone, keyword-count and an ambiguous tie', [main.matched.length, main.ambiguousMatchHits.length > 0], [4, true]);
+    t.eq('matched members + amounts IDENTICAL to analyzeBankRowsServer', sum(acc.matched), sum(main.matched));
+    const amb = list => list.map(h => [h.rowIdx, h.candidates.map(c => c.id)]).sort((a, b) => a[0] - b[0]);
+    t.eq('ambiguous rows IDENTICAL (row + candidates)', amb(acc.ambiguous), amb(main.ambiguousMatchHits));
+    t.eq('row parsing IDENTICAL (heuristic amount scan, no amount column)', S.accBankParseRows([H, ['x', '1,234', '2026', '5'], ['y', '']], { colName: 0 }).mr.map(m => m.amount), [1234]);
+  }
+
+  t.section('v2.14.78 (1ה) — CHAIN: import → REAL close → import');
+  {
+    const d = fx({ closedMonthsExtra: ['2026-08'], config: { amount: 300, manualMonth: 'ספטמבר' } });
+    commit(d, [['אור כהן', '30', '05/09/2026', '']], { monthKey: '2026-09' });
+    t.eq('precondition: September partial 30 of 50 recorded', [d.paymentHistory['1__acc__a1'][0].amount, d.paymentHistory['1__acc__a1'][0].paidAmount], [50, 30]);
+    d.tenants.forEach(tn => close(d, tn, '2026-09')); d.closedMonthsExtra.push('2026-09');
+    t.eq('REAL close banks the 20 shortfall (1ד parity)', [d.tenants[0].extraAccounts[0].openingDebt, d.paymentHistory['1__acc__a1'][0].shortfallBanked], [20, true]);
+    t.eq('…and דנה, who did not pay, accrues 50', d.tenants[1].extraAccounts[0].openingDebt, 50);
+    d.config.manualMonth = 'אוקטובר';
+    const again = commit(d, [['אור כהן', '30', '05/09/2026', ''], ['אור כהן', '70', '05/10/2026', '']]);
+    t.eq('the September row again → already imported (not queued, not written)', [again.plan.counts.alreadyImported, again.plan.closedHits.length], [1, 0]);
+    t.eq('October 70 written once', S.parseSentLogAmount(d.sentLog['1__acc__a1_אוקטובר']), 70);
+    const sp = S.extraAccountSplit(d, d.tenants[0], d.tenants[0].extraAccounts[0], '2026-10', 'אוקטובר');
+    t.eq('split: prior 20 + 50 − 70 = 0 owed', [sp.prior, sp.owedNow, sp.creditLeft], [20, 0, 0]);
+  }
+
+  t.section('v2.14.78 (1ה) — undo (one level, account fingerprints)');
+  {
+    const d = fx({ importedBankFingerprints: ['m1'], importedBankFingerprintsAcc: { T2: ['w'] }, sentLog: { '2_אוקטובר': bank(300) } });
+    const before = J({ sentLog: d.sentLog, paymentHistory: d.paymentHistory, fa: d.importedBankFingerprintsAcc });
+    const r = commit(d, [['אור כהן', '50', '05/10/2026', '']]);
+    t.eq('undo record written (source manual, account label)', [!!r.patch.lastImportUndo, r.patch.lastImportUndo.accountLabel, (r.patch.lastImportUndo.fpAccAdded || {}).T1.length], [true, 'ביטוח מבנה', 1]);
+    const u = S.planImportUndo(d);
+    t.eq('plan ok, summary counts the account fingerprint', [u.ok, u.summary.fingerprints], [true, 1]);
+    Object.assign(d, J(u.patch));
+    t.eq('undo restores sentLog + history + account fingerprints, main list untouched',
+      [J({ sentLog: d.sentLog, paymentHistory: d.paymentHistory, fa: d.importedBankFingerprintsAcc }), d.importedBankFingerprints], [Object.assign(before, { fa: { T2: ['w'], T1: [] } }), ['m1']]);
+    const c = fx(); commit(c, [['אור כהן', '50', '05/10/2026', '']]); c.closedMonthsExtra = c.closedMonthsExtra.concat(['2026-10']);
+    t.eq('a close after the import blocks the undo (2A)', S.planImportUndo(c).reason, 'closed');
+    const m = S.buildImportUndo({ sentLog: {}, importedBankFingerprints: [] }, { sentLog: { k: 'v' }, importedBankFingerprints: ['f'] }, {});
+    t.eq('a MAIN import record has no account fields (unchanged shape)', [m.fpAccAdded, m.fpAccDropped], [undefined, undefined]);
+  }
+
+  const routeBody = (head) => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const runRoute = (head, store, req, extra) => {
+    const body = routeBody(head); let out, status = 200; let saves = 0;
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves++; Object.assign(store, J(p)); }, console: { error() {}, log() {} } }, extra || {});
+    const names = Object.keys(g);
+    const res = { status(c) { status = c; return res; }, json(o) { out = o; } };
+    new Function(...names, 'req', 'res', body)(...names.map(n => g[n]), Object.assign({ user: { tenantId: 'B' }, body: {}, params: {} }, req), res);
+    return { out, status, saves };
+  };
+
+  t.section('v2.14.78 (1ה, ו4-A) — REAL /api/import-bank-account');
+  {
+    const head = "app.post('/api/import-bank-account', authMiddleware, (req, res) => {";
+    const d = fx();
+    const rows = [H, ['אור כהן', '50', '05/10/2026', '']];
+    const dry = runRoute(head, d, { body: { templateId: 'T1', rows, mapping: MAP, monthKey: '2026-10' } });
+    t.eq('dryRun is the DEFAULT: preview, nothing saved, no writes in the answer', [dry.out.dryRun, dry.saves, dry.out.writes, dry.out.counts.written], [true, 0, undefined, 1]);
+    const go = runRoute(head, d, { body: { templateId: 'T1', rows, mapping: MAP, monthKey: '2026-10', dryRun: false } });
+    t.eq('dryRun:false re-plans and saves once', [go.out.saved, go.saves, S.parseSentLogAmount(d.sentLog['1__acc__a1_אוקטובר'])], [true, 1, 50]);
+    const twice = runRoute(head, d, { body: { templateId: 'T1', rows, mapping: MAP, monthKey: '2026-10', dryRun: false } });
+    t.eq('the same commit again → nothing written (idempotent)', [twice.out.counts.written, S.parseSentLogAmount(d.sentLog['1__acc__a1_אוקטובר'])], [0, 50]);
+    t.eq('bad rows → 400', runRoute(head, fx(), { body: { templateId: 'T1', rows: 'x' } }).status, 400);
+    t.eq('unknown account → refused', runRoute(head, fx(), { body: { templateId: 'nope', rows, mapping: MAP } }).out.ok, false);
+    const f = fx(); f.accountTemplates[0].type = 'formula';
+    t.eq('a computed (formula) account → refused (stage 2)', runRoute(head, f, { body: { templateId: 'T1', rows, mapping: MAP } }).out.ok, false);
+    const w = runRoute(head, fx(), { body: { templateId: 'T1', rows: [['שם', 'סכום', 'תאריך'], ['', '50', '']], mapping: MAP } });
+    t.eq('a mapped column empty in every row → mappingWarning', /שם \/ תיאור/.test(w.out.mappingWarning || ''), true);
+  }
+
+  t.section('v2.14.78 (1ה, ו5-A) — REAL /api/import-bank with targetTemplateId (agent)');
+  {
+    const head = "app.post('/api/import-bank', bankSyncAuth, upload.single('file'), (req, res) => {";
+    const rows = [H, ['אור כהן', '50', '05/10/2026', ''], ['דנה לוי', '50', '05/09/2026', '']];
+    const XLSX = { read: () => ({ SheetNames: ['s'], Sheets: { s: {} } }), utils: { sheet_to_json: () => rows } };
+    const d = fx({ bankMapping: { colName: 0, colAmount: 1 } });
+    d.accountTemplates[0].bankMapping = MAP;
+    const r = runRoute(head, d, { file: { buffer: 'x' }, body: { targetTemplateId: 'T1', monthKey: '2026-10' } }, { XLSX });
+    t.eq('agent → the account engine with the ACCOUNT mapping (date column read)', [r.out.ok, r.out.accountLabel, r.out.matched, r.out.closedMonthHits.length], [true, 'ביטוח מבנה', 2, 1]);
+    t.eq('written to the account key; closed September queued (source agent)', [S.parseSentLogAmount(d.sentLog['1__acc__a1_אוקטובר']), d.pendingClosedMonthPayments.map(h => [h.tenantId, h.source])], [50, [[2, 'agent']]]);
+    t.eq('receipt + undo written, main fingerprints untouched', [d.lastBankSyncImport.accountLabel, d.lastImportUndo.source, d.importedBankFingerprints.length], ['ביטוח מבנה', 'agent', 0]);
+    t.eq('unknown targetTemplateId → 400, nothing saved', runRoute(head, fx(), { file: { buffer: 'x' }, body: { targetTemplateId: 'zz' } }, { XLSX }).status, 400);
+    t.eq('paused agent → 423 also for an account file', runRoute(head, fx({ bankSyncPaused: true }), { file: { buffer: 'x' }, body: { targetTemplateId: 'T1' } }, { XLSX }).status, 423);
+  }
+
+  t.section('v2.14.78 (1ה) — REAL /api/apply-ambiguous-match for an account row');
+  {
+    const mk = () => { const d = fx(); d.tenants[0].keywords = 'כהן'; d.tenants[1].keywords = 'כהן'; commit(d, [['כהן', '50', '05/10/2026', '']], {}, { source: 'agent', queueAmbiguous: true }); return d; };
+    const d = mk(); const key = S.ambiguousRowKey(d.pendingAmbiguousMatches[0]);
+    const r = lib.loadApplyAmbiguous(d, { rowKey: key, tenantId: 2 });
+    t.eq('assign → the CHOSEN member\'s ACCOUNT key, account fingerprint, row dropped', [r.result.applied, S.parseSentLogAmount(d.sentLog['2__acc__a2_אוקטובר']), d.importedBankFingerprintsAcc.T1.length, d.pendingAmbiguousMatches.length, !!d.sentLog['2_אוקטובר']], [true, 50, 1, 0, false]);
+    t.eq('history record on the account (frozen 50)', d.paymentHistory['2__acc__a2'][0].amount, 50);
+    const n = mk(); const rn = lib.loadApplyAmbiguous(n, { rowKey: S.ambiguousRowKey(n.pendingAmbiguousMatches[0]), tenantId: 3 });
+    t.eq('a member without the account → 400, nothing written, row kept', [rn.status, n.pendingAmbiguousMatches.length, Object.keys(n.sentLog).length], [400, 1, 0]);
+    const c = mk(); c.pendingAmbiguousMatches[0].date = '05/09/2026'; const ck = S.ambiguousRowKey(c.pendingAmbiguousMatches[0]);
+    const rc = lib.loadApplyAmbiguous(c, { rowKey: ck, tenantId: 1 });
+    t.eq('a CLOSED month → moved to the closed-month queue, not written', [rc.result.queuedClosed, c.pendingClosedMonthPayments.map(h => [h.tenantId, h.month, h.accountId]), Object.keys(c.sentLog).length], [true, [[1, '2026-09', 'a1']], 0]);
+    const w = mk(); w.importedBankFingerprintsAcc = { T1: [S.bankRowFingerprint('05/10/2026', 50, 'כהן', '')] };
+    const rw = lib.loadApplyAmbiguous(w, { rowKey: S.ambiguousRowKey(w.pendingAmbiguousMatches[0]), tenantId: 1 });
+    t.eq('already in the ACCOUNT store → no write, dropped', [rw.result.alreadyWritten, rw.result.applied, w.pendingAmbiguousMatches.length], [true, false, 0]);
+  }
+
+  t.section('v2.14.78 (1ה, ו6-A) — closed-month payment for an account: ONE store');
+  {
+    const d = fx({ extraPaymentHistory: {} });
+    d.tenants[0].extraAccounts[0].openingDebt = 50;
+    const r = lib.loadApplyClosedMonth(d, { tenantId: 1, month: '2026-09', scope: 'extra', accountId: 'a1', paidAmount: 50 });
+    t.eq('the record lands in paymentHistory (was d.extraPaymentHistory)', [r.result.applied, (d.paymentHistory['1__acc__a1'] || []).length, (d.extraPaymentHistory['1__acc__a1'] || []).length], [true, 1, 0]);
+    t.eq('the patch no longer writes extraPaymentHistory', 'extraPaymentHistory' in r.saved[0].patch, false);
+    const legacy = fx({ extraPaymentHistory: { '1__acc__a1': [{ month: '2026-09', paid: true, debtOffset: { reversedFrom: '2026-09' } }] } });
+    legacy.tenants[0].extraAccounts[0].openingDebt = 0;
+    const rl = lib.loadApplyClosedMonth(legacy, { tenantId: 1, month: '2026-09', scope: 'extra', accountId: 'a1', paidAmount: 50 });
+    t.eq('a LEGACY receipt (old store) still blocks a second subtraction', [rl.result.alreadyApplied, legacy.tenants[0].extraAccounts[0].openingDebt], [true, 0]);
+    const S2 = fx(); S2.paymentHistory['1__acc__a1'] = [{ month: '2026-09', paid: true, amount: 50, paidAmount: 50, type: 'bank_import', debtOffset: { reversedFrom: '2026-09' } }];
+    t.eq('split is unaffected by the paid closed record (no phantom debt)', S.extraAccountSplit(S2, S2.tenants[0], S2.tenants[0].extraAccounts[0], '2026-10', 'אוקטובר').prior, 0);
+  }
+
+  t.section('v2.14.78 (1ה) — mapping per account · dismiss · resets');
+  {
+    const head = "app.post('/api/account-templates/:id/bank-mapping', authMiddleware, (req, res) => {";
+    const d = fx();
+    const r = runRoute(head, d, { params: { id: 'T1' }, body: { mapping: { colName: '2', colAmount: 'x', colDate: 9, bankAmount: '50', bankTolerance: '-1' } } });
+    t.eq('saved on the definition, sanitized', d.accountTemplates[0].bankMapping, { colName: '2', colAmount: '-1', colDate: '9', colNote: '-1', colRef: '-1', bankAmount: '50', bankTolerance: '5' });
+    t.eq('other definitions untouched', d.accountTemplates[1].bankMapping, undefined);
+    t.eq('unknown account → refused', runRoute(head, d, { params: { id: 'zz' }, body: { mapping: {} } }).out.ok, false);
+    const tp = routeBody("app.post('/api/account-templates', authMiddleware, (req, res) => {");
+    t.eq('template save keeps the stored bankMapping (never from the page)', /delete t\.bankMapping;[\s\S]*old\.bankMapping/.test(tp), true);
+    const dh = "app.post('/api/dismiss-closed-month-payment', authMiddleware, (req, res) => {";
+    const q = fx({ pendingClosedMonthPayments: [{ tenantId: 1, month: '2026-09', scope: 'extra', accountId: 'a1' }, { tenantId: 1, month: '2026-09' }] });
+    const rd = runRoute(dh, q, { body: { tenantId: 1, month: '2026-09', scope: 'extra', accountId: 'a1' } });
+    t.eq('dismiss drops ONLY that row (the main row of the same month stays)', [rd.out.removed, q.pendingClosedMonthPayments], [1, [{ tenantId: 1, month: '2026-09' }]]);
+    const rp = lib.loadResetPayments(fx({ importedBankFingerprintsAcc: { T1: ['x'] } }), {});
+    t.eq('🧹 clears the account fingerprints too', rp.saved[0].patch.importedBankFingerprintsAcc, {});
+    const rf = lib.loadResetBuildingFull(fx({ importedBankFingerprintsAcc: { T1: ['x'] } }), { tenantId: 'T1' }, [{ tenantId: 'T1' }]);
+    t.eq('🧨 clears the account fingerprints too', rf.saved[0].patch.importedBankFingerprintsAcc, {});
+  }
+
+  t.section('v2.14.78 (1ה) — the MAIN account is untouched');
+  {
+    const fn = n => src.match(new RegExp('^function ' + n + '\\s*\\([\\s\\S]*?^\\}', 'm'))[0];
+    t.eq('analyzeBankRowsServer never reads the account store', /importedBankFingerprintsAcc/.test(fn('analyzeBankRowsServer')), false);
+    t.eq('the account engine never reads/writes the MAIN fingerprint list', /importedBankFingerprints\b(?!Acc)/.test(fn('planAccountBankImport') + fn('commitAccountBankImport')), false);
+    t.eq('the account engine never writes openingDebt', /openingDebt\s*=/.test(fn('planAccountBankImport') + fn('commitAccountBankImport')), false);
   }
 }
 

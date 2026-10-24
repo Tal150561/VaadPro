@@ -95,7 +95,14 @@ const SERVER_FNS = [
   'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'extraAmountSource', 'extraIntervalsFrom',
   'extraCancelFrom', 'extraPaidInMonth', 'extraValidateFromMonth', 'extraFmtMonth', 'extraSeedOwn',
   'extraAmountTimeline', 'extraCancellable', 'planTemplateTariff', 'commitTemplateTariff',
-  'planMemberTariff', 'commitMemberTariff', 'amountTimelineView'
+  'planMemberTariff', 'commitMemberTariff', 'amountTimelineView',
+  // v2.14.78 (1ה) — a bank file per extra account (the shared engine parts + the new engine)
+  'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth',
+  'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'kwMatchCount', 'scoreTenantRowMatch',
+  'compareScore', 'resolveRowCandidates', 'accumulatePaidAmount', 'mergeExtraPaymentHistory',
+  'phMoneyView', 'buildImportUndo', 'planImportUndo',
+  'accBankParseRows', 'accBankAptNumbers', 'accBankMappingWarning', 'accFpList', 'ambiguousRowKey',
+  'planAccountBankImport', 'accPlanView', 'commitAccountBankImport', 'runAccountBankImport', 'accAgentReceipt', 'sanitizeBankMapping'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
@@ -112,7 +119,8 @@ function loadServer() {
   const exTpl = src.match(/const EXCESS_DEBT_DEFAULT_TEMPLATE =[\s\S]*?';\n/);
   if (!exDefault) throw new Error('test-lib: EXCESS_DEBT_DEFAULT not found in server.js');
   if (!exTpl) throw new Error('test-lib: EXCESS_DEBT_DEFAULT_TEMPLATE not found in server.js');
-  const code = months[0] + '\n' + exDefault[0] + '\n' + exTpl[0] + '\n'
+  const splitHe = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);   // v2.14.78 — monthsNamedInNote
+  const code = months[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n'
     + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';
@@ -399,7 +407,9 @@ function loadApplyAmbiguous(building, reqBody) {
     }
   };
   const code = months + '\n'
-    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'crSuspendedIn', 'paymentRateForMonth', 'applyPaymentToDebt', 'recordPayment', 'parseSentLogAmount', 'accumulatePaidAmount'])
+    + extractFunctions(src, ['getMonthKey', 'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'monthInInterval', 'pickRateFromIntervals', 'resolveTariffRate', 'crSuspendedIn', 'paymentRateForMonth', 'applyPaymentToDebt', 'recordPayment', 'parseSentLogAmount', 'accumulatePaidAmount',
+         // v2.14.78 (1ה) — the extra-account branch + the shared row key
+         'ambiguousRowKey', 'accFpList', 'accLinkedToTemplate', 'mergeExtraPaymentHistory', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey'])
     + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
   const mod = runInSandbox(code, stubs);
   mod.handler(stubs.req, stubs.res);

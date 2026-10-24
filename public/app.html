@@ -702,10 +702,16 @@ function vpLogout() {
 
         <!-- Column Mapping (shown after file load) -->
         <div id="bankMappingPanel" style="display:none;margin-top:14px;background:var(--surface2);border-radius:10px;padding:14px;border:1px solid var(--border);">
+          <!-- v2.14.78 (1ה) — which account this file belongs to (shown only when the building has saved fixed extra accounts) -->
+          <div id="bankTargetBox" style="display:none;margin-bottom:12px;padding:10px;border:1px solid var(--accent);border-radius:8px;">
+            <label style="font-size:0.85rem;font-weight:700;color:var(--accent);">📂 לאיזה חשבון שייך הקובץ</label>
+            <select id="bankTarget" onchange="onBankTargetChange()" style="width:100%;margin-top:5px;font-size:0.85rem;"></select>
+            <div class="hint" id="bankTargetHint">ייבוא רגיל לחשבון הראשי — ללא שינוי.</div>
+          </div>
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
             <strong style="font-size:0.9rem;">🗂️ מיפוי עמודות</strong>
             <div style="display:flex;gap:6px;">
-              <button class="btn btn-secondary btn-sm" onclick="saveBankMapping()" style="font-size:0.75rem;" title="נשמר לבניין זה בלבד — לכל בניין מבנה קובץ בנק משלו">💾 שמור מבנה לבניין זה</button>
+              <button class="btn btn-secondary btn-sm" onclick="saveBankMappingForTarget()" style="font-size:0.75rem;" title="נשמר לבניין זה בלבד — לכל בניין (ולכל חשבון נוסף) מבנה קובץ בנק משלו">💾 שמור מבנה</button>
               <button class="btn btn-primary btn-sm" onclick="saveMappingAsDefault()" style="font-size:0.75rem;" title="Save mapping and generate API key for BankSync Agent">🔗 BankSync</button>
             </div>
           </div>
@@ -740,7 +746,7 @@ function vpLogout() {
             <div class="hint">התשלומים בקובץ יירשמו תחת החודש הזה — ללא קשר לחודש המוצג במערכת</div>
             <div id="bankManualMonthWarn" style="display:none;margin-top:6px;font-size:0.78rem;color:#f0ad4e;line-height:1.5;"></div>
           </div>
-          <button class="btn btn-accent" onclick="runBankAnalysis()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
+          <button class="btn btn-accent" onclick="runBankAnalysisForTarget()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
           <div style="margin-top:10px;padding:9px 11px;border-radius:8px;background:rgba(120,120,120,0.08);font-size:0.76rem;color:var(--text2);line-height:1.6;">
             ℹ️ <strong>איך מתעדכן החוב לאחר ייבוא:</strong> הייבוא מעדכן <strong>מיד</strong> את סטטוס התשלום החודשי (שילם / חלקי / לא שילם).
             <strong>החוב המצטבר</strong> (העמודה "חוב") מתעדכן <strong>אוטומטית ב-1 לכל חודש</strong>, כשהמערכת סוגרת את החודש הקודם וצוברת את מי שלא שילם.
@@ -1924,7 +1930,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.77';
+const HTML_VERSION = '2.14.78';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3029,6 +3035,8 @@ async function loadData() {
     loadAccountsIfNeeded().catch(function(){});
     // v2.14.42: surface the agent's queued ambiguous rows (if any) for manual decision.
     try { renderPendingAmbiguousQueue(); } catch(e) { console.warn('ambiguous queue render skipped:', e); }
+    // v2.14.78 (1ה, ו6-A): the persisted closed-month queue (main + extra) — was never shown.
+    try { renderPendingClosedQueue(); } catch(e) { console.warn('closed queue render skipped:', e); }
   } catch(e) {
     // השרת לא זמין – נסה לטעון מגיבוי מקומי
     try {
@@ -5470,6 +5478,7 @@ function showMappingPanel(rows, fileName){
   // תצוגה מקדימה
   renderBankPreview(rows, headers);
   document.getElementById('bankMappingPanel').style.display='block';
+  populateBankTarget().catch(function(){});   // v2.14.78 (1ה) — account selector (hidden without extra accounts)
   // Populate month selector - last 12 months, current month selected by default
   (function() {
     const sel = document.getElementById('bankMonth');
@@ -5588,6 +5597,254 @@ function loadBankMapping(){
 function runBankAnalysis(){
   if(!bankRows||bankRows.length<2){ toast('טען קובץ בנק תחילה','error'); return; }
   analyzeBankRows(bankRows, bankFileName);
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// v2.14.78 (1ה) — A BANK FILE FOR ONE EXTRA ACCOUNT (manual). Decisions ו1–ו7-A.
+// The selector "📂 לאיזה חשבון שייך הקובץ" sits at the top of the mapping panel.
+// Main account (default) → runBankAnalysis / analyzeBankRows / commitBankImport run
+// exactly as before (untouched). An extra account → the page sends the PARSED rows +
+// the mapping to POST /api/import-bank-account: dryRun = preview, dryRun:false = the
+// server RE-PLANS and writes (CONSUME — the page never computes money). The mapping of
+// each account is saved on its definition (server, building level).
+// ══════════════════════════════════════════════════════════════════════════
+function bankTargetTemplates(list){
+  return (Array.isArray(list) ? list : []).filter(function(t){ return t && t.id && t.type !== 'formula' && t.linked !== undefined; });
+}
+function bankTargetOptionsHtml(list, mainLabel, selected){
+  var tpls = bankTargetTemplates(list);
+  var h = '<option value="">' + esc(mainLabel || 'ערבות הדדית') + ' (ברירת מחדל)</option>';
+  tpls.forEach(function(t){ h += '<option value="' + esc(t.id) + '"' + (t.id === selected ? ' selected' : '') + '>' + esc(t.label || '') + '</option>'; });
+  return h;
+}
+async function populateBankTarget(){
+  var box = document.getElementById('bankTargetBox'), sel = document.getElementById('bankTarget');
+  if (!box || !sel) return;
+  try { if (!bankTargetTemplates(accountTemplates).length) await loadAccountTemplates(); } catch(e) {}
+  var prev = sel.value || '';
+  var tpls = bankTargetTemplates(accountTemplates);
+  if (!tpls.some(function(t){ return t.id === prev; })) prev = '';
+  sel.innerHTML = bankTargetOptionsHtml(accountTemplates, t('mainAccount'), prev);
+  box.style.display = tpls.length ? 'block' : 'none';
+  if (prev) onBankTargetChange();
+}
+function bankTargetId(){ var s = document.getElementById('bankTarget'); return s ? (s.value || '') : ''; }
+function bankTargetTpl(){ var id = bankTargetId(); return id ? (accountTemplates.filter(function(t){ return t && t.id === id; })[0] || null) : null; }
+function bankMappingFromForm(){
+  return {
+    colName: document.getElementById('colName').value,
+    colAmount: document.getElementById('colAmount').value,
+    colDate: document.getElementById('colDate').value,
+    colNote: document.getElementById('colNote').value,
+    colRef: (document.getElementById('colRef') || {}).value ?? '-1',
+    bankAmount: document.getElementById('bankAmount').value,
+    bankTolerance: document.getElementById('bankTolerance').value
+  };
+}
+function applyBankMappingToForm(m){
+  if (!m) return;
+  ['colName','colAmount','colDate','colNote','colRef'].forEach(function(id){
+    var el = document.getElementById(id);
+    if (el && m[id] !== undefined && el.querySelector('option[value="' + String(m[id]).replace(/"/g, '') + '"]')) el.value = String(m[id]);
+  });
+  document.getElementById('bankAmount').value = m.bankAmount || '';
+  if (m.bankTolerance !== undefined && m.bankTolerance !== '') document.getElementById('bankTolerance').value = m.bankTolerance;
+}
+function onBankTargetChange(){
+  window._pendingAccImport = null;
+  window._pendingBankImport = null;
+  var rd = document.getElementById('bankResult'); if (rd) { rd.style.display = 'none'; rd.innerHTML = ''; }
+  var tpl = bankTargetTpl();
+  var hint = document.getElementById('bankTargetHint');
+  if (!tpl) { applyBankMappingToForm(loadBankMapping()); if (hint) hint.textContent = 'ייבוא רגיל לחשבון הראשי — ללא שינוי.'; return; }
+  if (tpl.bankMapping) { applyBankMappingToForm(tpl.bankMapping); if (hint) hint.textContent = 'נטען המבנה השמור של "' + (tpl.label || '') + '". התשלומים יירשמו רק לחשבון הזה.'; }
+  else { applyBankMappingToForm(loadBankMapping()); if (hint) hint.textContent = 'אין עדיין מבנה שמור ל"' + (tpl.label || '') + '" — הועתק מבנה הראשי. בדקו ושמרו (💾). התשלומים יירשמו רק לחשבון הזה.'; }
+}
+async function saveBankMappingForTarget(){
+  var tpl = bankTargetTpl();
+  if (!tpl) { saveBankMapping(); return; }
+  try {
+    var r = await fetch(API + '/account-templates/' + encodeURIComponent(tpl.id) + '/bank-mapping', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mapping: bankMappingFromForm() }) });
+    var d = await r.json();
+    if (!d.ok) { toast('❌ ' + (d.error || 'שגיאה בשמירה'), 'error'); return; }
+    tpl.bankMapping = d.mapping;
+    toast('✅ מבנה נשמר לחשבון "' + (tpl.label || '') + '" (לכל המשתמשים בבניין)', 'success');
+  } catch(e) { toast('❌ שגיאה בשמירה', 'error'); }
+}
+function runBankAnalysisForTarget(){
+  if (!bankTargetId()) { runBankAnalysis(); return; }
+  accImportPreview();
+}
+function accImportRequest(extra){
+  return Object.assign({
+    templateId: bankTargetId(), rows: bankRows, mapping: bankMappingFromForm(),
+    monthKey: (document.getElementById('bankMonth') || {}).value || null
+  }, extra || {});
+}
+async function accImportPreview(){
+  if (!bankRows || bankRows.length < 2) { toast('טען קובץ בנק תחילה', 'error'); return; }
+  try {
+    var req = accImportRequest();
+    var r = await fetch(API + '/import-bank-account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) });
+    var p = await r.json();
+    if (!p.ok) { toast('❌ ' + (p.error || 'שגיאה'), 'error'); return; }
+    window._pendingAccImport = { req: req, plan: p };
+    var rd = document.getElementById('bankResult');
+    rd.innerHTML = accPreviewHtml(p, false);
+    rd.style.display = 'block';
+  } catch(e) { toast('❌ שגיאת רשת בתצוגה המקדימה', 'error'); }
+}
+function accMonthTxt(mk){ return VP_MONTHS[parseInt(String(mk).split('-')[1]) - 1] + ' ' + String(mk).split('-')[0]; }
+function accPreviewHtml(p, done){
+  var nis = function(v){ return (Math.round((parseFloat(v) || 0) * 100) / 100) + ' ₪'; };
+  var c = p.counts || {};
+  var h = '<div class="acc-imp" style="padding:14px;border-radius:12px;border:1px solid var(--border);background:var(--surface2);">';
+  h += '<div style="font-weight:700;margin-bottom:6px;">' + (done ? '✅ נרשם' : '🔍 תצוגה מקדימה') + ' — חשבון <span class="acc-imp-label">' + esc(p.label || '') + '</span> · ' + esc(accMonthTxt(p.monthKey)) + '</div>';
+  if (p.mappingWarning) h += '<div class="acc-imp-warn" style="margin:6px 0;padding:8px;border-radius:8px;color:#f0ad4e;border:1px solid #f0ad4e;font-size:0.82rem;">⚠️ ' + esc(p.mappingWarning) + '</div>';
+  if (p.selectedClosed) h += '<div style="margin:6px 0;font-size:0.82rem;color:#f0ad4e;">🔒 החודש שנבחר סגור — כל תשלום יעבור לאישור זקיפה, לא נרשם ישירות.</div>';
+  h += '<div style="font-size:0.84rem;color:var(--text2);margin-bottom:8px;">' + (c.payments || 0) + ' תשלומים ל-' + (c.matched || 0) + ' חברים'
+    + (c.closed ? ' · ' + c.closed + ' לחודש סגור (לאישור)' : '') + (c.alreadyImported ? ' · ' + c.alreadyImported + ' כבר יובאו' : '')
+    + (c.duplicates ? ' · ' + c.duplicates + ' כפולים בקובץ' : '') + '</div>';
+  if ((p.matched || []).length) {
+    h += '<div style="overflow-x:auto;"><table style="width:100%;font-size:0.82rem;border-collapse:collapse;"><tr><th style="text-align:right;">חבר</th><th style="text-align:right;">סכום</th><th style="text-align:right;">חודש</th></tr>';
+    p.matched.forEach(function(m){
+      var months = (m.months || []).map(function(x){ return esc(accMonthTxt(x.mk)) + ' ' + nis(x.sum) + (x.closed ? ' 🔒 לאישור' : ''); }).join(' · ');
+      h += '<tr class="acc-imp-row"><td>' + esc(m.name || '') + '</td><td>' + nis(m.amount) + (m.priorPaid ? ' <span style="color:var(--text2);">(+' + nis(m.priorPaid) + ' קיים)</span>' : '') + '</td><td>' + months + '</td></tr>';
+    });
+    h += '</table></div>';
+  }
+  if (!done && (p.splitMonths || (p.lumpSplits || []).length)) {
+    h += '<div style="margin-top:8px;font-size:0.8rem;color:var(--text2);">ℹ️ יש תשלומים שמתפרסים על כמה חודשים — באישור תישאלו אם לרשום כל תשלום בחודש שלו.</div>';
+  }
+  if ((p.noAccount || []).length) {
+    h += '<div class="acc-imp-noacc" style="margin-top:10px;font-size:0.82rem;"><b>⚠️ שילמו, אבל אין להם חשבון "' + esc(p.label || '') + '" פעיל (' + p.noAccount.length + ') — לא נרשם:</b><br>'
+      + p.noAccount.map(function(x){ return esc(x.name) + ' ' + nis(x.amount) + (x.reason === 'inactive' ? ' (חשבון לא פעיל)' : ''); }).join(' · ')
+      + '<div style="color:var(--text2);">שייכו אותם לחשבון (👥 החל על חברים או מודל החשבונות) וייבאו שוב את הקובץ — השורות האלה לא סומנו כמיובאות.</div></div>';
+  }
+  if ((p.unrecognized || []).length) {
+    h += '<div style="margin-top:8px;font-size:0.82rem;"><b>❓ לא זוהו (' + p.unrecognized.length + '):</b> ' + p.unrecognized.slice(0, 30).map(function(x){ return '<span style="unicode-bidi:plaintext;">' + esc(x.payerName || '') + '</span> ' + nis(x.amount); }).join(' · ') + '</div>';
+  }
+  var amb = (p.ambiguous || []).filter(function(a){ return !done || !a.decision; });
+  if (amb.length) {
+    h += '<div style="margin-top:10px;font-size:0.84rem;"><b>🤔 ' + amb.length + ' תשלומים מתאימים ליותר מחבר אחד — ' + (done ? 'לא נרשמו' : 'בחרו למי, או התעלמו') + ':</b>';
+    amb.forEach(function(a){
+      h += '<div style="padding:6px 0;border-top:1px solid var(--border);">💰 ' + nis(a.amount) + ' · <span style="unicode-bidi:plaintext;">"' + esc(a.rawText || a.payerName || '') + '"</span> ' + esc(a.date || '');
+      if (!done) {
+        h += ' <select class="acc-amb" data-acc-amb="' + esc(a.rowKey) + '"><option value="">— ללא החלטה (לא יירשם) —</option>';
+        (a.candidates || []).forEach(function(cd){ if (cd.hasAccount) h += '<option value="' + esc(String(cd.id)) + '">' + esc(cd.name || '') + '</option>'; });
+        h += '<option value="ignore">התעלם</option></select>';
+      }
+      h += '</div>';
+    });
+    h += '</div>';
+  }
+  if ((p.unpaid || []).length) {
+    h += '<details style="margin-top:8px;font-size:0.8rem;color:var(--text2);"><summary>לא נמצא תשלום בקובץ: ' + p.unpaid.length + ' חברים</summary>' + p.unpaid.map(function(x){ return esc(x.name); }).join(' · ') + '</details>';
+  }
+  if (!done) {
+    h += '<div style="display:flex;gap:8px;margin-top:12px;"><button class="btn btn-accent" onclick="accImportCommit()" style="flex:1;">✅ אשר ורשום לחשבון</button>'
+      + '<button class="btn btn-secondary" onclick="accImportCancel()">ביטול</button></div>'
+      + '<div style="font-size:0.75rem;color:var(--text2);margin-top:6px;">שום דבר לא נשמר עד האישור. החוב של החשבון מתעדכן בסגירת החודש, כמו בחשבון הראשי.</div>';
+  }
+  return h + '</div>';
+}
+function accDecisionsFrom(nodes){
+  var out = {};
+  Array.prototype.forEach.call(nodes || [], function(el){ var k = el.getAttribute('data-acc-amb'); if (k && el.value) out[k] = el.value; });
+  return out;
+}
+function accSplitQuestion(p){
+  if (p.selectedClosed || !(p.splitMonths || (p.lumpSplits || []).length)) return null;
+  var q = '';
+  if (p.splitMonths) q += 'הקובץ מכיל תשלומים בתאריכים מ-' + p.splitMonths.length + ' חודשים שונים (' + p.splitMonths.map(accMonthTxt).join(', ') + ').\n\n';
+  if ((p.lumpSplits || []).length) q += 'תשלום אחד שמכסה כמה חודשים (' + p.lumpSplits.length + '):\n' + p.lumpSplits.map(function(l){
+    return '• ' + l.name + ' ' + l.amount + '₪ → ' + l.parts.map(function(pt){ return accMonthTxt(pt.mk) + ' ' + pt.sum + '₪'; }).join(' · ');
+  }).join('\n') + '\n\n';
+  return q + 'אישור = לרשום כל תשלום בחודש שלו כמפורט. (מומלץ)\nביטול = לרשום הכל בחודש הנבחר בלבד (עודף נשמר כזכות).';
+}
+async function accImportCommit(){
+  var P = window._pendingAccImport;
+  if (!P) { toast('אין ייבוא ממתין לאישור', 'error'); return; }
+  var q = accSplitQuestion(P.plan);
+  var split = q ? confirm(q) : true;
+  var body = Object.assign({}, P.req, { dryRun: false, split: split, decisions: accDecisionsFrom(document.querySelectorAll('#bankResult [data-acc-amb]')) });
+  try {
+    var r = await fetch(API + '/import-bank-account', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    var d = await r.json();
+    if (!d.ok) { toast('❌ ' + (d.error || 'שגיאה'), 'error'); return; }
+    window._pendingAccImport = null;
+    var c = d.counts || {};
+    toast('✅ נרשמו ' + (c.payments || 0) + ' תשלומים לחשבון ' + (d.label || '') + (c.closed ? ' · ' + c.closed + ' ממתינים לאישור זקיפה' : '') + (c.ambiguousOpen ? ' · ' + c.ambiguousOpen + ' ללא החלטה (לא נרשמו)' : ''), 'success');
+    var rd = document.getElementById('bankResult');
+    rd.innerHTML = accPreviewHtml(d, true);
+    rd.style.display = 'block';
+    resetDropZone();
+    await loadData();
+    render();
+  } catch(e) { toast('❌ שמירת הייבוא נכשלה — רענן ובדוק', 'error'); }
+}
+function accImportCancel(){
+  window._pendingAccImport = null;
+  var rd = document.getElementById('bankResult'); if (rd) { rd.style.display = 'none'; rd.innerHTML = ''; }
+  toast('הייבוא בוטל — לא נשמר דבר', 'info');
+}
+
+// ── v2.14.78 (1ה, ו6-A) — the PERSISTED closed-month queue (main + extra) ──────
+// d.pendingClosedMonthPayments was written by the agent since v2.14.39 but never shown
+// (a late payment for a closed month stayed invisible). Now: one panel, "לזקוף" →
+// /api/apply-closed-month-payment (receipt-guarded), "התעלם" → /api/dismiss-closed-month-payment.
+// Display only — the numbers in the "what happens" line are the queued row's own.
+function pcqHtml(queue, mainLabel){
+  var rows = Array.isArray(queue) ? queue : [];
+  if (!rows.length) return '';
+  var nis = function(v){ return (Math.round((parseFloat(v) || 0) * 100) / 100) + ' ₪'; };
+  var h = '<div style="margin:12px 0;padding:14px;border-radius:12px;border:1px solid #f0ad4e;">';
+  h += '<div style="font-weight:700;margin-bottom:4px;color:#f0ad4e;">🔒 ' + rows.length + ' תשלומים לחודש שכבר נסגר ממתינים לאישור זקיפה</div>';
+  h += '<div style="font-size:0.8rem;color:var(--text2);margin-bottom:8px;">החודש כבר נסגר, ולכן התשלום לא נרשם אוטומטית. "לזקוף" מקטין את החוב של אותו חשבון (פעם אחת בלבד); "התעלם" מסיר מהרשימה בלי לרשום.</div>';
+  rows.forEach(function(hit, i){
+    var amt = hit.charge != null ? hit.charge : hit.amount;
+    var acct = (hit.scope === 'extra') ? '' : ' (' + esc(mainLabel || 'ראשי') + ')';
+    h += '<div class="pcq-row" style="padding:8px 0;border-top:1px solid var(--border);font-size:0.84rem;">'
+      + '<b>' + esc(hit.name || '') + '</b>' + acct + ' · ' + esc(accMonthTxt(hit.month)) + ' · 💰 ' + nis(amt)
+      + (hit.note ? ' · <span style="unicode-bidi:plaintext;color:var(--text2);">"' + esc(hit.note) + '"</span>' : '')
+      + ' <button class="btn btn-accent btn-sm" data-pcq-op="apply" data-pcq-idx="' + i + '">לזקוף</button>'
+      + ' <button class="btn btn-secondary btn-sm" data-pcq-op="dismiss" data-pcq-idx="' + i + '">התעלם</button></div>';
+  });
+  return h + '</div>';
+}
+function renderPendingClosedQueue(){
+  var box = document.getElementById('pendingClosedQueue');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'pendingClosedQueue';
+    box.addEventListener('click', pcqOnClick);
+    var anchor = document.getElementById('pendingAmbiguousQueue') || document.getElementById('bankSyncStatus') || document.getElementById('bankResult');
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor.nextSibling);
+    else document.body.appendChild(box);
+  }
+  var html = pcqHtml(data && data.pendingClosedMonthPayments, t('mainAccount'));
+  box.innerHTML = html;
+  box.style.display = html ? 'block' : 'none';
+}
+async function pcqOnClick(e){
+  var b = e.target && e.target.closest ? e.target.closest('[data-pcq-op]') : null;
+  if (!b) return;
+  var hit = ((data && data.pendingClosedMonthPayments) || [])[parseInt(b.getAttribute('data-pcq-idx'))];
+  if (!hit) return;
+  var op = b.getAttribute('data-pcq-op');
+  b.disabled = true;
+  try {
+    var url = op === 'apply' ? '/apply-closed-month-payment' : '/dismiss-closed-month-payment';
+    var body = { tenantId: hit.tenantId, month: hit.month, scope: hit.scope || 'main', accountId: hit.accountId || null };
+    if (op === 'apply') { body.paidAmount = hit.charge != null ? hit.charge : hit.amount; body.payerName = hit.payerName || ''; }
+    var r = await fetch(API + url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    var d = await r.json();
+    if (!d.ok) { toast('❌ ' + (d.error || 'שגיאה'), 'error'); b.disabled = false; return; }
+    if (op === 'apply') toast(d.alreadyApplied ? 'כבר נזקף קודם — לא בוצעה פעולה נוספת' : '✅ נזקף ' + (d.reversed != null ? d.reversed + ' ₪ ' : '') + 'ל' + (hit.name || ''), d.alreadyApplied ? 'info' : 'success');
+    else toast('הוסר מהרשימה — לא נרשם דבר', 'info');
+    await loadData();
+    render();
+  } catch(err) { toast('❌ שגיאת רשת', 'error'); b.disabled = false; }
 }
 
 // v2.13.26: parseDate חייבת להיות בסקופ העליון — גם analyzeBankRows
@@ -6646,7 +6903,8 @@ function resolveAmbiguousRow(i, tenantId){
 // we HIDE it here (and the endpoint also no-ops it) — no double decision, no
 // double write. This is what makes running the agent + manual imports in parallel
 // safe.
-function _ambRowKey(h){ return [h.rowIdx, h.amount, h.date||'', h.payerName||'', h.scope||'main'].join('|'); }
+// v2.14.78 (1ה): an extra-account row also carries its templateId (= server ambiguousRowKey).
+function _ambRowKey(h){ return [h.rowIdx, h.amount, h.date||'', h.payerName||'', h.scope||'main'].concat(h.templateId ? [h.templateId] : []).join('|'); }
 function _ambRowFp(h){
   // mirror bankRowFingerprint (3-part, no ref) for the overlap check
   var dd = String(h.date||'').trim().toLowerCase().replace(/\s+/g,' ');
@@ -6666,7 +6924,12 @@ function renderPendingAmbiguousQueue(){
   var queue = (data && Array.isArray(data.pendingAmbiguousMatches)) ? data.pendingAmbiguousMatches : [];
   // overlap guard: hide rows already written by a manual import (fingerprint present)
   var fpSet = new Set((data && Array.isArray(data.importedBankFingerprints)) ? data.importedBankFingerprints : []);
-  var rows = queue.filter(function(h){ return !fpSet.has(_ambRowFp(h)); });
+  // v2.14.78 (1ה): an extra-account row is checked against THAT account's fingerprints.
+  var fpAcc = (data && data.importedBankFingerprintsAcc && typeof data.importedBankFingerprintsAcc === 'object') ? data.importedBankFingerprintsAcc : {};
+  var rows = queue.filter(function(h){
+    if (h.scope === 'extra' && h.templateId) return (Array.isArray(fpAcc[h.templateId]) ? fpAcc[h.templateId] : []).indexOf(_ambRowFp(h)) < 0;
+    return !fpSet.has(_ambRowFp(h));
+  });
   if (!rows.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
   var isKib = (data.config && data.config.orgType === 'kibbutz');
   var distLabel = isKib ? 'גוש/חלקה' : 'דירה';
@@ -6680,10 +6943,12 @@ function renderPendingAmbiguousQueue(){
     var bankLine = '🏦 <span style="unicode-bidi:plaintext;">"' + esc(r.rawText||r.payerName||'') + '"</span>'
       + (r.note ? ' · <span style="unicode-bidi:plaintext;color:var(--text2);">"' + esc(r.note) + '"</span>' : '');
     h += '<div data-paq-row="' + esc(key) + '" style="padding:10px 0;border-top:1px solid rgba(255,255,255,.07);">';
-    h += '<div style="font-size:0.9rem;color:var(--text);margin-bottom:2px;">💰 <b>' + nis(r.amount) + '</b>' + (r.date?(' <span style="color:var(--text2);font-size:0.78rem;">('+esc(r.date)+')</span>'):'') + '</div>';
+    h += '<div style="font-size:0.9rem;color:var(--text);margin-bottom:2px;">💰 <b>' + nis(r.amount) + '</b>' + (r.date?(' <span style="color:var(--text2);font-size:0.78rem;">('+esc(r.date)+')</span>'):'')
+      + (r.scope === 'extra' ? ' <span class="paq-acc" style="color:var(--text2);font-size:0.78rem;">· חשבון ' + esc(r.accountLabel || '') + '</span>' : '') + '</div>';
     h += '<div style="font-size:0.78rem;color:var(--text2);margin-bottom:8px;">' + bankLine + '</div>';
     h += '<div style="display:flex;flex-wrap:wrap;gap:6px;align-items:center;">';
     (r.candidates||[]).forEach(function(c){
+      if (c.hasAccount === false) return;   // v2.14.78 (1ה): no such account → can't be assigned
       var t = (data.tenants||[]).filter(function(x){ return x.id === c.id; })[0];
       h += '<button onclick="decidePendingAmbiguous(' + JSON.stringify(key) + ',' + JSON.stringify(c.id) + ')" '
         + 'style="background:var(--accent,#25D366);color:#04210f;border:none;border-radius:8px;padding:6px 10px;font-size:0.82rem;font-weight:600;cursor:pointer;">'
@@ -6715,6 +6980,7 @@ async function decidePendingAmbiguous(rowKey, tenantId){
       data.pendingAmbiguousMatches = data.pendingAmbiguousMatches.filter(function(h){ return _ambRowKey(h) !== rowKey; });
     }
     if (d.alreadyWritten) toast('ℹ️ השורה כבר נרשמה בייבוא ידני — הוסרה מהתור', 'info');
+    else if (d.queuedClosed) { toast('🔒 החודש סגור — התשלום עבר לאישור זקיפה', 'info'); await loadData(); }
     else if (d.applied) toast('✅ שויך ל־' + (d.tenantName||'') , 'success');
     else toast('🚫 דולג', 'info');
     if (rowEl) rowEl.remove();
