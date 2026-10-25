@@ -4038,8 +4038,9 @@ const v2_14_64_async = async () => {
   const runTA = (store, accounts) => { let out;
     // v2.14.74: the handler now also uses accHasMoney / accTemplateFor / crAccountKey (deletion guard, templateId)
     // v2.14.76: + extraAmountForMonth / tplAmountForMonth (saved amount kept, dated seed for new accounts)
-    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'accHasMoney', 'accTemplateFor', 'crAccountKey', 'extraAmountForMonth', 'tplAmountForMonth', 'req', 'res', taBody)
-      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods, S.accHasMoney, S.accTemplateFor, S.crAccountKey, S.extraAmountForMonth, S.tplAmountForMonth,
+    // v2.14.80 (ה6): + extraBillingFieldsForSave (frequency / billing months of a saved linked account kept)
+    new Function('loadTenantData', 'saveTenantData', 'getMonthKey', 'normalizeSuspensionPeriods', 'accHasMoney', 'accTemplateFor', 'crAccountKey', 'extraAmountForMonth', 'tplAmountForMonth', 'extraBillingFieldsForSave', 'req', 'res', taBody)
+      (() => store, (id, p) => Object.assign(store, p), S.getMonthKey, S.normalizeSuspensionPeriods, S.accHasMoney, S.accTemplateFor, S.crAccountKey, S.extraAmountForMonth, S.tplAmountForMonth, S.extraBillingFieldsForSave,
        { user: { tenantId: 'B' }, params: { tenantId: '7' }, body: { accounts } }, { json: o => { out = o; } });
     return out; };
   const st = { config: { manualMonth: 'אוקטובר' }, tenants: [{ id: 7, name: 'ת', extraAccounts: [{ id: 'a1', label: 'מים', amount: 90, openingDebt: 0 }] }] };
@@ -5735,5 +5736,265 @@ const v2_14_79_async = async () => {
     t.eq('old payload kept for a cached page (extraBalances present)', !!p.extraBalances && p.extraBalances.i1.owedNow === p.accountsView[0].owedNow, true);
   }
 };
+
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.80 (ה6) — billing months + bimonthly (Tal, 2026-10-25, ח1–ח7 A, ח6 B)
+// ONE predicate (extraBillsInMonth) for split / report / PROTECTED close; dated schedule
+// on the DEFINITION, linked members follow; legacy data resolves exactly as before.
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const closeExtra = require('./test-lib').loadCloseExtra();
+  const routeBody = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head);
+    return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const run = (head, store, body, params, query) => {
+    const code = routeBody(head); let out; const saves = [];
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); Object.assign(store, J(p)); } });
+    const names = Object.keys(g);
+    new Function(...names, 'req', 'res', code)(...names.map(n => g[n]),
+      { params: params || {}, body: body || {}, query: query || {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const SCH = "app.post('/api/account-templates/:id/schedule', authMiddleware, (req, res) => {";
+  const SCHV = "app.get('/api/billing-schedule', authMiddleware, (req, res) => {";
+  const TSAVE = "app.post('/api/account-templates', authMiddleware, (req, res) => {";
+  const TGET = "app.get('/api/account-templates', authMiddleware, (req, res) => {";
+  const TACC = "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const TACCG = "app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const cfg = { amount: 300, manualMonth: 'אוקטובר' };
+  const MK = S.getMonthKey(cfg), EM = 'אוקטובר';
+  const N1 = S.crMonthAdd(MK, 1), N2 = S.crMonthAdd(MK, 2), N3 = S.crMonthAdd(MK, 3), P1 = S.crMonthAdd(MK, -1), P2 = S.crMonthAdd(MK, -2);
+  const heb = mk => S.HEBREW_MONTHS[Number(mk.slice(5)) - 1];
+  const yr = MK.slice(0, 4), m2 = n => yr + '-' + String(n).padStart(2, '0');
+  // the FROZEN v2.14.79 expression (golden reference for legacy data)
+  const OLD = (acc, mk) => { const mon = Number(mk.slice(5)); return !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1); };
+  const fx = () => ({
+    config: J(cfg),
+    accountTemplates: [{ id: 'ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 100 }],
+    tenants: [
+      { id: 1, name: 'אור', extraAccounts: [{ id: 'a', templateId: 'ins', label: 'ביטוח מבנה', frequency: 'monthly', amount: 100, openingDebt: 0 }] },
+      { id: 2, name: 'בן', extraAccounts: [{ id: 'b', templateId: 'ins', label: 'ביטוח מבנה', frequency: 'quarterly', amount: 100, openingDebt: 0 }] },   // own frequency (old modal edit)
+      { id: 3, name: 'גיל', extraAccounts: [{ id: 'g', label: 'ביטוח מבנה', frequency: 'monthly', amount: 100, openingDebt: 0 }] },                       // linked by name
+      { id: 4, name: 'דנה', extraAccounts: [{ id: 'w', label: 'מים', frequency: 'monthly', amount: 40, openingDebt: 0 }] }                               // unlinked
+    ],
+    sentLog: {}, paymentHistory: {}, closedMonths: [P2], closedMonthsExtra: [P1]
+  });
+
+  t.section('v2.14.80 (ה6) — billing months: pure helpers');
+  {
+    t.eq('legacy normalize: none/monthly/quarterly/yearly/unknown', [undefined, 'monthly', 'quarterly', 'yearly', 'weekly'].map(f => S.billNormalize(f)),
+      [{ frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] }, { frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] },
+       { frequency: 'quarterly', billingMonths: [3,6,9,12] }, { frequency: 'yearly', billingMonths: [1] }, { frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] }]);
+    t.eq('ח3-A bimonthly default = ODD months', S.billNormalize('bimonthly').billingMonths, [1,3,5,7,9,11]);
+    t.eq('a valid rotation is kept (sorted, deduped)', [S.billNormalize('quarterly', [10, 1, 7, 4, 4]).billingMonths, S.billNormalize('yearly', [4]).billingMonths, S.billNormalize('bimonthly', [12,2,4,6,8,10]).billingMonths],
+      [[1,4,7,10], [4], [2,4,6,8,10,12]]);
+    t.eq('an INVALID set falls back to the default (never a free set — ח2-A)', [S.billNormalize('quarterly', [1, 2]).billingMonths, S.billNormalize('yearly', [1, 7]).billingMonths, S.billNormalize('bimonthly', [1, 2]).billingMonths],
+      [[3,6,9,12], [1], [1,3,5,7,9,11]]);
+    t.eq('billMatchRotation: quarterly 1/4/7/10 ok, 1/2 → null, yearly 4 ok', [!!S.billMatchRotation('quarterly', [1,4,7,10]), S.billMatchRotation('quarterly', [1,2]), S.billMatchRotation('yearly', [4])], [true, null, [4]]);
+    t.eq('rotation counts: bimonthly 2, quarterly 3, yearly 12', ['bimonthly', 'quarterly', 'yearly'].map(f => S.billRotations(f).length), [2, 3, 12]);
+    // GOLDEN — legacy accounts: the new predicate == the frozen v2.14.79 expression, 5 frequencies × 24 months
+    let diff = 0;
+    ['monthly', undefined, 'quarterly', 'yearly', 'weird'].forEach(f => { for (let i = 0; i < 24; i++) { const mk = S.crMonthAdd('2026-01', i);
+      if (S.extraBillsInMonth({}, { id: 'x', label: 'Q', frequency: f }, mk) !== OLD({ frequency: f }, mk)) diff++; } });
+    t.eq('GOLDEN: legacy data bills EXACTLY as v2.14.79 (120 cases)', diff, 0);
+    const bi = { id: 'x', label: 'Q', frequency: 'bimonthly' };
+    t.eq('bimonthly odd: Jan/Mar/Sep bill, Feb/Aug do not', ['01', '02', '03', '08', '09'].map(m => S.extraBillsInMonth({}, bi, yr + '-' + m)), [true, false, true, false, true]);
+    t.eq('bimonthly even rotation', ['01', '02'].map(m => S.extraBillsInMonth({}, Object.assign({}, bi, { billingMonths: [2,4,6,8,10,12] }), yr + '-' + m)), [false, true]);
+    t.eq('quarterly rotation 1/4/7/10', [1, 3, 4, 7].map(n => S.extraBillsInMonth({}, { id: 'x', frequency: 'quarterly', billingMonths: [1,4,7,10] }, m2(n))), [true, false, true, true]);
+    t.eq('yearly in April (insurance renewing in April)', [1, 4].map(n => S.extraBillsInMonth({}, { id: 'x', frequency: 'yearly', billingMonths: [4] }, m2(n))), [false, true]);
+    // schedule resolution: personal › definition › own fields
+    const tpl = { id: 'T', label: 'D', frequency: 'monthly', billingSchedule: [{ from: '2000-01', frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] }, { from: '2027-01', frequency: 'bimonthly', billingMonths: [2,4,6,8,10,12] }] };
+    const d = { accountTemplates: [tpl] };
+    const fol = { id: 'f', templateId: 'T', label: 'D', frequency: 'quarterly' };   // own field ignored once the definition is dated
+    t.eq('linked member FOLLOWS the dated definition (Dec monthly, Jan 2027 not billed, Feb billed)', ['2026-11', '2027-01', '2027-02'].map(m => S.extraBillsInMonth(d, fol, m)), [true, false, true]);
+    t.eq('source: definition', S.extraScheduleAt(d, fol, '2027-02').source, 'definition');
+    const per = { id: 'p', templateId: 'T', label: 'D', billingSchedule: [{ from: '2000-01', frequency: 'yearly', billingMonths: [4] }, { from: '2027-03', follow: true }] };
+    t.eq('personal yearly-April, then back to the definition from 03/2027', ['2026-04', '2026-05', '2027-03', '2027-04'].map(m => S.extraBillsInMonth(d, per, m)), [true, false, false, true]);
+    t.eq('sources: personal → definition', [S.extraScheduleAt(d, per, '2026-04').source, S.extraScheduleAt(d, per, '2027-04').source], ['personal', 'definition']);
+    t.eq('an UNLINKED account (other name) ignores the definition', S.extraScheduleAt(d, { id: 'u', label: 'אחר', frequency: 'quarterly' }, '2027-02').source, 'fixed');
+    t.eq('next billing month', [S.extraNextBillingMonth({}, bi, '2026-10'), S.extraNextBillingMonth({}, { id: 'y', frequency: 'yearly', billingMonths: [4] }, '2026-10'), S.extraNextBillingMonth({}, { id: 'm' }, '2026-10')], ['2026-11', '2027-04', '2026-11']);
+    t.eq('labels', [S.billMonthsLabel(S.billNormalize('monthly')), S.billMonthsLabel(S.billNormalize('quarterly'))], ['כל חודש', 'מרץ · יוני · ספטמבר · דצמבר']);
+    const base = [{ from: '2000-01', frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] }, { from: '2027-05', frequency: 'yearly', billingMonths: [5] }];
+    t.eq('billScheduleFrom: an earlier change REPLACES the planned one after it', S.billScheduleFrom(base, { frequency: 'bimonthly' }, '2027-02').map(e => [e.from, e.frequency]), [['2000-01', 'monthly'], ['2027-02', 'bimonthly']]);
+    t.eq('billScheduleFrom: a change equal to the one in force is not added', S.billScheduleFrom(base, { frequency: 'monthly' }, '2027-02').length, 1);
+  }
+
+  t.section('v2.14.80 (ה6) — the PROTECTED close reads the billing months (REAL closeExtraAccountsUnpaid)');
+  {
+    const mk1 = (acc, ph) => ({ config: J(cfg), accountTemplates: [], paymentHistory: ph || {}, sentLog: {} });
+    const runClose = (acc, prevKey, ph) => { const d = mk1(acc, ph); const tn = { id: 9, extraAccounts: [acc] }; const n = closeExtra(d, tn, prevKey); return { od: acc.openingDebt, n, d }; };
+    t.eq('bimonthly odd: Feb closes with NO charge, Mar accrues 200', [runClose({ id: 'b', amount: 200, frequency: 'bimonthly', openingDebt: 0 }, m2(2)).od, runClose({ id: 'b', amount: 200, frequency: 'bimonthly', openingDebt: 0 }, m2(3)).od], [0, 200]);
+    t.eq('bimonthly even: Feb accrues, Mar does not', [runClose({ id: 'b', amount: 200, frequency: 'bimonthly', billingMonths: [2,4,6,8,10,12], openingDebt: 0 }, m2(2)).od, runClose({ id: 'b', amount: 200, frequency: 'bimonthly', billingMonths: [2,4,6,8,10,12], openingDebt: 0 }, m2(3)).od], [200, 0]);
+    t.eq('yearly April: January no charge (was: charged under legacy yearly), April accrues', [runClose({ id: 'y', amount: 600, frequency: 'yearly', billingMonths: [4], openingDebt: 0 }, m2(1)).od, runClose({ id: 'y', amount: 600, frequency: 'yearly', billingMonths: [4], openingDebt: 0 }, m2(4)).od], [0, 600]);
+    const paidMar = { '9__acc__y': [{ month: m2(3), paid: true, amount: 0, paidAmount: 600, type: 'bank' }] };
+    t.eq('yearly April paid in March (not a billing month) → credit 600 (ד3-A kept)', runClose({ id: 'y', amount: 600, frequency: 'yearly', billingMonths: [4], openingDebt: 0 }, m2(3), paidMar).od, -600);
+    t.eq('legacy quarterly unchanged: Feb no charge, Mar 300', [runClose({ id: 'q', amount: 300, frequency: 'quarterly', openingDebt: 0 }, m2(2)).od, runClose({ id: 'q', amount: 300, frequency: 'quarterly', openingDebt: 0 }, m2(3)).od], [0, 300]);
+    // a dated definition: monthly until 12/2026, quarterly 1/4/7/10 from 01/2027
+    const tplD = { id: 'T', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 100,
+      billingSchedule: [{ from: '2000-01', frequency: 'monthly', billingMonths: [1,2,3,4,5,6,7,8,9,10,11,12] }, { from: '2027-01', frequency: 'quarterly', billingMonths: [1,4,7,10] }] };
+    const dd = () => ({ config: J(cfg), accountTemplates: [tplD], paymentHistory: {}, sentLog: {} });
+    const c1 = dd(), a1 = { id: 'k', templateId: 'T', label: 'ביטוח', amount: 100, openingDebt: 0 }; closeExtra(c1, { id: 9, extraAccounts: [a1] }, '2026-12');
+    const c2 = dd(), a2 = { id: 'k', templateId: 'T', label: 'ביטוח', amount: 100, openingDebt: 0 }; closeExtra(c2, { id: 9, extraAccounts: [a2] }, '2027-02');
+    const c3 = dd(), a3 = { id: 'k', templateId: 'T', label: 'ביטוח', amount: 100, openingDebt: 0 }; closeExtra(c3, { id: 9, extraAccounts: [a3] }, '2027-04');
+    t.eq('dated definition: Dec 2026 (monthly) accrues, Feb 2027 not, Apr 2027 accrues', [a1.openingDebt, a2.openingDebt, a3.openingDebt], [100, 0, 100]);
+  }
+
+  t.section('v2.14.80 (ה6) — split + report consume the same predicate');
+  {
+    const mkd = acc => ({ config: J(cfg), accountTemplates: [], tenants: [{ id: 5, name: 'ה', extraAccounts: [acc] }], paymentHistory: {}, sentLog: {}, closedMonths: ['2026-01'], closedMonthsExtra: [] });
+    const accOn = { id: 'b', label: 'חשמל', amount: 200, frequency: 'bimonthly', billingMonths: Number(MK.slice(5)) % 2 ? [1,3,5,7,9,11] : [2,4,6,8,10,12] };
+    const accOff = Object.assign({}, accOn, { billingMonths: Number(MK.slice(5)) % 2 ? [2,4,6,8,10,12] : [1,3,5,7,9,11] });
+    const sOn = S.extraAccountSplit(mkd(accOn), { id: 5 }, accOn, MK, EM), sOff = S.extraAccountSplit(mkd(accOff), { id: 5 }, accOff, MK, EM);
+    t.eq('split: billing month → charge 200 unpaid; off month → notBilling 0', [sOn.charge, sOn.status, sOff.charge, sOff.status], [200, 'unpaid', 0, 'notBilling']);
+    const R = (d, from, to) => S.buildCollectionReport(d, { from, to, mkNow: MK, emNow: EM });
+    const accY = { id: 'y', label: 'ביטוח', amount: 600, frequency: 'yearly', billingMonths: [4] };
+    const r = R(mkd(accY), m2(1), m2(6));
+    t.eq('report: yearly April billed once (600) in Jan–Jun', r.accounts.find(a => a.key === 'x:ביטוח').charged, 600);
+    const r2 = R(mkd(accY), m2(1), m2(3));
+    t.eq('report: yearly April — nothing billed Jan–Mar (legacy yearly would bill January)', (r2.accounts.find(a => a.key === 'x:ביטוח') || { charged: 0 }).charged, 0);
+    const accB = { id: 'b', label: 'חשמל', amount: 200, frequency: 'bimonthly' };
+    t.eq('report: bimonthly 200 over Jan–Jun = 3 billings (600), not 6', R(mkd(accB), m2(1), m2(6)).accounts.find(a => a.key === 'x:חשמל').charged, 600);
+  }
+
+  t.section('v2.14.80 (ה6, ח4-A) — a dated change never rewrites the report\'s past');
+  {
+    const st = fx();
+    st.closedMonthsExtra = [P2, P1]; st.closedMonths = [S.crMonthAdd(MK, -6)];
+    const R = d => S.buildCollectionReport(d, { from: S.crMonthAdd(MK, -5), to: P1, mkNow: MK, emNow: EM }).accounts.find(a => a.key === 'x:ביטוח מבנה'); const RC = d => (R(d) || { charged: 0 }).charged;
+    const before = RC(st);
+    t.eq('precondition: the past was charged', before > 0, true);
+    const c = run(SCH, st, { op: 'set', frequency: 'yearly', billingMonths: [Number(N1.slice(5))], fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('commit ok', c.out.ok && c.out.changed, true);
+    t.eq('past report identical after the change (dated)', RC(st), before);
+    const st2 = fx(); st2.closedMonthsExtra = [P2, P1]; st2.closedMonths = [S.crMonthAdd(MK, -6)];
+    const before2 = RC(st2); st2.accountTemplates[0].frequency = 'yearly'; st2.tenants.forEach(t0 => (t0.extraAccounts || []).forEach(a => { if (a.label === 'ביטוח מבנה') a.frequency = 'yearly'; }));
+    t.eq('WHY: an undated in-place edit WOULD rewrite the past (reference)', RC(st2) !== before2, true);
+  }
+
+  t.section('v2.14.80 (ה6) — 📆 schedule route (REAL code)');
+  {
+    const st = fx(); const before = JSON.stringify(st);
+    const dry = run(SCH, st, { op: 'set', frequency: 'bimonthly', fromMonth: N1 }, { id: 'ins' });
+    t.eq('dryRun is the DEFAULT → nothing saved', [dry.out.ok, dry.out.dryRun, dry.saves.length, JSON.stringify(st) === before], [true, true, 0, true]);
+    t.eq('plan: follow אור + גיל (name link); בן has his own frequency → personal', [dry.out.follow.map(x => x.name), dry.out.personal.map(x => x.name), dry.out.seedPersonal], [['אור', 'גיל'], ['בן'], ['2']]);
+    t.eq('plan labels: monthly → bimonthly odd (default)', [dry.out.oldFrequency, dry.out.frequency, dry.out.billingMonths], ['monthly', 'bimonthly', [1,3,5,7,9,11]]);
+    const com = run(SCH, st, { op: 'set', frequency: 'bimonthly', fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('commit writes accountTemplates + tenants only', [com.out.changed, com.out.members, com.saves], [true, 2, [['accountTemplates', 'tenants']]]);
+    const tp = st.accountTemplates[0];
+    t.eq('definition seeded from 2000 + the change', tp.billingSchedule.map(e => [e.from, e.frequency]), [['2000-01', 'monthly'], [N1, 'bimonthly']]);
+    t.eq('mirror = the ACTIVE month (still monthly)', tp.frequency, 'monthly');
+    const acc = id => st.tenants.find(x => x.id === id).extraAccounts[0];
+    t.eq('בן frozen as personal (quarterly from 2000)', acc(2).billingSchedule, [{ from: '2000-01', frequency: 'quarterly', billingMonths: [3,6,9,12] }]);
+    t.eq('גיל gets templateId stamped', acc(3).templateId, 'ins');
+    t.eq('members follow from N1', [N1, N2].map(m => S.extraBillsInMonth(st, acc(1), m)), [Number(N1.slice(5)) % 2 === 1, Number(N2.slice(5)) % 2 === 1]);
+    t.eq('unlinked דנה untouched', st.tenants[3].extraAccounts[0], { id: 'w', label: 'מים', frequency: 'monthly', amount: 40, openingDebt: 0 });
+    const again = run(SCH, st, { op: 'set', frequency: 'bimonthly', fromMonth: N1, dryRun: false }, { id: 'ins' });
+    t.eq('same change again → noop, nothing saved (idempotent)', [again.out.changed, again.saves.length], [false, 0]);
+    // include personal
+    const inc = run(SCH, st, { op: 'set', frequency: 'quarterly', billingMonths: [1,4,7,10], fromMonth: N2, includePersonal: true, dryRun: false }, { id: 'ins' });
+    t.eq('includePersonal: בן follows from N2, keeps quarterly before', [inc.out.ok, acc(2).billingSchedule.map(e => e.follow === true ? 'follow' : e.frequency)], [true, ['quarterly', 'follow']]);
+    t.eq('בן: before N2 personal, from N2 the definition', [S.extraScheduleAt(st, acc(2), N1).source, S.extraScheduleAt(st, acc(2), N2).source], ['personal', 'definition']);
+    t.eq('replaced planned change is reported', run(SCH, st, { op: 'set', frequency: 'yearly', fromMonth: N1 }, { id: 'ins' }).out.replaced.map(r => r.from), [N1, N2]);
+    // view
+    const v = run(SCHV, st, {}, {}, { tpl: 'ins' }).out;
+    t.eq('GET view: active month + segments + cancellable', [v.ok, v.frequency, v.segments.length, v.cancelFrom, v.linked], [true, 'monthly', 3, N2, 3]);
+    // cancel
+    const cn = run(SCH, st, { op: 'cancel', fromMonth: N2, dryRun: false }, { id: 'ins' });
+    t.eq('cancel the last planned change', [cn.out.changed, st.accountTemplates[0].billingSchedule.map(e => e.from)], [true, ['2000-01', N1]]);
+    t.eq('cancel of a month without a planned change → refused', run(SCH, st, { op: 'cancel', fromMonth: N3 }, { id: 'ins' }).out.ok, false);
+    // guards
+    const g = b => run(SCH, fx(), b, { id: 'ins' }).out;
+    t.eq('guards: past / closed / > 24 months / bad frequency / bad rotation / unknown template', [
+      g({ frequency: 'yearly', fromMonth: P2 }).ok, g({ frequency: 'yearly', fromMonth: P1 }).ok, g({ frequency: 'yearly', fromMonth: S.crMonthAdd(MK, 25) }).ok,
+      g({ frequency: 'weekly', fromMonth: N1 }).ok, g({ frequency: 'quarterly', billingMonths: [1, 2], fromMonth: N1 }).ok, run(SCH, fx(), { frequency: 'yearly', fromMonth: N1 }, { id: 'nope' }).out.ok], [false, false, false, false, false, false]);
+    const fxF = fx(); fxF.accountTemplates[0].type = 'formula';
+    t.eq('formula definition refused', run(SCH, fxF, { frequency: 'yearly', fromMonth: N1 }, { id: 'ins' }).out.ok, false);
+    // paid guard (ג4-B analog)
+    const pd = fx(); pd.sentLog['1__acc__a_' + EM] = manual(100);
+    const offNow = (Number(MK.slice(5)) % 12) + 1;   // a yearly month that is NOT the active month → MK stops billing
+    const blk = run(SCH, pd, { frequency: 'yearly', billingMonths: [offNow], fromMonth: MK }, { id: 'ins' }).out;
+    t.eq('paid this month + the change stops billing the active month → refused, suggests next month', [blk.ok, blk.code, blk.paidBlocked.map(x => x.name), blk.suggest], [false, 'paidThisMonth', ['אור'], N1]);
+    const okp = run(SCH, pd, { frequency: 'yearly', billingMonths: [Number(MK.slice(5))], fromMonth: MK }, { id: 'ins' }).out;
+    t.eq('paid this month but the active month STAYS billed → allowed', okp.ok, true);
+    t.eq('next month is always allowed', run(SCH, pd, { frequency: 'yearly', billingMonths: [offNow], fromMonth: N1 }, { id: 'ins' }).out.ok, true);
+  }
+
+  t.section('v2.14.80 (ה6) — settings save / GET (REAL code)');
+  {
+    const st = fx();
+    const tplsGet = () => run(TGET, st, {}).out;
+    const gq = tplsGet();
+    t.eq('GET: billingLabel + rotations for the page', [gq.templates[0].billingLabel, gq.templates[0].schedDated, gq.billingRotations.bimonthly.length], ['כל חודש', false, 2]);
+    // saving the GET payload back unchanged → stored definition unchanged (no new keys)
+    const stored0 = J(st.accountTemplates);
+    const sv = run(TSAVE, st, { templates: J(gq.templates) });
+    t.eq('round trip GET → POST: ok, stored definition byte-identical', [sv.out.ok, JSON.stringify(st.accountTemplates) === JSON.stringify(stored0)], [true, true]);
+    // locked: linked definition, frequency edit refused
+    const lk = run(TSAVE, st, { templates: [(() => { const x = Object.assign(J(gq.templates[0]), { frequency: 'yearly' }); delete x.billingMonths; return x; })()] });   // = what the page sends (frequency change clears months)
+    t.eq('linked definition: frequency edit refused (scheduleLocked), nothing saved', [lk.out.ok, lk.out.scheduleLocked, lk.saves.length], [false, 'ins', 0]);
+    // new definitions
+    const nw = run(TSAVE, st, { templates: J(gq.templates).concat([{ id: 'el', label: 'חשמל', type: 'fixed', frequency: 'bimonthly', amount: 200, billingMonths: [2,4,6,8,10,12] },
+      { id: 'q', label: 'גינון', type: 'fixed', frequency: 'quarterly', amount: 90, billingMonths: [3,6,9,12] }]) });
+    const byId = id => st.accountTemplates.find(x => x.id === id);
+    t.eq('new bimonthly-even saved with its months; default quarterly → no field', [nw.out.ok, byId('el').billingMonths, 'billingMonths' in byId('q')], [true, [2,4,6,8,10,12], false]);
+    t.eq('invalid rotation refused', run(TSAVE, st, { templates: [{ id: 'z', label: 'Z', type: 'fixed', frequency: 'quarterly', amount: 1, billingMonths: [1, 2] }] }).out.ok, false);
+    t.eq('bimonthly is a valid frequency', S.tplBillingInvalid({ label: 'x', frequency: 'bimonthly' }), null);
+    // dated definition: save keeps the stored schedule (never from the page)
+    run(SCH, st, { op: 'set', frequency: 'bimonthly', fromMonth: N1, dryRun: false }, { id: 'ins' });
+    const sched = J(st.accountTemplates.find(x => x.id === 'ins').billingSchedule);
+    const g2 = tplsGet();
+    const ins2 = g2.templates.find(x => x.id === 'ins');
+    t.eq('GET: schedDated + nextSched', [ins2.schedDated, ins2.nextSched && ins2.nextSched.from, ins2.nextSched && ins2.nextSched.frequency], [true, N1, 'bimonthly']);
+    const evil = J(g2.templates); evil.find(x => x.id === 'ins').billingSchedule = [{ from: '2000-01', frequency: 'yearly' }];
+    t.eq('POST cannot overwrite the stored schedule', [run(TSAVE, st, { templates: evil }).out.ok, JSON.stringify(st.accountTemplates.find(x => x.id === 'ins').billingSchedule) === JSON.stringify(sched)], [true, true]);
+    const st3 = fx(); st3.accountTemplates.push({ id: 'free', label: 'חופשי', type: 'fixed', frequency: 'monthly', amount: 10 });
+    const g3 = run(TGET, st3, {}).out.templates; g3.find(x => x.id === 'free').billingSchedule = [{ from: '2000-01', frequency: 'yearly', billingMonths: [7] }];
+    run(TSAVE, st3, { templates: g3 });
+    t.eq('an undated definition: a schedule sent by the page is NOT stored', 'billingSchedule' in st3.accountTemplates.find(x => x.id === 'free'), false);
+    t.eq('display fields not stored', ['billingLabel', 'schedDated', 'nextSched', 'linked'].some(k => k in st.accountTemplates.find(x => x.id === 'ins')), false);
+  }
+
+  t.section('v2.14.80 (ה6, ח1-A) — member accounts (REAL code)');
+  {
+    const st = fx();
+    const g = run(TACCG, st, {}, { tenantId: '4' }).out.accounts[0];
+    t.eq('GET unlinked: follows nothing, own monthly', [g.schedFollows, g.frequency, g.billingLabel, g.schedSource], [false, 'monthly', 'כל חודש', 'fixed']);
+    const g1 = run(TACCG, st, {}, { tenantId: '2' }).out.accounts[0];
+    t.eq('GET linked: schedFollows + next billing month', [g1.schedFollows, g1.frequency, g1.nextBilling], [true, 'quarterly', S.extraNextBillingMonth(st, st.tenants[1].extraAccounts[0], MK)]);
+    // linked: an edit from the page is ignored
+    run(TACC, st, { accounts: [Object.assign(J(g1), { frequency: 'yearly' })] }, { tenantId: '2' });
+    t.eq('linked saved account: frequency edit ignored (follows the definition)', st.tenants[1].extraAccounts[0].frequency, 'quarterly');
+    // unlinked: the edit applies, bimonthly + rotation
+    run(TACC, st, { accounts: [Object.assign(J(g), { frequency: 'bimonthly', billingMonths: [2,4,6,8,10,12] })] }, { tenantId: '4' });
+    t.eq('unlinked: bimonthly-even saved', [st.tenants[3].extraAccounts[0].frequency, st.tenants[3].extraAccounts[0].billingMonths], ['bimonthly', [2,4,6,8,10,12]]);
+    run(TACC, st, { accounts: [Object.assign(J(g), { frequency: 'quarterly', billingMonths: [3,6,9,12] })] }, { tenantId: '4' });
+    t.eq('unlinked: default rotation → no field stored', 'billingMonths' in st.tenants[3].extraAccounts[0], false);
+    // a personal schedule survives a modal save
+    st.tenants[1].extraAccounts[0].billingSchedule = [{ from: '2000-01', frequency: 'yearly', billingMonths: [4] }];
+    run(TACC, st, { accounts: [J(run(TACCG, st, {}, { tenantId: '2' }).out.accounts[0])] }, { tenantId: '2' });
+    t.eq('billingSchedule kept on save', st.tenants[1].extraAccounts[0].billingSchedule, [{ from: '2000-01', frequency: 'yearly', billingMonths: [4] }]);
+    // legacy account round trip: no new keys
+    const lg = fx(); const lacc0 = J(lg.tenants[3].extraAccounts[0]);
+    run(TACC, lg, { accounts: [J(run(TACCG, lg, {}, { tenantId: '4' }).out.accounts[0])] }, { tenantId: '4' });
+    const lacc1 = lg.tenants[3].extraAccounts[0];
+    t.eq('legacy account GET → POST: no billing keys added', ['billingMonths', 'billingSchedule', 'billingLabel', 'schedFollows'].some(k => k in lacc1), false);
+    t.eq('legacy account GET → POST: frequency unchanged', lacc1.frequency, lacc0.frequency);
+  }
+
+  t.section('v2.14.80 (ה6) — accFromTemplate + portal');
+  {
+    const tY = { id: 'y', label: 'ביטוח', type: 'fixed', frequency: 'yearly', amount: 600, billingMonths: [4] };
+    const a = S.accFromTemplate(tY, { id: 1, extraAccounts: [] }, MK, {});
+    t.eq('new member from a yearly-April definition → billingMonths [4]', [a.frequency, a.billingMonths], ['yearly', [4]]);
+    const b = S.accFromTemplate({ id: 'q', label: 'ג', type: 'fixed', frequency: 'quarterly', amount: 90 }, { id: 1, extraAccounts: [] }, MK, {});
+    t.eq('default rotation → no billingMonths field (legacy shape)', [b.frequency, 'billingMonths' in b], ['quarterly', false]);
+    const off = (Number(MK.slice(5)) % 12) + 1;
+    const tn = { id: 30, name: 'פ', extraAccounts: [{ id: 'y1', label: 'ביטוח', amount: 600, frequency: 'yearly', billingMonths: [off], openingDebt: 0 }] };
+    const v = S.portalAccountsView({ config: J(cfg), accountTemplates: [], tenants: [tn], paymentHistory: {}, sentLog: {} }, tn, MK, EM)[0];
+    t.eq('portal: notBilling + next billing month text', [v.status, v.nextBilling, v.nextBillingLabel], ['notBilling', N1, S.HEBREW_MONTHS[off - 1] + ' ' + N1.slice(0, 4)]);
+  }
+}
 
 (async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); process.exit(t.done() ? 1 : 0); })();

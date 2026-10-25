@@ -21,6 +21,14 @@ const { readSource, extractHtmlRegion, extractFunctions, runInSandbox, makeRunne
 
 const t = makeRunner('frontend render');
 
+// v2.14.80 (ה6) — the page's frequency constants (FREQ_LABEL, short month names, the
+// rotations cache) for sandboxes that extract the billing-months UI functions.
+function billPageConsts(app) {
+  const a = app.match(/^const FREQ_LABEL = .*$/m), b = app.match(/^const BILL_MONTH_SHORT = .*$/m), c = app.match(/^let billRotationsCache = .*$/m);
+  if (!a || !b || !c) throw new Error('billPageConsts: constants not found in app.html');
+  return a[0].replace(/^const/, 'var') + '\n' + b[0].replace(/^const/, 'var') + '\n' + c[0].replace(/^let/, 'var') + '\n';
+}
+
 // ── 1. app.html: the debtCell block must not throw ────────────────
 // Extract from `const amount = ...` down to the end of the if/else chain.
 const START = '       const amount = t.effectiveAmount';
@@ -3130,9 +3138,10 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.section('v2.14.74 — template row (EXECUTED renderAccountTemplates)');
   t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
   {
-    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates']);   // v2.14.79 — + payments selector
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates',
+      'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort']);   // v2.14.79 — + payments selector · v2.14.80 — + frequency cell
     const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
-    const S = runInSandbox('var accountTemplates;\n' + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
+    const S = runInSandbox('var accountTemplates;\n' + billPageConsts(app) + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
       { document: { getElementById: id => els[id] || null } });
     S.run([{ id: 'tpl_a', label: 'ביטוח <b>', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true, linked: 3, pending: 2 },
            { id: 'tpl_new', label: 'חדש', type: 'fixed', frequency: 'monthly', amount: 0 }]);
@@ -3469,7 +3478,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('modal markup present, above the accounts modal', /id="amtModal" style="display:none;z-index:110;"/.test(app) && ['amtTitle', 'amtTimeline', 'amtForm', 'amtPlan', 'amtGo'].every(x => app.includes('id="' + x + '"')), true);
     t.eq('one delegated listener on the modal', /addEventListener\('click', amtOnClick\)/.test(app), true);
     t.eq('commit sends dryRun:false only after a preview', /async function amtCommit\(\)[\s\S]*?!amtCtx\.plan[\s\S]*?dryRun: false/.test(app), true);
-    t.eq('template save restores the list on amountLocked', app.includes('if (d.linked || d.amountLocked) loadAccountTemplates();'), true);
+    t.eq('template save restores the list on amountLocked (v2.14.80: + scheduleLocked)', app.includes('if (d.linked || d.amountLocked || d.scheduleLocked) loadAccountTemplates();'), true);
     t.eq('member modal amount uses taAmountCell', app.includes('${taAmountCell(acc, i)}'), true);
     t.eq('guide: 📅 box with anchor, both scopes, month rule, paid rule, cancel', ['id="vpg-acc-dated"', '📅 סכום מתוארך', 'לכל החברים', 'לחבר אחד', 'חזור לסכום ההגדרה', 'החודש הפעיל או חודש עתידי', 'כבר שילמו החודש?', 'שינוי מתוכנן'].every(x => gd.includes(x)), true);
     t.eq('guide: tenants-file amount = from the active month', gd.includes('בחשבון קיים, סכום חדש חל <strong>מהחודש הפעיל</strong>'), true);
@@ -3732,5 +3741,118 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     ['id="vpg-acc-send"', '💬 WA לחייבים בחשבון', '{סה"כ_כולל}', 'id="vpg-acc-tpl"', 'חוב קודם 80 ₪', 'id="vpg-portal-accounts"', 'היסטוריית התשלומים של אותו חשבון', 'עדיין לא קיימת'].every(x => gd.includes(x)), true);
   t.eq('guide: the old "מושהה … לא נכלל בתזכורות" sentence is gone', gd.includes('חשבון מושהה לא נצבר לחוב ולא נכלל בתזכורות'), false);
 })()]);
+
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.80 (ה6) — frequency + billing months UI, 📆 modal, portal "next billing". EXECUTED
+// against the REAL server plans (loadServer) — the page only renders them (CONSUME).
+// ════════════════════════════════════════════════════════════════
+{
+  const app = readSource('public/app.html'), portal = readSource('public/tenant-portal.html'), gd = readSource('public/vaadpro-guide.js');
+  const S = require('./test-lib').loadServer();
+  const J = o => JSON.parse(JSON.stringify(o));
+  const UI = ['esc', 'amtFmtMonth', 'tplNames', 'tplFreqCell', 'taFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort',
+    'schedSegHtml', 'schedRenderView', 'schedRenderPlan', 'schedBuildBody', 'schedSetFreq'];
+  const mkUI = (els, extra) => runInSandbox('var schedCtx = null;\n' + billPageConsts(app) + extractFunctions(app, UI) +
+    '\nmodule.exports={' + UI.join(',') + ',ctx:function(c){schedCtx=c;},getCtx:function(){return schedCtx;},cache:function(){return billRotationsCache;}};',
+    Object.assign({ document: { getElementById: id => (els || {})[id] || null } }, extra || {}));
+  const U = mkUI({});
+
+  t.section('v2.14.80 (ה6) — settings row frequency cell (EXECUTED)');
+  {
+    const open = U.tplFreqCell({ id: 'n', frequency: 'bimonthly', billingMonths: [2,4,6,8,10,12] }, 0);
+    t.eq('unsaved row: 4 frequencies incl. דו-חודשי', ['monthly', 'bimonthly', 'quarterly', 'yearly'].every(f => open.includes('value="' + f + '"')) && open.includes('דו-חודשי'), true);
+    t.eq('unsaved row: rotation select with the EVEN rotation selected', /<option value="1" selected>פבר׳/.test(open), true);
+    t.eq('unsaved row: no 📆 (save first); "per billing" hint', [open.includes('openSchedModal'), open.includes('הסכום הוא לכל חיוב')], [false, true]);
+    t.eq('monthly row: no rotation select, no hint', [U.tplFreqCell({ frequency: 'monthly' }, 1).includes('bill-rot'), U.tplFreqCell({ frequency: 'monthly' }, 1).includes('לכל חיוב')], [false, false]);
+    t.eq('yearly rotation: 12 options, default January', (() => { const h = U.tplFreqCell({ frequency: 'yearly' }, 0); return [(h.match(/<option value="\d+"/g) || []).length, /<option value="0" selected>בינו׳/.test(h)]; })(), [12, true]);
+    t.eq('quarterly default rotation = 3/6/9/12 (server default)', /<option value="2" selected>מרץ · יוני · ספט׳ · דצמ׳/.test(U.tplFreqCell({ frequency: 'quarterly' }, 0)), true);
+    const saved = U.tplFreqCell({ id: 's', frequency: 'monthly', linked: 0 }, 2);
+    t.eq('saved, not linked: editable + 📆 button by index', [saved.includes('bill-freq'), saved.includes('openSchedModal(2)')], [true, true]);
+    const locked = U.tplFreqCell({ id: 'l', frequency: 'quarterly', billingMonths: [1,4,7,10], linked: 3, nextSched: { from: '2027-01', frequency: 'yearly', label: 'אפריל <x>' } }, 4);
+    t.eq('linked: read-only + 📆, no select', [locked.includes('tpl-freq-ro'), locked.includes('bill-freq'), locked.includes('openSchedModal(4)'), locked.includes('ינו׳ · אפר׳ · יולי · אוק׳')], [true, false, true, true]);
+    t.eq('next planned change shown, escaped', [locked.includes('מ-01/2027: שנתי (אפריל &lt;x&gt;)'), locked.includes('<x>')], [true, false]);
+    t.eq('dated but unlinked: still locked', U.tplFreqCell({ id: 'd', frequency: 'monthly', linked: 0, schedDated: true }, 0).includes('tpl-freq-ro'), true);
+    t.eq('row renderer uses the cell', /<label style="font-size:0\.75rem;">תדירות<\/label>\$\{tplFreqCell\(t, i\)\}/.test(app), true);
+    t.eq('frequency change clears months + re-renders', U.billFreqSelect('monthly', 'X;').includes('onchange="var v=this.value;X;"') && /accountTemplates\['\s*\+\s*i\s*\+\s*'\]\.frequency=v;delete accountTemplates\['\s*\+\s*i\s*\+\s*'\]\.billingMonths;renderAccountTemplates\(\);/.test(extractFunctions(app, ['tplFreqCell'])), true);
+  }
+
+  t.section('v2.14.80 (ה6, ח1-A) — member modal frequency cell (EXECUTED)');
+  {
+    const ro = U.taFreqCell({ saved: true, schedFollows: true, frequency: 'yearly', billingMonths: [4], schedSource: 'definition' }, 0);
+    t.eq('linked saved: read-only "לפי הגדרת החשבון" + months', [ro.includes('ta-freq-ro'), ro.includes('לפי הגדרת החשבון'), ro.includes('אפר׳'), ro.includes('<select')], [true, true, true, false]);
+    t.eq('personal: "תדירות אישית"', U.taFreqCell({ saved: true, schedFollows: true, frequency: 'quarterly', billingMonths: [3,6,9,12], schedSource: 'personal' }, 0).includes('תדירות אישית'), true);
+    const ed = U.taFreqCell({ saved: true, schedFollows: false, frequency: 'bimonthly', billingMonths: [1,3,5,7,9,11] }, 3);
+    t.eq('unlinked: editable selects writing taModalAccounts[3]', [ed.includes('bill-freq'), ed.includes('bill-rot'), ed.includes('taModalAccounts[3].frequency=v')], [true, true, true]);
+    t.eq('modal renderer uses the cell; "from template" copies billingMonths', [/\$\{taFreqCell\(acc, i\)\}/.test(app), app.includes('frequency: tpl.frequency, billingMonths: tpl.billingMonths,')], [true, true]);
+  }
+
+  t.section('v2.14.80 (ה6) — 📆 modal renders the REAL server view + plans (EXECUTED)');
+  {
+    const cfg = { amount: 300, manualMonth: 'אוקטובר' }, MK = S.getMonthKey(cfg), N1 = S.crMonthAdd(MK, 1);
+    const st = { config: cfg, accountTemplates: [{ id: 'ins', label: 'ביטוח <b>', type: 'fixed', frequency: 'monthly', amount: 100 }],
+      tenants: [{ id: 1, name: 'אור', extraAccounts: [{ id: 'a', templateId: 'ins', label: 'ביטוח <b>', frequency: 'monthly', amount: 100 }] },
+                { id: 2, name: 'בן', extraAccounts: [{ id: 'b', templateId: 'ins', label: 'ביטוח <b>', frequency: 'quarterly', amount: 100 }] }],
+      sentLog: {}, paymentHistory: {}, closedMonthsExtra: [] };
+    const v = S.tplScheduleView(st, 'ins');
+    const h = U.schedRenderView(v);
+    t.eq('view: title escaped, linked + personal counts', [h.title.includes('ביטוח &lt;b&gt;'), h.current.includes('משויך ל-2 חברים'), h.current.includes('1 עם תדירות אישית')], [true, true, true]);
+    t.eq('view: include-personal checkbox + from-month bounds', [h.form.includes('id="schedInclPersonal"'), h.form.includes('min="' + MK + '"'), h.form.includes('max="' + v.maxMonth + '"')], [true, true, true]);
+    t.eq('view: one segment (from the start)', [(h.timeline.match(/class="sched-seg"/g) || []).length, h.timeline.includes('מההתחלה')], [1, true]);
+    const plan = S.planTemplateSchedule(J(st), 'ins', { op: 'set', frequency: 'bimonthly', fromMonth: N1 });
+    const ph = U.schedRenderPlan(plan);
+    t.eq('plan: old → new, follow 1 (אור), personal 1 (בן)', [ph.includes('חודשי (כל חודש) → דו-חודשי'), ph.includes('יעברו: <strong>1</strong> חברים (אור)'), ph.includes('לא ישתנו: 1 (בן)')], [true, true, true]);
+    t.eq('plan: timeline after has a ⏳ planned segment', ph.includes('⏳ מתוכנן'), true);
+    const err = U.schedRenderPlan({ ok: false, error: 'x <y>', paidBlocked: [{ name: 'אור' }] });
+    t.eq('refusal: escaped + names who paid', [err.includes('x &lt;y&gt;'), err.includes('כבר שילמו: אור')], [true, true]);
+    t.eq('noop text', U.schedRenderPlan({ ok: true, noop: true }).includes('אין שינוי'), true);
+    // body builder
+    const els = { schedFrom: { value: N1 }, schedInclPersonal: { checked: true } };
+    const U2 = mkUI(els);
+    U2.ctx({ view: v, freq: 'quarterly', months: [1,4,7,10] });
+    t.eq('body: frequency + months + from + includePersonal + dryRun', U2.schedBuildBody('set'), { op: 'set', frequency: 'quarterly', fromMonth: N1, includePersonal: true, dryRun: true, billingMonths: [1,4,7,10] });
+    U2.ctx({ view: v, freq: 'monthly', months: [1,2,3] });
+    t.eq('monthly body: no billingMonths', 'billingMonths' in U2.schedBuildBody('set'), false);
+    U2.ctx({ view: Object.assign({}, v, { cancelFrom: N1 }) });
+    t.eq('cancel body', U2.schedBuildBody('cancel'), { op: 'cancel', fromMonth: N1, dryRun: true });
+    const U3 = mkUI({ schedFrom: { value: '' } }); U3.ctx({ view: v, freq: 'yearly' });
+    t.eq('no month → error, no request', U3.schedBuildBody('set'), { error: 'בחרו חודש התחלה' });
+    // the page body is accepted by the REAL planner
+    U2.ctx({ view: v, freq: 'quarterly', months: [1,4,7,10] });
+    t.eq('page body → REAL planner ok', S.planTemplateSchedule(J(st), 'ins', U2.schedBuildBody('set')).ok, true);
+    const boxEls = { schedRotBox: { innerHTML: '' } }; const U4 = mkUI(boxEls); U4.ctx({ view: v, freq: 'quarterly', months: [1, 4, 7, 10] });
+    U4.schedSetFreq('yearly');
+    t.eq('changing the frequency rebuilds the rotation list + clears months', [(boxEls.schedRotBox.innerHTML.match(/<option/g) || []).length, U4.getCtx().months, U4.getCtx().freq], [12, null, 'yearly']);
+    t.eq('modal markup above the accounts modal; one delegated listener; commit after preview',
+      [/id="schedModal" style="display:none;z-index:110;"/.test(app), ['schedTitle', 'schedTimeline', 'schedForm', 'schedPlan', 'schedGo'].every(x => app.includes('id="' + x + '"')),
+       /addEventListener\('click', schedOnClick\)/.test(app), /async function schedCommit\(\)[\s\S]*?!schedCtx\.plan[\s\S]*?dryRun: false/.test(app)], [true, true, true, true]);
+    t.eq('server rotations override the page cache', (() => { const U5 = mkUI({}); U5.schedRenderView(Object.assign({}, v, { rotations: { bimonthly: [[1]], quarterly: [[1]], yearly: [[1]] } })); return U5.cache().bimonthly; })(), [[1]]);
+  }
+
+  t.section('v2.14.80 (ה6, ח7-A) — portal: next billing month (EXECUTED)');
+  {
+    const pf = extractFunctions(portal, ['portalEsc', 'portalMoney', 'portalAccHistoryHtml', 'renderUnifiedBreakdown']);
+    const runP = d => {
+      const els = { breakdownCard: { style: {} }, breakdownRows: { innerHTML: '' }, breakdownTotalAmount: { textContent: '' } };
+      new Function('document', pf + '\n; return renderUnifiedBreakdown;')({ getElementById: id => els[id] || null })
+        (d, { mainPaid: true, mainPriorDebt: 0, mainLabel: 'בניין', mainAccountLabel: 'ועד בית', mainCurrent: 0, mainAmountDue: 0 });
+      return els.breakdownRows.innerHTML;
+    };
+    const AV = [{ id: 'e', label: 'חשמל', frequency: 'bimonthly', status: 'notBilling', nextBillingLabel: 'נובמבר <2026>', owedNow: 0, owedCurrent: 0, owedPrior: 0, creditLeft: 0, creditApplied: 0, paidNow: 0, history: [] },
+                { id: 'y', label: 'ביטוח', frequency: 'yearly', status: 'notBilling', nextBillingLabel: 'אפריל 2027', owedNow: 80, owedCurrent: 0, owedPrior: 80, creditLeft: 0, creditApplied: 0, paidNow: 0, history: [] },
+                { id: 'm', label: 'גינון', frequency: 'monthly', status: 'unpaid', nextBillingLabel: 'נובמבר 2026', owedNow: 50, owedCurrent: 50, owedPrior: 0, creditLeft: 0, creditApplied: 0, paidNow: 0, history: [] }];
+    const r = runP({ accountsView: AV, grandTotal: 130 });
+    t.eq('notBilling, nothing owed: "דו-חודשי · החיוב הבא: …" (escaped)', [r.includes('דו-חודשי · החיוב הבא: נובמבר &lt;2026&gt;'), r.includes('<2026>')], [true, false]);
+    t.eq('notBilling with carried debt: "אין חיוב החודש (הבא: אפריל 2027)"', r.includes('אין חיוב החודש (הבא: אפריל 2027)'), true);
+    t.eq('a billing month never shows "החיוב הבא"', (r.split('גינון')[1] || '').includes('החיוב הבא'), false);
+  }
+
+  t.section('v2.14.80 (ה6) — guide');
+  {
+    t.eq('guide: billing-months box (frequencies, per-billing amount, 📆, follow, personal, next billing)',
+      ['id="vpg-acc-billing"', 'דו-חודשי', 'הסכום הוא לכל חיוב', 'תקופה של אוגוסט-ספטמבר מחויבת בספטמבר', 'בחודש שבוחרים', '📆', 'לפי הגדרת החשבון', 'תדירות אישית', 'החיוב הבא'].every(x => gd.includes(x)), true);
+    t.eq('guide: portal box mentions the next billing month', /id="vpg-portal-accounts"[\s\S]*?החיוב הבא/.test(gd), true);
+  }
+}
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

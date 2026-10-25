@@ -58,7 +58,7 @@ function load(src) {
   const ctx = { module: { exports: {} }, console: quiet, Math, parseFloat, String, Array, Object, Number, JSON };
   vm.createContext(ctx);
   vm.runInContext(MONTHS_SRC + '\n' + extract(src, 'closeMonthUnpaidForBuilding') + '\n' + extract(src, 'closeExtraAccountsUnpaid') +
-    ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn'].map(n => '\n' + extract(src, n)).join('') +   // v2.14.76 (1ג) · v2.14.77 (1ד) crSuspendedIn
+    ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn', 'billRotations', 'billDefaultMonths', 'billMatchRotation', 'billNormalize', 'billEntryAt', 'extraScheduleAt', 'extraBillsInMonth'].map(n => '\n' + extract(src, n)).join('') +   // v2.14.76 (1ג) · v2.14.77 (1ד) crSuspendedIn
     '\nmodule.exports={closeMonthUnpaidForBuilding,closeExtraAccountsUnpaid,HEBREW_MONTHS};', ctx);
   return ctx.module.exports;
 }

@@ -1062,6 +1062,7 @@ function renderUnifiedBreakdown(d, main) {
   // ── One card per extra account (server: accountsView) ──
   (d.accountsView || []).forEach(function(acc) {
     var freq = freqLabel[acc.frequency] || acc.frequency || '';
+    var nextTxt = (acc.status === 'notBilling' && acc.nextBillingLabel) ? portalEsc(acc.nextBillingLabel) : '';   // v2.14.80 (ה6, ח7-A) — server text
     var creditTxt = acc.creditLeft > 0 ? 'יתרת זכות ' + portalMoney(acc.creditLeft) + ' ₪' : '';
     var amountText, color, sub;
     if (!(acc.owedNow > 0)) {
@@ -1070,11 +1071,11 @@ function renderUnifiedBreakdown(d, main) {
       else if (acc.status === 'notBilling') { amountText = 'אין חיוב החודש'; color = 'var(--text2)'; }
       else if (acc.status === 'covered') amountText = '✅ מכוסה מזכות';
       else amountText = '✅ שולם';
-      sub = freq + ' · החודש' + (creditTxt ? ' · ' + creditTxt : '');
+      sub = freq + (nextTxt ? ' · החיוב הבא: ' + nextTxt : ' · החודש') + (creditTxt ? ' · ' + creditTxt : '');
     } else {
       var monthPart = acc.status === 'paid' ? 'החודש שולם'
                     : acc.status === 'exempt' ? 'החודש: פטור'
-                    : acc.status === 'notBilling' ? 'אין חיוב החודש'
+                    : acc.status === 'notBilling' ? 'אין חיוב החודש' + (nextTxt ? ' (הבא: ' + nextTxt + ')' : '')
                     : acc.status === 'partial' ? 'שולם ' + portalMoney(acc.paidNow) + ' ₪, נותר ' + portalMoney(acc.owedCurrent) + ' ₪ החודש'
                     : portalMoney(acc.owedCurrent) + ' ₪ החודש';
       sub = freq + ' · ' + monthPart +

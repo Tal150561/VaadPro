@@ -40,7 +40,7 @@ const buildings = Array.isArray(raw && raw.tenants) ? [['(file)', raw]]
 if (!buildings.length) { console.error('❌ no building data (tenants[]) found in ' + file); process.exit(2); }
 
 const src = lib.readSource('server.js');
-const H = lib.runInSandbox(lib.extractFunctions(src, lib.EXTRA_AMOUNT_FNS) + 'module.exports={extraAmountForMonth,crSuspendedIn};');
+const H = lib.runInSandbox(lib.extractFunctions(src, lib.EXTRA_AMOUNT_FNS) + 'module.exports={extraAmountForMonth,crSuspendedIn,extraBillsInMonth};');
 const r2 = n => Math.round(n * 100) / 100;
 
 let found = 0;
@@ -54,8 +54,7 @@ for (const [bid, d] of buildings) {
       for (const M of closed) {
         const rec = hist.find(r => r.month === M);
         if (!rec) continue;
-        const mon = Number(M.slice(5));
-        const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
+        const billing = H.extraBillsInMonth(d, acc, M);   // v2.14.80 (ה6) — the REAL billing-months resolver
         const dated = H.extraAmountForMonth(d, acc, M);
         const suspended = H.crSuspendedIn(acc, M);
         const amount = (billing && !suspended && dated > 0) ? dated : 0;

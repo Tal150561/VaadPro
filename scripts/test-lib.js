@@ -96,6 +96,12 @@ const SERVER_FNS = [
   'extraCancelFrom', 'extraPaidInMonth', 'extraValidateFromMonth', 'extraFmtMonth', 'extraSeedOwn',
   'extraAmountTimeline', 'extraCancellable', 'planTemplateTariff', 'commitTemplateTariff',
   'planMemberTariff', 'commitMemberTariff', 'amountTimelineView',
+  // v2.14.80 (ה6) — billing months + bimonthly (the ONE billing predicate + 📆 by month)
+  'billRotations', 'billDefaultMonths', 'billMatchRotation', 'billNormalize', 'billEntryAt', 'tplScheduleAt',
+  'extraScheduleAt', 'extraBillsInMonth', 'extraNextBillingMonth', 'billMonthsLabel', 'billScheduleFrom',
+  'billValidateFromMonth', 'tplScheduleTimeline', 'tplScheduleCancellable', 'planTemplateSchedule',
+  'commitTemplateSchedule', 'tplScheduleView', 'tplBillingInvalid', 'tplBillingStore', 'tplBillingKeep',
+  'extraBillingFieldsForSave', 'extraBillingView',
   // v2.14.78 (1ה) — a bank file per extra account (the shared engine parts + the new engine)
   'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth',
   'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'kwMatchCount', 'scoreTenantRowMatch',
@@ -111,7 +117,10 @@ const SERVER_FNS = [
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
 // extraAmountForMonth. Loaders that extract a single money function pull these in too.
 // v2.14.77 (1ד) — + crSuspendedIn: the close and the payment-freeze sites test suspension BY PERIOD.
-const EXTRA_AMOUNT_FNS = ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn'];
+// v2.14.80 (ה6) — + the billing-months resolver: the split, the report and the PROTECTED close
+// decide "is this a billing month" through extraBillsInMonth.
+const EXTRA_AMOUNT_FNS = ['monthInInterval', 'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'accTemplateFor', 'tplNameKey', 'crAccountKey', 'crSuspendedIn',
+  'billRotations', 'billDefaultMonths', 'billMatchRotation', 'billNormalize', 'billEntryAt', 'extraScheduleAt', 'extraBillsInMonth'];
 
 function loadServer() {
   const src = readSource('server.js');
@@ -124,8 +133,10 @@ function loadServer() {
   if (!exTpl) throw new Error('test-lib: EXCESS_DEBT_DEFAULT_TEMPLATE not found in server.js');
   const splitHe = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);   // v2.14.78 — monthsNamedInNote
   const remTpl = src.match(/const REMINDER_DEFAULT_TEMPLATE = .*;\n/);   // v2.14.79 — reminderAccountsGap
+  const billFreqs = src.match(/const BILL_FREQS = \[[^\]]*\];/);   // v2.14.80 (ה6)
+  if (!billFreqs) throw new Error('test-lib: BILL_FREQS not found in server.js');
   if (!remTpl) throw new Error('test-lib: REMINDER_DEFAULT_TEMPLATE not found in server.js');
-  const code = months[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0]
+  const code = months[0] + '\n' + billFreqs[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0]
     + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';

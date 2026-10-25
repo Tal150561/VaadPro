@@ -1885,6 +1885,21 @@ function vpLogout() {
     </div>
   </div>
 
+  <!-- v2.14.80 (ה6) — 📆 billing months from a month (definition scope) -->
+  <div class="modal-bg" id="schedModal" style="display:none;z-index:110;" onclick="if(event.target===this)closeSchedModal()">
+    <div class="modal" style="max-width:600px;max-height:90vh;overflow-y:auto;">
+      <h2 id="schedTitle"></h2>
+      <div id="schedCurrent" style="font-size:0.9rem;"></div>
+      <div id="schedTimeline" style="display:grid;gap:6px;margin:10px 0;"></div>
+      <div id="schedForm"></div>
+      <div id="schedPlan" style="margin:10px 0;"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-green" id="schedGo">✅ אשר שינוי</button>
+        <button class="btn btn-secondary" onclick="closeSchedModal()">סגור</button>
+      </div>
+    </div>
+  </div>
+
   <div class="modal-bg" id="tenantAccountsModal" style="display:none;" onclick="if(event.target===this)closeTenantAccountsModal()">
     <div class="modal" style="max-width:560px;">
       <h2><span id="taModalTitleLabel">💳 חשבונות לדייר: </span><span id="taModalName" style="color:var(--accent);"></span></h2>
@@ -1936,7 +1951,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.79';
+const HTML_VERSION = '2.14.80';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -10142,7 +10157,7 @@ async function loadAccountTemplates() {
   try {
     const r = await fetch(API + '/account-templates', { headers: {} });
     const d = await r.json();
-    if (d.ok) { accountTemplates = d.templates || []; renderAccountTemplates(); }
+    if (d.ok) { accountTemplates = d.templates || []; if (d.billingRotations) billRotationsCache = d.billingRotations; renderAccountTemplates(); }
   } catch(e) {}
 }
 
@@ -10193,12 +10208,7 @@ function renderAccountTemplates() {
       <div><label style="font-size:0.75rem;">שם החשבון</label>
         <input type="text" value="${esc(t.label||'')}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
       <div><label style="font-size:0.75rem;">סכום ₪</label>${tplAmountCell(t, i)}</div>
-      <div><label style="font-size:0.75rem;">תדירות</label>
-        <select onchange="accountTemplates[${i}].frequency=this.value" style="width:100%;">
-          <option value="monthly" ${t.frequency==='monthly'?'selected':''}>חודשי</option>
-          <option value="quarterly" ${t.frequency==='quarterly'?'selected':''}>רבעוני</option>
-          <option value="yearly" ${t.frequency==='yearly'?'selected':''}>שנתי</option>
-        </select></div>
+      <div><label style="font-size:0.75rem;">תדירות</label>${tplFreqCell(t, i)}</div>
       <div><label style="font-size:0.75rem;">סוג</label>
         <select onchange="accountTemplates[${i}].type=this.value" style="width:100%;">
           <option value="fixed" ${t.type==='fixed'?'selected':''}>קבוע</option>
@@ -10233,6 +10243,213 @@ function tplAmountCell(t, i) {
     (t && t.linked !== undefined ? '<button class="btn btn-secondary btn-sm tpl-act-amt" style="margin-top:4px;" onclick="openAmtModal(\'tpl\',' + i + ')">📅 סכום מתוארך</button>' : '') + nx;
 }
 
+// ══ v2.14.80 (ה6) — frequency + billing months ═══════════════════════════════
+// The rotations come from the server (GET /api/account-templates → billingRotations);
+// the server validates and resolves every month (CONSUME). The amount of a non-monthly
+// account is the amount PER BILLING PERIOD.
+const FREQ_LABEL = { monthly: 'חודשי', bimonthly: 'דו-חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+const BILL_MONTH_SHORT = ['ינו׳', 'פבר׳', 'מרץ', 'אפר׳', 'מאי', 'יוני', 'יולי', 'אוג׳', 'ספט׳', 'אוק׳', 'נוב׳', 'דצמ׳'];
+let billRotationsCache = { bimonthly: [[1,3,5,7,9,11],[2,4,6,8,10,12]], quarterly: [[1,4,7,10],[2,5,8,11],[3,6,9,12]], yearly: [[1],[2],[3],[4],[5],[6],[7],[8],[9],[10],[11],[12]] };
+
+function billMonthsShort(freq, months) {
+  if (!freq || freq === 'monthly') return 'כל חודש';
+  return (months || []).map(function(m){ return BILL_MONTH_SHORT[m - 1] || ''; }).join(' · ');
+}
+
+// Index of `months` among the rotations of `freq` (−1 = none → the server default).
+function billRotationIndex(freq, months) {
+  const list = billRotationsCache[freq] || [];
+  const want = JSON.stringify((months || []).map(Number).slice().sort(function(a, b){ return a - b; }));
+  for (let k = 0; k < list.length; k++) if (JSON.stringify(list[k]) === want) return k;
+  return -1;
+}
+
+// <select> of rotations for a non-monthly frequency; `setter` = JS taking the chosen array as `v`.
+function billRotationSelect(freq, months, setter) {
+  if (!freq || freq === 'monthly' || !billRotationsCache[freq]) return '';
+  let idx = billRotationIndex(freq, months);
+  if (idx < 0) idx = freq === 'bimonthly' ? 0 : freq === 'quarterly' ? 2 : 0;   // = server defaults
+  const opts = billRotationsCache[freq].map(function(r, k){
+    return '<option value="' + k + '"' + (k === idx ? ' selected' : '') + '>' + (freq === 'yearly' ? 'ב' : '') + billMonthsShort(freq, r) + '</option>';
+  }).join('');
+  return '<select class="bill-rot" style="width:100%;margin-top:4px;" onchange="var v=billRotationsCache[\'' + freq + '\'][this.value];' + setter + '">' + opts + '</select>';
+}
+
+function billFreqSelect(freq, setter) {
+  return '<select class="bill-freq" style="width:100%;" onchange="var v=this.value;' + setter + '">' +
+    ['monthly', 'bimonthly', 'quarterly', 'yearly'].map(function(f){ return '<option value="' + f + '"' + ((freq || 'monthly') === f ? ' selected' : '') + '>' + FREQ_LABEL[f] + '</option>'; }).join('') + '</select>';
+}
+
+// Settings row. A definition that is DATED or linked to members changes only through 📆.
+function tplFreqCell(t, i) {
+  const saved = t && t.linked !== undefined;
+  const locked = saved && (t.schedDated === true || (t.linked || 0) > 0);
+  const nx = t && t.nextSched ? '<div class="tpl-sched-next" style="font-size:0.7rem;color:var(--text2);">מ-' + amtFmtMonth(t.nextSched.from) + ': ' + esc(FREQ_LABEL[t.nextSched.frequency] || '') + ' (' + esc(t.nextSched.label || '') + ')</div>' : '';
+  const per = t && t.frequency && t.frequency !== 'monthly' ? '<div style="font-size:0.7rem;color:var(--text2);">הסכום הוא לכל חיוב</div>' : '';
+  if (locked) {
+    return '<div style="display:flex;gap:6px;align-items:center;min-height:36px;"><span class="tpl-freq-ro"><strong>' + esc(FREQ_LABEL[t.frequency] || 'חודשי') + '</strong>' +
+      (t.frequency !== 'monthly' ? ' <span style="font-size:0.72rem;color:var(--text2);">' + billMonthsShort(t.frequency, t.billingMonths) + '</span>' : '') + '</span>' +
+      '<button class="btn btn-secondary btn-sm tpl-act-sched" title="שינוי תדירות מחודש מסוים" onclick="openSchedModal(' + i + ')">📆</button></div>' + per + nx;
+  }
+  return billFreqSelect(t.frequency, 'accountTemplates[' + i + '].frequency=v;delete accountTemplates[' + i + '].billingMonths;renderAccountTemplates();') +
+    billRotationSelect(t.frequency, t.billingMonths, 'accountTemplates[' + i + '].billingMonths=v.slice();') +
+    (saved ? '<button class="btn btn-secondary btn-sm tpl-act-sched" style="margin-top:4px;" onclick="openSchedModal(' + i + ')">📆 מחודש מסוים</button>' : '') + per + nx;
+}
+
+// Member modal. A saved account linked to a definition FOLLOWS it (ח1-A) → read-only.
+function taFreqCell(acc, i) {
+  if (acc && acc.saved === true && acc.schedFollows === true) {
+    return '<div class="ta-freq-ro" style="min-height:36px;font-size:0.85rem;"><strong>' + esc(FREQ_LABEL[acc.frequency] || 'חודשי') + '</strong>' +
+      (acc.frequency !== 'monthly' ? ' <span style="font-size:0.72rem;color:var(--text2);">' + billMonthsShort(acc.frequency, acc.billingMonths) + '</span>' : '') +
+      '<div style="font-size:0.7rem;color:var(--text2);">' + (acc.schedSource === 'personal' ? 'תדירות אישית' : 'לפי הגדרת החשבון') + '</div></div>';
+  }
+  return billFreqSelect(acc && acc.frequency, 'taModalAccounts[' + i + '].frequency=v;delete taModalAccounts[' + i + '].billingMonths;renderTenantAccountsModal();') +
+    billRotationSelect(acc && acc.frequency, acc && acc.billingMonths, 'taModalAccounts[' + i + '].billingMonths=v.slice();');
+}
+
+// ── 📆 change the billing months from a month (definition scope; server plans) ──
+let schedCtx = null;   // { tplId, view, body, plan }
+let schedWired = false;
+
+function schedSegHtml(segs, cancelFrom) {
+  return (segs || []).map(function(sg){
+    const range = (sg.from === '2000-01' ? 'מההתחלה' : 'מ-' + amtFmtMonth(sg.from)) + (sg.to ? ' עד ' + amtFmtMonth(sg.to) : ' והלאה');
+    const tag = sg.current ? ' <span style="color:var(--accent);font-size:0.75rem;">● נוכחי</span>' : (sg.future ? ' <span style="color:var(--warn);font-size:0.75rem;">⏳ מתוכנן</span>' : '');
+    const cancel = (cancelFrom && sg.from === cancelFrom) ? ' <button class="btn btn-danger-soft btn-sm" data-sched-op="cancel">✖ בטל שינוי מתוכנן</button>' : '';
+    return '<div class="sched-seg" style="display:flex;justify-content:space-between;align-items:center;gap:8px;background:var(--surface2);border:1px solid var(--border);border-radius:8px;padding:8px 12px;font-size:0.85rem;">' +
+      '<span><strong>' + esc(FREQ_LABEL[sg.frequency] || '') + '</strong> <span style="color:var(--text2);font-size:0.75rem;">' + billMonthsShort(sg.frequency, sg.billingMonths) + '</span>' + tag + '</span>' +
+      '<span style="color:var(--text2);">' + range + cancel + '</span></div>';
+  }).join('');
+}
+
+function schedRenderView(v) {
+  if (!v || !v.ok) return { title: '📆 תדירות וחודשי חיוב', current: '<div style="color:var(--danger);">' + esc((v && v.error) || 'שגיאה') + '</div>', timeline: '', form: '' };
+  if (v.rotations) billRotationsCache = v.rotations;
+  const title = '📆 תדירות וחודשי חיוב — ' + esc(v.label) + ' (כל החברים)';
+  const current = 'בחודש הפעיל (' + amtFmtMonth(v.mkNow) + '): <strong style="color:var(--accent);">' + esc(FREQ_LABEL[v.frequency] || '') + '</strong> · ' + billMonthsShort(v.frequency, v.billingMonths) +
+    ' · משויך ל-' + v.linked + ' חברים' + (v.personal ? ' · ' + v.personal + ' עם תדירות אישית' : '');
+  let form = '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:end;">' +
+    '<div><label style="font-size:0.75rem;">תדירות</label><span id="schedFreqBox">' + billFreqSelect(v.frequency, 'schedSetFreq(v);') + '</span></div>' +
+    '<div><label style="font-size:0.75rem;">חודשי חיוב</label><span id="schedRotBox">' + (billRotationSelect(v.frequency, v.billingMonths, 'schedCtx.months=v.slice();') || '<div style="font-size:0.8rem;padding-top:8px;">כל חודש</div>') + '</span></div>' +
+    '<div><label style="font-size:0.75rem;">החל מחודש</label><input type="month" id="schedFrom" min="' + v.mkNow + '" max="' + v.maxMonth + '" value="' + (v.paidNow > 0 ? v.nextMonth : v.mkNow) + '" style="width:100%;"></div></div>' +
+    '<div id="schedErr" style="color:var(--danger);font-size:0.8rem;min-height:1em;"></div>';
+  if (v.personal > 0) form += '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;cursor:pointer;"><input type="checkbox" id="schedInclPersonal"> להחיל גם על ' + v.personal + ' חברים עם תדירות אישית</label>';
+  if (v.paidNow > 0) form += '<div style="font-size:0.78rem;color:var(--text2);">💡 ' + v.paidNow + ' חברים כבר שילמו את ' + amtFmtMonth(v.mkNow) + ' — שינוי שמשנה אם החודש הזה מחויב יכול להתחיל מ-' + amtFmtMonth(v.nextMonth) + '.</div>';
+  form += '<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;"><button class="btn btn-secondary btn-sm" data-sched-op="set">🔍 תצוגה מקדימה</button></div>' +
+    '<div style="font-size:0.75rem;color:var(--text2);margin-top:6px;">חודשים קודמים נשארים כפי שחויבו. הסכום הוא לכל חיוב (למשל דו-חודשי ₪200 = ₪200 כל חודשיים).</div>';
+  return { title: title, current: current, timeline: schedSegHtml(v.segments, v.cancelFrom), form: form };
+}
+
+function schedSetFreq(f) {
+  if (!schedCtx) return;
+  schedCtx.freq = f; schedCtx.months = null;
+  const box = document.getElementById('schedRotBox');
+  if (box) box.innerHTML = billRotationSelect(f, null, 'schedCtx.months=v.slice();') || '<div style="font-size:0.8rem;padding-top:8px;">כל חודש</div>';
+}
+
+function schedRenderPlan(p) {
+  const box = 'padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;line-height:1.7;';
+  if (!p) return '';
+  if (!p.ok) {
+    return '<div class="sched-plan-err" style="' + box + 'color:var(--danger);">⛔ ' + esc(p.error || 'שגיאה') +
+      (p.paidBlocked && p.paidBlocked.length ? '<div style="color:var(--text2);">כבר שילמו: ' + tplNames(p.paidBlocked, 20) + '</div>' : '') + '</div>';
+  }
+  if (p.noop) return '<div class="sched-plan" style="' + box + '">אין שינוי — זו כבר התדירות מהחודש הזה.</div>';
+  let h = '<div class="sched-plan" style="' + box + '">';
+  if (p.op === 'cancel') h += '✖ השינוי המתוכנן מ-' + amtFmtMonth(p.fromMonth) + ' יבוטל.';
+  else {
+    h += 'מ-' + amtFmtMonth(p.fromMonth) + ': <strong>' + esc(FREQ_LABEL[p.oldFrequency] || '') + ' (' + esc(p.oldLabel) + ') → ' + esc(FREQ_LABEL[p.frequency] || '') + ' (' + esc(p.newLabel) + ')</strong><br>' +
+      '👥 יעברו: <strong>' + p.follow.length + '</strong> חברים' + (p.follow.length ? ' (' + tplNames(p.follow, 15) + ')' : '') + '<br>' +
+      (p.personal.length ? '🔒 עם תדירות אישית — לא ישתנו: ' + p.personal.length + ' (' + tplNames(p.personal, 15) + ')<br>' : '') +
+      (p.replaced && p.replaced.length ? '⚠️ מחליף שינוי מתוכנן: ' + p.replaced.map(function(r){ return esc(r.label) + ' מ-' + amtFmtMonth(r.from); }).join(', ') + '<br>' : '');
+  }
+  return h + '</div><div style="font-size:0.78rem;color:var(--text2);margin:8px 0 4px;">אחרי השינוי:</div><div style="display:grid;gap:6px;">' + schedSegHtml(p.timelineAfter, null) + '</div>';
+}
+
+function openSchedModal(i) {
+  const t = accountTemplates[i];
+  if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
+  schedCtx = { tplId: t.id };
+  document.getElementById('schedTitle').textContent = '📆 תדירות וחודשי חיוב';
+  document.getElementById('schedCurrent').innerHTML = '<div style="color:var(--text2);">⏳ טוען…</div>';
+  ['schedTimeline', 'schedForm', 'schedPlan'].forEach(function(id){ document.getElementById(id).innerHTML = ''; });
+  document.getElementById('schedModal').style.display = 'flex';
+  document.getElementById('schedGo').onclick = function(){ schedCommit(); };
+  if (!schedWired) { document.getElementById('schedModal').addEventListener('click', schedOnClick); schedWired = true; }
+  schedLoad();
+}
+
+function closeSchedModal() {
+  document.getElementById('schedModal').style.display = 'none';
+  schedCtx = null;
+}
+
+async function schedLoad() {
+  if (!schedCtx) return;
+  let v;
+  try { const r = await fetch(API + '/billing-schedule?tpl=' + encodeURIComponent(schedCtx.tplId)); v = await r.json(); }
+  catch(e) { v = { ok: false, error: 'שגיאת רשת' }; }
+  if (!schedCtx) return;
+  schedCtx.view = v; schedCtx.plan = null; schedCtx.body = null;
+  schedCtx.freq = v && v.frequency; schedCtx.months = v && v.billingMonths ? v.billingMonths.slice() : null;
+  const h = schedRenderView(v);
+  document.getElementById('schedTitle').innerHTML = h.title;
+  document.getElementById('schedCurrent').innerHTML = h.current;
+  document.getElementById('schedTimeline').innerHTML = h.timeline;
+  document.getElementById('schedForm').innerHTML = h.form;
+  document.getElementById('schedPlan').innerHTML = '';
+}
+
+function schedOnClick(ev) {
+  const b = ev.target && ev.target.closest ? ev.target.closest('[data-sched-op]') : null;
+  if (!b) return;
+  schedPreview(b.getAttribute('data-sched-op'));
+}
+
+function schedBuildBody(op) {
+  const v = schedCtx.view || {};
+  if (op === 'cancel') return { op: 'cancel', fromMonth: v.cancelFrom, dryRun: true };
+  const from = (document.getElementById('schedFrom') || {}).value || '';
+  if (!from) return { error: 'בחרו חודש התחלה' };
+  const f = schedCtx.freq || 'monthly';
+  const inc = document.getElementById('schedInclPersonal');
+  const body = { op: 'set', frequency: f, fromMonth: from, includePersonal: !!(inc && inc.checked), dryRun: true };
+  if (f !== 'monthly' && schedCtx.months) body.billingMonths = schedCtx.months.slice();
+  return body;
+}
+
+async function schedPreview(op) {
+  if (!schedCtx) return;
+  const body = schedBuildBody(op);
+  const err = document.getElementById('schedErr');
+  if (body.error) { if (err) err.textContent = body.error; return; }
+  if (err) err.textContent = '';
+  let p;
+  try { const r = await fetch(API + '/account-templates/' + encodeURIComponent(schedCtx.tplId) + '/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }); p = await r.json(); }
+  catch(e) { p = { ok: false, error: 'שגיאת רשת' }; }
+  if (!schedCtx) return;
+  schedCtx.body = body; schedCtx.plan = (p && p.ok && !p.noop) ? p : null;
+  document.getElementById('schedPlan').innerHTML = schedRenderPlan(p);
+}
+
+async function schedCommit() {
+  if (!schedCtx || !schedCtx.plan || !schedCtx.body) { toast('הציגו תצוגה מקדימה תקינה קודם', 'error'); return; }
+  const p = schedCtx.plan;
+  const q = p.op === 'cancel' ? 'לבטל את השינוי המתוכנן מ-' + amtFmtMonth(p.fromMonth) + '?'
+          : 'לשנות ל' + (FREQ_LABEL[p.frequency] || '') + ' (' + p.newLabel + ') מ-' + amtFmtMonth(p.fromMonth) + ' עבור ' + p.follow.length + ' חברים?';
+  if (!confirm(q)) return;
+  const body = Object.assign({}, schedCtx.body, { dryRun: false });
+  try {
+    const r = await fetch(API + '/account-templates/' + encodeURIComponent(schedCtx.tplId) + '/schedule', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await r.json();
+    if (!d.ok) { document.getElementById('schedPlan').innerHTML = schedRenderPlan(d); return; }
+    toast(d.changed ? '✅ התדירות עודכנה מ-' + amtFmtMonth(d.fromMonth) : 'אין שינוי', 'success');
+  } catch(e) { toast('שגיאת רשת', 'error'); return; }
+  await schedLoad();
+  await loadAccountTemplates();
+  await loadAccountsStatus(); render();
+}
+
 function addAccountTemplateRow() {
   accountTemplates.push({ id: 'tpl_' + Date.now(), label: '', type: 'fixed', frequency: 'monthly', amount: 0 });
   renderAccountTemplates();
@@ -10255,7 +10472,8 @@ async function saveAccountTemplates() {
       toast('שגיאה: ' + d.error, 'error');
       // v2.14.74 — a refused delete (linked template) → restore the server's list
       // v2.14.76 — a refused amount edit (dated/linked) → restore too; the change goes through 📅
-      if (d.linked || d.amountLocked) loadAccountTemplates();
+      // v2.14.80 — a refused billing-months edit (dated/linked) → restore too; the change goes through 📆
+      if (d.linked || d.amountLocked || d.scheduleLocked) loadAccountTemplates();
     }
   } catch(e) { toast('שגיאת רשת', 'error'); }
 }
@@ -10598,7 +10816,7 @@ function closeTenantAccountsModal() {
 function renderTenantAccountsModal() {
   const el = document.getElementById('taModalList');
   if (!el) return;
-  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+  const freqLabel = { monthly: 'חודשי', bimonthly: 'דו-חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };   // v2.14.80 + bimonthly
 
   // ── שלב 1: סלוטי בעלים / שוכר ─────────────────────────────────
   const esc = (v) => String(v||'').replace(/"/g,'&quot;');
@@ -10639,12 +10857,7 @@ function renderTenantAccountsModal() {
         <div><label style="font-size:0.75rem;">שם החשבון</label>
           <input type="text" value="${acc.label||''}" onchange="taModalAccounts[${i}].label=this.value" style="width:100%;"></div>
         <div><label style="font-size:0.75rem;">סכום ₪</label>${taAmountCell(acc, i)}</div>
-        <div><label style="font-size:0.75rem;">תדירות</label>
-          <select onchange="taModalAccounts[${i}].frequency=this.value" style="width:100%;">
-            <option value="monthly" ${acc.frequency==='monthly'?'selected':''}>חודשי</option>
-            <option value="quarterly" ${acc.frequency==='quarterly'?'selected':''}>רבעוני</option>
-            <option value="yearly" ${acc.frequency==='yearly'?'selected':''}>שנתי</option>
-          </select></div>
+        <div><label style="font-size:0.75rem;">תדירות</label>${taFreqCell(acc, i)}</div>
         <button class="btn btn-danger-soft btn-sm" onclick="taRemoveRow(${i})" style="height:36px;margin-top:18px;">🗑️</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:8px;">
@@ -10711,7 +10924,7 @@ function addTenantAccountRow() {
       return;
     }
 
-    const freqLabel = { monthly:'חודשי', quarterly:'רבעוני', yearly:'שנתי' };
+    const freqLabel = { monthly: 'חודשי', bimonthly: 'דו-חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };   // v2.14.80 + bimonthly
     const opts = availableTemplates.map((t, i) =>
       `<option value="${i}">${t.label} — ₪${t.amount} (${freqLabel[t.frequency] || ''})</option>`
     ).join('');
@@ -10734,7 +10947,7 @@ function addTenantAccountRow() {
       if (!tpl) { bar.remove(); return; }
       const already = taModalAccounts.some(a => a.label.trim().toLowerCase() === tpl.label.trim().toLowerCase());
       if (already) { toast('חשבון זה כבר קיים לדייר', 'error'); bar.remove(); return; }
-      taModalAccounts.push({ id: 'acc_' + Date.now(), templateId: tpl.id, label: tpl.label, type: tpl.type, frequency: tpl.frequency, amount: tpl.amount, openingDebt: 0, matchKeywords: '', payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true });
+      taModalAccounts.push({ id: 'acc_' + Date.now(), templateId: tpl.id, label: tpl.label, type: tpl.type, frequency: tpl.frequency, billingMonths: tpl.billingMonths, amount: tpl.amount, openingDebt: 0, matchKeywords: '', payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true });
       bar.remove();
       renderTenantAccountsModal();
     });
@@ -11543,7 +11756,7 @@ function showCollectionBreakdown() {
 function renderExtraAccountsCell(tenantId) {
   const accs = accountsStatus[String(tenantId)];
   if (!accs || !accs.length) return '';
-  const freqLabel = { monthly: 'חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };
+  const freqLabel = { monthly: 'חודשי', bimonthly: 'דו-חודשי', quarterly: 'רבעוני', yearly: 'שנתי' };   // v2.14.80 + bimonthly
   let html = '<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">';
   for (const acc of accs) {
     if (acc.active === false) continue;

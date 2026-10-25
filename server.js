@@ -3277,7 +3277,7 @@ function crExtraMonth(d, t, acc, M, c) {
   if (!acc || acc.active === false) return null;
   const tid = String(t.id);
   const mon = Number(M.slice(5));
-  const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
+  const billing = extraBillsInMonth(d, acc, M);   // v2.14.80 (ה6) — dated billing months, never today's
   const amount = extraAmountForMonth(d, acc, M);   // v2.14.76 (1ג) — the month's dated amount, never today's
   const useSentLog = !c.closedExtra.has(M) && M >= c.sentLogFloor && M <= c.mkNow;
   let paid = 0, source = null, frozen = null;
@@ -3647,6 +3647,330 @@ function amountTimelineView(d, q) {
     segments: extraAmountTimeline(d, acc, tpl), cancelFrom: extraCancellable(acc.amountTariffs, mkNow) });
 }
 
+// ════════════════════════════════════════════════════════════════════════════════════
+// v2.14.80 (ה6) — BILLING MONTHS + BIMONTHLY for extra accounts (Tal, 2026-10-25, ח1–ח7)
+// ח1-A the schedule lives on the DEFINITION; a linked member follows it (a change in
+//      Settings reaches every member). An unlinked account keeps its own fields.
+// ח2-A a rotation per frequency: bimonthly odd/even · quarterly one of 3 · yearly any
+//      month. Stored as `billingMonths` (sorted 1–12); absent/invalid = today's default.
+// ח3-A bimonthly default = ODD months (spec: period 8-9 is billed in September).
+// ח4-A a change is DATED — `billingSchedule: [{from:'YYYY-MM', frequency, billingMonths}]`
+//      (or {from, follow:true} on a member = "the definition from here on"); the active
+//      or a future month, never a closed one → the report never changes the past.
+// ח5-A ONE predicate `extraBillsInMonth` — split, report and the PROTECTED close read it.
+// Legacy data (no billingMonths, no billingSchedule) resolves EXACTLY as before:
+// quarterly → 3/6/9/12, yearly → January, anything else → every month.
+// The amount of a non-monthly account is the amount PER BILLING PERIOD (unchanged).
+// ════════════════════════════════════════════════════════════════════════════════════
+const BILL_FREQS = ['monthly', 'bimonthly', 'quarterly', 'yearly'];
+
+// Every valid rotation of a frequency (arrays of month numbers 1–12, ascending).
+function billRotations(freq) {
+  const all = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+  if (freq === 'bimonthly') return [[1, 3, 5, 7, 9, 11], [2, 4, 6, 8, 10, 12]];
+  if (freq === 'quarterly') return [[1, 4, 7, 10], [2, 5, 8, 11], [3, 6, 9, 12]];
+  if (freq === 'yearly') return all.map(m => [m]);
+  return [all];
+}
+
+function billDefaultMonths(freq) {
+  if (freq === 'bimonthly') return [1, 3, 5, 7, 9, 11];
+  if (freq === 'quarterly') return [3, 6, 9, 12];
+  if (freq === 'yearly') return [1];
+  return [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+}
+
+// The rotation of `freq` equal to `months`, or null.
+function billMatchRotation(freq, months) {
+  if (!Array.isArray(months) || !months.length) return null;
+  const want = JSON.stringify(Array.from(new Set(months.map(Number))).sort((a, b) => a - b));
+  return billRotations(freq).find(r => JSON.stringify(r) === want) || null;
+}
+
+// {frequency, billingMonths} for any stored pair (legacy-safe; never throws).
+function billNormalize(freq, months) {
+  const f = ['monthly', 'bimonthly', 'quarterly', 'yearly'].includes(freq) ? freq : 'monthly';   // = BILL_FREQS (inline: extracted by tests)
+  const rot = f === 'monthly' ? null : billMatchRotation(f, months);
+  return { frequency: f, billingMonths: (rot || billDefaultMonths(f)).slice() };
+}
+
+// Latest schedule entry starting at/before mk, or null.
+function billEntryAt(schedule, mk) {
+  if (!Array.isArray(schedule) || !schedule.length) return null;
+  let best = null;
+  for (const e of schedule) {
+    if (!e || !/^\d{4}-\d{2}$/.test(String(e.from || ''))) continue;
+    if (String(e.from) > String(mk)) continue;
+    if (!best || String(e.from) > String(best.from)) best = e;
+  }
+  return best;
+}
+
+// A definition's schedule for a month (its dated schedule, else its own fields).
+function tplScheduleAt(tpl, mk) {
+  if (!tpl) return billNormalize('monthly');
+  const e = billEntryAt(tpl.billingSchedule, mk);
+  if (e && e.follow !== true) return billNormalize(e.frequency, e.billingMonths);
+  return billNormalize(tpl.frequency, tpl.billingMonths);
+}
+
+// THE schedule of an extra account for a month: personal › definition › own fields.
+function extraScheduleAt(d, acc, mk) {
+  if (!acc) return Object.assign(billNormalize('monthly'), { source: 'fixed' });
+  const own = billEntryAt(acc.billingSchedule, mk);
+  if (own && own.follow !== true) return Object.assign(billNormalize(own.frequency, own.billingMonths), { source: 'personal' });
+  const tpl = accTemplateFor(acc, (d && d.accountTemplates) || []);
+  if (tpl) {
+    const e = billEntryAt(tpl.billingSchedule, mk);
+    if (e && e.follow !== true) return Object.assign(billNormalize(e.frequency, e.billingMonths), { source: 'definition' });
+  }
+  return Object.assign(billNormalize(acc.frequency, acc.billingMonths), { source: 'fixed' });
+}
+
+// ⭐ Does the account BILL in month mk? (split, collection report, PROTECTED close)
+function extraBillsInMonth(d, acc, mk) {
+  const mon = Number(String(mk).slice(5, 7));
+  return extraScheduleAt(d, acc, mk).billingMonths.includes(mon);
+}
+
+// The first billing month AFTER mk (≤ 24 months ahead), or null.
+function extraNextBillingMonth(d, acc, mk) {
+  for (let i = 1; i <= 24; i++) {
+    const m = crMonthAdd(mk, i);
+    if (extraBillsInMonth(d, acc, m)) return m;
+  }
+  return null;
+}
+
+// "ינואר · מרץ · …" (monthly → "כל חודש").
+function billMonthsLabel(spec) {
+  if (!spec || spec.frequency === 'monthly') return 'כל חודש';
+  return (spec.billingMonths || []).map(m => HEBREW_MONTHS[m - 1]).join(' · ');
+}
+
+// New schedule: entries starting at/after fromMk are replaced by `entry` (from fromMk).
+// An entry equal to the one in force just before fromMk is not added (no-op change).
+function billScheduleFrom(schedule, entry, fromMk) {
+  const out = (Array.isArray(schedule) ? schedule : []).filter(e => e && String(e.from) < String(fromMk)).map(e => Object.assign({}, e));
+  out.sort((a, b) => String(a.from) < String(b.from) ? -1 : 1);
+  const add = entry && entry.follow === true ? { from: fromMk, follow: true }
+    : Object.assign({ from: fromMk }, billNormalize(entry.frequency, entry.billingMonths));
+  const prev = out[out.length - 1];
+  const same = prev && (add.follow === true ? prev.follow === true
+    : prev.follow !== true && JSON.stringify(billNormalize(prev.frequency, prev.billingMonths)) === JSON.stringify(billNormalize(add.frequency, add.billingMonths)));
+  if (!same) out.push(add);
+  return out;
+}
+
+// ח4-A — a schedule change starts in the active month or a future month (≤ 24), never a closed one.
+function billValidateFromMonth(d, fromMk) {
+  const mkNow = getMonthKey((d && d.config) || {});
+  const m = String(fromMk || '');
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(m)) return { ok: false, error: 'בחרו חודש התחלה' };
+  if (m < mkNow) return { ok: false, error: 'לא ניתן לשנות תדירות לחודש שעבר — העבר לא משתנה. בחרו את החודש הפעיל או חודש עתידי.' };
+  if (m > crMonthAdd(mkNow, 24)) return { ok: false, error: 'ניתן לתכנן שינוי עד שנתיים קדימה' };
+  if (Array.isArray(d && d.closedMonthsExtra) && d.closedMonthsExtra.includes(m)) return { ok: false, error: 'החודש כבר נסגר — העבר לא משתנה' };
+  return { ok: true, mkNow };
+}
+
+// Display segments of a definition's schedule (CONSUMED by the page).
+function tplScheduleTimeline(tpl, mkNow) {
+  const starts = ['2000-01'].concat(((tpl && tpl.billingSchedule) || []).filter(e => e && e.from).map(e => String(e.from)));
+  const months = Array.from(new Set(starts)).sort();
+  const segs = [];
+  months.forEach(m => {
+    const s = tplScheduleAt(tpl, m);
+    const last = segs[segs.length - 1];
+    if (last && last.frequency === s.frequency && JSON.stringify(last.billingMonths) === JSON.stringify(s.billingMonths)) return;
+    segs.push({ from: m, frequency: s.frequency, billingMonths: s.billingMonths, label: billMonthsLabel(s) });
+  });
+  segs.forEach((s, i) => {
+    s.to = segs[i + 1] ? crMonthAdd(segs[i + 1].from, -1) : null;
+    s.current = s.from <= mkNow && (s.to === null || s.to >= mkNow);
+    s.future = s.from > mkNow;
+  });
+  return segs;
+}
+
+// A planned change that can be cancelled: the last entry, starting after the active month.
+function tplScheduleCancellable(tpl, mkNow) {
+  const list = ((tpl && tpl.billingSchedule) || []).filter(e => e && e.from);
+  if (list.length < 2) return null;
+  const last = list.slice().sort((a, b) => String(a.from) < String(b.from) ? -1 : 1).pop();
+  return String(last.from) > mkNow ? String(last.from) : null;
+}
+
+// ── 📆 change for everyone on the definition (POST /api/account-templates/:id/schedule) ──
+// body: {op:'set', frequency, billingMonths, fromMonth, includePersonal} | {op:'cancel', fromMonth}
+function planTemplateSchedule(d, tplId, body) {
+  body = body || {};
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'שינוי תדירות זמין לחשבון קבוע בלבד' };
+  const op = body.op === 'cancel' ? 'cancel' : 'set';
+  const v = billValidateFromMonth(d, body.fromMonth);
+  if (!v.ok) return v;
+  const mkNow = v.mkNow, fromMonth = String(body.fromMonth);
+  const tplDated = Array.isArray(tpl.billingSchedule) && tpl.billingSchedule.length > 0;
+  const base = tplDated ? tpl.billingSchedule : [Object.assign({ from: '2000-01' }, billNormalize(tpl.frequency, tpl.billingMonths))];
+  let spec = null, after;
+  if (op === 'cancel') {
+    if (!tplDated || tplScheduleCancellable(tpl, mkNow) !== fromMonth) return { ok: false, error: 'אין שינוי מתוכנן שמתחיל ב-' + extraFmtMonth(fromMonth) };
+    after = tpl.billingSchedule.filter(e => !(e && String(e.from) === fromMonth)).map(e => Object.assign({}, e));
+  } else {
+    if (!BILL_FREQS.includes(body.frequency)) return { ok: false, error: 'תדירות לא תקינה' };
+    if (body.frequency !== 'monthly' && body.billingMonths != null && !billMatchRotation(body.frequency, body.billingMonths)) return { ok: false, error: 'חודשי החיוב לא תקינים לתדירות הזו' };
+    spec = billNormalize(body.frequency, body.billingMonths);
+    after = billScheduleFrom(base, spec, fromMonth);
+  }
+  const virtTpl = Object.assign({}, tpl, { billingSchedule: after });
+  const replaced = (tplDated && op === 'set') ? tpl.billingSchedule.filter(e => e && String(e.from) >= fromMonth)
+    .map(e => ({ from: String(e.from), label: billMonthsLabel(billNormalize(e.frequency, e.billingMonths)), frequency: billNormalize(e.frequency).frequency }))
+    .filter(r => !(r.from === fromMonth && spec && r.frequency === spec.frequency && r.label === billMonthsLabel(spec))) : [];
+  const includePersonal = body.includePersonal === true;
+  const tplLegacy = JSON.stringify(billNormalize(tpl.frequency, tpl.billingMonths));
+  const follow = [], personal = [], seedPersonal = [], revertPersonal = [], paidBlocked = [];
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (!acc) continue;
+    const tid = String(t.id), name = t.name || tid;
+    const hasOwn = Array.isArray(acc.billingSchedule) && acc.billingSchedule.length > 0;
+    const own = hasOwn ? billEntryAt(acc.billingSchedule, fromMonth) : null;
+    let isPersonal;
+    if (hasOwn) isPersonal = !!(own && own.follow !== true);
+    else isPersonal = !tplDated && JSON.stringify(billNormalize(acc.frequency, acc.billingMonths)) !== tplLegacy;
+    if (!hasOwn && isPersonal) seedPersonal.push(tid);
+    const fromSpec = extraScheduleAt(d, acc, fromMonth);
+    if (isPersonal && !(includePersonal && op === 'set')) { personal.push({ tid, name, label: billMonthsLabel(fromSpec), frequency: fromSpec.frequency }); continue; }
+    if (isPersonal) revertPersonal.push(tid);
+    const toSpec = tplScheduleAt(virtTpl, fromMonth);
+    follow.push({ tid, name, from: billMonthsLabel(fromSpec), to: billMonthsLabel(toSpec), suspended: acc.suspended === true });
+    if (fromMonth === mkNow && fromSpec.billingMonths.includes(Number(mkNow.slice(5))) !== toSpec.billingMonths.includes(Number(mkNow.slice(5)))
+        && extraPaidInMonth(d, tid, acc, mkNow)) paidBlocked.push({ tid, name });
+  }
+  if (paidBlocked.length) {
+    return { ok: false, code: 'paidThisMonth', paidBlocked, suggest: crMonthAdd(mkNow, 1),
+      error: paidBlocked.length + ' חברים כבר שילמו את ' + extraFmtMonth(mkNow) + ', והשינוי משנה אם החודש הזה מחויב — אי אפשר לשנות את החודש הפעיל. בחרו ' + extraFmtMonth(crMonthAdd(mkNow, 1)) + ' או חודש מאוחר יותר.' };
+  }
+  const oldSpec = tplScheduleAt(tpl, fromMonth);
+  const noop = (op === 'set' && JSON.stringify(oldSpec) === JSON.stringify(spec) && !replaced.length && !revertPersonal.length)
+    || (tplDated && JSON.stringify(after) === JSON.stringify(tpl.billingSchedule) && !seedPersonal.length && !revertPersonal.length);
+  return { ok: true, op, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, fromMonth, noop,
+    frequency: spec ? spec.frequency : null, billingMonths: spec ? spec.billingMonths : null,
+    newLabel: spec ? billMonthsLabel(spec) : null, oldLabel: billMonthsLabel(oldSpec), oldFrequency: oldSpec.frequency,
+    seedTemplate: !tplDated, seedPersonal, revertPersonal, includePersonal, replaced, follow, personal, scheduleAfter: after,
+    timelineAfter: tplScheduleTimeline(virtTpl, mkNow) };
+}
+
+function commitTemplateSchedule(d, plan) {
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === plan.tplId);
+  if (!tpl || !plan.ok || plan.noop) return { changed: false, members: 0 };
+  const mkNow = plan.mkNow;
+  const linked = [];
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (acc) linked.push({ t, acc });
+  }
+  // Seed BEFORE the definition gets a schedule: a member on a different rotation keeps it.
+  linked.forEach(({ t, acc }) => {
+    if (plan.seedPersonal.includes(String(t.id)) && !(Array.isArray(acc.billingSchedule) && acc.billingSchedule.length)) {
+      acc.billingSchedule = [Object.assign({ from: '2000-01' }, billNormalize(acc.frequency, acc.billingMonths))];
+    }
+    if (acc.templateId !== tpl.id) acc.templateId = tpl.id;
+  });
+  if (!(Array.isArray(tpl.billingSchedule) && tpl.billingSchedule.length)) {
+    tpl.billingSchedule = [Object.assign({ from: '2000-01' }, billNormalize(tpl.frequency, tpl.billingMonths))];
+  }
+  tpl.billingSchedule = plan.op === 'cancel'
+    ? tpl.billingSchedule.filter(e => !(e && String(e.from) === plan.fromMonth))
+    : billScheduleFrom(tpl.billingSchedule, { frequency: plan.frequency, billingMonths: plan.billingMonths }, plan.fromMonth);
+  linked.forEach(({ t, acc }) => {
+    if (plan.revertPersonal.includes(String(t.id))) acc.billingSchedule = billScheduleFrom(acc.billingSchedule, { follow: true }, plan.fromMonth);
+  });
+  // Mirrors of the active month (display / old readers); money reads the schedule.
+  const tNow = tplScheduleAt(tpl, mkNow);
+  tpl.frequency = tNow.frequency; tpl.billingMonths = tNow.billingMonths;
+  linked.forEach(({ acc }) => { const s = extraScheduleAt(d, acc, mkNow); acc.frequency = s.frequency; acc.billingMonths = s.billingMonths; });
+  return { changed: true, members: plan.follow.length };
+}
+
+// Read-only view for the 📆 modal (GET /api/billing-schedule?tpl=).
+function tplScheduleView(d, tplId) {
+  const templates = d.accountTemplates || [];
+  const tpl = templates.find(t => t && t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  const mkNow = getMonthKey((d && d.config) || {});
+  const now = tplScheduleAt(tpl, mkNow);
+  let linked = 0, personal = 0, paidNow = 0;
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (!acc) continue;
+    linked++;
+    const hasOwn = Array.isArray(acc.billingSchedule) && acc.billingSchedule.length > 0;
+    const own = hasOwn ? billEntryAt(acc.billingSchedule, mkNow) : null;
+    const isPersonal = hasOwn ? !!(own && own.follow !== true)
+      : !(Array.isArray(tpl.billingSchedule) && tpl.billingSchedule.length) && JSON.stringify(billNormalize(acc.frequency, acc.billingMonths)) !== JSON.stringify(billNormalize(tpl.frequency, tpl.billingMonths));
+    if (isPersonal) personal++;
+    if (extraPaidInMonth(d, t.id, acc, mkNow)) paidNow++;
+  }
+  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, nextMonth: crMonthAdd(mkNow, 1), maxMonth: crMonthAdd(mkNow, 24),
+    frequency: now.frequency, billingMonths: now.billingMonths, labelNow: billMonthsLabel(now), linked, personal, paidNow,
+    rotations: { bimonthly: billRotations('bimonthly'), quarterly: billRotations('quarterly'), yearly: billRotations('yearly') },
+    segments: tplScheduleTimeline(tpl, mkNow), cancelFrom: tplScheduleCancellable(tpl, mkNow) };
+}
+
+
+// ── Save-path helpers (one name per route, so the routes stay small) ──
+// POST /api/account-templates: validation of frequency + rotation. null = OK.
+function tplBillingInvalid(t) {
+  if (!['monthly', 'bimonthly', 'quarterly', 'yearly'].includes(t.frequency)) return 'תדירות לא תקינה: ' + t.frequency;
+  if (t.frequency !== 'monthly' && t.billingMonths != null && !billMatchRotation(t.frequency, t.billingMonths)) return 'חודשי החיוב לא תקינים: ' + crAccountKey(t.label);
+  return null;
+}
+
+// Stored form: display fields dropped; billingMonths kept only when not the default rotation.
+function tplBillingStore(t) {
+  delete t.billingLabel; delete t.schedDated; delete t.nextSched;
+  const nb = billNormalize(t.frequency, t.billingMonths);
+  if (nb.frequency === 'monthly' || JSON.stringify(nb.billingMonths) === JSON.stringify(billDefaultMonths(nb.frequency))) delete t.billingMonths;
+  else t.billingMonths = nb.billingMonths;
+  return t;
+}
+
+// ח4-A — a definition that is DATED or linked to members changes its billing months only
+// through 📆; the stored schedule is kept (never from the page) and the fields mirror it.
+// Returns an error response object, or null.
+function tplBillingKeep(old, t, linkedCount, mk) {
+  if (Array.isArray(old.billingSchedule) && old.billingSchedule.length) t.billingSchedule = old.billingSchedule;
+  const sWas = JSON.stringify(tplScheduleAt(old, mk)), sSent = JSON.stringify(billNormalize(t.frequency, t.billingMonths));
+  if (sWas !== sSent && (t.billingSchedule || linkedCount > 0)) {
+    return { ok: false, error: 'התדירות של "' + crAccountKey(old.label) + '" משתנה דרך 📆 (מחודש מסוים) — כך החודשים הקודמים נשארים כפי שחויבו.', scheduleLocked: t.id };
+  }
+  if (t.billingSchedule) { const sN = tplScheduleAt(t, mk); t.frequency = sN.frequency; t.billingMonths = sN.billingMonths; tplBillingStore(t); }
+  return null;
+}
+
+// POST /api/tenant-accounts: ח1-A — a SAVED account linked to a definition keeps its stored
+// frequency / billing months (it follows the definition); an unlinked or new account takes
+// what was sent (normalized; bimonthly allowed). Its dated schedule is always kept.
+function extraBillingFieldsForSave(prev, sent, linked) {
+  const src = (prev && linked) ? prev : (sent || {});
+  const nb = billNormalize(src.frequency || 'monthly', src.billingMonths);
+  const out = { frequency: src.frequency || 'monthly' };
+  if (nb.frequency !== 'monthly' && JSON.stringify(nb.billingMonths) !== JSON.stringify(billDefaultMonths(nb.frequency))) out.billingMonths = nb.billingMonths;
+  if (prev && Array.isArray(prev.billingSchedule) && prev.billingSchedule.length) out.billingSchedule = prev.billingSchedule;
+  return out;
+}
+
+// GET /api/tenant-accounts: the active month's billing months (resolved) + source.
+function extraBillingView(d, acc, mk) {
+  const s = extraScheduleAt(d, acc, mk);
+  return { frequency: s.frequency, billingMonths: s.billingMonths, billingLabel: billMonthsLabel(s), schedSource: s.source,
+    schedFollows: !!accTemplateFor(acc, (d && d.accountTemplates) || []), nextBilling: extraNextBillingMonth(d, acc, mk) };
+}
+
 // ── v2.14.64 — extra-account split AS OF NOW: THE single source for extras (0c) ──
 // Every screen/message that shows an extra account's money consumes THIS (report,
 // WA {חשבונות}, auto-send decision, חייבים חריגים detail, accounts-status, tenant-
@@ -3674,8 +3998,7 @@ function extraAccountSplit(d, t, acc, mkNow, emNow) {
   });
   const prior = r2(banked + histDebt);
   const amount = extraAmountForMonth(d, acc, mkNow);   // v2.14.76 (1ג) — dated amount of the active month
-  const mon = Number(String(mkNow).slice(5));
-  const billing = !(acc.frequency === 'quarterly' && mon % 3 !== 0) && !(acc.frequency === 'yearly' && mon !== 1);
+  const billing = extraBillsInMonth(d, acc, mkNow);   // v2.14.80 (ה6) — billing months (bimonthly / rotation / dated)
   const closedNow = Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(mkNow);
   let charge = 0, paidNow = 0, paidFlag = false;
   if (!closedNow) {
@@ -8137,7 +8460,10 @@ function portalAccountsView(d, tenant, mk, em) {
         amount: parseFloat(r.amount) || 0, paidAmount: isFinite(pa) ? pa : null,
         date: r.date || '', type: r.type || '', typeLabel: typeLabel(r.type), payerName: r.payerName || '' };
     });
-    out.push({ id: acc.id, label: acc.label || 'חשבון נוסף', frequency: acc.frequency || 'monthly',
+    // v2.14.80 (ה6, ח7-A) — resolved frequency + the next billing month (server text).
+    const sP = extraScheduleAt(d, acc, mk), nbP = extraNextBillingMonth(d, acc, mk);
+    out.push({ id: acc.id, label: acc.label || 'חשבון נוסף', frequency: sP.frequency,
+      billingLabel: billMonthsLabel(sP), nextBilling: nbP, nextBillingLabel: nbP ? HEBREW_MONTHS[Number(nbP.slice(5)) - 1] + ' ' + nbP.slice(0, 4) : '',
       suspended: acc.suspended === true, status: sp.status, charge: sp.charge, paidNow: sp.paidNow,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow,
       creditLeft: sp.creditLeft, creditApplied: sp.creditApplied, history });
@@ -8304,7 +8630,7 @@ app.get('/api/portal/:token', (req, res) => {
     ok: true,
     tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId),
       extraAccounts: (tenant.extraAccounts || []).map(a => ({
-        id: a.id, label: a.label, amount: extraAmountForMonth(d, a, getMonthKey(d.config || {})), frequency: a.frequency, openingDebt: a.openingDebt || 0, active: a.active !== false,
+        id: a.id, label: a.label, amount: extraAmountForMonth(d, a, getMonthKey(d.config || {})), frequency: extraScheduleAt(d, a, getMonthKey(d.config || {})).frequency, openingDebt: a.openingDebt || 0, active: a.active !== false,
         suspended: a.suspended === true
       }))
     },
@@ -10315,6 +10641,10 @@ function accFromTemplate(tpl, tenant, mk, opts) {
     frequency: tpl.frequency || 'monthly', amount, openingDebt: 0, matchKeywords: '', formulaNote: '',
     payer: tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner', active: true
   };
+  // v2.14.80 (ה6) — the definition's billing months for the start month (a dated
+  // definition is followed anyway; this keeps the member's own fields consistent).
+  { const sF = tplScheduleAt(tpl, mk); acc.frequency = sF.frequency;
+    if (sF.frequency !== 'monthly' && JSON.stringify(sF.billingMonths) !== JSON.stringify(billDefaultMonths(sF.frequency))) acc.billingMonths = sF.billingMonths; }
   // v2.14.76 (1ג) — on a DATED definition, a different amount is this member's own
   // amount (from the start, like a new main-account tariff); equal = follows the definition.
   if (Array.isArray(tpl.amountTariffs) && tpl.amountTariffs.length && amount !== base) {
@@ -10762,9 +11092,19 @@ app.get('/api/account-templates', authMiddleware, (req, res) => {
     const nx = extraAmountTimeline(d, null, t).find(x => x.future);
     return Object.assign({}, t, { linked: countLinkedToTemplate(d, t, tpls), pending: ps.ok ? ps.start.length : 0,
       amount: Math.round(tplAmountForMonth(t, mkT) * 100) / 100, dated: Array.isArray(t.amountTariffs) && t.amountTariffs.length > 0,
-      nextChange: nx ? { from: nx.from, rate: nx.rate } : null });
+      nextChange: nx ? { from: nx.from, rate: nx.rate } : null },
+      // v2.14.80 (ה6) — display-only: the active month's billing months + the next planned
+      // schedule change; schedLocked = changes only through 📆 (dated or linked to members).
+      (() => {
+        const sNow = tplScheduleAt(t, mkT);
+        const nxS = tplScheduleTimeline(t, mkT).find(x => x.future);
+        const schedDated = Array.isArray(t.billingSchedule) && t.billingSchedule.length > 0;
+        return { frequency: sNow.frequency, billingMonths: sNow.billingMonths, billingLabel: billMonthsLabel(sNow), schedDated,
+          nextSched: nxS ? { from: nxS.from, label: nxS.label, frequency: nxS.frequency } : null };
+      })());
   });
-  res.json({ ok: true, templates: out });
+  res.json({ ok: true, templates: out,
+    billingRotations: { bimonthly: billRotations('bimonthly'), quarterly: billRotations('quarterly'), yearly: billRotations('yearly') } });
 });
 
 // POST /api/account-templates — save building-level account templates
@@ -10775,7 +11115,8 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
   for (const t of templates) {
     if (!t.id || !t.label) return res.json({ ok: false, error: 'כל תבנית חייבת id ו-label' });
     if (!['fixed', 'formula'].includes(t.type)) return res.json({ ok: false, error: 'סוג חשבון לא תקין: ' + t.type });
-    if (!['monthly', 'quarterly', 'yearly'].includes(t.frequency)) return res.json({ ok: false, error: 'תדירות לא תקינה: ' + t.frequency });
+    const badB = tplBillingInvalid(t);   // v2.14.80 (ה6) — + bimonthly, + a valid rotation
+    if (badB) return res.json({ ok: false, error: badB });
   }
   // ── v2.14.74 (1א) ─────────────────────────────────────────────
   // (a) names unique — the lazy name-link needs it; (b) flags sanitized;
@@ -10793,6 +11134,8 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
   for (const t of templates) {
     const old = (d.accountTemplates || []).find(p => p && p.id === t.id);
     delete t.amountTariffs;
+    delete t.billingSchedule;                                              // v2.14.80 (ה6) — saved only via /schedule
+    tplBillingStore(t);                                                    // display fields dropped; default rotation not stored
     delete t.bankMapping;                                                  // v2.14.78 (1ה) — saved only via /bank-mapping
     if (old && old.bankMapping) t.bankMapping = old.bankMapping;
     if (!old) continue;
@@ -10803,6 +11146,10 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
       return res.json({ ok: false, error: 'הסכום של "' + crAccountKey(old.label) + '" משתנה דרך 📅 סכום מתוארך (מחודש מסוים) — כך החודשים הקודמים נשארים בסכום שלהם.', amountLocked: t.id });
     }
     if (t.amountTariffs) t.amount = was;                                 // mirror of the active month
+    // v2.14.80 (ה6, ח4-A) — billing months of a definition that is DATED or linked to members
+    // change only through 📆 (from a month) — a silent edit here would rewrite the report's past.
+    const lockB = tplBillingKeep(old, t, countLinkedToTemplate(d, old, d.accountTemplates || []), mkS);
+    if (lockB) return res.json(lockB);
   }
   templates.forEach(t => {
     delete t.linked; delete t.pending; delete t.dated; delete t.nextChange;   // display-only (GET), never stored
@@ -10904,6 +11251,9 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     const hasMoney = accHasMoney(d, tid, acc);   // v2.14.76 (1ג) — amount = the active month's dated amount
     const dated = { amount: Math.round(extraAmountForMonth(d, acc, mkA) * 100) / 100, amountSource: extraAmountSource(d, acc, mkA), saved: true,
       nextChange: (() => { const tl = extraAmountTimeline(d, acc, accTemplateFor(acc, d.accountTemplates || [])); const f = tl.find(x => x.future); return f ? { from: f.from, rate: f.rate } : null; })() };
+    // v2.14.80 (ה6) — the active month's billing months (resolved) + where they come from.
+    // A LINKED account follows the definition (ח1-A) → the modal shows it read-only.
+    Object.assign(dated, extraBillingView(d, acc, mkA));
     if (!sp) return { ...acc, ...dated, totalDebt: 0, historyDebt, hasMoney };
     return { ...acc, ...dated, totalDebt: sp.owedPrior, historyDebt, hasMoney,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,
@@ -10941,7 +11291,10 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
       ...(tplA ? { templateId: tplA.id } : {}),
       label:       acc.label,
       type:        acc.type || 'fixed',
-      frequency:   acc.frequency || 'monthly',
+      // v2.14.80 (ה6, ח1-A) — a SAVED account linked to a definition follows the definition:
+      // its own frequency / billing months are kept as stored (the modal shows them read-only).
+      // An unlinked or new account takes what was sent (normalized; bimonthly allowed).
+      ...extraBillingFieldsForSave(prev, acc, !!tplA),
       // v2.14.76 (1ג, ג6-A) — a SAVED account's amount changes only through 📅 (by month);
       // this form keeps the stored amount + dated history. A NEW account takes the sent amount.
       amount:      prev ? (parseFloat(prev.amount) || 0) : (parseFloat(acc.amount) || 0),
@@ -11011,6 +11364,25 @@ app.post('/api/account-templates/:id/tariff', authMiddleware, (req, res) => {
   const plan = planTemplateTariff(d, req.params.id, b);
   if (!plan.ok || b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
   const r = commitTemplateTariff(d, plan);
+  if (r.changed) saveTenantData(req.user.tenantId, { accountTemplates: d.accountTemplates, tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, changed: r.changed, members: r.members, fromMonth: plan.fromMonth });
+});
+
+// ── v2.14.80 (ה6) — 📆 billing months by month (definition scope) ──────────────────────
+// GET /api/billing-schedule?tpl=<id> — read-only view for the page.
+app.get('/api/billing-schedule', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json(tplScheduleView(d, String((req.query || {}).tpl || '')));
+});
+
+// POST /api/account-templates/:id/schedule — dryRun DEFAULT; dryRun:false RE-PLANS against
+// the stored data, then writes accountTemplates + tenants (definitions only — no money).
+app.post('/api/account-templates/:id/schedule', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planTemplateSchedule(d, req.params.id, b);
+  if (!plan.ok || b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  const r = commitTemplateSchedule(d, plan);
   if (r.changed) saveTenantData(req.user.tenantId, { accountTemplates: d.accountTemplates, tenants: d.tenants });
   res.json({ ok: true, dryRun: false, changed: r.changed, members: r.members, fromMonth: plan.fromMonth });
 });
@@ -11118,7 +11490,7 @@ app.get('/api/accounts-status', authMiddleware, (req, res) => {
       const sp = extraAccountSplit(d, tenant, acc, mk, em);
       return {
         id: acc.id, label: acc.label, amount: extraAmountForMonth(d, acc, mk),   // v2.14.76 — active month's dated amount
-        frequency: acc.frequency, active: acc.active !== false,
+        frequency: extraScheduleAt(d, acc, mk).frequency, active: acc.active !== false,   // v2.14.80 (ה6) — resolved
         suspended: acc.suspended === true,
         paidThisMonth, totalDebt: sp ? sp.owedPrior : 0, historyDebt, openingDebt,
         owedCurrent: sp ? sp.owedCurrent : 0, owedPrior: sp ? sp.owedPrior : 0, owedNow: sp ? sp.owedNow : 0,
@@ -11150,9 +11522,7 @@ function closeExtraAccountsUnpaid(d, tenant, prevKey) {
     // Main gets the same outcome from the live derivation (calcShortfallFromSentLog);
     // extraAccountSplit reads only the open month, so for an extra account the credit
     // must be banked HERE. Design 2C kept: each account is suspended independently.
-    const [year, month] = prevKey.split('-').map(Number);
-    const billing = !(acc.frequency === 'quarterly' && (month % 3 !== 0))   // bill on 3,6,9,12
-                 && !(acc.frequency === 'yearly'    && month !== 1);        // bill on January
+    const billing = extraBillsInMonth(d, acc, prevKey);   // v2.14.80 (ה6, ח5-A) — the closed month's billing months (legacy = 3/6/9/12, January)
     const dated = extraAmountForMonth(d, acc, prevKey);   // v2.14.76 (1ג, ג2-A) — the closed month's dated amount
     const amount = (billing && !crSuspendedIn(acc, prevKey) && dated > 0) ? dated : 0;
 
