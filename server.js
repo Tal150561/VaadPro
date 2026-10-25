@@ -2092,9 +2092,21 @@ app.get('/api/data', authMiddleware, (req, res) => {
         // decision from sentLog in the browser (CONSUME, DO NOT COMPUTE). This makes
         // the button honour credit-in-advance / suspended / paid-in-full exactly like
         // the automatic send. NOTE: "שלח לכולם" is deliberately NOT gated by this.
-        shouldRemind:  autoSendShouldRemind(d, t, mkNow)
+        shouldRemind:  autoSendShouldRemind(d, t, mkNow),
+        // v2.14.79 (1ו) — ONLY for a member with extra accounts (a building without
+        // extras gets a byte-identical payload): remindAcc = definition ids still owed
+        // THIS month (ז5-A selector), accOwedNow = what {חשבונות} would show (ז4-A).
+        ...(((t.extraAccounts || []).length) ? {
+          remindAcc:  remindAccountIds(d, t, mkNow, emNow),
+          accOwedNow: buildAccountsBlock(d, t, emNow).total
+        } : {})
       };
     });
+    // v2.14.79 (1ו, ז4-A) — template vs extra accounts (absent when no member has one).
+    try {
+      const gap = reminderAccountsGap(d);
+      if (gap) d.reminderAccountsGap = gap;
+    } catch (e) { console.error('[data] reminderAccountsGap', e.message); }
   }
   // v2.14.67 — saved collection reports are large and only the trends screen needs
   // them (own routes); keep them out of the 2.5s poll. The backup download asks ?full=1.
@@ -3022,12 +3034,16 @@ function resolvePayerPhone(tenant, acc) {
  * @returns {{block:string, recipients:Map<string,string[]>}} block is '' when no accounts are open
  */
 function buildAccountsBlock(d, tenant, month) {
-  // ⏸ v2.14.31 — a suspended extra account (acc.suspended===true) is exempt and
-  // must NOT appear in the reminder (design 2C — per-account). active===false
-  // already filtered; suspension is a separate, softer state.
-  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false && a.suspended !== true);
+  // ⏸ v2.14.79 (1ו, ז3-A) — PARITY with the main account: a suspended extra account is
+  // exempt for the MONTH (extraAccountSplit → charge 0, owedCurrent 0), but its debt from
+  // BEFORE is still owed and is shown as "• L: חוב קודם *X ₪*" — exactly like a suspended
+  // main account keeps {שורת_חוב_קודם}. Until v2.14.78 the account was filtered out here
+  // and its carried debt vanished from every reminder. Carried debt alone does NOT trigger
+  // the automatic send (tenantOwesActiveExtra reads owedCurrent — unchanged).
+  // active===false is still filtered (its balance is hidden everywhere — 1א finding).
+  const extraAccounts = (tenant.extraAccounts || []).filter(a => a.active !== false);
   const recipients = {};
-  if (!extraAccounts.length) return { block: '', recipients };
+  if (!extraAccounts.length) return { block: '', recipients, total: 0 };
   // v2.14.64 (0c) — CONSUMES extraAccountSplit (was: its own "paid? amount + max(0,openingDebt)").
   // Byte-identical for the common cases (unpaid month → "• L: *amount ₪*"; with carried
   // debt → "… + חוב קודם X ₪ = *total ₪*"; paid → no line). Fixed: a credit now reduces or
@@ -3035,9 +3051,11 @@ function buildAccountsBlock(d, tenant, month) {
   // payment shows the shortfall (was hidden as "paid"); carried debt of a paid month is shown.
   const mk = extraMonthKeyFor(d, month);
 
+  let total = 0;   // v2.14.79 (1ו, ז2-A) — Σ owedNow of the lines shown → {סה"כ_כולל}
   const lines = extraAccounts.map(acc => {
     const sp = extraAccountSplit(d, tenant, acc, mk, month);
     if (!sp || !(sp.owedNow > 0)) return null;
+    total += sp.owedNow;
     let line;
     if (sp.owedCurrent > 0 && sp.owedPrior > 0) {
       line = `• ${acc.label}: *${sp.owedCurrent} ₪* + חוב קודם ${sp.owedPrior} ₪ = *${sp.owedNow} ₪*`;
@@ -3057,7 +3075,7 @@ function buildAccountsBlock(d, tenant, month) {
   }).filter(Boolean);
 
   const block = lines.length ? '\n' + lines.join('\n') : '';
-  return { block, recipients };
+  return { block, recipients, total: Math.round(total * 100) / 100 };
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -4352,6 +4370,83 @@ app.post('/api/excess-debt/send', authMiddleware, async (req, res) => {
   }
 });
 
+// ══════════════════════════════════════════════════════════════════════════
+// v2.14.79 (1ו, ז7-A) — composeReminder: the ONE reminder composer. Until v2.14.78 the
+// same .replace() chain was copied in /api/send/:id, /api/send-all and doAutoSend, so a
+// new placeholder meant three edits (and three chances to drift). The chain below is
+// the v2.14.78 chain BYTE-FOR-BYTE, in the same order, with the same side effects
+// (getOrCreatePortalUrl only when the template asks for {לינק_פורטל}); a golden test
+// runs a frozen copy of the old chain against it. The ONE addition, at the END:
+//   {סה"כ_כולל} (ז2-A) = {סה"כ} (main, after credit) + Σ owedNow of the lines that
+//   {חשבונות} shows (buildAccountsBlock.total). {סה"כ} itself is unchanged.
+// Formatting only — every figure comes from buildReminderFigures / buildAccountsBlock.
+// Callers keep their own sentLog / recordPayment / send logic (untouched).
+// ctx: { tenantDataId, month (Hebrew, effective), mk ('YYYY-MM'), amount (Column A rate) }
+// ══════════════════════════════════════════════════════════════════════════
+function composeReminder(d, tenant, tmpl, ctx) {
+  const fig = buildReminderFigures(d, tenant, ctx.mk, ctx.month, ctx.amount);
+  const acc = buildAccountsBlock(d, tenant, ctx.month);
+  const portalUrl = tmpl.includes('{לינק_פורטל}')
+    ? getOrCreatePortalUrl(ctx.tenantDataId, tenant.id, tenant.name)
+    : '';
+  const balanceLine = buildBalanceLine(d, tenant, ctx.mk);
+  const grandTotal = Math.round(((Number(fig.total) || 0) + (Number(acc.total) || 0)) * 100) / 100;
+  const msg = tmpl
+    .replace(/{שם}/g, tenant.name)
+    .replace(/{חודש}/g, ctx.month)
+    .replace(/{סכום}/g, fig.monthDue)
+    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
+    .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
+    .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
+    .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
+    .replace(/{סה"כ}/g, fig.total)
+    .replace(/{חשבונות}/g, acc.block)
+    .replace(/{יתרה}/g, balanceLine)
+    .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
+    .replace(/{לינק_פורטל}/g, portalUrl)
+    .replace(/{סה"כ_כולל}/g, grandTotal);
+  return { msg, fig, accountsBlock: acc.block, accountsTotal: acc.total, grandTotal };
+}
+
+// v2.14.79 (1ו, ז4-A) — does the reminder template show the extra accounts? Returns
+// null for a building where no member has an active extra account (→ /api/data and the
+// page stay byte-identical). Otherwise { covered, owing }: covered = the template has
+// {חשבונות} or {סה"כ_כולל}; owing = members whose {חשבונות} would show a line right now
+// (they would get a reminder that does not mention it). Read-only; nothing is changed.
+const REMINDER_DEFAULT_TEMPLATE = 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
+function reminderAccountsGap(d) {
+  const tenants = (d && d.tenants) || [];
+  const hasExtras = tenants.some(t => (t.extraAccounts || []).some(a => a && a.active !== false));
+  if (!hasExtras) return null;
+  const tmpl = String(((d.config || {}).template) || REMINDER_DEFAULT_TEMPLATE);
+  const covered = tmpl.includes('{חשבונות}') || tmpl.includes('{סה"כ_כולל}');
+  const em = getEffectiveMonth(d.config || {});
+  let owing = 0;
+  for (const t of tenants) {
+    if (!(t.extraAccounts || []).length) continue;
+    if (buildAccountsBlock(d, t, em).total > 0) owing++;
+  }
+  return { covered, owing };
+}
+
+// v2.14.79 (1ו, ז5-A) — per member, for the payments-tab \"WA לחייבים בחשבון X\" selector:
+// the DEFINITION ids (templateId, lazy name link via accTemplateFor) of the extra accounts
+// this member still owes THIS month — the same rule as tenantOwesActiveExtra (active, not
+// suspended, owedCurrent > 0 after credit). An account not linked to a definition is not
+// selectable (it shows in 🩺). CONSUME: the page filters on this list, never on money.
+function remindAccountIds(d, tenant, mk, em) {
+  const tpls = Array.isArray(d.accountTemplates) ? d.accountTemplates : [];
+  const out = [];
+  for (const acc of (tenant.extraAccounts || [])) {
+    if (!acc || acc.active === false || acc.suspended === true) continue;
+    const sp = extraAccountSplit(d, tenant, acc, mk, em);
+    if (!sp || !(sp.owedCurrent > 0)) continue;
+    const tpl = accTemplateFor(acc, tpls);
+    if (tpl && tpl.id && !out.includes(tpl.id)) out.push(tpl.id);
+  }
+  return out;
+}
+
 // Send to single tenant
 app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
@@ -4369,26 +4464,8 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   // still owed THIS month, prior debt excludes the current month. Was
   // `amount + calcTotalDebt` → a tenant who paid the month + had prior debt got
   // 230 + 230 = 460 instead of 230; a partial payer was double-counted.
-  const fig    = buildReminderFigures(d, tenant, mk, month, amount);
-  // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
-  const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
-  const portalUrl1 = tmpl.includes('{לינק_פורטל}')
-    ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
-    : '';
-  const balanceLine1 = buildBalanceLine(d, tenant, mk);
-  const msg    = tmpl
-    .replace(/{שם}/g, tenant.name)
-    .replace(/{חודש}/g, month)
-    .replace(/{סכום}/g, fig.monthDue)
-    .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
-    .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-    .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
-    .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
-    .replace(/{סה"כ}/g, fig.total)
-    .replace(/{חשבונות}/g, accountsBlock)
-    .replace(/{יתרה}/g, balanceLine1)
-    .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
-    .replace(/{לינק_פורטל}/g, portalUrl1);
+  // v2.14.79 (1ו, ז7-A) — composeReminder: the one composer (was an inline .replace chain here).
+  const { msg } = composeReminder(d, tenant, tmpl, { tenantDataId: req.user.tenantId, month, mk, amount });
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
     const key = tenant.id+'_'+month;
@@ -4415,26 +4492,8 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   let sent = 0;
   for (const tenant of d.tenants) {
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
-    const fig    = buildReminderFigures(d, tenant, mk, month, amount);   // v2.14.54 — design A
-    // בנה רשימת חשבונות נוספים פתוחים (helper יחיד — מקור אמת אחד)
-    const { block: accountsBlock } = buildAccountsBlock(d, tenant, month);
-    const portalUrlSA = tmpl.includes('{לינק_פורטל}')
-      ? getOrCreatePortalUrl(req.user.tenantId, tenant.id, tenant.name)
-      : '';
-    const balanceLineSA = buildBalanceLine(d, tenant, mk);
-    const msg = tmpl
-      .replace(/{שם}/g, tenant.name)
-      .replace(/{חודש}/g, month)
-      .replace(/{סכום}/g, fig.monthDue)
-      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
-      .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-      .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
-      .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
-      .replace(/{סה"כ}/g, fig.total)
-      .replace(/{חשבונות}/g, accountsBlock)
-      .replace(/{יתרה}/g, balanceLineSA)
-      .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
-      .replace(/{לינק_פורטל}/g, portalUrlSA);
+    // v2.14.79 (1ו, ז7-A) — composeReminder: the one composer (was an inline .replace chain here).
+    const { msg } = composeReminder(d, tenant, tmpl, { tenantDataId: req.user.tenantId, month, mk, amount });
     try {
       await sendWaMsg(req.user.tenantId, tenant.phone, msg);
       const saKey = tenant.id+'_'+month;
@@ -6812,26 +6871,8 @@ async function doAutoSend(user) {
     // decision source: paid→skip, everyone else→remind.
     if (!autoSendShouldRemind(d, tenant, mk)) continue;
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
-    const fig    = buildReminderFigures(d, tenant, mk, month, amount);   // v2.14.54 — design A
-    const portalUrlAuto = tmpl.includes('{לינק_פורטל}')
-      ? getOrCreatePortalUrl(user.tenantId, tenant.id, tenant.name)
-      : '';
-    // extra accounts block (helper יחיד — מקור אמת אחד)
-    const { block: accountsBlockAuto } = buildAccountsBlock(d, tenant, month);
-    const balanceLineAuto = buildBalanceLine(d, tenant, mk);
-    const msg = tmpl
-      .replace(/{שם}/g, tenant.name)
-      .replace(/{חודש}/g, month)
-      .replace(/{סכום}/g, fig.monthDue)
-      .replace(/{שורת_חוב_קודם}/g, buildPriorDebtLine(fig.priorDebt))
-      .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
-      .replace(/{שורת_זכות}/g, buildCreditLinesFig(fig))
-      .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
-      .replace(/{סה"כ}/g, fig.total)
-      .replace(/{חשבונות}/g, accountsBlockAuto)
-      .replace(/{יתרה}/g, balanceLineAuto)
-      .replace(/{פירוט_קיזוז}/g, buildOffsetBlock(d, tenant))
-      .replace(/{לינק_פורטל}/g, portalUrlAuto);
+    // v2.14.79 (1ו, ז7-A) — composeReminder: the one composer (was an inline .replace chain here).
+    const { msg } = composeReminder(d, tenant, tmpl, { tenantDataId: user.tenantId, month, mk, amount });
         try {
       await sendWaMsg(user.tenantId, tenant.phone, msg);
       // Stage 3: a reminder must NOT clobber the bank_import/manual_paid value of a
@@ -8058,6 +8099,52 @@ app.patch('/api/portal/ticket/:id/close', (req, res) => {
 });
 
 // Get portal data (public - token only)
+// ══════════════════════════════════════════════════════════════════════════
+// v2.14.79 (1ו, ז6-A) — the tenant portal's view of each extra account, built HERE so
+// the page renders it verbatim (CONSUME). Money = extraAccountSplit (same numbers as the
+// report, the reminder and the committee screens). History = the account's last 12
+// records (wa_sent excluded), on COPIES, with the SAME reconciliation as the main
+// account's portal history: the active month reads paid from the account's sentLog key;
+// an older month stored paid:true with no confirming sentLog payment shows as neutral
+// \"⏳ בבירור\" (review), never as unpaid. Display only — nothing is written.
+// An inactive account (active:false) is not shown (extraAccountSplit → null), as today.
+// ══════════════════════════════════════════════════════════════════════════
+function portalAccountsView(d, tenant, mk, em) {
+  const tid = String(tenant.id);
+  const sentLog = d.sentLog || {};
+  const isPay = v => { const x = String(v || ''); return x.startsWith('bank_import') || x.startsWith('manual_paid'); };
+  const label = k => { const p = String(k).split('-'); return (HEBREW_MONTHS[parseInt(p[1], 10) - 1] || k) + ' ' + p[0]; };
+  const typeLabel = t => t === 'bank_import' || t === 'bank' ? 'ייבוא בנק' : t === 'manual' ? 'סומן ידנית' : '';
+  const out = [];
+  for (const acc of (tenant.extraAccounts || [])) {
+    const sp = extraAccountSplit(d, tenant, acc, mk, em);
+    if (!sp) continue;
+    const phKey = tid + '__acc__' + acc.id;
+    const recs = ((d.paymentHistory || {})[phKey] || [])
+      .filter(r => r && r.type !== 'wa_sent' && r.month)
+      .map(r => Object.assign({}, r))
+      .sort((a, b) => String(b.month).localeCompare(String(a.month)))
+      .slice(0, 12);
+    const history = recs.map(r => {
+      let paid = r.paid === true, review = false;
+      if (r.month === mk) paid = isPay(sentLog[phKey + '_' + em]);
+      else if (paid) {
+        const heb = HEBREW_MONTHS[parseInt(String(r.month).split('-')[1], 10) - 1];
+        if (!isPay(sentLog[phKey + '_' + heb])) { paid = false; review = true; }
+      }
+      const pa = parseFloat(r.paidAmount);
+      return { monthKey: r.month, monthLabel: label(r.month), paid, review,
+        amount: parseFloat(r.amount) || 0, paidAmount: isFinite(pa) ? pa : null,
+        date: r.date || '', type: r.type || '', typeLabel: typeLabel(r.type), payerName: r.payerName || '' };
+    });
+    out.push({ id: acc.id, label: acc.label || 'חשבון נוסף', frequency: acc.frequency || 'monthly',
+      suspended: acc.suspended === true, status: sp.status, charge: sp.charge, paidNow: sp.paidNow,
+      owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow,
+      creditLeft: sp.creditLeft, creditApplied: sp.creditApplied, history });
+  }
+  return out;
+}
+
 app.get('/api/portal/:token', (req, res) => {
   const tokens = loadPortalTokens();
   const entry = tokens[req.params.token];
@@ -8175,6 +8262,44 @@ app.get('/api/portal/:token', (req, res) => {
     .find(r => r.month === currentMonthKey);
   const currentPayerName = currentRecord ? (currentRecord.payerName || '') : '';
 
+  // v2.14.79 (1ו) — computed before res.json so grandTotal can consume it (same code).
+  const _current = (() => {
+    // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
+    // page renders it verbatim. Previously tenant-portal.html did this math
+    // itself and produced "שולם ✅" together with "לתשלום 30 ₪": the surplus
+    // was born from THIS month's payment and was then subtracted from this
+    // month's own charge again. One source of truth prevents that class of bug.
+    // v2.14.56 — consumes buildReminderFigures → splitCurrentMonthDebt, the SAME
+    // split as the dashboard (/api/data), the WA reminder and חייבים חריגים. The
+    // previous inline copy had no suspension handling and read the display-
+    // mutated history. Reads the ORIGINAL d.paymentHistory (see copies above).
+    const fig    = buildReminderFigures(d, tenant, currentMonthKey, currentMonthName, amount);
+    const bal    = fig.balance;                 // {status,paidAmount,expected,shortfall,credit}; 'exempt' when suspended
+    const credit = getCreditBalance(d, entry.tenantId);
+    const od     = parseFloat(tenant.openingDebt) || 0;
+    const priorDebt = fig.priorDebt;
+    // 💳 v2.14.57 — fig.total is already net of credit (splitCurrentMonthDebt).
+    const amountDue = fig.total;
+    return {
+      monthKey:   currentMonthKey,
+      monthLabel: currentMonthName,
+      amount,
+      status:     currentStatus,
+      type:       currentType,
+      typeLabel:  typeLabel(currentType),
+      payerName:  currentPayerName,
+      // ── computed, consume-only ──
+      balance:      bal,            // {status,paidAmount,expected,shortfall,credit}
+      amountDue:    amountDue,      // what the tenant actually owes right now
+      monthDue:     fig.monthDue,   // v2.14.56 — still owed for THIS month (0 paid/exempt, shortfall if partial)
+      creditApplied: fig.creditApplied, // v2.14.57 — credit that reduced amountDue
+      creditLeft:   fig.creditLeft,     // v2.14.57 — credit still standing after that
+      priorDebt:    priorDebt,
+      creditBalance: credit,
+      openingDebt:  od
+    };
+  })();
+  const _accountsView = portalAccountsView(d, tenant, currentMonthKey, currentMonthName);
   res.json({
     ok: true,
     tenant: { name: tenant.name, openingDebt: parseFloat(tenant.openingDebt) || 0, creditBalance: getCreditBalance(d, entry.tenantId),
@@ -8184,42 +8309,10 @@ app.get('/api/portal/:token', (req, res) => {
       }))
     },
     building: { name: portalBuildingName, org: t(getLabels(d.config), 'org'), mainAccount: t(getLabels(d.config), 'mainAccount') },
-    current: (() => {
-      // ⚠️ v2.13.10 — amountDue is computed HERE, server-side, and the portal
-      // page renders it verbatim. Previously tenant-portal.html did this math
-      // itself and produced "שולם ✅" together with "לתשלום 30 ₪": the surplus
-      // was born from THIS month's payment and was then subtracted from this
-      // month's own charge again. One source of truth prevents that class of bug.
-      // v2.14.56 — consumes buildReminderFigures → splitCurrentMonthDebt, the SAME
-      // split as the dashboard (/api/data), the WA reminder and חייבים חריגים. The
-      // previous inline copy had no suspension handling and read the display-
-      // mutated history. Reads the ORIGINAL d.paymentHistory (see copies above).
-      const fig    = buildReminderFigures(d, tenant, currentMonthKey, currentMonthName, amount);
-      const bal    = fig.balance;                 // {status,paidAmount,expected,shortfall,credit}; 'exempt' when suspended
-      const credit = getCreditBalance(d, entry.tenantId);
-      const od     = parseFloat(tenant.openingDebt) || 0;
-      const priorDebt = fig.priorDebt;
-      // 💳 v2.14.57 — fig.total is already net of credit (splitCurrentMonthDebt).
-      const amountDue = fig.total;
-      return {
-        monthKey:   currentMonthKey,
-        monthLabel: currentMonthName,
-        amount,
-        status:     currentStatus,
-        type:       currentType,
-        typeLabel:  typeLabel(currentType),
-        payerName:  currentPayerName,
-        // ── computed, consume-only ──
-        balance:      bal,            // {status,paidAmount,expected,shortfall,credit}
-        amountDue:    amountDue,      // what the tenant actually owes right now
-        monthDue:     fig.monthDue,   // v2.14.56 — still owed for THIS month (0 paid/exempt, shortfall if partial)
-        creditApplied: fig.creditApplied, // v2.14.57 — credit that reduced amountDue
-        creditLeft:   fig.creditLeft,     // v2.14.57 — credit still standing after that
-        priorDebt:    priorDebt,
-        creditBalance: credit,
-        openingDebt:  od
-      };
-    })(),
+    current: _current,
+    // v2.14.79 (1ו, ז6-A) — per-account cards + the grand total, from the server.
+    accountsView: _accountsView,
+    grandTotal: Math.round(((Number(_current.amountDue) || 0) + _accountsView.reduce((s, a) => s + (Number(a.owedNow) || 0), 0)) * 100) / 100,
     history: history.map(r => ({
       monthKey:   r.month,
       monthLabel: monthLabel(r.month),

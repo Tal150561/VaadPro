@@ -102,7 +102,10 @@ const SERVER_FNS = [
   'compareScore', 'resolveRowCandidates', 'accumulatePaidAmount', 'mergeExtraPaymentHistory',
   'phMoneyView', 'buildImportUndo', 'planImportUndo',
   'accBankParseRows', 'accBankAptNumbers', 'accBankMappingWarning', 'accFpList', 'ambiguousRowKey',
-  'planAccountBankImport', 'accPlanView', 'commitAccountBankImport', 'runAccountBankImport', 'accAgentReceipt', 'sanitizeBankMapping'
+  'planAccountBankImport', 'accPlanView', 'commitAccountBankImport', 'runAccountBankImport', 'accAgentReceipt', 'sanitizeBankMapping',
+  // v2.14.79 (1ו) — notifications + portal: the one reminder composer, {חשבונות}, the
+  // template-gap check, the per-account send selector, the portal's account cards
+  'resolvePayerPhone', 'buildAccountsBlock', 'composeReminder', 'reminderAccountsGap', 'remindAccountIds', 'portalAccountsView'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
@@ -120,7 +123,9 @@ function loadServer() {
   if (!exDefault) throw new Error('test-lib: EXCESS_DEBT_DEFAULT not found in server.js');
   if (!exTpl) throw new Error('test-lib: EXCESS_DEBT_DEFAULT_TEMPLATE not found in server.js');
   const splitHe = src.match(/const SPLIT_MONTHS_HE = \[[^\]]*\];/);   // v2.14.78 — monthsNamedInNote
-  const code = months[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n'
+  const remTpl = src.match(/const REMINDER_DEFAULT_TEMPLATE = .*;\n/);   // v2.14.79 — reminderAccountsGap
+  if (!remTpl) throw new Error('test-lib: REMINDER_DEFAULT_TEMPLATE not found in server.js');
+  const code = months[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0]
     + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS};';
@@ -493,6 +498,10 @@ async function loadSendOneRoute(d, tenantId) {
     loadTenantData: () => d, sendWaMsg: async (a, b, m) => { msg = m; },
     saveTenantData() {}, recordPayment() {}, getOrCreatePortalUrl: () => 'URL'
   });
+  // v2.14.79 — the route delegates to composeReminder; rebuild it over THIS scope so it
+  // sees the route's stubs (getOrCreatePortalUrl → 'URL'), not loadServer's sandbox stub.
+  { const n0 = Object.keys(g);
+    g.composeReminder = new Function(...n0, extractFunctions(src, ['composeReminder']) + '\n; return composeReminder;')(...n0.map(n => g[n])); }
   const names = Object.keys(g);
   const AF = Object.getPrototypeOf(async function () {}).constructor;
   const fn = new AF(...names, 'req', 'res', body);

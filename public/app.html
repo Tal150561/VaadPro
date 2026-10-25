@@ -666,6 +666,10 @@ function vpLogout() {
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
           <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">💬 WA לכולם</button>
           <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA למי שלא שילם החודש</button>
+          <span id="payAccSendBox" style="display:none;align-items:center;gap:6px;">
+            <select id="payAccSend" style="width:auto;height:36px;" title="חשבון נוסף"></select>
+            <button class="btn btn-secondary" id="btnSendAcc" onclick="sendAccountDebtors()">💬 WA לחייבים בחשבון</button>
+          </span>
           <button class="btn btn-secondary btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()">🔗 שלח פורטל לנבחרים</button>
           <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
           <button class="btn btn-secondary btn-sm" id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()">💳 החל חשבון נוסף על כולם</button>
@@ -1083,11 +1087,13 @@ function vpLogout() {
           <span class="var-tag" onclick="insertVar('{יתרת_זכות}')">{ יתרת_זכות }</span>
           <span class="var-tag" onclick="insertVar('{סה&quot;כ}')">{ סה״כ }</span>
           <span class="var-tag" onclick="insertVar('{חשבונות}')">{ חשבונות }</span>
+          <span class="var-tag" onclick="insertVar('{סה&quot;כ_כולל}')">{ סה״כ_כולל }</span>
           <span class="var-tag" onclick="insertVar('{יתרה}')">{ יתרה }</span>
           <span class="var-tag" onclick="insertVar('{פירוט_קיזוז}')">{ פירוט_קיזוז }</span>
           <span class="var-tag" onclick="insertVar('{לינק_פורטל}')">{ לינק_פורטל }</span>
         </div>
-        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שורת_חוב_קודם} = שורה שלמה "חוב קודם: X ₪" שמופיעה רק כשיש חוב (מומלץ) &nbsp;|&nbsp; {שורת_זכות} = שורה שלמה "יתרת זכות: X ₪" שמופיעה רק כשלדייר יש קרדיט (מומלץ) &nbsp;|&nbsp; {חוב_קודם}/{יתרת_זכות} = המספר בלבד (0 כשאין) &nbsp;|&nbsp; {סכום} = מה שנותר לשלם על החודש הנוכחי (0 אם שולם, היתרה אם שולם חלקית) &nbsp;|&nbsp; {סה״כ} = {סכום} + חוב קודם &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {יתרה} יופיע רק אם הדייר שילם חלקית החודש &nbsp;|&nbsp; {פירוט_קיזוז} יופיע רק אם תשלום של הדייר קיזז חוב קודם (למשל "239 ₪ עבור החודש, 478 ₪ קוזזו מחוב קודם") &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
+        <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שורת_חוב_קודם} = שורה שלמה "חוב קודם: X ₪" שמופיעה רק כשיש חוב (מומלץ) &nbsp;|&nbsp; {שורת_זכות} = שורה שלמה "יתרת זכות: X ₪" שמופיעה רק כשלדייר יש קרדיט (מומלץ) &nbsp;|&nbsp; {חוב_קודם}/{יתרת_זכות} = המספר בלבד (0 כשאין) &nbsp;|&nbsp; {סכום} = מה שנותר לשלם על החודש הנוכחי (0 אם שולם, היתרה אם שולם חלקית) &nbsp;|&nbsp; {סה״כ} = {סכום} + חוב קודם &nbsp;|&nbsp; {חשבונות} יופיע רק אם לדייר יש חשבונות נוספים פתוחים &nbsp;|&nbsp; {סה״כ_כולל} = {סה״כ} + כל החשבונות הנוספים שמופיעים ב-{חשבונות} &nbsp;|&nbsp; {יתרה} יופיע רק אם הדייר שילם חלקית החודש &nbsp;|&nbsp; {פירוט_קיזוז} יופיע רק אם תשלום של הדייר קיזז חוב קודם (למשל "239 ₪ עבור החודש, 478 ₪ קוזזו מחוב קודם") &nbsp;|&nbsp; {לינק_פורטל} — לינק אישי לפורטל הדייר</div>
+        <div id="tplAccWarn" style="display:none;margin-top:8px;padding:8px 12px;border-radius:8px;background:rgba(240,165,0,.1);border:1px solid rgba(240,165,0,.3);color:#b8860b;font-size:0.8rem;line-height:1.5;"></div>
         <div style="margin-top:10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <button class="btn btn-green" onclick="saveTemplate()" style="height:36px;padding:0 18px;font-size:0.85rem;">💾 שמור תבנית</button>
           <span id="templateSaveStatus" style="font-size:0.78rem;color:var(--text3);"></span>
@@ -1930,7 +1936,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.78';
+const HTML_VERSION = '2.14.79';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3456,8 +3462,37 @@ function updatePreview() {
     .replace(/{יתרת_זכות}/g,sampleCredit)
     .replace(/{חשבונות}/g,sampleAccounts)
     .replace(/{יתרה}/g,'שילמת 150 ₪, נותר לתשלום: *80 ₪*')
-    .replace(/{פירוט_קיזוז}/g,'מתוך תשלומך: *239 ₪* עבור דמי החודש, ו*478 ₪* קוזזו מחוב קודם.');
+    .replace(/{פירוט_קיזוז}/g,'מתוך תשלומך: *239 ₪* עבור דמי החודש, ו*478 ₪* קוזזו מחוב קודם.')
+    .replace(/{סה"כ_כולל}/g,sampleTotal+720);   // v2.14.79 — sample: {סה"כ} + the two sample lines (420 + 300)
+  renderTplAccWarn(t);
 }
+
+// v2.14.79 (1ו, ז4-A) — the template does not show the extra accounts. Server fact
+// (data.reminderAccountsGap: present only when a member has an extra account; owing =
+// members whose {חשבונות} would show a line now) + the text being edited. Nothing is
+// added to the template automatically — the operator decides.
+function tplAccGapText(tmpl, gap) {
+  if (!gap) return '';
+  var s = String(tmpl || '');
+  if (s.indexOf('{חשבונות}') >= 0 || s.indexOf('{סה"כ_כולל}') >= 0) return '';
+  return '⚠️ בבניין יש חשבונות נוספים, אבל התבנית לא כוללת {חשבונות} או {סה״כ_כולל} — התזכורת לא תזכיר אותם' +
+    (gap.owing > 0 ? ' (כרגע ' + gap.owing + ' חייבים בחשבון נוסף)' : '') + '. הוסיפו אחד מהם לתבנית.';
+}
+function renderTplAccWarn(tmpl) {
+  var el = document.getElementById('tplAccWarn');
+  if (!el) return;
+  var txt = tplAccGapText(tmpl, (typeof data !== 'undefined' && data) ? data.reminderAccountsGap : null);
+  el.textContent = txt;
+  el.style.display = txt ? 'block' : 'none';
+}
+// Before a MANUAL send: the SAVED template misses the accounts and the recipient(s) owe on
+// one → one confirm. `owingNow` = how many of the chosen recipients owe on an extra account.
+function confirmAccountsGap(owingNow) {
+  var gap = data && data.reminderAccountsGap;
+  if (!gap || gap.covered || !(owingNow > 0)) return true;
+  return confirm('תבנית ההודעה לא כוללת {חשבונות} או {סה״כ_כולל}.\n' + owingNow + ' מהנמענים חייבים בחשבון נוסף, וההודעה לא תזכיר את החוב הזה.\nלשלוח בכל זאת?');
+}
+function accOwing(t) { return (parseFloat(t && t.accOwedNow) || 0) > 0; }
 
 // v2.14.0 — targetId is OPTIONAL and defaults to 'cfgTemplate', so every existing
 // call site (the message-template chips) behaves EXACTLY as before. The preview is
@@ -4304,6 +4339,7 @@ async function tfCommitAccountPlan(plan) {
 
 async function sendOne(id) {
   if(!confirmManualSend()) return;
+  if(!confirmAccountsGap(accOwing((data.tenants || []).find(function(x){ return String(x.id) === String(id); })) ? 1 : 0)) return;
   // 💳 v2.14.57 — nothing to collect? (server figures: owedNow is net of credit,
   // shouldRemind covers extra accounts). Warn, don't block.
   const _t1 = (data.tenants || []).find(function(x){ return String(x.id) === String(id); });
@@ -4425,6 +4461,7 @@ async function resetWaAuth() {
 
 async function sendAll() {
   if(!confirmManualSend()) return;
+  if(!confirmAccountsGap((data.tenants || []).filter(accOwing).length)) return;
   const btn=document.getElementById('btnSendAll');
   btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span> שולח...';
   try{
@@ -4459,6 +4496,7 @@ async function sendUnpaidOnly() {
   });
   if(!unpaid.length){toast('✅ אין למי לשלוח — כולם שילמו / מכוסים ביתרת זכות / מושהים','success');return;}
   if(!confirmManualSend()) return;
+  if(!confirmAccountsGap(unpaid.filter(accOwing).length)) return;
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
   document.getElementById('sendingStatus').textContent='שולח '+unpaid.length+' הודעות...';
   toast('📤 שולח למי שלא שילם החודש ('+unpaid.length+')...','success');
@@ -4472,6 +4510,50 @@ async function sendUnpaidOnly() {
   await loadData(); render();
   document.getElementById('sendingStatus').textContent=''; btn.disabled=false;
   toast('✅ נשלחו '+unpaid.length+' הודעות!','success');
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+// v2.14.79 (1ו, ז5-A) — "💬 WA לחייבים בחשבון X". The selector lists the SAVED fixed
+// definitions (same list as the bank-file selector). Recipients = members whose server
+// list t.remindAcc holds the definition id (remindAccountIds: active, not suspended,
+// still owes THIS month after credit — the rule of the automatic send). CONSUME: no
+// money read here. The SAME full reminder is sent (POST /api/send/:id, unchanged) — an
+// account-only message is "separate notification", deferred to 1ו2 (ז1-A).
+// ══════════════════════════════════════════════════════════════════════════
+function populatePayAccSend() {
+  var box = document.getElementById('payAccSendBox'), sel = document.getElementById('payAccSend');
+  if (!box || !sel) return;
+  var tpls = bankTargetTemplates(accountTemplates);
+  var prev = sel.value || '';
+  sel.innerHTML = tpls.map(function(t){ return '<option value="' + esc(t.id) + '"' + (t.id === prev ? ' selected' : '') + '>' + esc(t.label || '') + '</option>'; }).join('');
+  box.style.display = tpls.length ? 'inline-flex' : 'none';
+}
+function accountDebtors(tenants, tplId) {
+  return (tenants || []).filter(function(t){ return !!tplId && Array.isArray(t.remindAcc) && t.remindAcc.indexOf(tplId) >= 0; });
+}
+async function sendAccountDebtors() {
+  var sel = document.getElementById('payAccSend');
+  var id = sel ? sel.value : '';
+  var tpl = accountTemplates.filter(function(x){ return x && x.id === id; })[0];
+  if (!tpl) { toast('❌ בחרו חשבון', 'error'); return; }
+  var list = accountDebtors(data.tenants, id);
+  if (!list.length) { toast('✅ אין חייבים החודש בחשבון ' + (tpl.label || ''), 'success'); return; }
+  if (!confirmManualSend()) return;
+  if (!confirmAccountsGap(list.length)) return;
+  if (!confirm('לשלוח תזכורת ל-' + list.length + ' חברים שחייבים החודש בחשבון "' + (tpl.label || '') + '"?\nתישלח ההודעה הרגילה (התבנית המלאה), כמו בשאר השליחות.')) return;
+  var btn = document.getElementById('btnSendAcc'); if (btn) btn.disabled = true;
+  var st = document.getElementById('sendingStatus'); if (st) st.textContent = 'שולח ' + list.length + ' הודעות...';
+  var ok = 0;
+  for (var i = 0; i < list.length; i++) {
+    try {
+      var r = await fetch(API + '/send/' + list[i].id, { method: 'POST' }); var d = await r.json();
+      if (d.ok) ok++;
+      await new Promise(function(res){ setTimeout(res, 800); });
+    } catch (e) {}
+  }
+  await loadData(); render();
+  if (st) st.textContent = ''; if (btn) btn.disabled = false;
+  toast('✅ נשלחו ' + ok + ' מתוך ' + list.length + ' הודעות', ok === list.length ? 'success' : 'error');
 }
 
 async function resetSent() {
@@ -10088,6 +10170,7 @@ function renderAccountTemplates() {
   const el = document.getElementById('accountTemplatesList');
   const sc = document.getElementById('payAccShortcut');
   if (sc) sc.style.display = accountTemplates.some(function(t){ return t && t.linked !== undefined; }) ? '' : 'none';
+  populatePayAccSend();
   if (!el) return;
   if (!accountTemplates.length) {
     el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);padding:8px 0;">עדיין אין תבניות חשבונות. לחץ ״הוסף חשבון״ ליצירת הראשון.</div>';
@@ -11597,7 +11680,7 @@ async function aiImprove(textareaId, instructionId, statusId, context) {
   if (statusEl) statusEl.textContent = '';
 
   const placeholderNote = context === 'settings'
-    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {שורת_חוב_קודם} {חוב_קודם} {שורת_זכות} {יתרת_זכות} {סה"כ} {חשבונות} {יתרה} {לינק_פורטל}'
+    ? 'שמור על כל הפלייסהולדרים בפורמט {משתנה} בדיוק. הפלייסהולדרים: {שם} {חודש} {סכום} {שורת_חוב_קודם} {חוב_קודם} {שורת_זכות} {יתרת_זכות} {סה"כ} {סה"כ_כולל} {חשבונות} {יתרה} {לינק_פורטל}'
     : 'שמור על כל הפלייסהולדרים בפורמט {משתנה}. הפלייסהולדרים: {שם} {תאריך}';
 
   const systemPrompt = 'אתה עוזר למנהלי ועד בית לשפר הודעות WhatsApp בעברית. כללים: כתוב בעברית טבעית ומכובדת. ' + placeholderNote + '. החזר רק את ההודעה המשופרת בלבד, ללא הסברים וללא מרכאות.';

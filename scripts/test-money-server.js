@@ -3663,7 +3663,10 @@ const v2_14_64_async = async () => {
   t.eq('unpaid → "• חשמל: *100 ₪*" (unchanged)', block(base(), [A({})]), '\n• חשמל: *100 ₪*');
   t.eq('carried debt → same old format (unchanged)', block(base(), [A({ openingDebt: 50 })]), '\n• חשמל: *100 ₪* + חוב קודם 50 ₪ = *150 ₪*');
   t.eq('paid, nothing carried → no line (unchanged)', block(base(slx(BIx(100))), [A({})]), '');
-  t.eq('suspended → no line (unchanged)', block(base(), [A({ suspended: true, openingDebt: 50 })]), '');
+  // v2.14.79 (1ו, ז3-A) — CHANGED ON PURPOSE: a suspended account's carried debt is shown
+  // (parity with a suspended main account); the month itself stays exempt.
+  t.eq('suspended → carried debt line only (ז3-A, was: no line)', block(base(), [A({ suspended: true, openingDebt: 50 })]), '\n• חשמל: חוב קודם *50 ₪*');
+  t.eq('suspended, nothing carried → no line', block(base(), [A({ suspended: true })]), '');
   t.eq('FIX: credit covers → no line (was "*100 ₪*")', block(base(), [A({ openingDebt: -1000 })]), '');
   t.eq('FIX: credit 30 → "*70 ₪*" (was 100)', block(base(), [A({ openingDebt: -30 })]), '\n• חשמל: *70 ₪*');
   t.eq('FIX: yearly, not billing → no line (was billed monthly)', block(base(), [A({ frequency: 'yearly' })]), '');
@@ -3725,8 +3728,11 @@ const v2_14_64_async = async () => {
   const dd = S.buildDebtDetail(D, D.tenants[0], MK);
   t.eq('debt detail: Σ account totals == Σ split owedNow', dd.accountsTotal, Math.round(ACC.reduce((x, a) => x + expected[a.id], 0) * 100) / 100);
   const wa = block(D, ACC);
-  t.eq('WA block: covered + suspended absent; partial 60, yearly carried 80, debtor 150, credit30 70',
-    wa, '\n• חלקי: *60 ₪*\n• שנתי: חוב קודם *80 ₪*\n• חייב: *100 ₪* + חוב קודם 50 ₪ = *150 ₪*\n• זכות30: *70 ₪*');
+  // v2.14.79 (1ו, ז3-A) — the suspended account's carried 20 is now shown (was absent).
+  t.eq('WA block: covered absent; partial 60, yearly carried 80, debtor 150, suspended carried 20, credit30 70',
+    wa, '\n• חלקי: *60 ₪*\n• שנתי: חוב קודם *80 ₪*\n• חייב: *100 ₪* + חוב קודם 50 ₪ = *150 ₪*\n• מושהה: חוב קודם *20 ₪*\n• זכות30: *70 ₪*');
+  t.eq('WA block total == Σ split owedNow (ONE NUMBER, 1ו)', WA.buildAccountsBlock(D, D.tenants[0], EM).total,
+    Math.round(ACC.reduce((x, a) => x + expected[a.id], 0) * 100) / 100);
   const msg = await lib.loadSendOneRoute(Object.assign({}, D, { config: Object.assign({}, D.config, { template: 'שלום {שם}{חשבונות}' }) }), 9);
   t.eq('send-one (REAL route): the WhatsApp text carries the same block', msg && msg.includes('• זכות30: *70 ₪*') && !msg.includes('מכוסה'), true);
 };
@@ -5555,4 +5561,179 @@ const v2_14_64_async = async () => {
   }
 }
 
-(async () => { await v2_14_57_async(); await v2_14_64_async(); process.exit(t.done() ? 1 : 0); })();
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.79 (1ו) — notifications + portal. Decisions ז1–ז7, all A.
+// ════════════════════════════════════════════════════════════════
+const v2_14_79_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const BIx = a => 'bank_import_2026-09-03T10:00:00.000Z_' + a + '_payer_x';
+  const MPx = a => 'manual_paid_2026-09-03T10:00:00.000Z_amount_' + a;
+  const EM = 'ספטמבר', MK = S.getMonthKey({ manualMonth: EM });
+  const PREV = S.crMonthAdd(MK, -1), PREV_HEB = S.HEBREW_MONTHS[Number(PREV.slice(5)) - 1];
+  const TPLS = [{ id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50 },
+                { id: 'T2', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 80 }];
+  const base = over => Object.assign({ config: { amount: 230, manualMonth: EM }, closedMonths: [], closedMonthsExtra: [],
+    paymentHistory: {}, sentLog: {}, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }], accountTemplates: J(TPLS) }, over);
+  const ins = o => Object.assign({ id: 'i1', label: 'ביטוח', amount: 50, templateId: 'T1' }, o);
+  const wat = o => Object.assign({ id: 'w1', label: 'מים', amount: 80, templateId: 'T2' }, o);
+  const ctx = d => ({ tenantDataId: 'B', month: EM, mk: MK, amount: 230 });
+  const compose = (d, tn, tmpl) => S.composeReminder(d, tn, tmpl, ctx(d)).msg;
+
+  // ── ז7-A golden: a FROZEN copy of the v2.14.78 chain (send-one / send-all / auto) ──
+  t.section('v2.14.79 (1ו, ז7-A) — composeReminder == the frozen v2.14.78 chain');
+  const frozen78 = (d, tenant, tmpl) => {
+    const month = EM, mk = MK, amount = 230;
+    const fig = S.buildReminderFigures(d, tenant, mk, month, amount);
+    const { block: accountsBlock } = S.buildAccountsBlock(d, tenant, month);
+    const portalUrl1 = tmpl.includes('{לינק_פורטל}') ? 'https://portal.test/x' : '';
+    const balanceLine1 = S.buildBalanceLine(d, tenant, mk);
+    return tmpl
+      .replace(/{שם}/g, tenant.name).replace(/{חודש}/g, month).replace(/{סכום}/g, fig.monthDue)
+      .replace(/{שורת_חוב_קודם}/g, S.buildPriorDebtLine(fig.priorDebt))
+      .replace(/{חוב_קודם}/g, fig.priorDebt > 0 ? fig.priorDebt : 0)
+      .replace(/{שורת_זכות}/g, S.buildCreditLinesFig(fig))
+      .replace(/{יתרת_זכות}/g, fig.creditLeft > 0 ? fig.creditLeft : 0)
+      .replace(/{סה"כ}/g, fig.total).replace(/{חשבונות}/g, accountsBlock).replace(/{יתרה}/g, balanceLine1)
+      .replace(/{פירוט_קיזוז}/g, S.buildOffsetBlock(d, tenant)).replace(/{לינק_פורטל}/g, portalUrl1);
+  };
+  const ALL = 'שלום {שם}! {חודש}\nהסכום: *{סכום} ₪*\n{שורת_חוב_קודם}\n{חוב_קודם}|{שורת_זכות}|{יתרת_זכות}|{סה"כ}{חשבונות}\n{יתרה}\n{פירוט_קיזוז}\n{לינק_פורטל}';
+  const GT = [
+    { id: 1, name: 'א', openingDebt: 0 }, { id: 2, name: 'ב', openingDebt: 460, extraAccounts: [ins({ openingDebt: 30 })] },
+    { id: 3, name: 'ג', openingDebt: -100, extraAccounts: [ins({ openingDebt: -200 })] }, { id: 4, name: 'ד', suspended: true, extraAccounts: [ins(), wat({ frequency: 'yearly', openingDebt: 40 })] },
+    { id: 5, name: 'ה', openingDebt: 230, customAmount: 300 }, { id: 6, name: 'ו', extraAccounts: [ins()] }
+  ];
+  const GD = base({ tenants: GT, sentLog: { ['1_' + EM]: BIx(230), ['2_' + EM]: MPx(100), ['3_' + EM]: 'sent_x', ['6_' + EM]: BIx(500), ['2__acc__i1_' + EM]: MPx(20) },
+    paymentHistory: { '2': [{ month: PREV, paid: false, amount: 230 }], '6': [{ month: PREV, paid: true, amount: 230, debtOffset: { monthCharge: 230, priorDebtPaid: 100, newCredit: 0 } }] } });
+  const goldenMsgs = GT.map(tn => compose(GD, tn, ALL));
+  t.eq('golden: 6 members × every old placeholder — byte-identical', GT.map(tn => frozen78(GD, tn, ALL)), goldenMsgs);
+  t.eq('golden precondition: non-trivial (accounts, credit, offset, portal all exercised)',
+    [goldenMsgs.some(m => m.includes('• ביטוח')), goldenMsgs.some(m => m.includes('קוזזה יתרת זכות')), goldenMsgs.some(m => m.includes('מתוך תשלומך')), goldenMsgs.every(m => m.includes('https://portal.test/x')), new Set(goldenMsgs).size],
+    [true, true, true, true, 6]);
+  const DEF = 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
+  t.eq('golden: default template too', GT.map(tn => frozen78(GD, tn, DEF)), GT.map(tn => compose(GD, tn, DEF)));
+  t.eq('no {לינק_פורטל} → no portal URL created (same side effect as before)', (() => {
+    let calls = 0; const n0 = Object.keys(S); const g = Object.assign({}, S, { getOrCreatePortalUrl: () => { calls++; return 'U'; } });
+    const fn = new Function(...Object.keys(g), lib.extractFunctions(src, ['composeReminder']) + '; return composeReminder;')(...Object.keys(g).map(k => g[k]));
+    fn(GD, GT[0], 'שלום {שם}', ctx()); const a = calls; fn(GD, GT[0], '{לינק_פורטל}', ctx()); return [a, calls]; })(), [0, 1]);
+
+  // ── ז2-A {סה"כ_כולל} ──
+  t.section('v2.14.79 (1ו, ז2-A) — {סה"כ_כולל} = {סה"כ} + Σ the {חשבונות} lines');
+  {
+    const tn = { id: 7, name: 'ז', extraAccounts: [ins(), wat({ frequency: 'yearly', openingDebt: 40 })] };
+    const d = base({ tenants: [tn] });
+    t.eq('main 230 + insurance 50 + water carried 40 → "230|320"', compose(d, tn, '{סה"כ}|{סה"כ_כולל}'), '230|320');
+    const r = S.composeReminder(d, tn, '{סה"כ_כולל}', ctx());
+    t.eq('grandTotal == fig.total + block.total', r.grandTotal, r.fig.total + S.buildAccountsBlock(d, tn, EM).total);
+    const lines = (S.buildAccountsBlock(d, tn, EM).block.match(/= \*([\d.]+) ₪\*|: \*([\d.]+) ₪\*$|חוב קודם \*([\d.]+) ₪\*/gm) || []).map(x => parseFloat(x.replace(/[^\d.]/g, '')));
+    t.eq('{סה"כ_כולל} − {סה"כ} == the sum of the printed lines (50 + 40)', [lines.reduce((a, b) => a + b, 0), r.grandTotal - r.fig.total], [90, 90]);
+    t.eq('{סה"כ} regex does not eat {סה"כ_כולל} (order-independent)', compose(d, tn, '{סה"כ_כולל}{סה"כ}'), '320230');
+    const tnS = { id: 8, name: 'ח', suspended: true, extraAccounts: [ins()] };
+    t.eq('suspended main + unpaid extra → "{סכום}|{סה"כ_כולל}" = "0|50"', compose(base({ tenants: [tnS] }), tnS, '{סכום}|{סה"כ_כולל}'), '0|50');
+    const tnC = { id: 9, name: 'ט', openingDebt: -300, extraAccounts: [ins()] };
+    t.eq('main covered by credit → total main 0 + extra 50', compose(base({ tenants: [tnC] }), tnC, '{סה"כ}|{סה"כ_כולל}'), '0|50');
+    const tnN = { id: 10, name: 'י' };
+    t.eq('no extra accounts → {סה"כ_כולל} == {סה"כ}', compose(base({ tenants: [tnN] }), tnN, '{סה"כ}|{סה"כ_כולל}'), '230|230');
+    const msg = await lib.loadSendOneRoute(base({ tenants: [tn], config: { amount: 230, manualMonth: EM, template: 'סה"כ: {סה"כ_כולל}{חשבונות}' } }), 7);
+    t.eq('REAL send-one route: "סה"כ: 320" + the lines', msg, 'סה"כ: 320\n• ביטוח: *50 ₪*\n• מים: חוב קודם *40 ₪*');
+  }
+
+  // ── ז3-A suspended extra ──
+  t.section('v2.14.79 (1ו, ז3-A) — suspended extra account: carried debt shown, month exempt');
+  {
+    const tn = { id: 11, name: 'כ', extraAccounts: [ins({ suspended: true, openingDebt: 70 })] };
+    const d = base({ tenants: [tn], sentLog: { ['11_' + EM]: BIx(230) } });
+    t.eq('line = carried only', S.buildAccountsBlock(d, tn, EM).block, '\n• ביטוח: חוב קודם *70 ₪*');
+    t.eq('the month is NOT charged (70, not 120)', S.buildAccountsBlock(d, tn, EM).total, 70);
+    t.eq('carried debt alone does not trigger the auto send (main paid)', [S.tenantOwesActiveExtra(d, tn, EM), S.autoSendShouldRemind(d, tn, MK)], [false, false]);
+    const tnP = { id: 12, name: 'ל', extraAccounts: [ins({ suspended: true, suspensions: [{ from: MK, to: null }], openingDebt: 0 })] };
+    t.eq('suspended, nothing carried → no line', S.buildAccountsBlock(base({ tenants: [tnP] }), tnP, EM).block, '');
+    t.eq('inactive account (active:false) still never shown', S.buildAccountsBlock(base(), { id: 13, extraAccounts: [ins({ active: false, openingDebt: 70 })] }, EM).block, '');
+  }
+
+  // ── ז5-A remindAccountIds ──
+  t.section('v2.14.79 (1ו, ז5-A) — remindAccountIds (the "WA לחייבים בחשבון" selector)');
+  {
+    const R = (accs, over) => { const tn = { id: 20, name: 'מ', extraAccounts: accs }; return S.remindAccountIds(base(Object.assign({ tenants: [tn] }, over || {})), tn, MK, EM); };
+    const sl = v => ({ sentLog: { ['20__acc__i1_' + EM]: v } });
+    t.eq('unpaid → [T1]', R([ins()]), ['T1']);
+    t.eq('paid in full → []', R([ins()], sl(BIx(50))), []);
+    t.eq('partial → [T1]', R([ins()], sl(MPx(20))), ['T1']);
+    t.eq('credit covers the month → []', R([ins({ openingDebt: -100 })]), []);
+    t.eq('paid + carried only → [] (same rule as the auto send)', R([ins({ openingDebt: 70 })], sl(BIx(50))), []);
+    t.eq('suspended → []', R([ins({ suspended: true, openingDebt: 70 })]), []);
+    t.eq('inactive → []', R([ins({ active: false })]), []);
+    t.eq('not a billing month (yearly) → []', R([ins({ frequency: 'yearly' })]), []);
+    t.eq('no templateId, same name → linked by name → [T1]', R([{ id: 'x', label: 'ביטוח', amount: 50 }]), ['T1']);
+    t.eq('unlinked (no definition with that name) → []', R([{ id: 'x', label: 'חניה', amount: 50 }]), []);
+    t.eq('two accounts → [T1, T2]', R([ins(), wat()]), ['T1', 'T2']);
+    t.eq('consistent with tenantOwesActiveExtra', (() => { const tn = { id: 20, extraAccounts: [ins(), wat({ openingDebt: -500 })] }; const d = base({ tenants: [tn] });
+      return [S.remindAccountIds(d, tn, MK, EM).length > 0, S.tenantOwesActiveExtra(d, tn, EM)]; })(), [true, true]);
+  }
+
+  // ── ז4-A reminderAccountsGap ──
+  t.section('v2.14.79 (1ו, ז4-A) — reminderAccountsGap');
+  {
+    const G = (tenants, template) => S.reminderAccountsGap(base({ tenants, config: Object.assign({ amount: 230, manualMonth: EM }, template !== undefined ? { template } : {}) }));
+    t.eq('no member has an extra account → null (payload unchanged)', G([{ id: 1 }, { id: 2, extraAccounts: [] }]), null);
+    t.eq('only inactive accounts → null', G([{ id: 1, extraAccounts: [ins({ active: false })] }]), null);
+    const T3 = [{ id: 1, extraAccounts: [ins()] }, { id: 2, extraAccounts: [ins({ openingDebt: -500 })] }, { id: 3, extraAccounts: [ins({ suspended: true, openingDebt: 30 })] }];
+    t.eq('default template → not covered, owing 2 (unpaid + suspended carried; credit-covered not)', G(T3), { covered: false, owing: 2 });
+    t.eq('{חשבונות} → covered', G(T3, 'x{חשבונות}').covered, true);
+    t.eq('{סה"כ_כולל} → covered', G(T3, 'x {סה"כ_כולל}').covered, true);
+    t.eq('{סה"כ} alone → NOT covered', G(T3, 'x {סה"כ}').covered, false);
+  }
+
+  // ── /api/data (REAL handler) ──
+  t.section('v2.14.79 (1ו) — GET /api/data: new fields only where extras exist');
+  {
+    const head = "app.get('/api/data', authMiddleware, (req, res) => {";
+    const st = src.indexOf(head); const body = src.slice(st + head.length, src.indexOf('\n});\n', st));
+    const runData = d => { const g = Object.assign({}, S, { loadTenantData: () => d, SERVER_VERSION: 'x', getLabels: () => ({}) });
+      const names = Object.keys(g); let out;
+      new Function(...names, 'req', 'res', body)(...names.map(n => g[n]), { query: {}, user: { tenantId: 'B' } }, { json: o => { out = o; } }); return out; };
+    const no = runData(base({ tenants: [{ id: 1, name: 'א' }, { id: 2, name: 'ב', openingDebt: 100 }] }));
+    t.eq('no extras: no remindAcc / accOwedNow / reminderAccountsGap keys', [no.tenants.some(x => 'remindAcc' in x || 'accOwedNow' in x), 'reminderAccountsGap' in no], [false, false]);
+    const yes = runData(base({ tenants: [{ id: 1, name: 'א' }, { id: 2, name: 'ב', extraAccounts: [ins(), wat({ openingDebt: 40 })] }],
+      sentLog: { ['2__acc__w1_' + EM]: BIx(80) } }));
+    const t2 = yes.tenants.find(x => x.id === 2);
+    t.eq('member with extras: remindAcc [T1] (water paid), accOwedNow 90 (50 + carried 40)', [t2.remindAcc, t2.accOwedNow], [['T1'], 90]);
+    t.eq('member without extras in the same building: no new keys', 'remindAcc' in yes.tenants.find(x => x.id === 1), false);
+    t.eq('reminderAccountsGap shipped (default template)', yes.reminderAccountsGap, { covered: false, owing: 1 });
+  }
+
+  // ── ז6-A portal ──
+  t.section('v2.14.79 (1ו, ז6-A) — portal: accountsView + grandTotal from the server');
+  {
+    const tn = { id: 30, name: 'נ', openingDebt: 100, extraAccounts: [ins({ openingDebt: 20 }), wat({ frequency: 'yearly', openingDebt: -10 }), ins({ id: 'off', label: 'כבוי', active: false, openingDebt: 999 })] };
+    const OLD1 = S.crMonthAdd(MK, -2), OLD1_HEB = S.HEBREW_MONTHS[Number(OLD1.slice(5)) - 1];
+    const ph = { '30__acc__i1': [
+      { month: MK, paid: true, amount: 50, paidAmount: 50, type: 'bank_import' },                 // current, no sentLog → not paid
+      { month: PREV, paid: true, amount: 50, paidAmount: 50, type: 'bank_import', payerName: 'כהן' }, // confirmed by sentLog → paid
+      { month: OLD1, paid: true, amount: 50, type: 'manual' },                                     // no sentLog → review
+      { month: PREV, type: 'wa_sent', amount: 50 }                                                  // never shown
+    ] };
+    const d = base({ tenants: [tn], paymentHistory: J(ph), sentLog: { ['30__acc__i1_' + PREV_HEB]: BIx(50) } });
+    const before = JSON.stringify(d);
+    const p = lib.loadPortalRoute(d, 30);
+    t.eq('read-only: stored data untouched', JSON.stringify(d), before);
+    t.eq('inactive account not shown; 2 cards', p.accountsView.map(a => a.id), ['i1', 'w1']);
+    t.eq('money == extraAccountSplit (owedNow / owedCurrent / owedPrior / creditLeft)', p.accountsView.map(a => [a.owedNow, a.owedCurrent, a.owedPrior, a.creditLeft]),
+      tn.extraAccounts.slice(0, 2).map(a => { const x = S.extraAccountSplit(d, tn, a, MK, EM); return [x.owedNow, x.owedCurrent, x.owedPrior, x.creditLeft]; }));
+    t.eq('grandTotal == current.amountDue + Σ owedNow', p.grandTotal, Math.round((p.current.amountDue + p.accountsView.reduce((x, a) => x + a.owedNow, 0)) * 100) / 100);
+    t.eq('grandTotal precondition: both parts non-zero', [p.current.amountDue > 0, p.accountsView[0].owedNow > 0], [true, true]);
+    const h = p.accountsView[0].history;
+    t.eq('history: wa_sent excluded, newest first', h.map(r => r.monthKey), [MK, PREV, OLD1]);
+    t.eq('current month: paid only if the account sentLog says so (none → unpaid, not review)', [h[0].paid, h[0].review], [false, false]);
+    t.eq('confirmed older month → ✅ paid + payer + type label', [h[1].paid, h[1].review, h[1].payerName, h[1].typeLabel], [true, false, 'כהן', 'ייבוא בנק']);
+    t.eq('unconfirmed paid month → ⏳ בבירור (main parity)', [h[2].paid, h[2].review], [false, true]);
+    t.eq('history capped at 12', (() => { const many = []; for (let i = 1; i <= 15; i++) many.push({ month: S.crMonthAdd(MK, -i), paid: false, amount: 50 });
+      return S.portalAccountsView(base({ paymentHistory: { '30__acc__i1': many } }), { id: 30, extraAccounts: [ins()] }, MK, EM)[0].history.length; })(), 12);
+    const pn = lib.loadPortalRoute(base({ tenants: [{ id: 40, name: 'ס', openingDebt: 50 }] }), 40);
+    t.eq('member without extras: accountsView [] and grandTotal == amountDue', [pn.accountsView, pn.grandTotal], [[], pn.current.amountDue]);
+    t.eq('old payload kept for a cached page (extraBalances present)', !!p.extraBalances && p.extraBalances.i1.owedNow === p.accountsView[0].owedNow, true);
+  }
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); process.exit(t.done() ? 1 : 0); })();

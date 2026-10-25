@@ -193,7 +193,7 @@ t.eq('portal derives mainAccountLabel from building.mainAccount',
 t.eq('portal subtitle no longer hardcodes "חשבון ראשי ·"',
   /'חשבון ראשי · '/.test(portal), false);
 t.eq('portal subtitle composes from the type label var',
-  /_mainTypeLabel\s*\+\s*' · '/.test(portal), true);
+  /(?:portalEsc\()?_mainTypeLabel\)?\s*\+\s*' · '/.test(portal), true);   // v2.14.79 — escaped
 t.eq('getLabels iterates fallback keys so mainAccount override applies',
   /Object\.keys\(fallback\)\.forEach/.test(srv), true);
 
@@ -1902,10 +1902,18 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   Object.keys(paths).forEach(k => {
     const b = paths[k];
     t.eq(k + ': body located', b.length > 200, true);
-    t.eq(k + ': calls buildReminderFigures', /buildReminderFigures\(d, tenant, mk, month, amount\)/.test(b), true);
-    t.eq(k + ': {סכום} ← fig.monthDue', b.includes('.replace(/{סכום}/g, fig.monthDue)'), true);
-    t.eq(k + ': {סה"כ} ← fig.total', b.includes('.replace(/{סה"כ}/g, fig.total)'), true);
-    t.eq(k + ': prior-debt line ← fig.priorDebt', b.includes('buildPriorDebtLine(fig.priorDebt)'), true);
+    // v2.14.79 (1ו, ז7-A) — each path delegates to the ONE composer with the same inputs.
+    t.eq(k + ': calls composeReminder(…month, mk, amount)', /composeReminder\(d, tenant, tmpl, \{ tenantDataId: [\w.]+, month, mk, amount \}\)/.test(b), true);
+  });
+  {
+    const cb = body('function composeReminder(', '\n}\n');
+    t.eq('composer: calls buildReminderFigures(d, tenant, ctx.mk, ctx.month, ctx.amount)', cb.includes('buildReminderFigures(d, tenant, ctx.mk, ctx.month, ctx.amount)'), true);
+    t.eq('composer: {סכום} ← fig.monthDue', cb.includes('.replace(/{סכום}/g, fig.monthDue)'), true);
+    t.eq('composer: {סה"כ} ← fig.total', cb.includes('.replace(/{סה"כ}/g, fig.total)'), true);
+    t.eq('composer: prior-debt line ← fig.priorDebt', cb.includes('buildPriorDebtLine(fig.priorDebt)'), true);
+  }
+  Object.keys(paths).forEach(k => {
+    const b = paths[k];
     t.eq(k + ': no local amount + debt arithmetic', /amount \+ debt|calcTotalDebt\(/.test(b), false);
   });
   t.eq('GET /api/data uses the shared splitCurrentMonthDebt',
@@ -2030,7 +2038,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.section('v2.14.57 — portal page consumes the credit split');
   t.eq('leftover from server creditLeft (no client re-derivation)', pg57.includes('const leftover = creditLeft;') && !pg57.includes('creditBalance - c.amount'), true);
   t.eq('partial banner shows credit offset', pg57.includes("קוזזה יתרת זכות: ' + creditApplied + '₪"), true);
-  t.eq('breakdown row shows − קרדיט', pg57.includes("' − קרדיט ' + money(main.mainCreditApplied)"), true);
+  t.eq('breakdown row shows − קרדיט', pg57.includes("' − קרדיט ' + portalMoney(main.mainCreditApplied)"), true);
 
   t.section('v2.14.57 — guide');
   t.eq('guide: credit netted everywhere box', gd57.includes('יתרת זכות מקוזזת מיד — בכל המסכים'), true);
@@ -2686,7 +2694,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('accounts modal shows credit in green', app64.includes('זכות: ₪${acc.creditLeft}</span>` : \'\';') && app64.includes('${(debt || creditTag) ?'), true);
 
   t.section('v2.14.64 — tenant portal consumes extraBalances');
-  const pf = extractFunctions(portal64, ['renderUnifiedBreakdown']);
+  const pf = extractFunctions(portal64, ['portalEsc', 'portalMoney', 'portalAccHistoryHtml', 'renderUnifiedBreakdown']);   // v2.14.79 helpers
   const runP = d => {
     const els = { breakdownCard: { style: {} }, breakdownRows: { innerHTML: '' }, breakdownTotalAmount: { textContent: '' } };
     new Function('document', pf + '\n; return renderUnifiedBreakdown;')({ getElementById: id => els[id] || null })
@@ -2699,18 +2707,18 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
                p: { status: 'partial', owedNow: 60, owedCurrent: 60, owedPrior: 0, creditLeft: 0, creditApplied: 0, charge: 100, paidNow: 40 },
                y: { status: 'notBilling', owedNow: 80, owedCurrent: 0, owedPrior: 80, creditLeft: 0, creditApplied: 0, charge: 0, paidNow: 0 },
                s: { status: 'exempt', owedNow: 0, owedCurrent: 0, owedPrior: 0, creditLeft: 0, creditApplied: 0, charge: 0, paidNow: 0 } };
-  const P = runP({ tenant: { extraAccounts: accs }, current: { monthKey: '2026-09' }, extraBalances: EB, extraPaymentHistory: {}, extraCurrentStatus: {} });
-  t.eq('portal total = 60 + 80 (credit and exemption respected)', P.total, '140 ₪');
+  // v2.14.79 (1ו, ז6-A) — the page now renders d.accountsView + d.grandTotal (server).
+  const AV = accs.map(a => Object.assign({ id: a.id, label: a.label, frequency: a.frequency, suspended: a.suspended === true, history: [] }, EB[a.id]));
+  const P = runP({ tenant: { extraAccounts: accs }, current: { monthKey: '2026-09' }, accountsView: AV, grandTotal: 140 });
+  t.eq('portal total = server grandTotal verbatim (140)', P.total, '140 ₪');
   t.eq('covered → "✅ מכוסה מזכות" + credit text', P.rows.includes('✅ מכוסה מזכות') && P.rows.includes('יתרת זכות 900 ₪'), true);
   t.eq('partial → "שולם 40 ₪, נותר 60 ₪ החודש"', P.rows.includes('שולם 40 ₪, נותר 60 ₪ החודש'), true);
   t.eq('yearly → "אין חיוב החודש + חוב קודם 80 ₪"', P.rows.includes('אין חיוב החודש + חוב קודם 80 ₪'), true);
   t.eq('suspended → "⏸ פטור"', P.rows.includes('⏸ פטור'), true);
-  const L = runP({ tenant: { extraAccounts: [{ id: 'l', label: 'ישן', amount: 100, frequency: 'monthly', openingDebt: 0 }] }, current: { monthKey: '2026-09' },
-                   extraPaymentHistory: {}, extraCurrentStatus: { l: 'unpaid' } });
-  t.eq('older server without extraBalances → legacy path (100)', L.total, '100 ₪');
-  t.eq('portal: no client-side money math on the new path', /var sp = eb \? eb\[acc\.id\] : null;[\s\S]*?\/\/ ── legacy fallback/.test(portal64) &&
-    !/sp\.(owedNow|owedCurrent|owedPrior|creditLeft)\s*[-+*\/]/.test(portal64), true);
-
+  const P2 = runP({ tenant: { extraAccounts: accs }, current: { monthKey: '2026-09' }, accountsView: AV, grandTotal: 999 });
+  t.eq('page does NOT add up the total (server 999 shown as-is)', P2.total, '999 ₪');
+  t.eq('portal: no client-side money math (no total accumulation, no legacy re-derivation)',
+    !/grandTotal\s*\+=/.test(portal64) && !portal64.includes('legacy fallback') && !/acc\.(owedNow|owedCurrent|owedPrior|creditLeft)\s*[-+*\/]/.test(portal64), true);
   t.section('v2.14.64 — guide');
   t.eq('guide: extra accounts — one number everywhere', gd64.includes('🧾 חשבונות נוספים — אותו חישוב בכל מקום'), true);
   t.eq('guide: statuses in the tenant list', gd64.includes('🟡') && gd64.includes('מכוסה מזכות') && gd64.includes('אין חיוב החודש'), true);
@@ -3122,7 +3130,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.section('v2.14.74 — template row (EXECUTED renderAccountTemplates)');
   t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
   {
-    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth']);
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates']);   // v2.14.79 — + payments selector
     const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
     const S = runInSandbox('var accountTemplates;\n' + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
       { document: { getElementById: id => els[id] || null } });
@@ -3607,5 +3615,122 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
       ['id="vpg-acc-bank"', '📂 לאיזה חשבון שייך הקובץ', 'שילם, אבל אין לו את החשבון', 'זיכרון ייבוא משלו', 'id="vpg-closed-queue"', 'רשימה קבועה', 'id="vpg-undo-acc"', 'אחד לכל הבניין', 'id="vpg-acc-bankfile"'].every(x => gd.includes(x)), true);
   }
 }
+
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.79 (1ו) — notifications + portal (EXECUTED where possible)
+// ════════════════════════════════════════════════════════════════
+global.__crRuns = (global.__crRuns || []).concat([(async () => {
+  const app = readSource('public/app.html'), portal = readSource('public/tenant-portal.html'), gd = readSource('public/vaadpro-guide.js');
+  t.section('v2.14.79 (1ו, ז4-A) — template warning + send confirm (EXECUTED)');
+  {
+    const fns = extractFunctions(app, ['tplAccGapText', 'renderTplAccWarn', 'confirmAccountsGap', 'accOwing']);
+    const mk = (dataObj, confirmRet) => {
+      const els = { tplAccWarn: { textContent: '', style: { display: 'none' } } }; const asked = [];
+      const X = runInSandbox('var data;\n' + fns + '\nmodule.exports={set:function(d){data=d;},tplAccGapText,renderTplAccWarn,confirmAccountsGap,accOwing};',
+        { document: { getElementById: id => els[id] || null }, confirm: m => { asked.push(m); return confirmRet; } });
+      X.set(dataObj); return { X, els, asked };
+    };
+    const gap = { covered: false, owing: 3 };
+    const { X } = mk({ reminderAccountsGap: gap });
+    t.eq('no gap object (building without extras) → no text', X.tplAccGapText('x', null), '');
+    t.eq('template with {חשבונות} → no text', X.tplAccGapText('a{חשבונות}', gap), '');
+    t.eq('template with {סה"כ_כולל} → no text', X.tplAccGapText('a{סה"כ_כולל}', gap), '');
+    t.eq('missing → warning with the count', /לא כוללת \{חשבונות\}/.test(X.tplAccGapText('a {סה"כ}', gap)) && X.tplAccGapText('a', gap).includes('כרגע 3 חייבים'), true);
+    const w = mk({ reminderAccountsGap: gap }); w.X.renderTplAccWarn('שלום');
+    t.eq('renderTplAccWarn shows the box', [w.els.tplAccWarn.style.display, w.els.tplAccWarn.textContent.length > 20], ['block', true]);
+    w.X.renderTplAccWarn('שלום{חשבונות}');
+    t.eq('…and hides it once the text includes {חשבונות}', w.els.tplAccWarn.style.display, 'none');
+    const c1 = mk({ reminderAccountsGap: gap }, false);
+    t.eq('confirm asked when gap + owing recipients; "cancel" stops', [c1.X.confirmAccountsGap(2), c1.asked.length, c1.asked[0].includes('2 מהנמענים')], [false, 1, true]);
+    const c2 = mk({ reminderAccountsGap: gap }, false);
+    t.eq('no owing recipient → no question', [c2.X.confirmAccountsGap(0), c2.asked.length], [true, 0]);
+    const c3 = mk({ reminderAccountsGap: { covered: true, owing: 5 } }, false);
+    t.eq('covered template → no question', [c3.X.confirmAccountsGap(5), c3.asked.length], [true, 0]);
+    const c4 = mk({}, false);
+    t.eq('building without extras → no question', [c4.X.confirmAccountsGap(5), c4.asked.length], [true, 0]);
+    t.eq('accOwing reads the server field only', [c4.X.accOwing({ accOwedNow: 40 }), c4.X.accOwing({ accOwedNow: 0 }), c4.X.accOwing({})], [true, false, false]);
+    const body = n => { const m = app.match(new RegExp('async function ' + n + '\\([\\s\\S]*?\\n\\}')); return m ? m[0] : ''; };
+    t.eq('sendOne / sendAll / sendUnpaidOnly / sendAccountDebtors ask confirmAccountsGap after confirmManualSend',
+      ['sendOne', 'sendAll', 'sendUnpaidOnly', 'sendAccountDebtors'].every(n => { const b = body(n); return b.indexOf('confirmAccountsGap(') > b.indexOf('confirmManualSend()') && b.indexOf('confirmManualSend()') > 0; }), true);
+    t.eq('markup: warning box under the template + {סה"כ_כולל} chip + hint', app.includes('id="tplAccWarn"') && app.includes("insertVar('{סה&quot;כ_כולל}')") && app.includes('{סה״כ_כולל} = {סה״כ} + כל החשבונות הנוספים'), true);
+    t.eq('AI improver keeps {סה"כ_כולל}', app.includes('{סה"כ} {סה"כ_כולל} {חשבונות}'), true);
+  }
+
+  t.section('v2.14.79 (1ו) — preview sample (EXECUTED updatePreview)');
+  {
+    const fns = extractFunctions(app, ['updatePreview', 'tplAccGapText', 'renderTplAccWarn']);
+    const els = { cfgTemplate: { value: '{סה"כ}|{סה"כ_כולל}|{חשבונות}' }, cfgAmount: { value: '230' }, msgPreview: { textContent: '' }, tplAccWarn: { textContent: '', style: {} } };
+    runInSandbox('var data={tenants:[],config:{},reminderAccountsGap:{covered:false,owing:1}};\n' + fns + '\nupdatePreview();', { document: { getElementById: id => els[id] || null } });
+    t.eq('{סה"כ_כולל} sample = {סה"כ} + the sample lines (430 + 720 = 1150)', els.msgPreview.textContent.startsWith('430|1150|'), true);
+    t.eq('preview template has {חשבונות} → no warning', els.tplAccWarn.style.display, 'none');
+  }
+
+  t.section('v2.14.79 (1ו, ז5-A) — "WA לחייבים בחשבון" (EXECUTED)');
+  {
+    const fns = extractFunctions(app, ['bankTargetTemplates', 'populatePayAccSend', 'accountDebtors', 'sendAccountDebtors', 'esc', 'confirmAccountsGap', 'accOwing']);
+    const run = async (opts) => {
+      const els = { payAccSendBox: { style: { display: 'none' } }, payAccSend: { value: '', innerHTML: '' }, btnSendAcc: { disabled: false }, sendingStatus: { textContent: '' } };
+      const posted = [], toasts = [], asked = [];
+      const X = runInSandbox('var accountTemplates, data;\n' + fns + '\nmodule.exports={set:function(a,d){accountTemplates=a;data=d;},populatePayAccSend,accountDebtors,sendAccountDebtors};', {
+        document: { getElementById: id => els[id] || null }, API: '/api',
+        fetch: async (u) => { posted.push(u); return { json: async () => ({ ok: true }) }; },
+        toast: (m) => toasts.push(m), confirm: m => { asked.push(m); return opts.confirm !== false; }, confirmManualSend: () => true,
+        loadData: async () => {}, render: () => {}, setTimeout: (f) => f(), Promise });
+      X.set(opts.tpls, opts.data);
+      X.populatePayAccSend();
+      if (opts.pick !== undefined) els.payAccSend.value = opts.pick;
+      if (opts.send) await X.sendAccountDebtors();
+      return { X, els, posted, toasts, asked };
+    };
+    const TP = [{ id: 'T1', label: 'ביטוח <x>', type: 'fixed', linked: 3 }, { id: 'T2', label: 'מים', type: 'fixed', linked: 0 },
+                { id: 'TF', label: 'חשמל', type: 'formula', linked: 1 }, { id: 'TN', label: 'לא שמור', type: 'fixed' }];
+    const tenants = [{ id: 1, remindAcc: ['T1'] }, { id: 2, remindAcc: ['T1', 'T2'], accOwedNow: 90 }, { id: 3, remindAcc: [] }, { id: 4 }];
+    const a = await run({ tpls: TP, data: { tenants } });
+    t.eq('selector: saved fixed definitions only (no formula / unsaved), label escaped, box shown',
+      [a.els.payAccSendBox.style.display, (a.els.payAccSend.innerHTML.match(/<option/g) || []).length, a.els.payAccSend.innerHTML.includes('ביטוח &lt;x&gt;')], ['inline-flex', 2, true]);
+    const b = await run({ tpls: [], data: { tenants } });
+    t.eq('no saved definitions → hidden', b.els.payAccSendBox.style.display, 'none');
+    t.eq('accountDebtors filters on the server list only', [a.X.accountDebtors(tenants, 'T1').map(x => x.id), a.X.accountDebtors(tenants, 'T2').map(x => x.id), a.X.accountDebtors(tenants, '').length], [[1, 2], [2], 0]);
+    const s = await run({ tpls: TP, data: { tenants }, pick: 'T1', send: true });
+    t.eq('send → POST /api/send/:id for the 2 debtors of T1 only', s.posted, ['/api/send/1', '/api/send/2']);
+    t.eq('one confirm names the account and the count', s.asked.some(m => m.includes('ל-2 חברים') && m.includes('ביטוח')), true);
+    const n = await run({ tpls: TP, data: { tenants }, pick: 'T2', send: true, confirm: false });
+    t.eq('cancel → nothing sent', n.posted, []);
+    const z = await run({ tpls: TP, data: { tenants: [{ id: 9, remindAcc: [] }] }, pick: 'T1', send: true });
+    t.eq('no debtors → toast, nothing sent', [z.posted.length, z.toasts.some(m => m.includes('אין חייבים'))], [0, true]);
+    t.eq('markup: selector + button in the payments card', app.includes('id="payAccSendBox"') && app.includes('onclick="sendAccountDebtors()"'), true);
+    t.eq('renderAccountTemplates refreshes the selector', /populatePayAccSend\(\);/.test(extractFunctions(app, ['renderAccountTemplates'])), true);
+  }
+
+  t.section('v2.14.79 (1ו, ז6-A) — portal account cards + history (EXECUTED)');
+  {
+    const pf = extractFunctions(portal, ['portalEsc', 'portalMoney', 'portalAccHistoryHtml', 'renderUnifiedBreakdown']);
+    const runP = d => {
+      const els = { breakdownCard: { style: {} }, breakdownRows: { innerHTML: '' }, breakdownTotalAmount: { textContent: '' } };
+      new Function('document', pf + '\n; return renderUnifiedBreakdown;')({ getElementById: id => els[id] || null })
+        (d, { mainPaid: false, mainPriorDebt: 0, mainLabel: 'בניין <b>', mainAccountLabel: 'ועד בית', mainCurrent: 230, mainAmountDue: 230 });
+      return { rows: els.breakdownRows.innerHTML, total: els.breakdownTotalAmount.textContent };
+    };
+    const AV = [{ id: 'i1', label: 'ביטוח <i>', frequency: 'monthly', status: 'unpaid', owedNow: 70, owedCurrent: 50, owedPrior: 20, creditLeft: 0, creditApplied: 0, paidNow: 0,
+      history: [{ monthKey: '2026-08', monthLabel: 'אוגוסט 2026', paid: true, review: false, amount: 50, paidAmount: 50, typeLabel: 'ייבוא בנק', date: '2026-08-03', payerName: 'כהן' },
+                { monthKey: '2026-07', monthLabel: 'יולי 2026', paid: false, review: true, amount: 50, paidAmount: null, typeLabel: '', date: '', payerName: '' }] },
+      { id: 'w1', label: 'מים', frequency: 'yearly', status: 'notBilling', owedNow: 0, owedCurrent: 0, owedPrior: 0, creditLeft: 10, creditApplied: 0, paidNow: 0, history: [] }];
+    const P = runP({ accountsView: AV, grandTotal: 300 });
+    t.eq('one <details> card per account', (P.rows.match(/<details class="acc-card"/g) || []).length, 2);
+    t.eq('row: "50 ₪ החודש + חוב קודם 20 ₪" → 70 ₪', P.rows.includes('50 ₪ החודש + חוב קודם 20 ₪') && P.rows.includes('70 ₪'), true);
+    t.eq('history: ✅ שולם with payer, ⏳ בבירור for review', P.rows.includes('✅ שולם') && P.rows.includes('שם המשלם: כהן') && P.rows.includes('⏳ בבירור'), true);
+    t.eq('empty history → friendly note; yearly → "אין חיוב החודש" + credit', P.rows.includes('אין עדיין תשלומים בחשבון זה') && P.rows.includes('אין חיוב החודש') && P.rows.includes('יתרת זכות 10 ₪'), true);
+    t.eq('labels escaped (account + building)', P.rows.includes('ביטוח &lt;i&gt;') && P.rows.includes('בניין &lt;b&gt;') && !P.rows.includes('<i>'), true);
+    t.eq('total = server grandTotal (not 230 + 70 recomputed)', runP({ accountsView: AV, grandTotal: 299 }).total, '299 ₪');
+    t.eq('no grandTotal from the server → "—", never a page sum', runP({ accountsView: AV }).total, '—');
+    t.eq('no accounts → main line only', (runP({ accountsView: [], grandTotal: 230 }).rows.match(/<details/g) || []).length, 0);
+  }
+
+  t.section('v2.14.79 (1ו) — guide');
+  t.eq('guide: send by account, {סה"כ_כולל}, template warning, suspended line, portal cards',
+    ['id="vpg-acc-send"', '💬 WA לחייבים בחשבון', '{סה"כ_כולל}', 'id="vpg-acc-tpl"', 'חוב קודם 80 ₪', 'id="vpg-portal-accounts"', 'היסטוריית התשלומים של אותו חשבון', 'עדיין לא קיימת'].every(x => gd.includes(x)), true);
+  t.eq('guide: the old "מושהה … לא נכלל בתזכורות" sentence is gone', gd.includes('חשבון מושהה לא נצבר לחוב ולא נכלל בתזכורות'), false);
+})()]);
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

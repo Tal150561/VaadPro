@@ -176,8 +176,14 @@ t.eq('buildPriorDebtLine defined exactly once',
   (server.match(/function buildPriorDebtLine\(/g) || []).length, 1);
 
 // All send paths + the excess-debt builder call the helper (4 call sites)
-t.eq('4 send paths call buildPriorDebtLine',
-  (server.match(/\{שורת_חוב_קודם\}\/g, buildPriorDebtLine\(/g) || []).length, 4);
+// v2.14.79 (1ו, ז7-A) — the 3 reminder paths share ONE composer (composeReminder), so
+// the wiring appears twice: composeReminder + the excess-debt builder.
+t.eq('composer + excess builder call buildPriorDebtLine (2)',
+  (server.match(/\{שורת_חוב_קודם\}\/g, buildPriorDebtLine\(/g) || []).length, 2);
+t.eq('send-one / send-all / auto all call composeReminder (3)',
+  (server.match(/const \{ msg \} = composeReminder\(d, tenant, tmpl, \{ tenantDataId: /g) || []).length, 3);
+t.eq('no inline reminder chain left outside composeReminder',
+  (server.match(/\.replace\(\/\{חשבונות\}\/g/g) || []).length, 1);
 
 // ORDERING GUARD (the subtle bit): in every path, {שורת_חוב_קודם} must be
 // replaced BEFORE {חוב_קודם}, else the /{חוב_קודם}/g regex corrupts the
@@ -185,13 +191,13 @@ t.eq('4 send paths call buildPriorDebtLine',
 // placeholder textually precedes the bare one in each of the 4 blocks.
 {
   const blocks = server.match(/\{שורת_חוב_קודם\}[\s\S]{0,120}?\{חוב_קודם\}/g) || [];
-  t.eq('whole-line placeholder replaced before the bare one (all 4)', blocks.length, 4);
+  t.eq('whole-line placeholder replaced before the bare one (composer + excess)', blocks.length, 2);
 }
 
 // The bare {חוב_קודם} now yields 0 (not '') when there is no debt, so a
 // hand-written "…{חוב_קודם}…" no longer leaves an empty gap.
 t.eq('bare {חוב_קודם} falls back to 0 not empty string',
-  (server.match(/\{חוב_קודם\}\/g, [^)]*\? [^:]*: 0\)/g) || []).length >= 3, true);
+  (server.match(/\{חוב_קודם\}\/g, [^)]*\? [^:]*: 0\)/g) || []).length >= 2, true);
 t.eq('no send path still uses the empty-string fallback',
   /\{חוב_קודם\}\/g, [^)]*\? [^:]*: ''\)/.test(server), false);
 
@@ -203,13 +209,13 @@ t.eq('buildCreditLine defined exactly once',
 // All 4 send/excess paths call the whole-line credit helper
 // v2.14.57 — the 3 reminder paths use the credit-aware buildCreditLinesFig(fig)
 // (offset line + remaining line); the excess letter keeps buildCreditLine.
-t.eq('3 reminder paths call buildCreditLinesFig(fig)',
-  (server.match(/\{שורת_זכות\}\/g, buildCreditLinesFig\(fig\)\)/g) || []).length, 3);
+t.eq('the reminder composer calls buildCreditLinesFig(fig) (1ו: one composer)',
+  (server.match(/\{שורת_זכות\}\/g, buildCreditLinesFig\(fig\)\)/g) || []).length, 1);
 t.eq('excess letter still calls buildCreditLine',
   (server.match(/\{שורת_זכות\}\/g, buildCreditLine\(/g) || []).length, 1);
 // All 4 paths wire the bare {יתרת_זכות} with a 0 fallback (never '')
-t.eq('4 paths wire bare {יתרת_זכות} with 0 fallback',
-  (server.match(/\{יתרת_זכות\}\/g, [\w.]+ > 0 \? [\w.]+ : 0\)/g) || []).length, 4);
+t.eq('composer + excess wire bare {יתרת_זכות} with 0 fallback',
+  (server.match(/\{יתרת_זכות\}\/g, [\w.]+ > 0 \? [\w.]+ : 0\)/g) || []).length, 2);
 t.eq('no path uses empty-string fallback for credit',
   /\{יתרת_זכות\}\/g, [^)]*: ''\)/.test(server), false);
 // credit is sourced from getCreditBalance in each send path (the single source)
@@ -218,7 +224,7 @@ t.eq('no path uses empty-string fallback for credit',
 t.eq('credit sourced from getCreditBalance (in the shared split)',
   /const credit = getCreditBalance\(d, tid\);/.test(server), true);
 t.eq('reminder paths: bare {יתרת_זכות} ← fig.creditLeft',
-  (server.match(/\{יתרת_זכות\}\/g, fig\.creditLeft > 0 \? fig\.creditLeft : 0\)/g) || []).length, 3);
+  (server.match(/\{יתרת_זכות\}\/g, fig\.creditLeft > 0 \? fig\.creditLeft : 0\)/g) || []).length, 1);
 
 // ── v2.14.20 — BankSync agent "already imported" reporting ─────────
 // The agent path (analyzeBankRowsServer → /api/import-bank) must classify rows that
