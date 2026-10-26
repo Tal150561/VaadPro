@@ -2120,6 +2120,29 @@ app.get('/api/data', authMiddleware, (req, res) => {
 // ── עדכון sentLog key בודד — ללא סנכרון paymentHistory ──────────────
 // להשתמש בזה במקום POST /api/data כשרוצים רק לעדכן/למחוק key ספציפי
 // (markPaid, markUnpaid, resetSent, sendOne — לא bank import)
+// ── v2.14.81 (ט3-A) — "🔄 אפס סימוני נשלח": removes ONLY the "sent" marks of the active
+// month (main + extra accounts). A PAYMENT mark (manual_paid / bank_import) and every
+// paymentHistory record are untouched. (Before: the page deleted EVERY key of the month
+// through /sentlog-key — wiping the month's payments, main AND extra-account sentLog.)
+function planResetSentMarks(d) {
+  const month = getEffectiveMonth((d && d.config) || {});
+  const log = (d && d.sentLog) || {};
+  const keys = Object.keys(log).filter(k => k.endsWith('_' + month));
+  const remove = keys.filter(k => !sentLogIsPayment(log[k]));
+  return { ok: true, month, remove, count: remove.length, keptPayments: keys.length - remove.length };
+}
+
+// POST /api/reset-sent-marks — dryRun DEFAULT (counts for the confirm); dryRun:false re-plans
+// against the stored data and writes sentLog only.
+app.post('/api/reset-sent-marks', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const plan = planResetSentMarks(d);
+  const out = { ok: true, month: plan.month, count: plan.count, keptPayments: plan.keptPayments };
+  if ((req.body || {}).dryRun !== false) return res.json(Object.assign({ dryRun: true }, out));
+  if (plan.count) { plan.remove.forEach(k => { delete d.sentLog[k]; }); saveTenantData(req.user.tenantId, { sentLog: d.sentLog }); }
+  res.json(Object.assign({ dryRun: false }, out));
+});
+
 app.post('/api/sentlog-key', authMiddleware, (req, res) => {
   const { key, value } = req.body; // value=null → מחיקה
   if (!key) return res.json({ ok: false, error: 'חסר key' });

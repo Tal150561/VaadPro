@@ -3855,4 +3855,79 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.81 (ט1–ט5) — reminders toolbar: hints, ❓, rows, reset; settings share card collapsed
+// ════════════════════════════════════════════════════════════════
+{
+  const app = readSource('public/app.html'), gd = readSource('public/vaadpro-guide.js');
+  const tag = id => { const m = app.match(new RegExp('<(button|select)[^>]*id="' + id + '"[^>]*>')); return m ? m[0] : ''; };
+  const block = (startId, endMark) => { const st = app.indexOf('id="' + startId + '"'); return st < 0 ? '' : app.slice(st, app.indexOf(endMark, st)); };
+
+  t.section('v2.14.81 (ט1, ט2, ט4, ט5) — toolbar markup');
+  {
+    const ids = ['btnSendAll', 'btnSendUnpaid', 'payAccSend', 'btnSendAcc', 'btnPortalSel', 'btnResetSent', 'payAccShortcut'];
+    t.eq('every control has a hover hint (title)', ids.map(id => /\stitle="[^"]{8,}"/.test(tag(id))), ids.map(() => true));
+    t.eq('hints say the key differences', [/גם למי ששילם/.test(tag('btnSendAll')), /רק לחייבים/.test(tag('btnSendUnpaid')), /ההודעה היא המלאה/.test(tag('btnSendAcc')),
+      /הקישור הקודם שלהם יפסיק לעבוד/.test(tag('btnPortalSel')), /תשלומים לא נמחקים/.test(tag('btnResetSent')), /מעבר להגדרות/.test(tag('payAccShortcut'))], [true, true, true, true, true, true]);
+    const sendRow = block('paySendRow', '</div>'), toolsRow = block('payToolsRow', '</div>');
+    t.eq('row 1 "שליחה": the 3 WA buttons only', [sendRow.includes('📨 שליחה'), ['btnSendAll', 'btnSendUnpaid', 'btnSendAcc'].every(x => sendRow.includes('id="' + x + '"')), /btnPortalSel|btnResetSent|payAccShortcut/.test(sendRow)], [true, true, false]);
+    t.eq('row 2 "כלים": portal / reset / settings, no WA send', [toolsRow.includes('🧰 כלים'), ['btnPortalSel', 'btnResetSent', 'payAccShortcut'].every(x => toolsRow.includes('id="' + x + '"')), /sendAll\(|sendUnpaidOnly\(|sendAccountDebtors\(/.test(toolsRow)], [true, true, false]);
+    t.eq('new names; old confusing names gone', [tag('btnResetSent').length > 0 && app.includes('🔄 אפס סימוני נשלח'), app.includes('💳 הגדרת חשבונות נוספים ↗'), app.includes('🔄 אפס סטטוס'), app.includes('💳 החל חשבון נוסף על כולם')], [true, true, false, false]);
+    const help = tag('paySendHelp');
+    t.eq('❓ in the card header → showHelp("payments#pay-send")', [/class="help-btn"/.test(help), help.includes("showHelp('payments#pay-send')")], [true, true]);
+    t.eq('…and the anchor exists in the guide (vpg-a-<hash>)', gd.includes('id="vpg-a-pay-send"'), true);
+  }
+
+  t.section('v2.14.81 (ט3-A) — resetSent CONSUMES the server (EXECUTED)');
+  {
+    const fnSrc = extractFunctions(app, ['resetSent']);
+    t.eq('no longer deletes through /sentlog-key', /sentlog-key/.test(fnSrc), false);
+    const mk = (replies, confirmAns) => {
+      const calls = [], toasts = [], confirms = []; let reloaded = 0;
+      const S2 = runInSandbox(fnSrc + '\nmodule.exports={resetSent};', {
+        API: '/api',
+        fetch: async (url, o) => { calls.push({ url, body: JSON.parse(o.body) }); const r = replies.shift(); if (r instanceof Error) throw r; return { json: async () => r }; },
+        confirm: m => { confirms.push(m); return confirmAns; }, toast: (m, k) => toasts.push([m, k || '']),
+        loadData: async () => { reloaded++; }, render: () => { reloaded++; } });
+      return { S2, calls, toasts, confirms, get reloaded() { return reloaded; } };
+    };
+    global.__crRuns = (global.__crRuns || []).concat([(async () => {
+      const a = mk([{ ok: true, dryRun: true, month: 'אוקטובר', count: 4, keptPayments: 7 }, { ok: true, dryRun: false, count: 4 }], true);
+      await a.S2.resetSent();
+      t.eq('dryRun first, then dryRun:false', a.calls.map(c => [c.url, c.body.dryRun]), [['/api/reset-sent-marks', true], ['/api/reset-sent-marks', false]]);
+      t.eq('confirm shows the server counts and says payments stay', [a.confirms.length, a.confirms[0].includes('4 סימוני "נשלח"'), a.confirms[0].includes('אוקטובר'), a.confirms[0].includes('(7) לא נמחקים')], [1, true, true, true]);
+      t.eq('success toast + reload', [a.toasts[0][0].includes('אופסו 4'), a.reloaded >= 2], [true, true]);
+      const b = mk([{ ok: true, dryRun: true, month: 'אוקטובר', count: 4, keptPayments: 0 }], false);
+      await b.S2.resetSent();
+      t.eq('confirm cancelled → no commit request', b.calls.length, 1);
+      const c = mk([{ ok: true, dryRun: true, month: 'אוקטובר', count: 0, keptPayments: 3 }], true);
+      await c.S2.resetSent();
+      t.eq('nothing to reset → no confirm, one request', [c.confirms.length, c.calls.length, c.toasts[0][0].includes('אין סימוני')], [0, 1, true]);
+      const e = mk([new Error('net')], true);
+      await e.S2.resetSent();
+      t.eq('network error → error toast, no confirm', [e.toasts[0][1], e.confirms.length], ['error', 0]);
+    })()]);
+  }
+
+  t.section('v2.14.81 — settings: share card collapsed by default (EXECUTED toggle)');
+  {
+    t.eq('header toggles secShare; body hidden; "▶ הרחב"', [/id="secShareHead"[^>]*onclick="toggleSection\('secShare'\)"/.test(app), /id="secShareBody" style="display:none;"/.test(app), /id="secShareIcon"[^>]*>▶ הרחב</.test(app)], [true, true, true]);
+    t.eq('the share body still holds the message + buttons', (() => { const b = block('secShareBody', '<!-- ACCOUNT TEMPLATES CARD -->'); return ['id="shareMsg"', 'shareVaadProWA()', 'copyReferralLink()'].every(x => b.includes(x)); })(), true);
+    const els = { secShareBody: { style: { display: 'none' } }, secShareIcon: { textContent: '▶ הרחב' } };
+    const T = runInSandbox(extractFunctions(app, ['toggleSection']) + '\nmodule.exports={toggleSection};', { document: { getElementById: id => els[id] || null } });
+    T.toggleSection('secShare');
+    t.eq('click → open, "▼ כווץ"', [els.secShareBody.style.display, els.secShareIcon.textContent], ['block', '▼ כווץ']);
+    T.toggleSection('secShare');
+    t.eq('click again → closed, "▶ הרחב"', [els.secShareBody.style.display, els.secShareIcon.textContent], ['none', '▶ הרחב']);
+  }
+
+  t.section('v2.14.81 — guide');
+  {
+    t.eq('guide: rows, hover, ?, per-button cards incl. portal link renewal + reset keeps payments + undo box',
+      ['📨 שליחה', '🧰 כלים', 'ריחוף', 'id="vpg-a-pay-reset"', 'תשלומים לא נמחקים', 'הקישור הקודם שלו מפסיק לעבוד', 'id="vpg-pay-undo"', '💳 הגדרת חשבונות נוספים ↗'].every(x => gd.includes(x)), true);
+    t.eq('guide: old "איפוס סימוני נשלח/שולם" text gone', gd.includes('איפוס סימוני נשלח/שולם'), false);
+  }
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

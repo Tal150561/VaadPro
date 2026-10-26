@@ -5997,4 +5997,52 @@ const v2_14_79_async = async () => {
   }
 }
 
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.81 (ט3-A) — "🔄 אפס סימוני נשלח": only the "sent" marks of the active month
+// ════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const head = "app.post('/api/reset-sent-marks', authMiddleware, (req, res) => {";
+  const body = (() => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found'); return src.slice(st + head.length, src.indexOf('\n});\n', st)); })();
+  const run = (store, b) => { let out; const saves = [];
+    const g = Object.assign({}, S, { loadTenantData: () => store, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); Object.assign(store, J(p)); } });
+    const names = Object.keys(g);
+    new Function(...names, 'req', 'res', body)(...names.map(n => g[n]), { params: {}, body: b || {}, query: {}, user: { tenantId: 'B' } }, { json: o => { out = o; }, status() { return this; } });
+    return { out, saves }; };
+  const fx = () => ({
+    config: { amount: 300, manualMonth: 'אוקטובר' },
+    tenants: [{ id: 1, name: 'א' }, { id: 2, name: 'ב' }, { id: 3, name: 'ג' }],
+    sentLog: {
+      '1_אוקטובר': 'sent_2026-10-01T09:00:00.000Z',
+      '2_אוקטובר': manual(300),
+      '3_אוקטובר': bank(300, 'ג'),
+      '1__acc__a_אוקטובר': 'sent_2026-10-01T09:00:00.000Z',
+      '2__acc__b_אוקטובר': manual(50),
+      '1_ספטמבר': 'sent_2026-09-01T09:00:00.000Z'
+    },
+    paymentHistory: { '2': [{ month: '2026-10', paid: true, amount: 300, paidAmount: 300, type: 'manual' }],
+                      '2__acc__b': [{ month: '2026-10', paid: true, amount: 50, paidAmount: 50, type: 'manual' }] }
+  });
+
+  t.section('v2.14.81 (ט3-A) — reset only the "sent" marks (REAL route)');
+  {
+    const st = fx(); const before = JSON.stringify(st);
+    const p = S.planResetSentMarks(st);
+    t.eq('plan: month + the 2 "sent" keys (main + extra account), 3 payments kept', [p.month, p.remove.slice().sort(), p.keptPayments], ['אוקטובר', ['1__acc__a_אוקטובר', '1_אוקטובר'], 3]);
+    const dry = run(st, {});
+    t.eq('dryRun is the DEFAULT → counts only, nothing saved', [dry.out.dryRun, dry.out.count, dry.out.keptPayments, dry.saves.length, JSON.stringify(st) === before], [true, 2, 3, 0, true]);
+    const com = run(st, { dryRun: false });
+    t.eq('commit: 2 removed, writes sentLog ONLY', [com.out.ok, com.out.count, com.saves], [true, 2, [['sentLog']]]);
+    t.eq('payments of the month KEPT (main manual + bank + extra-account manual)', [st.sentLog['2_אוקטובר'], st.sentLog['3_אוקטובר'], st.sentLog['2__acc__b_אוקטובר']], [manual(300), bank(300, 'ג'), manual(50)]);
+    t.eq('the "sent" marks are gone', ['1_אוקטובר' in st.sentLog, '1__acc__a_אוקטובר' in st.sentLog], [false, false]);
+    t.eq('another month untouched', st.sentLog['1_ספטמבר'], 'sent_2026-09-01T09:00:00.000Z');
+    t.eq('paymentHistory untouched', JSON.stringify(st.paymentHistory), JSON.stringify(fx().paymentHistory));
+    const again = run(st, { dryRun: false });
+    t.eq('second run: 0, nothing saved', [again.out.count, again.saves.length], [0, 0]);
+    t.eq('empty sentLog → 0', S.planResetSentMarks({ config: { manualMonth: 'אוקטובר' } }).count, 0);
+  }
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); process.exit(t.done() ? 1 : 0); })();

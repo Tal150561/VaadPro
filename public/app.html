@@ -661,19 +661,27 @@ function vpLogout() {
   <div class="tab-panel" id="tab-payments">
 
     <div class="card">
-      <div class="card-header">📤 שליחת תזכורות</div>
+      <!-- v2.14.81 (ט1–ט5) — hover hints on every control, ❓ → the guide at "שליחת תזכורות",
+           two labelled rows: what SENDS messages vs tools that send nothing. -->
+      <div class="card-header">📤 שליחת תזכורות
+        <button class="help-btn" id="paySendHelp" onclick="showHelp('payments#pay-send')" title="מה עושה כל כפתור — פתיחת המדריך" style="margin-right:8px;">?</button>
+      </div>
       <div class="card-body">
-        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
-          <button class="btn btn-green" id="btnSendAll" onclick="sendAll()">💬 WA לכולם</button>
-          <button class="btn btn-secondary" onclick="sendUnpaidOnly()">💬 WA למי שלא שילם החודש</button>
+        <div class="pay-send-row" id="paySendRow" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px;">
+          <span class="pay-row-label" style="font-size:0.75rem;color:var(--text3);min-width:48px;">📨 שליחה</span>
+          <button class="btn btn-green" id="btnSendAll" onclick="sendAll()" title="שולח לכל הדיירים — גם למי ששילם. מתאים להודעה כללית; לגבייה השתמשו ב&quot;למי שלא שילם&quot;">💬 WA לכולם</button>
+          <button class="btn btn-secondary" id="btnSendUnpaid" onclick="sendUnpaidOnly()" title="שולח רק לחייבים — בדיוק כמו התזכורת האוטומטית. מדלג על מי ששילם, מי שבזכות ומושהים">💬 WA למי שלא שילם החודש</button>
           <span id="payAccSendBox" style="display:none;align-items:center;gap:6px;">
-            <select id="payAccSend" style="width:auto;height:36px;" title="חשבון נוסף"></select>
-            <button class="btn btn-secondary" id="btnSendAcc" onclick="sendAccountDebtors()">💬 WA לחייבים בחשבון</button>
+            <select id="payAccSend" style="width:auto;height:36px;" title="בחרו חשבון נוסף"></select>
+            <button class="btn btn-secondary" id="btnSendAcc" onclick="sendAccountDebtors()" title="שולח רק למי שחייב החודש בחשבון שבבורר. ההודעה היא המלאה — עם כל החשבונות">💬 WA לחייבים בחשבון</button>
           </span>
-          <button class="btn btn-secondary btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()">🔗 שלח פורטל לנבחרים</button>
-          <button class="btn btn-secondary btn-sm" onclick="resetSent()">🔄 אפס סטטוס</button>
-          <button class="btn btn-secondary btn-sm" id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()">💳 החל חשבון נוסף על כולם</button>
           <span id="sendingStatus" style="font-size:0.81rem;color:var(--text2);"></span>
+        </div>
+        <div class="pay-send-row" id="payToolsRow" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px;">
+          <span class="pay-row-label" style="font-size:0.75rem;color:var(--text3);min-width:48px;">🧰 כלים</span>
+          <button class="btn btn-secondary btn-sm" id="btnPortalSel" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()" title="שולח קישור אישי לפורטל לדיירים שסימנתם ✔ בטבלה. הקישור הקודם שלהם יפסיק לעבוד">🔗 שלח פורטל לנבחרים</button>
+          <button class="btn btn-secondary btn-sm" id="btnResetSent" onclick="resetSent()" title="מוחק את סימוני &quot;נשלח&quot; של החודש. תשלומים לא נמחקים">🔄 אפס סימוני נשלח</button>
+          <button class="btn btn-secondary btn-sm" id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()" title="מעבר להגדרות › חשבונות נוספים (שם מחילים חשבון על החברים)">💳 הגדרת חשבונות נוספים ↗</button>
         </div>
 
       </div>
@@ -1205,8 +1213,11 @@ function vpLogout() {
 
     <!-- כרטיס שיתוף וירלי -->
     <div class="card" style="border:1px solid rgba(37,211,102,.3);background:rgba(37,211,102,.04);">
-      <div class="card-header" style="color:#25d366;">❤️ אהבת את VaadPro? שתף עם ועד בית אחר</div>
-      <div class="card-body">
+      <!-- v2.14.81 — collapsible, collapsed by default (Tal) -->
+      <div class="card-header" id="secShareHead" style="color:#25d366;cursor:pointer;user-select:none;" onclick="toggleSection('secShare')">❤️ אהבת את VaadPro? שתף עם ועד בית אחר
+        <span id="secShareIcon" style="margin-right:auto;font-size:0.8rem;color:var(--text3);">▶ הרחב</span>
+      </div>
+      <div class="card-body" id="secShareBody" style="display:none;">
         <p style="font-size:0.84rem;color:var(--text2);margin-bottom:10px;">שלח לחבר שמנהל ועד בית — הוא יקבל 30 יום ניסיון חינם, ואתה עוזר לו לחסוך שעות עבודה 😊</p>
 
         <div style="margin-bottom:12px;">
@@ -1951,7 +1962,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.80';
+const HTML_VERSION = '2.14.81';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4571,16 +4582,27 @@ async function sendAccountDebtors() {
   toast('✅ נשלחו ' + ok + ' מתוך ' + list.length + ' הודעות', ok === list.length ? 'success' : 'error');
 }
 
+// v2.14.81 (ט3-A) — "🔄 אפס סימוני נשלח": the SERVER removes only the "sent" marks of the
+// active month; payments (manual / bank, main + extra accounts) are never touched.
+// (Before: every sentLog key of the month was deleted through /sentlog-key → the month's
+// payments disappeared.) dryRun first → the confirm shows the server's counts.
 async function resetSent() {
-  if(!confirm('לאפס את סטטוס התשלומים לחודש הנוכחי?')) return;
-  const em = getEffectiveMonth();
-  // Only delete keys for current month - keep other months intact
-  const keysToDelete = Object.keys(data.sentLog).filter(function(k){ return k.endsWith('_'+em); });
-  for (const k of keysToDelete) {
-    delete data.sentLog[k];
-    try { await fetch(API+'/sentlog-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({key:k,value:null})}); } catch(e){}
-  }
-  render(); toast('🔄 סטטוס אופס');
+  let p;
+  try {
+    const r = await fetch(API + '/reset-sent-marks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: true }) });
+    p = await r.json();
+  } catch (e) { toast('❌ שגיאת רשת — נסה שוב', 'error'); return; }
+  if (!p || !p.ok) { toast('❌ ' + ((p && p.error) || 'שגיאה'), 'error'); return; }
+  if (!p.count) { toast('אין סימוני "נשלח" לאפס ב' + p.month, 'success'); return; }
+  if (!confirm('לאפס ' + p.count + ' סימוני "נשלח" של ' + p.month + '?\n' +
+      (p.keptPayments ? 'התשלומים שנרשמו (' + p.keptPayments + ') לא נמחקים.' : 'תשלומים לא נמחקים.'))) return;
+  try {
+    const r2 = await fetch(API + '/reset-sent-marks', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: false }) });
+    const d2 = await r2.json();
+    if (!d2 || !d2.ok) { toast('❌ ' + ((d2 && d2.error) || 'שגיאה'), 'error'); return; }
+    toast('🔄 אופסו ' + d2.count + ' סימוני "נשלח"', 'success');
+  } catch (e) { toast('❌ שגיאת רשת — נסה שוב', 'error'); return; }
+  await loadData(); render();
 }
 
 async function markPaid(id) {

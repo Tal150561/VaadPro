@@ -102,6 +102,8 @@ const SERVER_FNS = [
   'billValidateFromMonth', 'tplScheduleTimeline', 'tplScheduleCancellable', 'planTemplateSchedule',
   'commitTemplateSchedule', 'tplScheduleView', 'tplBillingInvalid', 'tplBillingStore', 'tplBillingKeep',
   'extraBillingFieldsForSave', 'extraBillingView',
+  // v2.14.81 (ט3-A) — reset only the "sent" marks of the month
+  'planResetSentMarks',
   // v2.14.78 (1ה) — a bank file per extra account (the shared engine parts + the new engine)
   'bankRowFingerprint', 'bankFpPrefixes', 'bankFpAlreadySeen', 'bankRowMonthKey', 'groupMatchesByMonth',
   'prevMonthKey', 'monthsNamedInNote', 'splitOverpayAcrossMonths', 'kwMatchCount', 'scoreTenantRowMatch',
