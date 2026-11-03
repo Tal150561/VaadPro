@@ -3930,4 +3930,72 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   }
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.82 — tenant portal › meetings: the LATEST meeting open, older ones
+//            collapsed (<details>), expand state kept across re-render. EXECUTED.
+// ════════════════════════════════════════════════════════════════
+{
+  const portal = readSource('public/tenant-portal.html'), gd = readSource('public/vaadpro-guide.js'), pkg = JSON.parse(readSource('package.json'));
+  const app = readSource('public/app.html');
+  t.section('v2.14.82 — portal meetings: latest open, older collapsed (EXECUTED)');
+  t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
+  const fns = extractFunctions(portal, ['portalRenderMeetings', 'portalMtgEsc', 'portalMtgSorted', 'portalMtgStatusBadge', 'portalMtgOnToggle']);
+  const mkRun = () => {
+    const listeners = [];
+    const el = { innerHTML: '', addEventListener: (ev, fn, cap) => listeners.push([ev, fn, cap]) };
+    const S = runInSandbox('var portalMtgData = [], portalMtgOpen = {}, portalMtgToggleBound = false;\n' + fns +
+      '\nmodule.exports={run:function(a){portalMtgData=a;portalRenderMeetings();},toggle:portalMtgOnToggle,open:function(){return portalMtgOpen;}};',
+      { document: { getElementById: () => el } });
+    return { S, el, listeners };
+  };
+  const M = [
+    { id: 'm1', date: '2026-03-10', type: 'שוטפת', protocol: 'פרוטוקול מרץ', decisions: [{ text: 'א', status: 'בוצע' }], createdAt: '2026-03-11', myConfirmation: { type: 'agree', confirmedAt: '2026-03-12' } },
+    { id: 'm3', date: '2026-10-01', type: 'כללית', protocol: 'פרוטוקול אוקטובר', decisions: [], createdAt: '2026-10-02', myConfirmation: null },
+    { id: 'm2', date: '2026-06-05', type: 'שלא מן המניין <b>', protocol: 'פרוטוקול יוני', decisions: [{ text: 'x', status: 'פתוח' }, { text: 'y', status: 'פתוח' }], createdAt: '2026-06-06', myConfirmation: { type: 'disagree', note: '', confirmedAt: '2026-06-07' } }
+  ];
+  {
+    const r = mkRun(); r.S.run(M); const h = r.el.innerHTML;
+    t.eq('exactly ONE open card (the latest) + 2 collapsed', [(h.match(/class="mtg-latest"/g) || []).length, (h.match(/<details class="mtg-old"/g) || []).length], [1, 2]);
+    t.eq('latest = newest DATE (Oct), not the first in the list', /class="mtg-latest"[\s\S]*?2026-10-01/.test(h) && h.indexOf('2026-10-01') < h.indexOf('2026-06-05'), true);
+    t.eq('older ones newest-first (Jun before Mar)', h.indexOf('2026-06-05') < h.indexOf('2026-03-10'), true);
+    t.eq('collapsed by default (no "open" attribute)', /<details class="mtg-old"[^>]* open/.test(h), false);
+    t.eq('"אסיפות קודמות (2)" title once', (h.match(/אסיפות קודמות \(2\)/g) || []).length, 1);
+    t.eq('summary shows status per meeting (✅ אישרת / ❌ לא הסכמת)', [h.includes('✅ אישרת'), h.includes('❌ לא הסכמת')], [true, true]);
+    t.eq('summary shows decision count (Hebrew singular/plural)', [h.includes('· 2 החלטות'), h.includes('· החלטה אחת')], [true, true]);
+    t.eq('older content still rendered inside (protocol + confirm buttons)', [h.includes('פרוטוקול יוני'), h.includes('פרוטוקול מרץ'), h.includes("portalOpenDisagree('m1')")], [true, true, true]);
+    t.eq('summary type is HTML-escaped', [h.includes('שלא מן המניין &lt;b&gt;'), h.includes('שלא מן המניין <b>')], [true, false]);
+    t.eq('toggle listener bound once (capture) on the list', [r.listeners.length, r.listeners[0][0], r.listeners[0][2]], [1, 'toggle', true]);
+    r.S.run(M);
+    t.eq('…re-render does not bind a second listener', r.listeners.length, 1);
+  }
+  {
+    const r = mkRun(); r.S.run([M[0]]); const h = r.el.innerHTML;
+    t.eq('a single meeting → open, no collapsed rows, no "קודמות" title', [h.includes('class="mtg-latest"'), h.includes('<details'), h.includes('אסיפות קודמות')], [true, false, false]);
+  }
+  {
+    const r = mkRun(); r.S.run([]);
+    t.eq('no meetings → "אין אסיפות עדיין"', r.el.innerHTML.includes('אין אסיפות עדיין'), true);
+  }
+  {
+    const r = mkRun(); r.S.run(M);
+    const det = { open: true, classList: { contains: c => c === 'mtg-old' }, getAttribute: () => 'm2' };
+    r.S.toggle({ target: det });
+    r.S.run(M);   // e.g. after ✅/❌ the list re-renders
+    t.eq('an expanded older meeting STAYS open after re-render', /<details class="mtg-old" data-mtg-id="m2" open/.test(r.el.innerHTML), true);
+    t.eq('…the other older one stays collapsed', /data-mtg-id="m1" open/.test(r.el.innerHTML), false);
+    det.open = false; r.S.toggle({ target: det }); r.S.run(M);
+    t.eq('collapsing it again is remembered too', /data-mtg-id="m2" open/.test(r.el.innerHTML), false);
+    r.S.toggle({ target: { open: true, classList: { contains: () => false }, getAttribute: () => 'zz' } });
+    t.eq('a toggle from another <details> (e.g. account card) is ignored', r.S.open().zz, undefined);
+  }
+  {
+    const r = mkRun();
+    r.S.run([{ id: 'a', date: '2026-05-01', type: 't', createdAt: '2026-05-01T08:00', decisions: [] },
+             { id: 'b', date: '2026-05-01', type: 't', createdAt: '2026-05-02T08:00', decisions: [] }]);
+    t.eq('same date → newest CREATED is the open one', /class="mtg-latest"[\s\S]*<details class="mtg-old" data-mtg-id="a"/.test(r.el.innerHTML), true);
+  }
+  t.eq('portal CSS hides the default details marker for .mtg-old', portal.includes('details.mtg-old > summary::-webkit-details-marker'), true);
+  t.eq('guide: collapsed older meetings explained (meetings + portal card)', [gd.includes('id="vpg-mtg-portal-collapse"'), gd.includes('האחרונה פתוחה, הקודמות מכווצות')], [true, true]);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
