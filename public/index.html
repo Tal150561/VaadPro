@@ -72,9 +72,9 @@
     <input type="text" id="regName" placeholder="ישראל ישראלי">
     <label>שם הבניין <span style="color:var(--text2);font-weight:400">(אופציונלי)</span></label>
     <input type="text" id="regBuilding" placeholder='למשל: "בניין הדס" — אפשר להשאיר ריק'>
-    <label>כתובת הבניין</label>
+    <label>כתובת הבניין <span style="color:var(--text2);font-weight:400">(אופציונלי)</span></label>
     <div id="regAddrHost"></div>
-    <input type="text" id="regAddress" placeholder="התחל להקליד כתובת ובחר מהרשימה">
+    <input type="text" id="regAddress" placeholder='למשל: הרצל 15, ראש העין — אפשר להשאיר ריק'>
     <div id="regAddrHint" style="font-size:0.75rem;color:var(--text2);margin-top:-8px;margin-bottom:14px;display:none;">בחר כתובת מהרשימה לתוצאות חיפוש מדויקות בעתיד</div>
     <label>מייל</label>
     <input type="email" id="regEmail" placeholder="your@email.com" dir="ltr">
@@ -90,8 +90,13 @@
 // ===== Google Places Autocomplete (כתובת בניין) =====
 // state: נתפס בעת בחירת כתובת מהרשימה. נופל לטקסט חופשי אם Google לא זמין.
 let regAddrData = { address: '', placeId: '' };
+// v2.14.83 — ה-widget של Google Places כבוי בהרשמה: לא הציג הצעות, הטקסט שהוקלד בו לא נקלט
+// והכתובת הייתה חובה → ההרשמה נחסמה. כעת: input רגיל, טקסט חופשי, לא חובה.
+// להחזרת ההשלמה האוטומטית בעתיד: true (הכתובת תישאר אופציונלית בכל מקרה).
+const REG_PLACES_WIDGET = false;
 
 (async function loadMapsForRegister() {
+  if (!REG_PLACES_WIDGET) return;                      // טקסט חופשי בלבד
   try {
     const r = await fetch('/api/maps-key');
     const d = await r.json();
@@ -131,6 +136,8 @@ window.initRegAutocomplete = async function () {
         regAddrData.placeId = place.id || '';
       } catch (err) { console.error('fetchFields failed', err); }
     });
+    // הקלדה ללא בחירה מהרשימה מבטלת בחירה קודמת (הטקסט החופשי לא נקלט מה-widget)
+    acEl.addEventListener('input', () => { regAddrData = { address: '', placeId: '' }; });
     // אם Google דוחה בקשה — חוזרים ל-input הרגיל כדי לא לחסום הרשמה
     acEl.addEventListener('gmp-requesterror', () => {
       host.innerHTML = '';
@@ -196,7 +203,8 @@ async function doRegister() {
   const email    = document.getElementById('regEmail').value.trim();
   const phone    = document.getElementById('regPhone').value.trim();
   const pass     = document.getElementById('regPass').value;
-  if (!name || !address || !email || !pass) { showMsg('msgRegister', 'יש למלא שם, כתובת, מייל וסיסמה', 'err'); return; }
+  // v2.14.83 — כתובת אופציונלית (טקסט חופשי)
+  if (!name || !email || !pass) { showMsg('msgRegister', 'יש למלא שם, מייל וסיסמה', 'err'); return; }
   if (pass.length < 6) { showMsg('msgRegister', 'סיסמה חייבת להכיל לפחות 6 תווים', 'err'); return; }
   const btn = document.getElementById('btnRegister');
   btn.disabled = true; btn.textContent = 'נרשם...';

@@ -1699,23 +1699,33 @@ app.get('/api/maps-key', (req, res) => {
 });
 
 // הרשמה
+// v2.14.83 — שם תצוגה לבניין בהרשמה (כתובת ושם בניין אופציונליים)
+function registerDisplayName(buildingName, address, fullName) {
+  const b = String(buildingName || '').trim();
+  if (b) return b;
+  const a = String(address || '').trim();
+  if (a) return a;
+  const f = String(fullName || '').trim();
+  return f ? ('הבניין של ' + f) : 'הבניין שלי';
+}
+
 app.post('/api/auth/register', async (req, res) => {
   const { email, password, buildingName, address, placeId, phone, fullName } = req.body;
-  // הכתובת היא החובה החדשה; שם הבניין אופציונלי (נופל חזרה לכתובת לתצוגה)
-  if (!email || !password || !address) return res.json({ ok: false, error: 'יש למלא את כל השדות' });
+  // v2.14.83 — כתובת ושם בניין אופציונליים (טקסט חופשי). חובה: מייל + סיסמה.
+  if (!email || !password) return res.json({ ok: false, error: 'יש למלא מייל וסיסמה' });
   if (password.length < 6) return res.json({ ok: false, error: 'סיסמה חייבת להכיל לפחות 6 תווים' });
 
   const users = loadUsers();
   if (users.find(u => u.email === email.toLowerCase())) return res.json({ ok: false, error: 'אימייל זה כבר רשום' });
 
-  // אם שם הבניין ריק — השתמש בכתובת כשם תצוגה (fallback)
-  const displayName = (buildingName && buildingName.trim()) ? buildingName.trim() : address;
+  // שם תצוגה: שם הבניין → כתובת → "הבניין של <שם>" → "הבניין שלי"
+  const displayName = registerDisplayName(buildingName, address, fullName);
 
   const tenantId  = uuidv4();
   const passHash  = await bcrypt.hash(password, 10);
   const trialEnd  = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(); // 30 יום
 
-  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName: displayName, address: address||'', buildingPlaceId: placeId||'', phone: phone||'', fullName: fullName||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
+  const user = { id: uuidv4(), email: email.toLowerCase(), passHash, tenantId, buildingName: displayName, address: String(address||'').trim(), buildingPlaceId: placeId||'', phone: phone||'', fullName: fullName||'', plan: 'trial', trialEnd, createdAt: new Date().toISOString() };
   users.push(user);
   saveUsers(users);
 

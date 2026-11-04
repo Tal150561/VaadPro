@@ -3998,4 +3998,52 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('guide: collapsed older meetings explained (meetings + portal card)', [gd.includes('id="vpg-mtg-portal-collapse"'), gd.includes('האחרונה פתוחה, הקודמות מכווצות')], [true, true]);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// v2.14.83 — registration: building address optional, free text (Google widget off)
+// ═══════════════════════════════════════════════════════════════════════════
+{
+  const fs = require('fs'), path = require('path');
+  const idx = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8');
+  const srvR = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const gdR = fs.readFileSync(path.join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8');
+
+  t.section('v2.14.83 — register page markup');
+  t.eq('widget flag off + loader returns early', [/^const REG_PLACES_WIDGET = false;/m.test(idx), idx.includes('if (!REG_PLACES_WIDGET) return;')], [true, true]);
+  t.eq('address label says (אופציונלי), plain input present', [/<label>כתובת הבניין <span[^>]*>\(אופציונלי\)<\/span><\/label>/.test(idx), /<input type="text" id="regAddress"/.test(idx)], [true, true]);
+
+  t.section('v2.14.83 — doRegister EXECUTED (address optional)');
+  const mkReg = (vals) => {
+    const els = {}; const calls = []; const msgs = [];
+    ['regName','regBuilding','regAddress','regEmail','regPhone','regPass'].forEach(k => els[k] = { value: vals[k] || '' });
+    els.btnRegister = { disabled: false, textContent: '' };
+    els.msgRegister = { textContent: '', className: '', style: {} };
+    const win = { location: { href: '' } };
+    const R = runInSandbox('var regAddrData = { address: "", placeId: "" };\n' + extractFunctions(idx, ['doRegister', 'showMsg']) + '\nmodule.exports={doRegister};', {
+      document: { getElementById: id => els[id] },
+      fetch: async (url, o) => { calls.push([url, JSON.parse(o.body)]); return { json: async () => ({ ok: true, token: 'T', buildingName: 'X' }) }; },
+      localStorage: { setItem() {} }, window: win
+    });
+    return { R, els, calls, win };
+  };
+  global.__crRuns = (global.__crRuns || []).concat([(async () => {
+    const a = mkReg({ regName: 'משה', regEmail: 'm@x.com', regPass: '123456' });
+    await a.R.doRegister();
+    t.eq('empty address → request sent with address ""', [a.calls.length, a.calls[0] && a.calls[0][0], a.calls[0] && a.calls[0][1].address, a.win.location.href], [1, '/api/auth/register', '', '/app.html']);
+    const b = mkReg({ regName: 'משה', regAddress: '  מבצע דני 15 ראש העין ', regEmail: 'm@x.com', regPass: '123456' });
+    await b.R.doRegister();
+    t.eq('free-text address passed trimmed', b.calls[0][1].address, 'מבצע דני 15 ראש העין');
+    const c = mkReg({ regName: '', regEmail: 'm@x.com', regPass: '123456' });
+    await c.R.doRegister();
+    t.eq('missing name → no request, message lists name/mail/password only', [c.calls.length, c.els.msgRegister.textContent], [0, 'יש למלא שם, מייל וסיסמה']);
+  })()]);
+
+  t.section('v2.14.83 — server registerDisplayName EXECUTED');
+  const D = runInSandbox(extractFunctions(srvR, ['registerDisplayName']) + '\nmodule.exports={registerDisplayName};');
+  t.eq('building → address → "הבניין של" → "הבניין שלי"',
+    [D.registerDisplayName(' הדס ', 'הרצל 1', 'משה'), D.registerDisplayName('', ' הרצל 1 ', 'משה'), D.registerDisplayName('', '', 'משה'), D.registerDisplayName(undefined, undefined, '')],
+    ['הדס', 'הרצל 1', 'הבניין של משה', 'הבניין שלי']);
+  t.eq('route no longer requires address', [srvR.includes("if (!email || !password || !address)"), srvR.includes("if (!email || !password) return res.json({ ok: false, error: 'יש למלא מייל וסיסמה' });")], [false, true]);
+  t.eq('guide: address optional, free text', [gdR.includes('<strong>כתובת הבניין</strong> ושם הבניין — אופציונליים, טקסט חופשי'), gdR.includes('(חובה — עם השלמה אוטומטית)')], [true, false]);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
