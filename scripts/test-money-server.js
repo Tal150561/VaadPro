@@ -6180,4 +6180,259 @@ const v2_14_79_async = async () => {
   }
 }
 
-(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); process.exit(t.done() ? 1 : 0); })();
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.85 (1ו2) — a SEPARATE message per account to the PAYER phone (ל1–ל10, all A)
+// Pure helpers + the REAL routes (send-one / send-all / GET /api/data / account-templates /
+// tenant-accounts) + the REAL doAutoSend + the REAL protected extra close.
+// ════════════════════════════════════════════════════════════════
+const v2_14_85_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const EM = 'ספטמבר', MK = S.getMonthKey({ manualMonth: EM });
+  const BI = a => 'bank_import_2026-09-03T10:00:00.000Z_' + a + '_payer_x';
+  const MP = a => 'manual_paid_2026-09-03T10:00:00.000Z_amount_' + a;
+  const TPL = () => [
+    { id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, notify: { mode: 'separate' } },
+    { id: 'T2', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 80 },
+    { id: 'T3', label: 'גינון', type: 'fixed', frequency: 'monthly', amount: 30, notify: { mode: 'separate' } }];
+  const ins = o => Object.assign({ id: 'i1', label: 'ביטוח', amount: 50, templateId: 'T1', payer: 'tenant' }, o);
+  const wat = o => Object.assign({ id: 'w1', label: 'מים', amount: 80, templateId: 'T2', payer: 'tenant' }, o);
+  const gar = o => Object.assign({ id: 'g1', label: 'גינון', amount: 30, templateId: 'T3', payer: 'tenant' }, o);
+  const mem = (id, o) => Object.assign({ id, name: 'חבר' + id, phone: '050111111' + id, tenant: { name: 'שוכר' + id, phone: '052222222' + id } }, o);
+  const base = over => Object.assign({ config: { amount: 230, manualMonth: EM, template: 'שלום {שם}! {סכום}{חשבונות} כולל {סה"כ_כולל}' },
+    closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: {},
+    defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }], accountTemplates: TPL() }, over);
+  const ctx = d => ({ tenantDataId: 'B', month: EM, mk: MK, amount: 230, mainTmpl: d.config.template, payerTmpl: d.config.payerTemplate });
+
+  t.section('v2.14.85 (1ו2, ל8-A) — resolvePayerPhone never crosses owner ↔ renter');
+  {
+    const r = (tn, payer) => S.resolvePayerPhone(tn, { payer });
+    const M = { phone: '0500000001', owner: {}, tenant: { phone: '0520000002' } };
+    t.eq('THE BUG: payer owner + EMPTY owner slot + renter phone → MAIN phone (was the renter)', r(M, 'owner'), '0500000001');
+    t.eq('legacy payer undefined (= owner) → MAIN phone (was the renter)', r(M, undefined), '0500000001');
+    t.eq('payer renter → renter phone', r(M, 'tenant'), '0520000002');
+    t.eq('payer renter, no renter phone, owner slot filled → MAIN (not the owner)', r({ phone: '0500000001', owner: { phone: '0530000003' }, tenant: {} }, 'tenant'), '0500000001');
+    t.eq('payer owner, owner slot filled → owner phone', r({ phone: '0500000001', owner: { phone: ' 0530000003 ' }, tenant: { phone: '0520000002' } }, 'owner'), '0530000003');
+    t.eq('no slots at all → main (trimmed)', r({ phone: ' 0500000001 ' }, 'tenant'), '0500000001');
+  }
+
+  t.section('v2.14.85 (1ו2) — waPhoneKey / accNotifySeparate / payerNameFor');
+  {
+    t.eq('waPhoneKey = sendWaMsg normalization (digits, 0→972)', [S.waPhoneKey('050-111 1111'), S.waPhoneKey('+972501111111'), S.waPhoneKey(''), S.waPhoneKey(null)], ['972501111111', '972501111111', '', '']);
+    const d = base({});
+    t.eq('linked "separate" → true; merged → false', [S.accNotifySeparate(d, ins()), S.accNotifySeparate(d, wat())], [true, false]);
+    t.eq('name link (no templateId) follows the definition', S.accNotifySeparate(d, { id: 'x', label: 'ביטוח' }), true);
+    t.eq('unlinked account (no definition) → merged', S.accNotifySeparate(d, { id: 'x', label: 'חניה' }), false);
+    t.eq('building without notify anywhere → false', S.accNotifySeparate(base({ accountTemplates: TPL().map(x => { delete x.notify; return x; }) }), ins()), false);
+    t.eq('payer name: renter slot name, else member name', [S.payerNameFor(mem(1), ins()), S.payerNameFor(mem(1, { tenant: { phone: '1' } }), ins()), S.payerNameFor(mem(1, { owner: { name: 'בעלי' } }), ins({ payer: 'owner' }))], ['שוכר1', 'חבר1', 'בעלי']);
+  }
+
+  t.section('v2.14.85 (1ו2, ל1/ל4/ל9) — memberMessageSplit');
+  {
+    const d = base({});
+    const m1 = mem(1, { extraAccounts: [ins(), wat()] });
+    const snap = JSON.stringify(m1);
+    const s1 = S.memberMessageSplit(d, m1);
+    t.eq('separate + renter phone ≠ main → ONE payer group (ביטוח); merged מים stays', [s1.routed, s1.groups.length, s1.groups[0].phone, s1.groups[0].name, s1.groups[0].accounts.map(a => a.id), s1.mainTenant.extraAccounts.map(a => a.id)], [true, 1, '0522222221', 'שוכר1', ['i1'], ['w1']]);
+    t.eq('the member object itself is NOT changed (shallow copy)', [JSON.stringify(m1) === snap, s1.mainTenant !== m1, s1.mainTenant.id], [true, true, 1]);
+    const m2 = mem(2, { tenant: { name: 'ש', phone: '0529999999' }, extraAccounts: [ins({ payer: 'owner' })] });
+    const s2 = S.memberMessageSplit(d, m2);
+    t.eq('payer owner + empty owner slot → main phone → NOT routed, mainTenant is the SAME object', [s2.routed, s2.mainTenant === m2], [false, true]);
+    const m3 = mem(3, { phone: '050-1111113', tenant: { phone: '+972501111113' }, extraAccounts: [ins()] });
+    t.eq('renter phone == main phone (other format) → stays in the main message (ה12-ב)', S.memberMessageSplit(d, m3).routed, false);
+    const m4 = mem(4, { extraAccounts: [ins(), gar(), wat()] });
+    const s4 = S.memberMessageSplit(d, m4);
+    t.eq('two separate accounts, same payer → ONE group with both', [s4.groups.length, s4.groups[0].accounts.map(a => a.id), s4.mainTenant.extraAccounts.map(a => a.id)], [1, ['i1', 'g1'], ['w1']]);
+    const m5 = mem(5, { extraAccounts: [ins(), gar({ payer: 'owner' })], owner: { name: 'ב', phone: '0533333335' } });
+    t.eq('different payers → two groups (owner + renter)', S.memberMessageSplit(d, m5).groups.map(g => g.phone), ['0522222225', '0533333335']);
+    t.eq('inactive separate account → not routed', S.memberMessageSplit(d, mem(6, { extraAccounts: [ins({ active: false })] })).routed, false);
+    t.eq('renter with no phone → main → not routed', S.memberMessageSplit(d, mem(7, { tenant: { name: 'x' }, extraAccounts: [ins()] })).routed, false);
+    t.eq('no extras → not routed', S.memberMessageSplit(d, { id: 8, phone: '1' }).routed, false);
+  }
+
+  t.section('v2.14.85 (1ו2, ל3/ל4/ל5) — composePayerMessage + planMemberMessages');
+  {
+    const d = base({ tenants: [] });
+    const m1 = mem(1, { extraAccounts: [ins({ openingDebt: 20 }), wat()] });
+    const msgs = S.planMemberMessages(d, m1, ctx(d));
+    t.eq('two messages: main first (main phone), payer second (renter phone)', msgs.map(m => [m.kind, m.phone]), [['main', '0501111111'], ['payer', '0522222221']]);
+    t.eq('payer message = DEFAULT template, only its account, its total',
+      msgs[1].msg, 'שלום שוכר1!\nתזכורת לתשלום עבור חבר1 לחודש ספטמבר:\n• ביטוח: *50 ₪* + חוב קודם 20 ₪ = *70 ₪*\nסה"כ לתשלום: *70 ₪*\n\nתודה!');
+    t.eq('payer view fields', [msgs[1].accIds, msgs[1].tplIds, msgs[1].labels, msgs[1].total, msgs[1].shouldRemind], [['i1'], ['T1'], ['ביטוח'], 70, true]);
+    t.eq('MAIN message has NO ביטוח line, {סה"כ_כולל} = 230 + מים 80 only', [msgs[0].msg.includes('ביטוח'), msgs[0].msg, msgs[0].total], [false, 'שלום חבר1! 230\n• מים: *80 ₪* כולל 310', 310]);
+    t.eq('main message == composeReminder over the member WITHOUT ביטוח (the composer is unchanged)',
+      msgs[0].msg, S.composeReminder(d, Object.assign({}, m1, { extraAccounts: [m1.extraAccounts[1]] }), d.config.template, ctx(d)).msg);
+    const g = S.memberMessageSplit(d, m1).groups[0];
+    const pm = S.composePayerMessage(d, m1, g, 'היי {שם} ({שם_חבר}) {חודש}{חשבונות} = {סה"כ}/{סה"כ_כולל} {לינק_פורטל}!', ctx(d));
+    t.eq('custom payer template: every placeholder; NO portal link', pm.msg, 'היי שוכר1 (חבר1) ספטמבר\n• ביטוח: *50 ₪* + חוב קודם 20 ₪ = *70 ₪* = 70/70 !');
+    t.eq('empty payer template → the default', S.composePayerMessage(d, m1, g, '', ctx(d)).msg.startsWith('שלום שוכר1!'), true);
+    // a building with NO separate definition: the plan is exactly today's message
+    const dn = base({ accountTemplates: TPL().map(x => { delete x.notify; return x; }) });
+    const pn = S.planMemberMessages(dn, m1, ctx(dn));
+    t.eq('no separate definition → ONE message, byte-identical to composeReminder(member)', [pn.length, pn[0].msg === S.composeReminder(dn, m1, dn.config.template, ctx(dn)).msg, pn[0].shouldRemind === S.autoSendShouldRemind(dn, m1, MK)], [1, true, true]);
+  }
+
+  t.section('v2.14.85 (1ו2, ל5-A) — each message by its own rule');
+  {
+    const dec = (sl, accO) => { const d = base({ sentLog: sl || {} }); return S.planMemberMessages(d, mem(1, { extraAccounts: [ins(accO), wat()] }), ctx(d)).map(m => m.shouldRemind); };
+    t.eq('main + water paid, renter owes ביטוח → main NO, payer YES (the member is not nagged)', dec({ ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) }), [false, true]);
+    t.eq('main unpaid, ביטוח paid → main YES, payer NO', dec({ ['1__acc__i1_' + EM]: BI(50) }), [true, false]);
+    // ⚠️ PRE-EXISTING rule of autoSendShouldRemind (unchanged, tracked): a main account PAID in
+    // full (sentLog payment) skips the member even if a merged extra account is unpaid — the
+    // extra accounts count only in the suspended / credit-in-advance branches. 1ו2 keeps it.
+    t.eq('main paid, water unpaid (stays in main), ביטוח paid → main NO (the 2.14.84 rule), payer NO', dec({ ['1_' + EM]: BI(230), ['1__acc__i1_' + EM]: BI(50) }), [false, false]);
+    t.eq('ביטוח suspended → payer NO', dec({}, { suspended: true })[1], false);
+    t.eq('ביטוח month paid, carried debt only → payer NO (carried debt alone never sends)', dec({ ['1__acc__i1_' + EM]: BI(50) }, { openingDebt: 40 })[1], false);
+    t.eq('2.14.84 on the WHOLE member in case 1 → no reminder at all (the renter debt was never sent)', S.autoSendShouldRemind(base({ sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) } }), mem(1, { extraAccounts: [ins(), wat()] }), MK), false);
+    t.eq('main SUSPENDED, water paid, ביטוח unpaid: 2.14.84 reminded the MEMBER for the renter\'s debt → now main NO, payer YES', (() => { const d = base({ sentLog: { ['1__acc__w1_' + EM]: BI(80) } }); const m = mem(1, { suspended: true, extraAccounts: [ins(), wat()] }); return [S.autoSendShouldRemind(d, m, MK), S.planMemberMessages(d, m, ctx(d)).map(x => x.shouldRemind)]; })(), [true, [false, true]]);
+  }
+
+  t.section('v2.14.85 (1ו2, ל7) — pickMemberMessages scopes');
+  {
+    const M = [{ kind: 'main', shouldRemind: false, total: 0, tplIds: [] }, { kind: 'payer', shouldRemind: true, total: 50, tplIds: ['T1'] }, { kind: 'payer', shouldRemind: false, total: 0, tplIds: ['T3'] }];
+    t.eq("'all' → main always + payer with a line", S.pickMemberMessages(M, 'all').map(m => m.tplIds[0] || 'main'), ['main', 'T1']);
+    t.eq("'remind' → own decisions only", S.pickMemberMessages(M, 'remind').map(m => m.tplIds[0] || 'main'), ['T1']);
+    t.eq("'acc' → the payer message holding X, else main", [S.pickMemberMessages(M, 'acc', 'T3')[0].tplIds[0], S.pickMemberMessages(M, 'acc', 'T2')[0].kind, S.pickMemberMessages(M, 'acc', '')[0].kind], ['T3', 'main', 'main']);
+  }
+
+  t.section('v2.14.85 (1ו2, ל6) — markPayerSent');
+  {
+    const d = { sentLog: { ['1__acc__g1_' + EM]: MP(10) } };
+    const n = S.markPayerSent(d, { id: 1 }, ['i1', 'g1'], EM, '2026-09-05T00:00:00.000Z');
+    t.eq('sent_ on the unpaid account, a PAYMENT is never overwritten', [n, d.sentLog['1__acc__i1_' + EM], d.sentLog['1__acc__g1_' + EM]], [1, 'sent_2026-09-05T00:00:00.000Z', MP(10)]);
+    t.eq('no paymentHistory created', 'paymentHistory' in d, false);
+    t.eq('the account split reads the mark as NOT paid', S.extraAccountSplit(base({ sentLog: { ['1__acc__i1_' + EM]: 'sent_x' } }), mem(1), ins(), MK, EM).owedCurrent, 50);
+  }
+
+  // ── REAL routes ──────────────────────────────────────────────────
+  const bodyOf = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  const env = (d, opts) => {
+    opts = opts || {};
+    const sends = [], saves = []; let portal = 0;
+    const g = Object.assign({}, S, {
+      loadTenantData: () => d, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); },
+      sendWaMsg: async (tid, phone, msg) => { if (opts.failPhone && phone === opts.failPhone) throw new Error('WhatsApp מנותק'); sends.push({ phone, msg }); },
+      setTimeout: f => f(), getOrCreatePortalUrl: () => { portal++; return 'URL'; }, SERVER_VERSION: 'x', getLabels: () => ({}),
+      loadUsers: () => [], console: { log() {}, error() {} }
+    });
+    const rebuild = n => { const k = Object.keys(g); g[n] = new Function(...k, lib.extractFunctions(src, [n]) + '\n; return ' + n + ';')(...k.map(x => g[x])); };
+    rebuild('composeReminder'); rebuild('planMemberMessages'); rebuild('sendRoutedMember');
+    return { g, sends, saves, portal: () => portal };
+  };
+  const runSend = async (d, id, body, opts) => {
+    const E = env(d, opts); const names = Object.keys(E.g); let out;
+    await new AF(...names, 'req', 'res', bodyOf("app.post('/api/send/:id', authMiddleware, async (req, res) => {"))(...names.map(n => E.g[n]),
+      { params: { id: String(id) }, body: body || {}, user: { tenantId: 'B' } }, { json: o => { out = o; } });
+    return { out, sends: E.sends, saves: E.saves, d };
+  };
+
+  t.section('v2.14.85 (1ו2) — REAL /api/send/:id');
+  {
+    const fx = (sl, accO) => base({ tenants: [mem(1, { extraAccounts: [ins(accO), wat()] }), mem(9, { extraAccounts: [wat()] })], sentLog: sl || {} });
+    const a = await runSend(fx(), 1);
+    t.eq('📱 שלח (all): main → main phone, payer → renter phone', a.sends.map(s => s.phone), ['0501111111', '0522222221']);
+    t.eq('response counts', [a.out.ok, a.out.sent, a.out.payerSent, a.out.failed], [true, 2, 1, 0]);
+    t.eq('main: sent_ + wa_sent record (as today); account: sent_ mark, NO history key', [/^sent_/.test(a.d.sentLog['1_' + EM]), (a.d.paymentHistory['1'] || []).map(r => r.type), /^sent_/.test(a.d.sentLog['1__acc__i1_' + EM]), '1__acc__i1' in a.d.paymentHistory], [true, ['wa_sent'], true, false]);
+    t.eq('the merged account (מים) gets no mark', '1__acc__w1_' + EM in a.d.sentLog, false);
+    t.eq('saved once: sentLog + paymentHistory', a.saves, [['paymentHistory', 'sentLog']]);
+    const r = await runSend(fx({ ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) }), 1, { scope: 'remind' });
+    t.eq("scope 'remind', member paid, renter owes → ONLY the renter", [r.sends.map(s => s.phone), r.out.sent, r.d.sentLog['1_' + EM]], [['0522222221'], 1, BI(230)]);
+    const c1 = await runSend(fx(), 1, { scope: 'acc', tplId: 'T1' });
+    const c2 = await runSend(fx(), 1, { scope: 'acc', tplId: 'T2' });
+    t.eq("scope 'acc': ביטוח → payer message only; מים → main only", [c1.sends.map(s => s.phone), c2.sends.map(s => s.phone)], [['0522222221'], ['0501111111']]);
+    const f = await runSend(fx(), 1, {}, { failPhone: '0522222221' });
+    t.eq('payer send fails → main delivered, failed 1, account NOT marked', [f.out.ok, f.out.sent, f.out.failed, f.out.error, '1__acc__i1_' + EM in f.d.sentLog], [true, 1, 1, 'WhatsApp מנותק', false]);
+    const ff = await runSend(fx(), 1, {}, { failPhone: '0501111111' });
+    t.eq('main fails, payer delivered → ok, main NOT marked', [ff.out.ok, ff.out.sent, '1_' + EM in ff.d.sentLog, /^sent_/.test(ff.d.sentLog['1__acc__i1_' + EM])], [true, 1, false, true]);
+    const p = await runSend(fx({ ['1__acc__i1_' + EM]: MP(20) }), 1);
+    t.eq('partial account payment: payer message sent for the 30 left, the payment is kept', [((p.sends[1] || {}).msg || '').includes('*30 ₪*'), p.d.sentLog['1__acc__i1_' + EM]], [true, MP(20)]);
+    const nr = await runSend(fx(), 9);
+    t.eq('member WITHOUT a payer message: one message, today\'s exact text, response {ok, month} only',
+      [nr.sends.length, (nr.sends[0] || {}).msg === S.composeReminder(nr.d, nr.d.tenants[1], nr.d.config.template, ctx(nr.d)).msg, Object.keys(nr.out).sort()], [1, true, ['month', 'ok']]);
+    const nb = await runSend(base({ accountTemplates: TPL().map(x => { delete x.notify; return x; }), tenants: [mem(1, { extraAccounts: [ins(), wat()] })] }), 1, { scope: 'acc', tplId: 'T1' });
+    t.eq('building without "separate": scope ignored → the full message to the main phone (as 2.14.84)', [nb.sends.length, nb.sends[0].phone, nb.sends[0].msg.includes('ביטוח')], [1, '0501111111', true]);
+  }
+
+  t.section('v2.14.85 (1ו2) — REAL /api/send-all');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, {}), mem(3, { extraAccounts: [ins({ openingDebt: 0 })], tenant: {} })],
+      sentLog: { ['1__acc__i1_' + EM]: BI(50) } });
+    const E = env(d); const names = Object.keys(E.g); let out;
+    await new AF(...names, 'req', 'res', bodyOf("app.post('/api/send-all', authMiddleware, async (req, res) => {"))(...names.map(n => E.g[n]), { body: {}, user: { tenantId: 'B' } }, { json: o => { out = o; } });
+    t.eq('member 1: ביטוח paid → no payer message (no line); everyone gets the main', E.sends.map(s => s.phone), ['0501111111', '0501111112', '0501111113']);
+    t.eq('response', [out.ok, out.sent, out.payerSent], [true, 3, 0]);
+    const d2 = base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, {})] });
+    const E2 = env(d2); const n2 = Object.keys(E2.g); let o2;
+    await new AF(...n2, 'req', 'res', bodyOf("app.post('/api/send-all', authMiddleware, async (req, res) => {"))(...n2.map(n => E2.g[n]), { body: {}, user: { tenantId: 'B' } }, { json: o => { o2 = o; } });
+    t.eq('member 1 owes ביטוח → main + renter; member 2 main', [E2.sends.map(s => s.phone), o2.sent, o2.payerSent], [['0501111111', '0522222221', '0501111112'], 3, 1]);
+  }
+
+  t.section('v2.14.85 (1ו2, ל5-A) — REAL doAutoSend');
+  {
+    const run = async d => { const E = env(d); const k = Object.keys(E.g);
+      const fn = new Function(...k, lib.extractFunctions(src, ['doAutoSend']) + '\n; return doAutoSend;')(...k.map(x => E.g[x]));
+      const r = await fn({ tenantId: 'B', email: 'x@y' }); return { r, sends: E.sends, d }; };
+    const a = await run(base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, {}), mem(3, {})],
+      sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80), ['3_' + EM]: BI(230) } }));
+    t.eq('member 1 paid, renter owes → ONLY the renter; member 2 unpaid → main; member 3 paid → nothing', a.sends.map(s => s.phone), ['0522222221', '0501111112']);
+    t.eq('result + markers', [a.r.sent, a.r.failed, a.d.sentLog['1_' + EM], /^sent_/.test(a.d.sentLog['1__acc__i1_' + EM]), /^sent_/.test(a.d.sentLog['2_' + EM])], [2, 0, BI(230), true, true]);
+    t.eq('lastAutoSend counts messages', a.d.config.lastAutoSend.sent, 2);
+    const b = await run(base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] })], sentLog: { ['1__acc__i1_' + EM]: BI(50) } }));
+    t.eq('renter paid, member owes → only the main phone, ביטוח not in it', [b.sends.map(s => s.phone), b.sends[0].msg.includes('ביטוח')], [['0501111111'], false]);
+  }
+
+  t.section('v2.14.85 (1ו2) — REAL GET /api/data');
+  {
+    const runData = d => { const E = env(d); const names = Object.keys(E.g); let out;
+      new Function(...names, 'req', 'res', bodyOf("app.get('/api/data', authMiddleware, (req, res) => {"))(...names.map(n => E.g[n]), { query: {}, user: { tenantId: 'B' } }, { json: o => { out = o; } });
+      return { out, portal: E.portal() }; };
+    const d = base({ config: { amount: 230, manualMonth: EM, template: 'שלום {שם} {לינק_פורטל}{חשבונות}' },
+      tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, { extraAccounts: [wat()] }), mem(3, {})], sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) } });
+    const { out, portal } = runData(d);
+    const t1 = out.tenants.find(x => x.id === 1);
+    t.eq('routed member: shouldRemind true (renter owes), mainShouldRemind false, accOwedNow = main block only (0)', [t1.shouldRemind, t1.mainShouldRemind, t1.accOwedNow], [true, false, 0]);
+    t.eq('payerSplit = the server view', t1.payerSplit, [{ phone: '0522222221', name: 'שוכר1', tplIds: ['T1'], labels: ['ביטוח'], total: 50, shouldRemind: true }]);
+    t.eq('other members: no payerSplit / mainShouldRemind keys', out.tenants.filter(x => x.id !== 1).some(x => 'payerSplit' in x || 'mainShouldRemind' in x), false);
+    t.eq('the 2.5s poll never creates a portal link', portal, 0);
+    t.eq('reminderAccountsGap counts the MAIN message only (member 1 owes only via the renter)', out.reminderAccountsGap, { covered: true, owing: 1 });
+    const dn = base({ accountTemplates: TPL().map(x => { delete x.notify; return x; }), tenants: [mem(1, { extraAccounts: [ins(), wat()] })] });
+    t.eq('building without "separate": no new keys at all', 'payerSplit' in runData(dn).out.tenants[0], false);
+  }
+
+  t.section('v2.14.85 (1ו2, ל2-A) — REAL POST /api/account-templates stores only {mode:"separate"}');
+  {
+    const d = base({ tenants: [] });
+    const E = env(d); E.g.saveTenantData = (id, p) => Object.assign(d, J(p)); const names = Object.keys(E.g); let out;
+    const tp = [{ id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, notify: { mode: 'separate', template: 'x', hack: 1 } },
+                { id: 'T2', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 80, notify: { mode: 'merged' } },
+                { id: 'T3', label: 'גינון', type: 'fixed', frequency: 'monthly', amount: 30 }];
+    new Function(...names, 'req', 'res', bodyOf("app.post('/api/account-templates', authMiddleware, (req, res) => {"))(...names.map(n => E.g[n]), { body: { templates: tp }, user: { tenantId: 'B' } }, { json: o => { out = o; } });
+    t.eq('saved: separate kept clean, merged/absent → no notify key', [out.ok, d.accountTemplates.map(x => x.notify === undefined ? '-' : JSON.stringify(x.notify))], [true, ['{"mode":"separate"}', '-', '-']]);
+  }
+
+  t.section('v2.14.85 (1ו2) — 💳 GET /api/tenant-accounts: where the reminder goes (display)');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, { tenant: {}, extraAccounts: [ins()] })] });
+    const run = id => { const E = env(d); const names = Object.keys(E.g); let out;
+      new Function(...names, 'req', 'res', bodyOf("app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {"))(...names.map(n => E.g[n]), { params: { tenantId: String(id) }, user: { tenantId: 'B' } }, { json: o => { out = o; } }); return out; };
+    const a = run(1);
+    t.eq('separate → "הודעה נפרדת לטלפון … (שוכר1)"; merged → no notifyTo', [a.accounts[0].notifyTo, 'notifyTo' in a.accounts[1]], ['📨 הודעה נפרדת לטלפון 0522222221 (שוכר1)', false]);
+    t.eq('separate but no renter phone → in the main message', run(2).accounts[0].notifyTo, '📨 בהודעה הראשית (טלפון המשלם = הטלפון הראשי)');
+    t.eq('POST /api/tenant-accounts field list does not carry notifyTo (display only)', /notifyTo/.test(bodyOf("app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {")), false);
+  }
+
+  t.section('v2.14.85 (1ו2, ל6) — the PROTECTED close is not affected by a payer send');
+  {
+    const closeExtraAccountsUnpaid = lib.loadCloseExtra();
+    const mk = () => base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] })] });
+    const sent = (await runSend(mk(), 1)).d, clean = mk();
+    const PK = MK;
+    closeExtraAccountsUnpaid(sent, sent.tenants[0], PK); closeExtraAccountsUnpaid(clean, clean.tenants[0], PK);
+    t.eq('close after a payer send == close without it (openingDebt + account history)', [sent.tenants[0].extraAccounts.map(a => a.openingDebt), JSON.stringify(sent.paymentHistory['1__acc__i1'] || [])],
+      [clean.tenants[0].extraAccounts.map(a => a.openingDebt), JSON.stringify(clean.paymentHistory['1__acc__i1'] || [])]);
+  }
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); process.exit(t.done() ? 1 : 0); })();

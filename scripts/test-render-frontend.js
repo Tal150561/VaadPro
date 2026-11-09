@@ -2036,7 +2036,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('Tami (paid, prior 230) → no warn', owesNothing(row(6, 230, { ['6_' + SEPx]: bankx(230) })), false);
   t.eq('older server (no owedNow) → never warn', owesNothing({ shouldRemind: false }), false);
   function by2(arr, id) { return arr.find(x => x.id === id); }
-  t.eq('sendOne calls the warning before POST', /async function sendOne\(id\) \{\n  if\(!confirmManualSend\(\)\) return;[\s\S]{0,400}t1OwesNothing\(_t1\)[\s\S]{0,300}fetch\(API\+'\/send\/'\+id/.test(app57), true);
+  t.eq('sendOne calls the warning before POST', /async function sendOne\(id\) \{\n  if\(!confirmManualSend\(\)\) return;[\s\S]{0,800}t1OwesNothing\(_t1\)[\s\S]{0,300}fetch\(API\+'\/send\/'\+id/.test(app57), true);   // v2.14.85 — window 400 → 800 (confirmPayerSplit added before it, ON PURPOSE)
 
   t.section('v2.14.57 — payments-tab debt cell + status list wiring');
   t.eq('debt cell: owed after credit branch', app57.includes("אחרי קיזוז קרדיט '+creditApplied+'₪"), true);
@@ -3139,7 +3139,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
   {
     const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates',
-      'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort']);   // v2.14.79 — + payments selector · v2.14.80 — + frequency cell
+      'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort', 'renderPayerTplBox']);   // v2.14.79 — + payments selector · v2.14.80 — + frequency cell · v2.14.85 — + payer template box
     const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
     const S = runInSandbox('var accountTemplates;\n' + billPageConsts(app) + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
       { document: { getElementById: id => els[id] || null } });
@@ -3685,7 +3685,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 
   t.section('v2.14.79 (1ו, ז5-A) — "WA לחייבים בחשבון" (EXECUTED)');
   {
-    const fns = extractFunctions(app, ['bankTargetTemplates', 'populatePayAccSend', 'accountDebtors', 'sendAccountDebtors', 'esc', 'confirmAccountsGap', 'accOwing']);
+    const fns = extractFunctions(app, ['bankTargetTemplates', 'populatePayAccSend', 'accountDebtors', 'sendAccountDebtors', 'esc', 'confirmAccountsGap', 'accOwing', 'payerMsgCount', 'sendBody']);   // v2.14.85 — + payer count / scope body
     const run = async (opts) => {
       const els = { payAccSendBox: { style: { display: 'none' } }, payAccSend: { value: '', innerHTML: '' }, btnSendAcc: { disabled: false }, sendingStatus: { textContent: '' } };
       const posted = [], toasts = [], asked = [];
@@ -3746,7 +3746,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 
   t.section('v2.14.79 (1ו) — guide');
   t.eq('guide: send by account, {סה"כ_כולל}, template warning, suspended line, portal cards',
-    ['id="vpg-acc-send"', '💬 WA לחייבים בחשבון', '{סה"כ_כולל}', 'id="vpg-acc-tpl"', 'חוב קודם 80 ₪', 'id="vpg-portal-accounts"', 'היסטוריית התשלומים של אותו חשבון', 'עדיין לא קיימת'].every(x => gd.includes(x)), true);
+    ['id="vpg-acc-send"', '💬 WA לחייבים בחשבון', '{סה"כ_כולל}', 'id="vpg-acc-tpl"', 'חוב קודם 80 ₪', 'id="vpg-portal-accounts"', 'היסטוריית התשלומים של אותו חשבון', 'הודעת המשלם'].every(x => gd.includes(x)), true);   // v2.14.85 — "עדיין לא קיימת" (separate message) replaced ON PURPOSE by the 1ו2 exception
   t.eq('guide: the old "מושהה … לא נכלל בתזכורות" sentence is gone', gd.includes('חשבון מושהה לא נצבר לחוב ולא נכלל בתזכורות'), false);
 })()]);
 
@@ -4052,6 +4052,102 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     ['הדס', 'הרצל 1', 'הבניין של משה', 'הבניין שלי']);
   t.eq('route no longer requires address', [srvR.includes("if (!email || !password || !address)"), srvR.includes("if (!email || !password) return res.json({ ok: false, error: 'יש למלא מייל וסיסמה' });")], [false, true]);
   t.eq('guide: address optional, free text', [gdR.includes('<strong>כתובת הבניין</strong> ושם הבניין — אופציונליים, טקסט חופשי'), gdR.includes('(חובה — עם השלמה אוטומטית)')], [true, false]);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.85 (1ו2) — separate message per account to the payer phone (page, EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const srv85 = readSource('server.js');
+  const gd85 = readSource('public/vaadpro-guide.js');
+  t.section('v2.14.85 (1ו2) — page helpers EXECUTED');
+  const P = runInSandbox(extractFunctions(app, ['sendBody', 'payerMsgCount', 'confirmPayerSplit', 'sendResultText', 'anySeparateNotify', 'payerPreviewText'])
+    + '\n' + (app.match(/const PAYER_TEMPLATE_DEFAULT = .*;\n/) || [''])[0]
+    + 'module.exports={sendBody,payerMsgCount,confirmPayerSplit,sendResultText,anySeparateNotify,payerPreviewText,PAYER_TEMPLATE_DEFAULT,setAsk:function(f){confirm=f;}};var confirm;', {});
+  {
+    const srvDef = srv85.match(/const PAYER_DEFAULT_TEMPLATE = (.*);\n/);
+    t.eq('page default payer template == server PAYER_DEFAULT_TEMPLATE (text copy, no drift)', !!srvDef && P.PAYER_TEMPLATE_DEFAULT === JSON.parse(srvDef[1].replace(/^'|'$/g, '"').replace(/\\"/g, '"').replace(/"([^"]*)"$/, '"$1"').replace(/סה"כ/g, 'סה\\"כ')), true);
+    const b = P.sendBody('acc', 'T1');
+    t.eq('sendBody: POST + JSON {scope, tplId}; no tplId → {scope}', [b.method, b.headers['Content-Type'], JSON.parse(b.body), JSON.parse(P.sendBody('remind').body)], ['POST', 'application/json', { scope: 'acc', tplId: 'T1' }, { scope: 'remind' }]);
+    const tn = { name: 'כהן', payerSplit: [{ tplIds: ['T1'], total: 50, shouldRemind: true }, { tplIds: ['T3'], total: 0, shouldRemind: false }] };
+    t.eq('payerMsgCount: all / remind / acc, from the server flags only', [P.payerMsgCount(tn, 'all'), P.payerMsgCount(tn, 'remind'), P.payerMsgCount(tn, 'acc', 'T3'), P.payerMsgCount(tn, 'acc', 'T2'), P.payerMsgCount({}, 'all'), P.payerMsgCount(null, 'all')], [1, 1, 1, 0, 0, 0]);
+    const carried = { payerSplit: [{ tplIds: ['T1'], total: 40, shouldRemind: false }] };   // carried debt only
+    t.eq('payerMsgCount: a line without its own reminder rule → all 1, remind 0', [P.payerMsgCount(carried, 'all'), P.payerMsgCount(carried, 'remind')], [1, 0]);
+    const asked = []; P.setAsk(m => { asked.push(m); return false; });
+    t.eq('confirmPayerSplit: nothing to add → true, NO question', [P.confirmPayerSplit([{ name: 'x' }], 'all'), asked.length], [true, 0]);
+    t.eq('confirmPayerSplit: one payer message → asks (count + name + "not in the main message"); cancel → false',
+      [P.confirmPayerSplit([tn, { name: 'y' }], 'all'), asked.length, asked[0].includes('1 הודעה נפרדת'), asked[0].includes('כהן'), asked[0].includes('לא מופיע בהודעה הראשית')], [false, 1, true, true, true]);
+    t.eq('sendResultText: old server reply → the old toast; counts; failures', [P.sendResultText({ ok: true, month: 'x' }), P.sendResultText({ sent: 2, payerSent: 1 }), P.sendResultText({ sent: 1, payerSent: 0, failed: 1, error: 'מנותק' }), P.sendResultText({ sent: 5, payerSent: 0 })],
+      ['✅ הודעה נשלחה!', '✅ נשלחו 2 הודעות (מתוכן 1 לטלפון המשלם)', '✅ הודעה נשלחה! · ⚠️ 1 נכשלו: מנותק', '✅ נשלחו 5 הודעות']);
+    t.eq('anySeparateNotify', [P.anySeparateNotify([{ notify: { mode: 'separate' } }]), P.anySeparateNotify([{}, { notify: { mode: 'merged' } }]), P.anySeparateNotify(null)], [true, false, false]);
+    t.eq('preview: sample, no portal link, empty → default', [P.payerPreviewText('{שם}/{שם_חבר}/{חודש}{חשבונות}={סה"כ}{לינק_פורטל}', 'מאי'), P.payerPreviewText('', 'מאי').startsWith('שלום דנה לוי!')],
+      ['דנה לוי/משפחת כהן/מאי\n• ביטוח מבנה: *240 ₪*=240', true]);
+  }
+
+  t.section('v2.14.85 (1ו2) — settings row + payer template box EXECUTED');
+  {
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates',
+      'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort', 'renderPayerTplBox', 'anySeparateNotify', 'payerPreviewText', 'setTplNotify']);
+    const mk = () => ({ accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: {} }, payerTplBox: { style: { display: 'none' } }, cfgPayerTemplate: { value: '' }, payerPreview: { textContent: '' } });
+    const els = mk();
+    const S = runInSandbox('var accountTemplates, data = { config: { manualMonth: "יוני" } };\n' + billPageConsts(app) + (app.match(/const PAYER_TEMPLATE_DEFAULT = .*;\n/) || [''])[0] + fns
+      + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();},set:setTplNotify,get:function(){return accountTemplates;}};', { document: { getElementById: id => els[id] || null } });
+    S.run([{ id: 'a', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, linked: 2, notify: { mode: 'separate' } }, { id: 'b', label: 'מים', type: 'fixed', frequency: 'monthly', amount: 80, linked: 0 }]);
+    const h = els.accountTemplatesList.innerHTML;
+    t.eq('row: "תזכורת:" select per definition, "לטלפון המשלם" selected only for the separate one',
+      [(h.match(/class="tpl-notify"/g) || []).length, (h.match(/<option value="separate" selected>/g) || []).length, (h.match(/<option value="merged" selected>/g) || []).length], [2, 1, 1]);
+    t.eq('handler takes the row INDEX only', /onchange="setTplNotify\(1, this.value\)"/.test(h), true);
+    t.eq('a separate definition → the payer template box shows + preview (month from data)', [els.payerTplBox.style.display, els.payerPreview.textContent.includes('יוני')], ['block', true]);
+    S.set(0, 'merged');
+    t.eq('switch back to merged → notify removed, box hidden', ['notify' in S.get()[0], els.payerTplBox.style.display], [false, 'none']);
+    S.set(1, 'separate');
+    t.eq('switch to separate → {mode:"separate"}', [JSON.stringify(S.get()[1].notify), els.payerTplBox.style.display], ['{"mode":"separate"}', 'block']);
+  }
+
+  t.section('v2.14.85 (1ו2) — send buttons EXECUTED');
+  {
+    const run85 = async (fn, tenants, opts) => {
+      opts = opts || {};
+      const els = { btnSendAll: { disabled: false, innerHTML: '' }, sendingStatus: { textContent: '' }, payAccSend: { value: opts.pick || '' }, btnSendAcc: {}, ['send-btn-1']: {} };
+      const posted = [], toasts = [], asked = [];
+      const X = runInSandbox('var data, accountTemplates;\n' + extractFunctions(app, [fn, 'sendBody', 'payerMsgCount', 'confirmPayerSplit', 'sendResultText', 'accOwing', 'confirmAccountsGap', 'accountDebtors', 't1OwesNothing'])
+        + '\nmodule.exports={set:function(d,a){data=d;accountTemplates=a;},go:' + fn + '};', {
+          document: { getElementById: id => els[id] || null }, API: '/api',
+          fetch: async (u, o) => { posted.push([u, o && o.body ? JSON.parse(o.body) : null]); return { json: async () => (opts.reply || { ok: true }) }; },
+          toast: m => toasts.push(m), confirm: m => { asked.push(m); return opts.confirm !== false; }, confirmManualSend: () => true,
+          loadData: async () => {}, render: () => {}, setTimeout: f => f(), setInterval: () => 0, clearInterval: () => {}, getEffectiveMonth: () => 'x', showWaBanner: () => {}, Promise });
+      X.set({ tenants, config: {} }, [{ id: 'T1', label: 'ביטוח', type: 'fixed', linked: 1 }]);
+      await X.go(opts.arg);
+      return { posted, toasts, asked };
+    };
+    const T = [{ id: 1, name: 'כהן', shouldRemind: true, remindAcc: ['T1'], payerSplit: [{ tplIds: ['T1'], total: 50, shouldRemind: true }] },
+               { id: 2, name: 'לוי', shouldRemind: true, remindAcc: ['T1'] }, { id: 3, name: 'פרץ', shouldRemind: false }];
+    global.__crRuns = (global.__crRuns || []).concat([(async () => {
+      const a = await run85('sendOne', T, { arg: 1, reply: { ok: true, month: 'x', sent: 2, payerSent: 1 } });
+      t.eq('📱 שלח: confirm about the payer message, POST {scope:"all"}, toast with counts', [a.asked.length, a.posted, a.toasts[0]], [1, [['/api/send/1', { scope: 'all' }]], '✅ נשלחו 2 הודעות (מתוכן 1 לטלפון המשלם)']);
+      const c = await run85('sendOne', T, { arg: 1, confirm: false });
+      t.eq('📱 שלח: cancel the payer question → nothing sent', c.posted.length, 0);
+      const n = await run85('sendOne', T, { arg: 2 });
+      t.eq('📱 שלח to a member WITHOUT a payer message: no extra question, old toast', [n.asked.length, n.toasts[0]], [0, '✅ הודעה נשלחה!']);
+      const u = await run85('sendUnpaidOnly', T);
+      t.eq('WA למי שלא שילם: the shouldRemind members, each POST {scope:"remind"}', u.posted, [['/api/send/1', { scope: 'remind' }], ['/api/send/2', { scope: 'remind' }]]);
+      const s = await run85('sendAccountDebtors', T, { pick: 'T1' });
+      t.eq('WA לחייבים בחשבון: POST {scope:"acc", tplId}; the confirm says 1 of them goes to the payer phone',
+        [s.posted, s.asked.some(m => m.includes('ל-1 מהם תישלח הודעת המשלם'))], [[['/api/send/1', { scope: 'acc', tplId: 'T1' }], ['/api/send/2', { scope: 'acc', tplId: 'T1' }]], true]);
+      const all = await run85('sendAll', T, { reply: { ok: true, sent: 4, payerSent: 1 } });
+      t.eq('WA לכולם: payer question, toast from d.sent (was "undefined")', [all.asked.some(m => m.includes('לטלפון המשלם')), all.toasts[0]], [true, '✅ נשלחו 4 הודעות (מתוכן 1 לטלפון המשלם)']);
+    })()]);
+  }
+
+  t.section('v2.14.85 (1ו2) — markup, wiring, guide');
+  t.eq('payer template box + textarea + preview + help anchor', ['id="payerTplBox"', 'id="cfgPayerTemplate"', 'id="payerPreview"', "showHelp('settings#set-payer-msg')"].every(x => app.includes(x)), true);
+  t.eq('saveTemplate stores payerTemplate only when it differs from the default', /_pt\.value\.trim\(\); if \(pv && pv !== PAYER_TEMPLATE_DEFAULT\) data\.config\.payerTemplate = _pt\.value; else delete data\.config\.payerTemplate;/.test(extractFunctions(app, ['saveTemplate'])), true);
+  t.eq('fillForm loads it (default when empty) and refreshes the box', /cfgPayerTemplate[\s\S]{0,120}c\.payerTemplate\|\|PAYER_TEMPLATE_DEFAULT[\s\S]{0,40}renderPayerTplBox\(\)/.test(extractFunctions(app, ['fillForm'])), true);
+  t.eq('insertVar refreshes the payer preview', /cfgPayerTemplate'\) renderPayerTplBox\(\)/.test(extractFunctions(app, ['insertVar'])), true);
+  t.eq('💳 modal shows the server text notifyTo (escaped)', app.includes('${acc.notifyTo ? `<div class="ta-notify"') && app.includes('${esc(acc.notifyTo)}'), true);
+  t.eq('guide: payer-message section + send box + accounts row + payer column text',
+    ['id="vpg-a-set-payer-msg"', 'id="vpg-payer-send"', 'id="vpg-payer-volume"', 'תזכורת: לטלפון המשלם', 'לעולם לא עוברים מבעלים לשוכר'].every(x => gd85.includes(x)), true);
+  t.eq('guide: "תגיע בגרסה הבאה" (payer column) is gone', gd85.includes('הודעה נפרדת לטלפון המשלם תגיע בגרסה הבאה'), false);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

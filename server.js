@@ -2109,7 +2109,23 @@ app.get('/api/data', authMiddleware, (req, res) => {
         ...(((t.extraAccounts || []).length) ? {
           remindAcc:  remindAccountIds(d, t, mkNow, emNow),
           accOwedNow: buildAccountsBlock(d, t, emNow).total
-        } : {})
+        } : {}),
+        // v2.14.85 (1ו2) — ONLY for a member with a payer message (absent otherwise):
+        // shouldRemind = any of his messages would go; mainShouldRemind = the main one;
+        // accOwedNow = what the MAIN message's {חשבונות} shows (ל4); payerSplit = the
+        // payer messages (phone, name, definition ids, total, own decision).
+        ...(((t.extraAccounts || []).length) ? (() => {
+          try {
+            const spD = memberMessageSplit(d, t);
+            if (!spD.routed) return {};
+            // mainTmpl '' → no text is built for the main message (and no portal link is ever
+            // created by the 2.5s poll); only the decisions and the payer totals are used here.
+            const msgsD = planMemberMessages(d, t, { tenantDataId: req.user.tenantId, month: emNow, mk: mkNow, amount: live,
+              mainTmpl: '', payerTmpl: (d.config || {}).payerTemplate });
+            return { shouldRemind: msgsD.some(m => m.shouldRemind), mainShouldRemind: msgsD[0].shouldRemind,
+              accOwedNow: buildAccountsBlock(d, spD.mainTenant, emNow).total, payerSplit: payerSplitView(msgsD) };
+          } catch (e) { console.error('[data] payerSplit', e.message); return {}; }
+        })() : {})
       };
     });
     // v2.14.79 (1ו, ז4-A) — template vs extra accounts (absent when no member has one).
@@ -3038,18 +3054,18 @@ function t(labels, key) {
   return (LABELS.he.vaad[key] != null) ? LABELS.he.vaad[key] : key;
 }
 
-// Phone resolution per account uses staged fallback:
-//   payer-slot phone → owner phone → tenant phone → main tenant.phone
+// Phone resolution per account (v2.14.85, 1ו2 ל8-A — fixed fallback):
+//   payer 'tenant'            → renter-slot phone → main tenant.phone
+//   payer 'owner' / undefined → owner-slot phone  → main tenant.phone
+// NEVER crosses owner ↔ renter. Until v2.14.84 an owner payer with an EMPTY owner slot
+// fell to the RENTER phone before tenant.phone (legacy undefined too) — at נווה ים
+// (owner slot empty, member phone in tenant.phone) a member's "בעלים" account would have
+// been routed to his renter. Harmless until 1ו2 (nothing sent by it); fixed before use.
 // ─────────────────────────────────────────────────────────────────────────────
 function resolvePayerPhone(tenant, acc) {
-  const payer = acc && acc.payer; // 'owner' | 'tenant' | undefined
-  const owner  = tenant.owner  || {};
-  const renter = tenant.tenant || {};
-  if (payer === 'owner'  && String(owner.phone  || '').trim()) return String(owner.phone).trim();
-  if (payer === 'tenant' && String(renter.phone || '').trim()) return String(renter.phone).trim();
-  // staged fallback: owner → tenant → main
-  if (String(owner.phone  || '').trim()) return String(owner.phone).trim();
-  if (String(renter.phone || '').trim()) return String(renter.phone).trim();
+  const payer = acc && acc.payer; // 'owner' | 'tenant' | undefined (= owner)
+  const slot = payer === 'tenant' ? (tenant.tenant || {}) : (tenant.owner || {});
+  if (String(slot.phone || '').trim()) return String(slot.phone).trim();
   return String(tenant.phone || '').trim();
 }
 
@@ -4780,7 +4796,7 @@ function reminderAccountsGap(d) {
   let owing = 0;
   for (const t of tenants) {
     if (!(t.extraAccounts || []).length) continue;
-    if (buildAccountsBlock(d, t, em).total > 0) owing++;
+    if (buildAccountsBlock(d, memberMessageSplit(d, t).mainTenant, em).total > 0) owing++;   // v2.14.85 (ל4) — the MAIN message only
   }
   return { covered, owing };
 }
@@ -4803,6 +4819,176 @@ function remindAccountIds(d, tenant, mk, em) {
   return out;
 }
 
+// ══════════════════════════════════════════════════════════════════════════
+// v2.14.85 (1ו2) — a SEPARATE message per extra account to the PAYER phone (נווה ים).
+// Locked (Tal, 2026-11-09, ל1–ל10 all A; spec ה5-ב, ה12-ב, ה13-א):
+//  ל1 an account leaves the main message ONLY when its definition is "separate" AND its
+//     payer phone (normalized like sendWaMsg) differs from the member's main phone; same
+//     phone → it stays a line of {חשבונות} in the main message (ה12-ב: a member who pays
+//     everything gets ONE message).
+//  ל2 the switch lives on the DEFINITION: tpl.notify = {mode:'separate'}; absent = merged
+//     (every other building byte-identical). Unlinked account → merged.
+//  ל3 ONE building template config.payerTemplate (default below) for a message that may
+//     group several accounts: {שם} payer, {שם_חבר}, {חודש}, {חשבונות} (the group only),
+//     {סה"כ} (Σ owedNow of the group). No portal link (the member's portal shows his own
+//     accounts) — {לינק_פורטל} is removed from it.
+//  ל4 the main message is composed for a SHALLOW COPY of the member whose extraAccounts
+//     omit the routed ones → composeReminder / buildAccountsBlock / autoSendShouldRemind
+//     run UNCHANGED (byte-identical) on it.
+//  ל5 main decision = autoSendShouldRemind(copy); payer decision = tenantOwesActiveExtra over
+//     the group (active, not suspended, owedCurrent > 0). Carried debt alone never sends.
+//  ל6 delivered payer message → 'sent_<ISO>' on tid__acc__<id>_<month> of each account in
+//     it (never over a payment); NO paymentHistory record (closeExtraAccountsUnpaid finds
+//     the month with find() and does not skip wa_sent).
+//  ל9 grouping is per member only.
+// ══════════════════════════════════════════════════════════════════════════
+const PAYER_DEFAULT_TEMPLATE = 'שלום {שם}!\nתזכורת לתשלום עבור {שם_חבר} לחודש {חודש}:{חשבונות}\nסה"כ לתשלום: *{סה"כ} ₪*\n\nתודה!';
+
+// Same normalization as sendWaMsg (digits, leading 0 → 972) — used only to compare phones.
+function waPhoneKey(phone) {
+  let s = String(phone || '').replace(/\D/g, '');
+  if (s.startsWith('0')) s = '972' + s.slice(1);
+  return s;
+}
+
+// ל2 — is this account's definition set to "separate message to the payer"?
+function accNotifySeparate(d, acc) {
+  const tpl = accTemplateFor(acc, Array.isArray(d && d.accountTemplates) ? d.accountTemplates : []);
+  return !!(tpl && tpl.notify && tpl.notify.mode === 'separate');
+}
+
+// Name for {שם} of a payer message: the payer slot's name, else the member's name.
+function payerNameFor(tenant, acc) {
+  const slot = acc && acc.payer === 'tenant' ? (tenant.tenant || {}) : (tenant.owner || {});
+  return String(slot.name || '').trim() || String(tenant.name || '');
+}
+
+// ל1 / ל4 / ל9 — split ONE member into the main message (a shallow copy without the routed
+// accounts) and payer groups { phone, key, name, accounts[] } keyed by normalized phone.
+// No routed account → { routed:false, mainTenant: tenant (the SAME object) }.
+function memberMessageSplit(d, tenant) {
+  const mainKey = waPhoneKey(tenant && tenant.phone);
+  const keep = [], groups = [], byKey = {};
+  for (const acc of ((tenant && tenant.extraAccounts) || [])) {
+    if (!acc || acc.active === false || !accNotifySeparate(d, acc)) { keep.push(acc); continue; }
+    const phone = resolvePayerPhone(tenant, acc);
+    const k = waPhoneKey(phone);
+    if (!k || k === mainKey) { keep.push(acc); continue; }
+    if (!byKey[k]) { byKey[k] = { phone, key: k, name: payerNameFor(tenant, acc), accounts: [] }; groups.push(byKey[k]); }
+    byKey[k].accounts.push(acc);
+  }
+  if (!groups.length) return { routed: false, mainTenant: tenant, groups: [] };
+  return { routed: true, mainTenant: Object.assign({}, tenant, { extraAccounts: keep }), groups };
+}
+
+// ל3 — the payer message. Figures = buildAccountsBlock over the group (CONSUME).
+function composePayerMessage(d, tenant, group, tmpl, ctx) {
+  const pseudo = Object.assign({}, tenant, { extraAccounts: group.accounts });
+  const acc = buildAccountsBlock(d, pseudo, ctx.month);
+  const msg = String(tmpl || PAYER_DEFAULT_TEMPLATE)
+    .replace(/{שם_חבר}/g, String(tenant.name || ''))
+    .replace(/{שם}/g, group.name)
+    .replace(/{חודש}/g, ctx.month)
+    .replace(/{חשבונות}/g, acc.block)
+    .replace(/{סה"כ_כולל}/g, acc.total)
+    .replace(/{סה"כ}/g, acc.total)
+    .replace(/{לינק_פורטל}/g, '');
+  return { msg, block: acc.block, total: acc.total };
+}
+
+// ל7 — every message ONE member gets this month, in send order (main first).
+// ctx: { tenantDataId, month, mk, amount, mainTmpl, payerTmpl }
+function planMemberMessages(d, tenant, ctx) {
+  const sp = memberMessageSplit(d, tenant);
+  const main = composeReminder(d, sp.mainTenant, ctx.mainTmpl, ctx);
+  const out = [{ kind: 'main', phone: tenant.phone, name: tenant.name, msg: main.msg, accIds: [], tplIds: [],
+    total: main.grandTotal, shouldRemind: autoSendShouldRemind(d, sp.mainTenant, ctx.mk) }];
+  const tpls = Array.isArray(d.accountTemplates) ? d.accountTemplates : [];
+  for (const g of sp.groups) {
+    const pm = composePayerMessage(d, tenant, g, ctx.payerTmpl, ctx);
+    const pseudo = Object.assign({}, tenant, { extraAccounts: g.accounts });
+    out.push({ kind: 'payer', phone: g.phone, name: g.name, msg: pm.msg,
+      accIds: g.accounts.map(a => a.id),
+      tplIds: g.accounts.map(a => { const t = accTemplateFor(a, tpls); return t && t.id; }).filter(Boolean),
+      labels: g.accounts.map(a => a.label),
+      total: pm.total, shouldRemind: tenantOwesActiveExtra(d, pseudo, ctx.month) });
+  }
+  return out;
+}
+
+// ל6 — mark the accounts of a delivered payer message (never over a payment).
+function markPayerSent(d, tenant, accIds, month, iso) {
+  if (!d.sentLog) d.sentLog = {};
+  let n = 0;
+  for (const id of (accIds || [])) {
+    const k = String(tenant.id) + '__acc__' + id + '_' + month;
+    if (sentLogIsPayment(d.sentLog[k])) continue;
+    d.sentLog[k] = 'sent_' + (iso || new Date().toISOString());
+    n++;
+  }
+  return n;
+}
+
+// ל7 — which messages a send path delivers for a member that HAS a payer message.
+//   'all'    (📱 שלח, WA לכולם): main always (as today) + each payer message with a line
+//   'remind' (WA למי שלא שילם, automatic): every message whose own rule says remind
+//   'acc'    (WA לחייבים בחשבון X): the payer message holding X, else the main message
+function pickMemberMessages(msgs, scope, tplId) {
+  if (scope === 'remind') return msgs.filter(m => m.shouldRemind);
+  if (scope === 'acc') {
+    const g = msgs.find(m => m.kind === 'payer' && tplId && m.tplIds.includes(tplId));
+    return g ? [g] : [msgs[0]];
+  }
+  return msgs.filter(m => m.kind === 'main' || m.total > 0);
+}
+
+// Delivers the picked messages of ONE routed member. Main message = the SAME bookkeeping as
+// the existing paths (sentLog 'sent_' unless a payment, recordPayment wa_sent); payer
+// message = markPayerSent only. Caller saves. Returns counts + the first error.
+async function sendRoutedMember(d, tenant, msgs, ctx, opts) {
+  opts = opts || {};
+  const pick = pickMemberMessages(msgs, opts.scope || 'all', opts.tplId);
+  let sent = 0, payerSent = 0, failed = 0, error = '';
+  for (let i = 0; i < pick.length; i++) {
+    const m = pick[i];
+    if (i > 0 && opts.delayMs) await new Promise(r => setTimeout(r, opts.delayMs));
+    try {
+      await sendWaMsg(ctx.tenantDataId, m.phone, m.msg);
+      if (m.kind === 'main') {
+        const key = tenant.id + '_' + ctx.month;
+        if (!sentLogIsPayment(d.sentLog[key])) d.sentLog[key] = 'sent_' + new Date().toISOString();
+        recordPayment(d, String(tenant.id), ctx.mk, 'wa_sent', ctx.amount, tenant.name);
+      } else {
+        markPayerSent(d, tenant, m.accIds, ctx.month);
+        payerSent++;
+      }
+      sent++;
+    } catch (e) {
+      failed++;
+      if (!error) error = e.message || 'שגיאה לא ידועה';
+    }
+  }
+  return { planned: pick.length, sent, payerSent, failed, error };
+}
+
+// /api/data view (only for a member that HAS a payer message): what the page needs to
+// count and filter — never money it re-derives (CONSUME).
+function payerSplitView(msgs) {
+  return msgs.filter(m => m.kind === 'payer').map(m => ({
+    phone: m.phone, name: m.name, tplIds: m.tplIds, labels: m.labels, total: m.total, shouldRemind: m.shouldRemind
+  }));
+}
+
+// 💳 member modal (GET /api/tenant-accounts): where this account's reminder goes.
+function accNotifyText(d, tenant, acc) {
+  if (!acc || acc.active === false || !accNotifySeparate(d, acc)) return '';
+  const phone = resolvePayerPhone(tenant, acc);
+  const k = waPhoneKey(phone);
+  if (!k) return '📨 הודעה נפרדת — אין טלפון';
+  if (k === waPhoneKey(tenant.phone)) return '📨 בהודעה הראשית (טלפון המשלם = הטלפון הראשי)';
+  return '📨 הודעה נפרדת לטלפון ' + phone + ' (' + payerNameFor(tenant, acc) + ')';
+}
+
 // Send to single tenant
 app.post('/api/send/:id', authMiddleware, async (req, res) => {
   const d      = loadTenantData(req.user.tenantId);
@@ -4821,6 +5007,19 @@ app.post('/api/send/:id', authMiddleware, async (req, res) => {
   // `amount + calcTotalDebt` → a tenant who paid the month + had prior debt got
   // 230 + 230 = 460 instead of 230; a partial payer was double-counted.
   // v2.14.79 (1ו, ז7-A) — composeReminder: the one composer (was an inline .replace chain here).
+  // v2.14.85 (1ו2, ל7-A) — a member whose account goes to a DIFFERENT payer phone is sent
+  // through the planner (main message without that account + one message per payer phone).
+  // Every other member: the code below, unchanged. body.scope: 'all' (default) | 'remind' | 'acc'.
+  const _sp = memberMessageSplit(d, tenant);
+  if (_sp.routed) {
+    const ctxR = { tenantDataId: req.user.tenantId, month, mk, amount, mainTmpl: tmpl, payerTmpl: (d.config || {}).payerTemplate };
+    const bR = req.body || {};
+    const r = await sendRoutedMember(d, tenant, planMemberMessages(d, tenant, ctxR), ctxR,
+      { scope: bR.scope === 'remind' || bR.scope === 'acc' ? bR.scope : 'all', tplId: bR.tplId, delayMs: 800 });
+    if (r.sent > 0) saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
+    if (!r.sent && r.failed) return res.json({ ok: false, error: r.error });
+    return res.json({ ok: true, month, sent: r.sent, payerSent: r.payerSent, failed: r.failed, error: r.failed ? r.error : null });
+  }
   const { msg } = composeReminder(d, tenant, tmpl, { tenantDataId: req.user.tenantId, month, mk, amount });
   try {
     await sendWaMsg(req.user.tenantId, tenant.phone, msg);
@@ -4845,9 +5044,18 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
   const globalAmount = (d.config||{}).amount || 300;
   const tmpl   = (d.config||{}).template || 'שלום {שם}!\nתזכורת לתשלום ועד הבית לחודש {חודש}.\nהסכום: *{סכום} ₪*\n\nתודה!';
   const mk = getMonthKey(d.config);
-  let sent = 0;
+  let sent = 0, payerSent = 0;
   for (const tenant of d.tenants) {
     const amount = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
+    // v2.14.85 (1ו2, ל7-A) — a member with a payer message: main + each payer message with a line.
+    if (memberMessageSplit(d, tenant).routed) {
+      const ctxR = { tenantDataId: req.user.tenantId, month, mk, amount, mainTmpl: tmpl, payerTmpl: (d.config || {}).payerTemplate };
+      const r = await sendRoutedMember(d, tenant, planMemberMessages(d, tenant, ctxR), ctxR, { scope: 'all', delayMs: 1200 });
+      sent += r.sent; payerSent += r.payerSent;
+      if (r.failed) console.error(`[send-all:${req.user.tenantId}]`, tenant.name, r.error);
+      await new Promise(r2 => setTimeout(r2, 1200));
+      continue;
+    }
     // v2.14.79 (1ו, ז7-A) — composeReminder: the one composer (was an inline .replace chain here).
     const { msg } = composeReminder(d, tenant, tmpl, { tenantDataId: req.user.tenantId, month, mk, amount });
     try {
@@ -4864,7 +5072,7 @@ app.post('/api/send-all', authMiddleware, async (req, res) => {
     catch(e) { console.error(`[send-all:${req.user.tenantId}]`, tenant.name, e.message); }
   }
   saveTenantData(req.user.tenantId, { sentLog: d.sentLog, paymentHistory: d.paymentHistory });
-  res.json({ ok: true, sent });
+  res.json({ ok: true, sent, payerSent });
 });
 
 // Manual resend-auto: same logic as cron, triggered from settings UI
@@ -7221,6 +7429,19 @@ async function doAutoSend(user) {
 
   for (const tenant of (d.tenants || [])) {
     const key = tenant.id + '_' + month;
+    // v2.14.85 (1ו2, ל5-A) — a member with a payer message: each message by its OWN rule
+    // (main = autoSendShouldRemind on the member without the routed accounts; payer = the
+    // group still owes this month). Every other member: the code below, unchanged.
+    if (memberMessageSplit(d, tenant).routed) {
+      const amountR = resolveTariffRate(tenant, d.defaultTariffs, mk, tenant.customAmount || globalAmount);
+      const ctxR = { tenantDataId: user.tenantId, month, mk, amount: amountR, mainTmpl: tmpl, payerTmpl: config.payerTemplate };
+      const r = await sendRoutedMember(d, tenant, planMemberMessages(d, tenant, ctxR), ctxR, { scope: 'remind', delayMs: 1200 });
+      sent += r.sent; failed += r.failed;
+      if (r.failed && !firstErr) firstErr = r.error;
+      if (r.failed) console.error(`[AutoSend] ${user.email} → ${tenant.name}: ${r.error}`);
+      if (r.planned) await new Promise(r2 => setTimeout(r2, 1200));
+      continue;
+    }
     // Stage 3 (v2.13.18) + v2.14.30: remind anyone not paid in full — a partial
     // payer for the balance, AND anyone already reminded manually (a manual nudge
     // no longer suppresses the scheduled send). autoSendShouldRemind is the single
@@ -11222,6 +11443,8 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
     delete t.linked; delete t.pending; delete t.dated; delete t.nextChange;   // display-only (GET), never stored
     if (t.requiredForAll === true) t.requiredForAll = true; else delete t.requiredForAll;
     if (t.defaultPayer !== 'tenant') delete t.defaultPayer;
+    // v2.14.85 (1ו2, ל2-A) — only {mode:'separate'} is stored; anything else = merged (absent).
+    if (t.notify && t.notify.mode === 'separate') t.notify = { mode: 'separate' }; else delete t.notify;
   });
   const prevT = d.accountTemplates || [];
   for (const p of prevT) {
@@ -11321,6 +11544,8 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     // v2.14.80 (ה6) — the active month's billing months (resolved) + where they come from.
     // A LINKED account follows the definition (ח1-A) → the modal shows it read-only.
     Object.assign(dated, extraBillingView(d, acc, mkA));
+    const nt = accNotifyText(d, tenant, acc);   // v2.14.85 (1ו2) — where this account's reminder goes (display)
+    if (nt) dated.notifyTo = nt;
     if (!sp) return { ...acc, ...dated, totalDebt: 0, historyDebt, hasMoney };
     return { ...acc, ...dated, totalDebt: sp.owedPrior, historyDebt, hasMoney,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,

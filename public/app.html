@@ -1113,6 +1113,21 @@ function vpLogout() {
           <span id="cfgAiStatus" style="font-size:0.78rem;color:var(--text3);"></span>
         </div>
         <div style="margin-top:16px;"><div class="msg-preview" id="msgPreview"></div></div>
+        <div id="payerTplBox" style="display:none;margin-top:18px;padding-top:14px;border-top:1px dashed var(--border);">
+          <div style="font-weight:600;font-size:0.88rem;margin-bottom:4px;">📨 הודעה לטלפון המשלם <button class="help-btn" onclick="showHelp('settings#set-payer-msg')" style="margin-right:6px;">?</button></div>
+          <div style="font-size:0.75rem;color:var(--text2);margin-bottom:6px;">נשלחת כשחשבון נוסף מוגדר "תזכורת: לטלפון המשלם" והמשלם (שוכר/בעלים) בטלפון אחר מהטלפון הראשי. אותו משלם לכמה חשבונות — הודעה אחת. החשבון לא מופיע בהודעה הראשית.</div>
+          <textarea id="cfgPayerTemplate" onInput="renderPayerTplBox()" style="min-height:90px;unicode-bidi:plaintext;text-align:right;"></textarea>
+          <div class="var-tags">
+            <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
+            <span class="var-tag" onclick="insertVar('{שם}','cfgPayerTemplate')">{ שם }</span>
+            <span class="var-tag" onclick="insertVar('{שם_חבר}','cfgPayerTemplate')">{ שם_חבר }</span>
+            <span class="var-tag" onclick="insertVar('{חודש}','cfgPayerTemplate')">{ חודש }</span>
+            <span class="var-tag" onclick="insertVar('{חשבונות}','cfgPayerTemplate')">{ חשבונות }</span>
+            <span class="var-tag" onclick="insertVar('{סה&quot;כ}','cfgPayerTemplate')">{ סה״כ }</span>
+          </div>
+          <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שם} = שם המשלם (שוכר/בעלים; אם חסר — שם החבר) &nbsp;|&nbsp; {שם_חבר} = שם החבר &nbsp;|&nbsp; {חשבונות} = רק החשבונות של המשלם הזה &nbsp;|&nbsp; {סה״כ} = הסכום שלהם &nbsp;|&nbsp; אין לינק לפורטל (הפורטל הוא של החבר). נשמר עם "💾 שמור תבנית".</div>
+          <div style="margin-top:10px;"><div class="msg-preview" id="payerPreview"></div></div>
+        </div>
       </div>
     </div>
 
@@ -1962,7 +1977,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.84';
+const HTML_VERSION = '2.14.85';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3086,6 +3101,7 @@ function fillForm() {
   const mn=String(c.sendMinute!=null?c.sendMinute:0).padStart(2,'0');
   document.getElementById('cfgTime').value=h+':'+mn;
   if(c.template) document.getElementById('cfgTemplate').value=c.template;
+  { const _pt=document.getElementById('cfgPayerTemplate'); if(_pt) _pt.value=c.payerTemplate||PAYER_TEMPLATE_DEFAULT; renderPayerTplBox(); }   // v2.14.85 (1ו2)
   // v2.14.0 — excessive-debt settings
   const exEl=document.getElementById('cfgExcessDebt');
   if(exEl) exEl.value=(c.excessDebtThreshold!=null?c.excessDebtThreshold:1000);
@@ -3520,6 +3536,67 @@ function confirmAccountsGap(owingNow) {
 }
 function accOwing(t) { return (parseFloat(t && t.accOwedNow) || 0) > 0; }
 
+// ══ v2.14.85 (1ו2) — separate message per account to the PAYER phone ═════════════════
+// The server decides everything (t.payerSplit: present ONLY for a member whose account goes to
+// a different phone — phone, name, definition ids, total, own decision). The page only counts
+// for the confirm and sends the scope; it never decides a phone or an amount (CONSUME).
+function sendBody(scope, tplId) {
+  return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(tplId ? { scope: scope, tplId: tplId } : { scope: scope }) };
+}
+// How many PAYER messages this member gets in a send of `scope` (mirrors the server's pick rule
+// over the server's own flags: all → a payer message with a line; remind → its own decision;
+// acc → the payer message holding the definition).
+function payerMsgCount(t, scope, tplId) {
+  var ps = (t && Array.isArray(t.payerSplit)) ? t.payerSplit : [];
+  if (scope === 'acc') return ps.some(function(p){ return (p.tplIds || []).indexOf(tplId) >= 0; }) ? 1 : 0;
+  if (scope === 'remind') return ps.filter(function(p){ return p.shouldRemind === true; }).length;
+  return ps.filter(function(p){ return (parseFloat(p.total) || 0) > 0; }).length;
+}
+// One confirm before a manual send that also sends payer messages. Nothing to add → true.
+function confirmPayerSplit(list, scope) {
+  var n = 0, who = [];
+  (list || []).forEach(function(t){ var c = payerMsgCount(t, scope); if (c > 0) { n += c; if (who.length < 3) who.push(t.name || ''); } });
+  if (!n) return true;
+  return confirm('בנוסף להודעה הראשית יישלחו ' + n + (n === 1 ? ' הודעה נפרדת' : ' הודעות נפרדות') +
+    ' לטלפון המשלם (שוכר/בעלים) של חשבון נוסף' + (who.length ? ' — ' + who.join(', ') + ((list || []).length > who.length && n > who.length ? '…' : '') : '') +
+    '.\nהחשבון הזה לא מופיע בהודעה הראשית.\nלהמשיך?');
+}
+function sendResultText(d) {
+  var s = (d && typeof d.sent === 'number') ? d.sent : 1;
+  var p = (d && d.payerSent) || 0;
+  var txt = s === 1 && !p ? '✅ הודעה נשלחה!' : '✅ נשלחו ' + s + ' הודעות' + (p ? ' (מתוכן ' + p + ' לטלפון המשלם)' : '');
+  if (d && d.failed > 0) txt += ' · ⚠️ ' + d.failed + ' נכשלו' + (d.error ? ': ' + d.error : '');
+  return txt;
+}
+// Settings › ✉️ — the payer-message template (shown only when a definition is "separate").
+// The page default is a TEXT copy of the server's PAYER_DEFAULT_TEMPLATE (a render test
+// keeps them equal); an empty field = the server default.
+const PAYER_TEMPLATE_DEFAULT = 'שלום {שם}!\nתזכורת לתשלום עבור {שם_חבר} לחודש {חודש}:{חשבונות}\nסה"כ לתשלום: *{סה"כ} ₪*\n\nתודה!';
+function anySeparateNotify(tpls) {
+  return (tpls || []).some(function(t){ return t && t.notify && t.notify.mode === 'separate'; });
+}
+function setTplNotify(i, v) {
+  if (!accountTemplates[i]) return;
+  if (v === 'separate') accountTemplates[i].notify = { mode: 'separate' }; else delete accountTemplates[i].notify;
+  renderPayerTplBox();
+}
+function payerPreviewText(tmpl, month) {
+  return String(tmpl || PAYER_TEMPLATE_DEFAULT)
+    .replace(/{שם_חבר}/g, 'משפחת כהן').replace(/{שם}/g, 'דנה לוי')
+    .replace(/{חודש}/g, month || '?')
+    .replace(/{חשבונות}/g, '\n• ביטוח מבנה: *240 ₪*')
+    .replace(/{סה"כ_כולל}/g, '240').replace(/{סה"כ}/g, '240').replace(/{לינק_פורטל}/g, '');
+}
+function renderPayerTplBox() {
+  var box = document.getElementById('payerTplBox');
+  if (!box) return;
+  box.style.display = anySeparateNotify(typeof accountTemplates !== 'undefined' ? accountTemplates : []) ? 'block' : 'none';
+  var ta = document.getElementById('cfgPayerTemplate'), pv = document.getElementById('payerPreview');
+  var dd = (typeof data !== 'undefined' && data) ? data : {};
+  var month = (dd.config && dd.config.manualMonth) ? dd.config.manualMonth : (dd.effectiveMonth || dd.currentAutoMonth || '?');
+  if (pv) pv.textContent = payerPreviewText(ta ? ta.value : '', month);
+}
+
 // v2.14.0 — targetId is OPTIONAL and defaults to 'cfgTemplate', so every existing
 // call site (the message-template chips) behaves EXACTLY as before. The preview is
 // only refreshed for the main template, which is the only one with a preview pane.
@@ -3531,6 +3608,7 @@ function insertVar(v, targetId) {
   ta.value=ta.value.substring(0,s)+v+ta.value.substring(e);
   ta.focus();ta.setSelectionRange(s+v.length,s+v.length);
   if(id==='cfgTemplate') updatePreview();
+  else if(id==='cfgPayerTemplate') renderPayerTplBox();   // v2.14.85 (1ו2)
 }
 
 async function fixPaymentHistoryMonth() {
@@ -3591,6 +3669,9 @@ async function saveTemplate() {
   const statusEl = document.getElementById('templateSaveStatus');
   statusEl.textContent = '...שומר';
   data.config = Object.assign({}, data.config, { template: tmpl });
+  // v2.14.85 (1ו2) — the payer-message template (empty = the server default).
+  const _pt = document.getElementById('cfgPayerTemplate');
+  if (_pt) { const pv = _pt.value.trim(); if (pv && pv !== PAYER_TEMPLATE_DEFAULT) data.config.payerTemplate = _pt.value; else delete data.config.payerTemplate; }
   try {
     const r = await fetch(API+'/data', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: data.config }) });
     const d = await r.json();
@@ -4366,6 +4447,9 @@ async function tfCommitAccountPlan(plan) {
 async function sendOne(id) {
   if(!confirmManualSend()) return;
   if(!confirmAccountsGap(accOwing((data.tenants || []).find(function(x){ return String(x.id) === String(id); })) ? 1 : 0)) return;
+  // v2.14.85 (1ו2) — an account that goes to a DIFFERENT payer phone is sent as its own message.
+  const _tp = (data.tenants || []).find(function(x){ return String(x.id) === String(id); });
+  if (!confirmPayerSplit(_tp ? [_tp] : [], 'all')) return;
   // 💳 v2.14.57 — nothing to collect? (server figures: owedNow is net of credit,
   // shouldRemind covers extra accounts). Warn, don't block.
   const _t1 = (data.tenants || []).find(function(x){ return String(x.id) === String(id); });
@@ -4374,10 +4458,10 @@ async function sendOne(id) {
   const btn=document.getElementById('send-btn-'+id);
   if(btn){btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span>';}
   try{
-    const r=await fetch(API+'/send/'+id,{method:'POST'}); const d=await r.json();
+    const r=await fetch(API+'/send/'+id,sendBody('all')); const d=await r.json();
     if(d.ok){
       // השרת כבר שמר את sentLog ב-/api/send/:id — loadData יטען את המצב העדכני
-      await loadData(); render(); toast('✅ הודעה נשלחה!','success');
+      await loadData(); render(); toast(sendResultText(d),(d.failed>0)?'error':'success');
     } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
   }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
 }
@@ -4488,13 +4572,15 @@ async function resetWaAuth() {
 async function sendAll() {
   if(!confirmManualSend()) return;
   if(!confirmAccountsGap((data.tenants || []).filter(accOwing).length)) return;
+  if(!confirmPayerSplit(data.tenants || [], 'all')) return;   // v2.14.85 (1ו2)
   const btn=document.getElementById('btnSendAll');
   btn.disabled=true;btn.innerHTML='<span class="spin">⏳</span> שולח...';
   try{
     const r=await fetch(API+'/send-all',{method:'POST'}); const d=await r.json();
     if(d.ok){
-      document.getElementById('sendingStatus').textContent='שולח '+d.total+' הודעות...';
-      toast('📤 שולח '+d.total+' הודעות...','success');
+      // v2.14.85 — the server answers AFTER sending: d.sent (was d.total, never sent → "undefined")
+      document.getElementById('sendingStatus').textContent='';
+      toast(sendResultText(d),'success');
       let i=0; const poll=setInterval(async function(){await loadData();render();i++;if(i>12){clearInterval(poll);document.getElementById('sendingStatus').textContent='';btn.disabled=false;btn.innerHTML='💬 WA לכולם';}},3000);
     } else if(d.error && d.error.includes('מנותק')) {
       toast('❌ WhatsApp מנותק — לחץ על כפתור החיבור למעלה וסרוק ברקוד','error');
@@ -4523,12 +4609,13 @@ async function sendUnpaidOnly() {
   if(!unpaid.length){toast('✅ אין למי לשלוח — כולם שילמו / מכוסים ביתרת זכות / מושהים','success');return;}
   if(!confirmManualSend()) return;
   if(!confirmAccountsGap(unpaid.filter(accOwing).length)) return;
+  if(!confirmPayerSplit(unpaid, 'remind')) return;   // v2.14.85 (1ו2)
   const btn=document.getElementById('btnSendAll'); btn.disabled=true;
   document.getElementById('sendingStatus').textContent='שולח '+unpaid.length+' הודעות...';
   toast('📤 שולח למי שלא שילם החודש ('+unpaid.length+')...','success');
   for(let i=0;i<unpaid.length;i++){
     try{
-      const r=await fetch(API+'/send/'+unpaid[i].id,{method:'POST'}); const d=await r.json();
+      const r=await fetch(API+'/send/'+unpaid[i].id,sendBody('remind')); const d=await r.json();   // v2.14.85 — each message by its own rule
       if(d.ok){ /* השרת כבר שמר sentLog ב-/api/send/:id */ }
       await new Promise(function(res){setTimeout(res,800);});
     }catch(e){}
@@ -4566,13 +4653,17 @@ async function sendAccountDebtors() {
   if (!list.length) { toast('✅ אין חייבים החודש בחשבון ' + (tpl.label || ''), 'success'); return; }
   if (!confirmManualSend()) return;
   if (!confirmAccountsGap(list.length)) return;
-  if (!confirm('לשלוח תזכורת ל-' + list.length + ' חברים שחייבים החודש בחשבון "' + (tpl.label || '') + '"?\nתישלח ההודעה הרגילה (התבנית המלאה), כמו בשאר השליחות.')) return;
+  var nPay = list.filter(function(t){ return payerMsgCount(t, 'acc', id) > 0; }).length;   // v2.14.85 (1ו2)
+  if (!confirm('לשלוח תזכורת ל-' + list.length + ' חברים שחייבים החודש בחשבון "' + (tpl.label || '') + '"?\n' +
+      (nPay ? (nPay === list.length ? 'החשבון נשלח לטלפון המשלם: תישלח הודעת המשלם (רק החשבונות שלו).'
+                                    : 'ל-' + nPay + ' מהם תישלח הודעת המשלם (לטלפון המשלם); לשאר — ההודעה הרגילה (התבנית המלאה).')
+            : 'תישלח ההודעה הרגילה (התבנית המלאה), כמו בשאר השליחות.'))) return;
   var btn = document.getElementById('btnSendAcc'); if (btn) btn.disabled = true;
   var st = document.getElementById('sendingStatus'); if (st) st.textContent = 'שולח ' + list.length + ' הודעות...';
   var ok = 0;
   for (var i = 0; i < list.length; i++) {
     try {
-      var r = await fetch(API + '/send/' + list[i].id, { method: 'POST' }); var d = await r.json();
+      var r = await fetch(API + '/send/' + list[i].id, sendBody('acc', id)); var d = await r.json();
       if (d.ok) ok++;
       await new Promise(function(res){ setTimeout(res, 800); });
     } catch (e) {}
@@ -10208,6 +10299,7 @@ function renderAccountTemplates() {
   const sc = document.getElementById('payAccShortcut');
   if (sc) sc.style.display = accountTemplates.some(function(t){ return t && t.linked !== undefined; }) ? '' : 'none';
   populatePayAccSend();
+  renderPayerTplBox();   // v2.14.85 (1ו2)
   if (!el) return;
   if (!accountTemplates.length) {
     el.innerHTML = '<div style="font-size:0.83rem;color:var(--text3);padding:8px 0;">עדיין אין תבניות חשבונות. לחץ ״הוסף חשבון״ ליצירת הראשון.</div>';
@@ -10245,6 +10337,11 @@ function renderAccountTemplates() {
         <select onchange="accountTemplates[${i}].defaultPayer=this.value" style="width:auto;">
           <option value="owner" ${t.defaultPayer!=='tenant'?'selected':''}>בעלים</option>
           <option value="tenant" ${t.defaultPayer==='tenant'?'selected':''}>שוכר</option>
+        </select></label>
+      <label style="font-size:0.75rem;" title="לטלפון המשלם: כשהמשלם (שוכר/בעלים) בטלפון אחר מהטלפון הראשי, החשבון יוצא מההודעה הראשית ונשלח לו בהודעה נפרדת">תזכורת:
+        <select class="tpl-notify" onchange="setTplNotify(${i}, this.value)" style="width:auto;">
+          <option value="merged" ${!(t.notify && t.notify.mode==='separate')?'selected':''}>בהודעה הראשית</option>
+          <option value="separate" ${(t.notify && t.notify.mode==='separate')?'selected':''}>לטלפון המשלם</option>
         </select></label>
       ${actions}
     </div>
@@ -10887,7 +10984,7 @@ function renderTenantAccountsModal() {
           <select onchange="taModalAccounts[${i}].payer=this.value" style="width:100%;">
             <option value="owner"  ${acc.payer!=='tenant'?'selected':''}>בעלים</option>
             <option value="tenant" ${acc.payer==='tenant'?'selected':''}>שוכר</option>
-          </select></div>
+          </select>${acc.notifyTo ? `<div class="ta-notify" style="font-size:0.7rem;color:var(--text2);margin-top:3px;">${esc(acc.notifyTo)}</div>` : ''}</div>
         <div><label style="font-size:0.75rem;">יתרת פתיחה ₪</label>
           <input type="number" value="${acc.openingDebt||0}" onchange="taModalAccounts[${i}].openingDebt=parseFloat(this.value)||0" style="width:100%;"></div>
         <div><label style="font-size:0.75rem;">מילות חיפוש בנק</label>

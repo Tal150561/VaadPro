@@ -182,8 +182,16 @@ t.eq('composer + excess builder call buildPriorDebtLine (2)',
   (server.match(/\{שורת_חוב_קודם\}\/g, buildPriorDebtLine\(/g) || []).length, 2);
 t.eq('send-one / send-all / auto all call composeReminder (3)',
   (server.match(/const \{ msg \} = composeReminder\(d, tenant, tmpl, \{ tenantDataId: /g) || []).length, 3);
-t.eq('no inline reminder chain left outside composeReminder',
-  (server.match(/\.replace\(\/\{חשבונות\}\/g/g) || []).length, 1);
+// v2.14.85 (1ו2) — a SECOND {חשבונות} replace, ON PURPOSE: composePayerMessage (the payer
+// message shows ONLY its group's accounts). Both live in the two composers, nowhere else.
+t.eq('no inline reminder chain left outside the two composers',
+  (server.match(/\.replace\(\/\{חשבונות\}\/g/g) || []).length, 2);
+{
+  const fnBody = (n) => { const m = server.match(new RegExp('^function ' + n + '\\([\\s\\S]*?^\\}', 'm')); return m ? m[0] : ''; };
+  t.eq('…one in composeReminder', /\.replace\(\/\{חשבונות\}\/g/.test(fnBody('composeReminder')), true);
+  t.eq('…one in composePayerMessage', /\.replace\(\/\{חשבונות\}\/g/.test(fnBody('composePayerMessage')), true);
+  t.eq('payer composer removes the portal link (ל3)', /\{לינק_פורטל\}\/g, ''\)/.test(fnBody('composePayerMessage')), true);
+}
 
 // ORDERING GUARD (the subtle bit): in every path, {שורת_חוב_קודם} must be
 // replaced BEFORE {חוב_קודם}, else the /{חוב_קודם}/g regex corrupts the
