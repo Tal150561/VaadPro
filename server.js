@@ -10884,14 +10884,14 @@ function validateCollection(d) {
 
 // ── v2.14.75 (1ב) — tenants file: extra-account columns (פ9) ─────────────────
 // Three columns per FIXED account definition: "<שם>" (שיוך/סטטוס), "<שם> – סכום",
-// "<שם> – יתרת פתיחה". TRI-STATE: a missing column or an empty cell never touches
+// "<שם> – יתרת פתיחה" (+ v2.14.84 (1ב2) a 4th: "<שם> – משלם" = בעלים / שוכר). TRI-STATE: a missing column or an empty cell never touches
 // anything; only an explicit value changes the account. Export → import is a no-op.
 // Writes ONLY tenant.extraAccounts DEFINITIONS (create / amount / openingDebt /
 // ⏸ / delete a CLEAN account). Never sentLog or paymentHistory. The opening balance
 // is a definition, exactly like the main account's חוב_התחלתי in the same file.
 function tfAccHeaders(tpl) {
   const L = crAccountKey(tpl && tpl.label);
-  return [L, L + ' – סכום', L + ' – יתרת פתיחה'];
+  return [L, L + ' – סכום', L + ' – יתרת פתיחה', L + ' – משלם'];   // v2.14.84 (1ב2) — + payer
 }
 
 // Raw header → { tplId, field: 'status' | 'amount' | 'openingDebt' } or null.
@@ -10903,7 +10903,8 @@ function tfParseAccountHeader(raw, templates) {
     .map(t => ({ tpl: t, k: tplNameKey(t.label) })).sort((a, b) => b.k.length - a.k.length);
   const SUFFIX = { 'סכום': 'amount', 'סכום חודשי': 'amount', 'תשלום': 'amount', 'תשלום חודשי': 'amount',
     'יתרת פתיחה': 'openingDebt', 'חוב התחלתי': 'openingDebt', 'יתרה': 'openingDebt',
-    'שיוך': 'status', 'סטטוס': 'status' };
+    'שיוך': 'status', 'סטטוס': 'status',
+    'משלם': 'payer', 'מי משלם': 'payer', 'payer': 'payer' };          // v2.14.84 (1ב2)
   for (const { tpl, k } of list) {
     if (h === k) return { tplId: tpl.id, field: 'status' };
     if (h.length > k.length && h.startsWith(k)) {
@@ -10924,6 +10925,21 @@ function tfParseStatusCell(raw) {
   if (['מושהה', 'מושהית', 'השהיה', 'מושעה', 'suspended', 'hold', 'pause', '⏸'].includes(v)) return { ok: true, value: 'suspended' };
   if (['לא', 'no', 'n', '0', 'false', 'הסר', 'ללא', 'none', 'x', '✗'].includes(v)) return { ok: true, value: 'none' };
   return { ok: false, error: 'ערך לא מזוהה ("' + String(raw).trim() + '") — פעיל / מושהה / לא' };
+}
+
+// v2.14.84 (1ב2) — payer cell → {ok, value: 'owner' | 'tenant' | null(no change)} or {ok:false, error}.
+// Locked ת1-A: "בעלים" also accepts בעל/ת הבית, חבר/ה (kibbutz member = the owner). "דייר" is
+// NOT accepted — in a ועד בית everybody is a דייר. One payer per account (ה13-A).
+function tfParsePayerCell(raw) {
+  const v = String(raw == null ? '' : raw).replace(/[\u200e\u200f\u202a-\u202e]/g, '').trim().replace(/\s+/g, ' ').toLowerCase();
+  if (v === '') return { ok: true, value: null };
+  if (['בעלים', 'בעל הבית', 'בעלת הבית', 'בעל בית', 'חבר', 'חברה', 'owner'].includes(v)) return { ok: true, value: 'owner' };
+  if (['שוכר', 'שוכרת', 'tenant', 'renter'].includes(v)) return { ok: true, value: 'tenant' };
+  return { ok: false, error: 'ערך לא מזוהה ("' + String(raw).trim() + '") — בעלים / שוכר' };
+}
+// undefined (legacy) = בעלים (ת2-A)
+function tfPayerLabel(p) {
+  return p === 'tenant' ? 'שוכר' : 'בעלים';
 }
 
 // Money cell → {ok, value: number | null(no change)} or {ok:false, error}.
@@ -10949,10 +10965,11 @@ function tenantFileAccountExport(d) {
     const row = [];
     fixed.forEach(tpl => {
       const a = accLinkedToTemplate(t, tpl, all);
-      if (!a) { row.push('', '', ''); return; }
+      if (!a) { row.push('', '', '', ''); return; }
       row.push(a.active === false ? 'לא פעיל' : (a.suspended === true ? 'מושהה' : 'פעיל'));
       row.push(extraAmountForMonth(d, a, getMonthKey(d.config || {})));   // v2.14.76 — active month's amount
       row.push(Math.round((parseFloat(a.openingDebt) || 0) * 100) / 100);
+      row.push(tfPayerLabel(a.payer));                                    // v2.14.84 (1ב2) — legacy undefined → בעלים
     });
     byTenant[String(t.id)] = row;
   });
@@ -11003,17 +11020,22 @@ function planTenantFileAccounts(d, input) {
       const st = tfParseStatusCell(cell('status'));
       const am = tfParseMoneyCell(cell('amount'), false);
       const od = tfParseMoneyCell(cell('openingDebt'), true);
+      const py = tfParsePayerCell(cell('payer'));                           // v2.14.84 (1ב2)
       const bad = [];
       if (!st.ok) bad.push(label + ': ' + st.error);
       if (!am.ok) bad.push(label + ' – סכום: ' + am.error);
       if (!od.ok) bad.push(label + ' – יתרת פתיחה: ' + od.error);
+      if (!py.ok) bad.push(label + ' – משלם: ' + py.error);
       if (bad.length) { errors.push({ row, msg: name + ' — ' + bad.join(' · ') + ' — החשבון לא עודכן' }); continue; }
-      const status = st.value, amount = am.value, opening = od.value;
-      if (status === null && amount === null && opening === null) continue;        // nothing asked → untouched
+      const status = st.value, amount = am.value, opening = od.value, payer = py.value;
+      if (status === null && amount === null && opening === null && payer === null) continue;   // nothing asked → untouched
+      // v2.14.84 (1ב2, ת5-A) — "שוכר" set by the file while the member has no renter phone → warning
+      const noRenterPhone = !(t.tenant && String(t.tenant.phone || '').trim());
+      const warnRenter = () => warnings.push({ row, msg: name + ' · ' + label + ' — משלם = שוכר, אבל אין לחבר טלפון שוכר. המשלם נשמר; הזינו טלפון שוכר ב-💳 חשבונות החבר.' });
       const base = { row, tid: isNew ? null : String(t.id), isNew, name, tplId, label };
       const acc = accLinkedToTemplate(t, tpl, templates);
       if (status === 'none') {
-        if (amount !== null || opening !== null) { errors.push({ row, msg: name + ' · ' + label + ' — "לא" יחד עם סכום או יתרה — סתירה, החשבון לא עודכן' }); continue; }
+        if (amount !== null || opening !== null || payer !== null) { errors.push({ row, msg: name + ' · ' + label + ' — "לא" יחד עם סכום, יתרה או משלם — סתירה, החשבון לא עודכן' }); continue; }
         if (!acc) continue;
         if (!isNew && accHasMoney(d, t.id, acc)) {
           warnings.push({ row, msg: name + ' · ' + label + ' — יש יתרה או היסטוריית תשלומים, החשבון לא הוסר. כדי לעצור גבייה כתבו "מושהה".' });
@@ -11028,14 +11050,17 @@ function planTenantFileAccounts(d, input) {
           continue;
         }
         if (status === null) {
-          warnings.push({ row, msg: name + ' · ' + label + ' — הוזנו סכום או יתרה, אבל החבר לא משויך לחשבון. כדי לשייך כתבו "פעיל" או "מושהה" בעמודה "' + label + '".' });
+          warnings.push({ row, msg: name + ' · ' + label + ' — הוזנו סכום, יתרה או משלם, אבל החבר לא משויך לחשבון. כדי לשייך כתבו "פעיל" או "מושהה" בעמודה "' + label + '".' });
           continue;
         }
         const amt = amount !== null ? amount : r2(tplAmountForMonth(tpl, mk));
         const changes = ['שיוך חדש' + (status === 'suspended' ? ' (מושהה)' : ''), 'סכום ' + amt];
         if (opening !== null && opening !== 0) changes.push('יתרת פתיחה ' + opening);
+        const effP = payer !== null ? payer : (tpl.defaultPayer === 'tenant' ? 'tenant' : 'owner');   // no cell → the definition's default
+        if (payer !== null) changes.push('משלם ' + tfPayerLabel(payer));
         if (!(amt > 0)) warnings.push({ row, msg: name + ' · ' + label + ' — סכום ₪0: החשבון לא יחויב' });
-        items.push(Object.assign(base, { action: 'create', status, amount, openingDebt: opening, changes }));
+        if (effP === 'tenant' && noRenterPhone) warnRenter();
+        items.push(Object.assign(base, { action: 'create', status, amount, openingDebt: opening, payer, changes }));
         continue;
       }
       const ch = [], set = {};
@@ -11052,6 +11077,13 @@ function planTenantFileAccounts(d, input) {
       }
       const curOd = r2(parseFloat(acc.openingDebt) || 0);
       if (opening !== null && curOd !== opening) { ch.push('יתרת פתיחה: ' + curOd + ' → ' + opening); set.openingDebt = opening; }
+      // v2.14.84 (1ב2) — payer = routing, not money (ת6-A): allowed on a suspended / "לא פעיל" /
+      // already-paid account, immediate, not dated. Legacy undefined = בעלים (ת2-A → no write).
+      const curP = acc.payer === 'tenant' ? 'tenant' : 'owner';
+      if (payer !== null && payer !== curP) {
+        ch.push('משלם: ' + tfPayerLabel(curP) + ' → ' + tfPayerLabel(payer)); set.payer = payer;
+        if (payer === 'tenant' && noRenterPhone) warnRenter();
+      }
       if (status !== null) {
         if (acc.active === false) { ch.push('חשבון "לא פעיל" → פעיל (היתרה תוצג ותיגבה)'); set.reactivate = true; }
         const curS = acc.suspended === true;
@@ -11085,6 +11117,7 @@ function commitTenantFileAccounts(d, plan) {
       if (!Array.isArray(t.extraAccounts)) t.extraAccounts = [];
       const a = accFromTemplate(tpl, t, plan.mk, { amount: it.amount, suspended: it.status === 'suspended' });
       if (it.openingDebt !== null && it.openingDebt !== undefined) a.openingDebt = it.openingDebt;
+      if (it.payer === 'owner' || it.payer === 'tenant') a.payer = it.payer;   // v2.14.84 (1ב2); else the definition's default
       t.extraAccounts.push(a); created++;
     } else if (it.action === 'update') {
       if (!acc) continue;
@@ -11096,6 +11129,7 @@ function commitTenantFileAccounts(d, plan) {
         if (mp.ok) commitMemberTariff(d, mp);
       }
       if (s.openingDebt !== undefined) acc.openingDebt = s.openingDebt;
+      if (s.payer === 'owner' || s.payer === 'tenant') acc.payer = s.payer;   // v2.14.84 (1ב2)
       if (s.reactivate === true) acc.active = true;
       if (s.suspended === true) acc.suspended = true;
       if (s.suspended === false) { delete acc.suspended; delete acc.suspendedByApply; }

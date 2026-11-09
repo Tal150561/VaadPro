@@ -3246,7 +3246,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     accountTemplates: [{ id: 'tpl_ins', label: 'ביטוח מבנה', type: 'fixed', frequency: 'monthly', amount: 50, requiredForAll: true }],
     tenants: [
       { id: 1, name: 'אור', phone: '0501111111', keywords: 'אור', openingDebt: 0 },
-      { id: 2, name: 'בן', phone: '0502222222', keywords: 'בן', openingDebt: 230, extraAccounts: [{ id: 'b1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 120 }] },
+      { id: 2, name: 'בן', phone: '0502222222', keywords: 'בן', openingDebt: 230, extraAccounts: [{ id: 'b1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 120, payer: 'tenant' }] },
       { id: 3, name: 'גיל', phone: '0503333333', keywords: 'גיל', suspended: true, extraAccounts: [{ id: 'g1', label: 'ביטוח מבנה', amount: 55.5, openingDebt: -40, suspended: true }] }
     ],
     sentLog: {}, paymentHistory: {}
@@ -3260,8 +3260,8 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('no account columns → exactly the pre-1ב file (11 columns)', [plain[0].length, plain[1].length], [11, 11]);
     const acc = S.tenantFileAccountExport(d);
     const rows = E.tenantExportRows(acc);
-    t.eq('header = 11 main + 3 per account', rows[0].slice(11), ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה']);
-    t.eq('cells per member from the server', rows.slice(1).map(r => r.slice(11)), [['', '', ''], ['פעיל', 50, 120], ['מושהה', 55.5, -40]]);
+    t.eq('header = 11 main + 4 per account (v2.14.84: + משלם)', rows[0].slice(11), ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה', 'ביטוח מבנה – משלם']);
+    t.eq('cells per member from the server (payer: שוכר / legacy → בעלים)', rows.slice(1).map(r => r.slice(11)), [['', '', '', ''], ['פעיל', 50, 120, 'שוכר'], ['מושהה', 55.5, -40, 'בעלים']]);
     t.eq('main columns unchanged by the account columns', JSON.stringify(rows.map(r => r.slice(0, 11))), JSON.stringify(plain));
     const N = load(['tfExportNote'], { data: d });
     t.eq('note when extras exist but the columns could not be fetched', [N.tfExportNote(null).includes('ללא עמודות'), N.tfExportNote(acc)], [true, '']);
@@ -3275,16 +3275,23 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     const aoa = E.tenantExportRows(S.tenantFileAccountExport(d)).map(r => r.map(v => v == null ? '' : String(v)));   // SheetJS raw:false
     const plan = E.planTenantImport(d.tenants, aoa[0].map(E.tenantHeaderToKey), aoa.slice(1));
     const inp = E.tfAccountInput(plan, aoa[0], aoa.slice(1));
-    t.eq('precondition: the 3 account columns are sent, main columns are not', inp.headers, ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה']);
+    t.eq('precondition: the 4 account columns are sent, main columns are not', inp.headers, ['ביטוח מבנה', 'ביטוח מבנה – סכום', 'ביטוח מבנה – יתרת פתיחה', 'ביטוח מבנה – משלם']);
     t.eq('precondition: every member row goes with its id', inp.rows.map(r => r.tenantId), [1, 2, 3]);
     const P = S.planTenantFileAccounts(d, inp);
-    t.eq('server plan: 3 columns recognized, nothing to change, no errors', [P.columns.recognized.length, P.items.length, P.errors.length, P.warnings.length], [3, 0, 0, 0]);
+    t.eq('server plan: 4 columns recognized, nothing to change, no errors, no warnings (שוכר without phone unchanged)', [P.columns.recognized.length, P.items.length, P.errors.length, P.warnings.length], [4, 0, 0, 0]);
     // one edit in "Excel": אור joins at 60 with opening 100
     aoa[1][11] = 'פעיל'; aoa[1][12] = '60'; aoa[1][13] = '100';
     const plan2 = E.planTenantImport(d.tenants, aoa[0].map(E.tenantHeaderToKey), aoa.slice(1));
     const P2 = S.planTenantFileAccounts(d, E.tfAccountInput(plan2, aoa[0], aoa.slice(1)));
     t.eq('…one edited row → exactly one create', P2.items.map(i => [i.name, i.action, i.changes]), [['אור', 'create', ['שיוך חדש', 'סכום 60', 'יתרת פתיחה 100']]]);
     t.eq('main plan unaffected by the account columns (no new money-change lines)', plan2.updates.every(u => u.moneyChanges.length === 0), true);
+    // v2.14.84 (1ב2) — one payer edit in "Excel": בן שוכר → בעלים
+    const aoa3 = E.tenantExportRows(S.tenantFileAccountExport(d)).map(r => r.map(v => v == null ? '' : String(v)));
+    aoa3[2][14] = 'בעלים';
+    const plan3 = E.planTenantImport(d.tenants, aoa3[0].map(E.tenantHeaderToKey), aoa3.slice(1));
+    const P3 = S.planTenantFileAccounts(d, E.tfAccountInput(plan3, aoa3[0], aoa3.slice(1)));
+    t.eq('…one payer edit → exactly one update "משלם: שוכר → בעלים"', P3.items.map(i => [i.name, i.action, i.changes]), [['בן', 'update', ['משלם: שוכר → בעלים']]]);
+    t.eq('…the main importer does not claim the payer header', E.tenantHeaderToKey('ביטוח מבנה – משלם'), null);
   }
 
   t.section('v2.14.75 (1ב) — import input + preview (EXECUTED)');
@@ -3396,6 +3403,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
     t.eq('guide: column names come from the account name in settings, several accounts', gd.includes('כפי שהוגדר בהגדרות</strong> — לכל חשבון עמודות משלו') && gd.includes('&lt;שם החשבון&gt; – יתרת פתיחה') && gd.includes('קרן שיפוצים – סכום'), true);
     t.eq('guide: no fixed example column in the tenants-file table', gd.includes('<code>ביטוח מבנה – יתרת פתיחה</code>'), false);
     t.eq('guide: renamed account → export a new file', gd.includes('שיניתם שם של חשבון בהגדרות?'), true);
+    t.eq('guide (1ב2): payer column, values, legacy = בעלים, renter phone in the member modal, no column for the main account', ['&lt;שם החשבון&gt; – משלם', 'בעלים / שוכר', 'בעל הבית, חבר', 'טלפון שוכר', 'אין עמודת משלם לחשבון הראשי', 'שוכר אחד או בעלים — לא שניהם'].every(x => gd.includes(x)), true);
     t.eq('guide: the old "suspension of extra accounts is not in the import" line is gone', gd.includes('אינה נכללת בייבוא'), false);
   }
 }

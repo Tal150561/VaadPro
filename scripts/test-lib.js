@@ -89,7 +89,7 @@ const SERVER_FNS = [
   'planStartBilling', 'commitStartBilling', 'countLinkedToTemplate', 'stampTemplateIds',
   'applyRequiredAccounts', 'validateCollection',
   // v2.14.75 (1ב) — tenants file: extra-account columns
-  'tfAccHeaders', 'tfParseAccountHeader', 'tfParseStatusCell', 'tfParseMoneyCell',
+  'tfAccHeaders', 'tfParseAccountHeader', 'tfParseStatusCell', 'tfParseMoneyCell', 'tfParsePayerCell', 'tfPayerLabel',
   'tenantFileAccountExport', 'planTenantFileAccounts', 'commitTenantFileAccounts',
   // v2.14.76 (1ג) — dated amounts for extra accounts
   'extraIvAt', 'tplAmountForMonth', 'extraAmountForMonth', 'extraAmountSource', 'extraIntervalsFrom',

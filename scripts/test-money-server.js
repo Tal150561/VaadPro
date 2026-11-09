@@ -4671,11 +4671,11 @@ const v2_14_64_async = async () => {
     const st = fx(); const before = JSON.stringify(st);
     const e = run(GET, st).out;
     t.eq('read-only', JSON.stringify(st), before);
-    t.eq('3 columns per FIXED definition (computed חשמל excluded)', e.headers, H.concat(['מים', 'מים – סכום', 'מים – יתרת פתיחה']));
-    t.eq('not linked → empty cells', e.byTenant['1'], ['', '', '', '', '', '']);
+    t.eq('4 columns per FIXED definition (v2.14.84: + משלם; computed חשמל excluded)', e.headers, H.concat(['ביטוח מבנה – משלם', 'מים', 'מים – סכום', 'מים – יתרת פתיחה', 'מים – משלם']));
+    t.eq('not linked → empty cells', e.byTenant['1'], ['', '', '', '', '', '', '', '']);
     t.eq('linked active with debt', e.byTenant['2'].slice(0, 3), ['פעיל', 50, 120]);
     t.eq('linked by NAME only, suspended, credit, decimal amount', e.byTenant['3'].slice(0, 3), ['מושהה', 55.5, -40]);
-    t.eq('inactive account → "לא פעיל" (never silently "פעיל")', e.byTenant['4'], ['לא פעיל', 50, 60, 'פעיל', 30, 0]);
+    t.eq('inactive account → "לא פעיל" (never silently "פעיל"); legacy payer → בעלים', e.byTenant['4'], ['לא פעיל', 50, 60, 'בעלים', 'פעיל', 30, 0, 'בעלים']);
     t.eq('building without definitions → no columns', run(GET, { config: J(cfg), tenants: [{ id: 1 }] }).out.headers, []);
   }
 
@@ -4685,7 +4685,7 @@ const v2_14_64_async = async () => {
     // what Excel hands back (raw:false → strings)
     const rows = st.tenants.map((x, i) => row(i + 2, x.id, e.byTenant[String(x.id)].map(v => String(v))));
     const dry = run(POST, st, { headers: e.headers, rows }).out;
-    t.eq('precondition: columns recognized (6)', dry.columns.recognized.length, 6);
+    t.eq('precondition: columns recognized (8, incl. משלם)', dry.columns.recognized.length, 8);
     t.eq('plan: nothing to do, no errors', [dry.items.length, dry.errors.length, dry.warnings.length], [0, 0, 0]);
     const c = run(POST, st, { headers: e.headers, rows, dryRun: false });
     t.eq('commit: 0 writes, store byte-identical', [c.out.created + c.out.updated + c.out.deleted, c.saves.length, JSON.stringify(st) === before], [0, 0, true]);
@@ -4804,15 +4804,15 @@ const v2_14_64_async = async () => {
                 { id: 2, name: 'בן', extraAccounts: [{ id: 'y', templateId: 'c', label: 'חניה מקורה', amount: 40, openingDebt: 0, suspended: true }] }],
       sentLog: {}, paymentHistory: {} };
     const e = run(GET, st).out;
-    t.eq('3 accounts → 9 columns, each named by its definition', e.headers, ['קרן שיפוצים', 'קרן שיפוצים – סכום', 'קרן שיפוצים – יתרת פתיחה', 'גינון', 'גינון – סכום', 'גינון – יתרת פתיחה', 'חניה מקורה', 'חניה מקורה – סכום', 'חניה מקורה – יתרת פתיחה']);
+    t.eq('3 accounts → 12 columns, each named by its definition', e.headers, ['קרן שיפוצים', 'קרן שיפוצים – סכום', 'קרן שיפוצים – יתרת פתיחה', 'קרן שיפוצים – משלם', 'גינון', 'גינון – סכום', 'גינון – יתרת פתיחה', 'גינון – משלם', 'חניה מקורה', 'חניה מקורה – סכום', 'חניה מקורה – יתרת פתיחה', 'חניה מקורה – משלם']);
     t.eq('no column carries a fixed example name', e.headers.some(h => h.includes('ביטוח')), false);
-    t.eq('each account in its own cells', [e.byTenant['1'], e.byTenant['2']], [['פעיל', 80, 160, '', '', '', '', '', ''], ['', '', '', '', '', '', 'מושהה', 40, 0]]);
-    const rows = [{ row: 2, tenantId: 2, name: 'בן', cells: ['', '', '', 'פעיל', '', '300', 'פעיל', '', ''] }];
+    t.eq('each account in its own cells', [e.byTenant['1'], e.byTenant['2']], [['פעיל', 80, 160, 'בעלים', '', '', '', '', '', '', '', ''], ['', '', '', '', '', '', '', '', 'מושהה', 40, 0, 'בעלים']]);
+    const rows = [{ row: 2, tenantId: 2, name: 'בן', cells: ['', '', '', '', 'פעיל', '', '300', '', 'פעיל', '', '', ''] }];
     const c = run(POST, st, { headers: e.headers, rows, dryRun: false }).out;
     t.eq('one row edits two different accounts independently', [c.created, c.updated, accOf(st, 2, 'b').openingDebt, accOf(st, 2, 'b').amount, accOf(st, 2, 'c').suspended, accOf(st, 1, 'a').openingDebt], [1, 1, 300, 120, undefined, 160]);
     st.accountTemplates[1].label = 'גינון ופיתוח';                                   // renamed in settings
     const e2 = run(GET, st).out;
-    t.eq('rename in settings → the export uses the NEW name (link kept by templateId)', [e2.headers[3], e2.byTenant['2'][3]], ['גינון ופיתוח', 'פעיל']);
+    t.eq('rename in settings → the export uses the NEW name (link kept by templateId)', [e2.headers[4], e2.byTenant['2'][4]], ['גינון ופיתוח', 'פעיל']);
     const old = run(POST, st, { headers: e.headers, rows: [] }).out.columns;
     t.eq('an OLD file with the old name → reported as unknown, not imported', old.unknown.includes('גינון') && !old.recognized.some(r => r.header === 'גינון'), true);
   }
@@ -4823,6 +4823,141 @@ const v2_14_64_async = async () => {
     const r = run(POST, st, { headers: ['הערות'], rows: [row(2, 1, ['משהו'])], dryRun: false });
     t.eq('no definitions → templates 0, nothing recognized, nothing written', [r.out.ok, r.saves.length, JSON.stringify(st) === b], [true, 0, true]);
     t.eq('…dry plan reports templates: 0 (the page shows nothing)', run(POST, st, { headers: ['הערות'], rows: [] }).out.templates, 0);
+  }
+
+  // ════════════════════════════════════════════════════════════════
+  // v2.14.84 (1ב2) — "<שם החשבון> – משלם" column. Locked (Tal 2026-11-09): ת1-A values
+  // (בעלים/בעל הבית/חבר/owner · שוכר/tenant), ת2-A legacy undefined = בעלים (no write),
+  // ת3-A bad value = row error, ת4-A "לא"+payer = contradiction, ת5-A renter-phone warning
+  // only on change/create, ת6-A always allowed / immediate / not dated, ת7-A no renter columns.
+  // Payer = ROUTING, never money: every case also asserts money stores byte-identical.
+  // ════════════════════════════════════════════════════════════════
+  const HP = H.concat(['ביטוח מבנה – משלם']);
+  const money = st => JSON.stringify([st.sentLog, st.paymentHistory, st.tenants.map(x => [x.openingDebt, (x.extraAccounts || []).map(a => [a.amount, a.openingDebt, a.amountTariffs])])]);
+  const withRenter = (st, tid, phone) => { st.tenants.find(x => x.id === tid).tenant = { name: 'שוכר ' + tid, phone: phone || '', email: '' }; return st; };
+
+  t.section('v2.14.84 (1ב2) — payer header + cell parsing');
+  {
+    const T = fx().accountTemplates;
+    t.eq('"– משלם" / "-מי משלם" / "_payer" / "מים: משלם" → payer', ['ביטוח מבנה – משלם', 'ביטוח מבנה-מי משלם', 'ביטוח מבנה_payer', 'מים: משלם'].map(h => { const r = S.tfParseAccountHeader(h, T); return r && [r.tplId, r.field]; }),
+      [['tpl_ins', 'payer'], ['tpl_ins', 'payer'], ['tpl_ins', 'payer'], ['tpl_w', 'payer']]);
+    t.eq('"משלם" alone / no separator → not an account column', [S.tfParseAccountHeader('משלם', T), S.tfParseAccountHeader('ביטוח מבנהמשלם', T)], [null, null]);
+    t.eq('owner aliases (ת1-A)', ['בעלים', ' בעל  הבית ', 'בעלת הבית', 'חבר', 'חברה', 'OWNER'].map(v => S.tfParsePayerCell(v).value), ['owner', 'owner', 'owner', 'owner', 'owner', 'owner']);
+    t.eq('renter aliases', ['שוכר', 'שוכרת', 'Tenant', 'renter'].map(v => S.tfParsePayerCell(v).value), ['tenant', 'tenant', 'tenant', 'tenant']);
+    t.eq('empty → null (no change)', [S.tfParsePayerCell('').value, S.tfParsePayerCell(null).value, S.tfParsePayerCell('  ').value], [null, null, null]);
+    t.eq('"דייר" / "שניהם" / "בעלים ושוכר" → error (one payer per account, ה13-A)', ['דייר', 'שניהם', 'בעלים ושוכר'].map(v => S.tfParsePayerCell(v).ok), [false, false, false]);
+    t.eq('label: legacy undefined → בעלים', [S.tfPayerLabel(undefined), S.tfPayerLabel('owner'), S.tfPayerLabel('tenant')], ['בעלים', 'בעלים', 'שוכר']);
+  }
+
+  t.section('v2.14.84 (1ב2) — export writes the current payer');
+  {
+    const st = fx(); st.tenants[1].extraAccounts[0].payer = 'tenant'; st.tenants[2].extraAccounts[0].payer = 'owner';
+    const e = run(GET, st).out;
+    t.eq('payer column follows the 3 existing ones', e.headers.slice(0, 4), HP);
+    t.eq('tenant → שוכר · owner → בעלים · legacy undefined → בעלים · unlinked → ""', [e.byTenant['2'][3], e.byTenant['3'][3], e.byTenant['4'][7], e.byTenant['1'][3]], ['שוכר', 'בעלים', 'בעלים', '']);
+  }
+
+  t.section('v2.14.84 (1ב2) — ROUND TRIP with payers = 0 changes, 0 warnings, 0 writes');
+  {
+    const st = fx(); st.tenants[1].extraAccounts[0].payer = 'tenant';             // שוכר WITHOUT a renter phone
+    st.tenants[3].extraAccounts[0].payer = 'owner';
+    t.eq('precondition: a שוכר payer with no renter phone exists', !(st.tenants[1].tenant && st.tenants[1].tenant.phone), true);
+    const e = run(GET, st).out; const before = JSON.stringify(st);
+    const rows = st.tenants.map((x, i) => row(i + 2, x.id, e.byTenant[String(x.id)].map(v => String(v))));
+    const dry = run(POST, st, { headers: e.headers, rows }).out;
+    t.eq('precondition: 8 columns recognized, 2 of them payer', [dry.columns.recognized.length, dry.columns.recognized.filter(c => c.field === 'payer').length], [8, 2]);
+    t.eq('plan: 0 items, 0 errors, 0 warnings (ת5-A: unchanged שוכר is not re-warned)', [dry.items.length, dry.errors.length, dry.warnings.length], [0, 0, 0]);
+    const c = run(POST, st, { headers: e.headers, rows, dryRun: false });
+    t.eq('commit: 0 writes, legacy undefined NOT stamped "owner" (ת2-A)', [c.saves.length, JSON.stringify(st) === before, st.tenants[3].extraAccounts[1].payer], [0, true, undefined]);
+  }
+
+  t.section('v2.14.84 (1ב2) — update / create / defaults');
+  {
+    const st = withRenter(fx(), 2, '0529999999'); const m0 = money(st);
+    const sp0 = JSON.stringify(S.extraAccountSplit(st, st.tenants[1], st.tenants[1].extraAccounts[0], MK, EMk));
+    const r = run(POST, st, { headers: HP, rows: [row(2, 2, ['', '', '', 'שוכר']), row(3, 3, ['', '', '', 'בעלים'])], dryRun: false });
+    t.eq('בן: legacy → שוכר (renter has a phone → no warning); גיל: "בעלים" on legacy = no change', [r.out.updated, r.out.warnings.length, accOf(st, 2, 'tpl_ins').payer, accOf(st, 3, 'tpl_ins').payer], [1, 0, 'tenant', undefined]);
+    t.eq('…writes ONLY tenants; money stores byte-identical; split identical', [r.saves, money(st) === m0, JSON.stringify(S.extraAccountSplit(st, st.tenants[1], st.tenants[1].extraAccounts[0], MK, EMk)) === sp0], [[['tenants']], true, true]);
+    const back = run(POST, st, { headers: HP, rows: [row(2, 2, ['', '', '', 'חבר'])] }).out;
+    t.eq('שוכר → "חבר" = back to בעלים, the preview says so', back.items.map(i => i.changes), [['משלם: שוכר → בעלים']]);
+    run(POST, st, { headers: HP, rows: [row(2, 2, ['', '', '', 'חבר'])], dryRun: false });
+    t.eq('…committed', accOf(st, 2, 'tpl_ins').payer, 'owner');
+  }
+  {
+    const st = fx(); st.accountTemplates[1].defaultPayer = 'tenant';               // מים: default = שוכר
+    withRenter(st, 1, '0521');
+    const H8 = HP.concat(['מים', 'מים – סכום', 'מים – יתרת פתיחה', 'מים – משלם']);
+    const dry = run(POST, st, { headers: H8, rows: [row(2, 1, ['פעיל', '', '', 'שוכר', 'פעיל', '', '', ''])] }).out;
+    t.eq('create with payer: the preview shows "משלם שוכר"; no cell → no payer line', dry.items.map(i => [i.label, i.changes]), [['ביטוח מבנה', ['שיוך חדש', 'סכום 50', 'משלם שוכר']], ['מים', ['שיוך חדש', 'סכום 30']]]);
+    run(POST, st, { headers: H8, rows: [row(2, 1, ['פעיל', '', '', 'שוכר', 'פעיל', '', '', ''])], dryRun: false });
+    t.eq('…ביטוח payer = file (שוכר); מים payer = the definition default (שוכר)', [accOf(st, 1, 'tpl_ins').payer, accOf(st, 1, 'tpl_w').payer], ['tenant', 'tenant']);
+    const st2 = fx();
+    run(POST, st2, { headers: HP, rows: [row(2, 1, ['מושהה', '', '', 'בעלים'])], dryRun: false });
+    t.eq('create suspended + בעלים → owner, suspended', [accOf(st2, 1, 'tpl_ins').payer, accOf(st2, 1, 'tpl_ins').suspended], ['owner', true]);
+  }
+
+  t.section('v2.14.84 (1ב2) — tri-state, errors, contradiction (ת3-A, ת4-A)');
+  {
+    const st = fx(); const b = JSON.stringify(st);
+    const un = run(POST, st, { headers: HP, rows: [row(2, 1, ['', '', '', 'שוכר'])], dryRun: false }).out;
+    t.eq('payer for a NOT linked member → warning, nothing created', [un.created, un.warnings.length, /משלם/.test((un.warnings[0] || {}).msg), JSON.stringify(st) === b], [0, 1, true, true]);
+    const bad = run(POST, st, { headers: HP, rows: [row(2, 2, ['', '99', '', 'דייר'])], dryRun: false }).out;
+    t.eq('bad payer → row error; the SAME account\'s amount is not applied either', [bad.errors.length, /משלם/.test((bad.errors[0] || {}).msg), accOf(st, 2, 'tpl_ins').amount, JSON.stringify(st) === b], [1, true, 50, true]);
+    const st2 = fx(); st2.tenants[0].extraAccounts = [{ id: 'o1', templateId: 'tpl_ins', label: 'ביטוח מבנה', amount: 50, openingDebt: 0 }];
+    t.eq('precondition: the account is clean (would be deleted by "לא" alone)', S.accHasMoney(st2, 1, st2.tenants[0].extraAccounts[0]), false);
+    const b2 = JSON.stringify(st2);
+    const cx = run(POST, st2, { headers: HP, rows: [row(2, 1, ['לא', '', '', 'שוכר'])], dryRun: false }).out;
+    t.eq('"לא" + payer → contradiction error, account NOT deleted', [cx.errors.length, cx.deleted, JSON.stringify(st2) === b2], [1, 0, true]);
+    const old = fx(); old.tenants[1].extraAccounts[0].payer = 'tenant'; const ob = JSON.stringify(old);
+    const r3 = run(POST, old, { headers: H, rows: [row(2, 2, ['פעיל', '', ''])], dryRun: false });
+    t.eq('an OLD 3-column file (no payer column) → payers untouched', [r3.saves.length, JSON.stringify(old) === ob, accOf(old, 2, 'tpl_ins').payer], [0, true, 'tenant']);
+    const alone = fx(); withRenter(alone, 2, '052');
+    const r4 = run(POST, alone, { headers: ['ביטוח מבנה – משלם'], rows: [row(2, 2, ['שוכר'])], dryRun: false }).out;
+    t.eq('payer column ALONE updates only the payer', [r4.updated, accOf(alone, 2, 'tpl_ins').payer, accOf(alone, 2, 'tpl_ins').amount, accOf(alone, 2, 'tpl_ins').openingDebt], [1, 'tenant', 50, 120]);
+  }
+
+  t.section('v2.14.84 (1ב2) — renter-phone warning only on change/create (ת5-A)');
+  {
+    const st = fx(); withRenter(st, 2, '');                                      // a renter slot WITHOUT a phone
+    const r = run(POST, st, { headers: HP, rows: [row(2, 2, ['', '', '', 'שוכר'])], dryRun: false }).out;
+    t.eq('change to שוכר, no renter phone → warning, but the payer IS saved', [r.warnings.length, /טלפון שוכר/.test((r.warnings[0] || {}).msg), accOf(st, 2, 'tpl_ins').payer], [1, true, 'tenant']);
+    const again = run(POST, st, { headers: HP, rows: [row(2, 2, ['', '', '', 'שוכר'])] }).out;
+    t.eq('same file again (already שוכר) → no item, no warning', [again.items.length, again.warnings.length], [0, 0]);
+    const cr = run(POST, fx(), { headers: HP, rows: [row(2, 1, ['פעיל', '', '', 'שוכר'])] }).out;
+    t.eq('create with שוכר and no renter at all → warning', cr.warnings.filter(w => /טלפון שוכר/.test(w.msg)).length, 1);
+    const ok = run(POST, withRenter(fx(), 1, '0521'), { headers: HP, rows: [row(2, 1, ['פעיל', '', '', 'שוכר'])] }).out;
+    t.eq('create with שוכר and a renter phone → no warning', ok.warnings.length, 0);
+    const own = run(POST, fx(), { headers: HP, rows: [row(2, 2, ['', '', '', 'בעלים'])] }).out;
+    t.eq('בעלים never warns about the renter', own.warnings.length, 0);
+  }
+
+  t.section('v2.14.84 (1ב2) — routing, not money: always allowed, immediate (ת6-A)');
+  {
+    const pd = withRenter(fx(), 2, '052'); pd.sentLog['2__acc__b1_' + EMk] = 'manual_paid_x_amount_50';
+    t.eq('precondition: בן already paid the active month', S.extraPaidInMonth(pd, 2, pd.tenants[1].extraAccounts[0], MK), true);
+    const m0 = money(pd);
+    const p = run(POST, pd, { headers: HP, rows: [row(2, 2, ['', '70', '', 'שוכר'])], dryRun: false }).out;
+    t.eq('paid month: the amount is refused (ג4-B), the payer still changes', [accOf(pd, 2, 'tpl_ins').amount, accOf(pd, 2, 'tpl_ins').payer, p.warnings.some(w => /כבר שולם/.test(w.msg)), money(pd) === m0], [50, 'tenant', true, true]);
+    const sus = withRenter(fx(), 3, '053'); const g0 = J(accOf(sus, 3, 'tpl_ins'));
+    run(POST, sus, { headers: HP, rows: [row(2, 3, ['', '', '', 'שוכר'])], dryRun: false });
+    const g = accOf(sus, 3, 'tpl_ins');
+    t.eq('suspended account: payer changes, suspension + periods untouched', [g.payer, g.suspended, JSON.stringify(g.suspensions) === JSON.stringify(g0.suspensions)], ['tenant', true, true]);
+    const ina = withRenter(fx(), 4, '054');
+    run(POST, ina, { headers: HP, rows: [row(2, 4, ['לא פעיל', '', '', 'שוכר'])], dryRun: false });
+    const d2 = ina.tenants[3].extraAccounts.find(a => a.id === 'd2');
+    t.eq('"לא פעיל" account: payer changes, it is NOT reactivated', [d2.payer, d2.active], ['tenant', false]);
+    t.eq('no dated payer store was created', [Object.keys(g).some(k => /payer/i.test(k) && k !== 'payer'), Object.keys(d2).some(k => /payer/i.test(k) && k !== 'payer')], [false, false]);
+  }
+
+  t.section('v2.14.84 (1ב2) — NEW member: payer on the required account it will get');
+  {
+    const st = fx();
+    const dry = run(POST, st, { headers: HP, rows: [row(6, null, ['', '', '', 'שוכר'], { name: 'חדש' })] }).out;
+    t.eq('preview: update of the simulated required account, payer line + renter warning', [dry.items.map(i => [i.action, i.isNew, i.changes]), dry.warnings.length], [[['update', true, ['משלם: בעלים → שוכר']]], 1]);
+    t.eq('…dry plan wrote nothing', dry.items.every(i => i.tid === null), true);
+    st.tenants.push({ id: 60, name: 'חדש', extraAccounts: [S.accFromTemplate(st.accountTemplates[0], { extraAccounts: [] }, MK, {})] });
+    run(POST, st, { headers: HP, rows: [row(6, 60, ['', '', '', 'שוכר'], { name: 'חדש' })], dryRun: false });
+    t.eq('commit by the new id → ONE account, payer שוכר', [st.tenants.find(x => x.id === 60).extraAccounts.length, accOf(st, 60, 'tpl_ins').payer], [1, 'tenant']);
   }
 }
 
