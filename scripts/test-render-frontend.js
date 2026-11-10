@@ -2692,7 +2692,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('card total == list total (mixed)', runCB([S_COVERED, S_PARTIAL, S_YEARLY]).extrasTotal, runTS([S_COVERED, S_PARTIAL, S_YEARLY])[0].extrasTotal);
 
   t.section('v2.14.64 — tenant-list cell shows the server status');
-  const cellFn = extractFunctions(app64, ['renderExtraAccountsCell']);
+  const cellFn = extractFunctions(app64, ['renderExtraAccountsCell', 'projectProgressLines', 'esc']);   // v2.14.86 — + project progress lines
   const cell = accs => new Function('accountsStatus', cellFn + '\n; return renderExtraAccountsCell;')({ '1': accs })('1');
   t.eq('partial → "🟡 … שולם ₪40, נותר ₪60"', cell([S_PARTIAL]).includes('🟡 מים — שולם ₪40, נותר ₪60'), true);
   t.eq('covered → "✓ … מכוסה מזכות" + green credit, no "סמן ששילם"', (() => { const h = cell([S_COVERED]); return h.includes('✓ חשמל — מכוסה מזכות') && h.includes('זכות: ₪900') && !h.includes('סמן ששילם'); })(), true);
@@ -3138,7 +3138,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.section('v2.14.74 — template row (EXECUTED renderAccountTemplates)');
   t.eq('HTML_VERSION === package.json version', app.includes("const HTML_VERSION = '" + pkg.version + "';"), true);
   {
-    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates',
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'projectTplRowHtml', 'tplTypeSelect', 'renderPayProjShortcut', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates', 'tplIsProject',
       'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort', 'renderPayerTplBox']);   // v2.14.79 — + payments selector · v2.14.80 — + frequency cell · v2.14.85 — + payer template box
     const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: { display: 'none' } } };
     const S = runInSandbox('var accountTemplates;\n' + billPageConsts(app) + fns + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();}};',
@@ -3161,7 +3161,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
 
   t.section('v2.14.74 — preview renderers consume the server plan (EXECUTED renderTplPlan)');
   {
-    const S = runInSandbox(extractFunctions(app, ['renderTplPlan', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan};', {});
+    const S = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan};', {});
     const P = { mk: '2026-10', add: [{ tid: '1', name: 'אור', amount: 50 }, { tid: '4', name: 'דנה', amount: 75 }], already: [{ name: 'בן' }], skippedSuspended: [{ name: 'גיל' }], conflicts: [], relink: [], totalPerCharge: 125, startSuspended: false, includeSuspended: false };
     const h = S.renderTplPlan('apply', P);
     t.eq('apply: counts + total from the plan', [h.includes('יתווסף ל-<strong>2</strong>'), h.includes('₪125'), h.includes('כבר משויכים (ידלגו): 1'), h.includes('(ידלגו): 1')], [true, true, true, true]);
@@ -3530,7 +3530,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const J = o => JSON.parse(JSON.stringify(o));
   const VP = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
   const ELS = {};
-  const P = runInSandbox(extractFunctions(app, ['esc', 'bankTargetTemplates', 'bankTargetOptionsHtml', 'accMonthTxt', 'accPreviewHtml', 'accDecisionsFrom', 'accSplitQuestion', 'pcqHtml', '_ambRowKey', 'accImportRequest', 'accImportCommit', 'bankTargetId', 'bankMappingFromForm'])
+  const P = runInSandbox(extractFunctions(app, ['esc', 'bankTargetTemplates', 'tplIsProject', 'bankTargetOptionsHtml', 'accMonthTxt', 'accPreviewHtml', 'accDecisionsFrom', 'accSplitQuestion', 'pcqHtml', '_ambRowKey', 'accImportRequest', 'accImportCommit', 'bankTargetId', 'bankMappingFromForm'])
     + '\nmodule.exports={esc,bankTargetTemplates,bankTargetOptionsHtml,accMonthTxt,accPreviewHtml,accDecisionsFrom,accSplitQuestion,pcqHtml,_ambRowKey,accImportRequest,accImportCommit};',
     { VP_MONTHS: VP, document: { getElementById: id => ELS[id] || null, querySelectorAll: () => ELS.__amb || [] } });
   const d0 = () => ({ config: { amount: 300, manualMonth: 'אוקטובר' },
@@ -3685,7 +3685,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 
   t.section('v2.14.79 (1ו, ז5-A) — "WA לחייבים בחשבון" (EXECUTED)');
   {
-    const fns = extractFunctions(app, ['bankTargetTemplates', 'populatePayAccSend', 'accountDebtors', 'sendAccountDebtors', 'esc', 'confirmAccountsGap', 'accOwing', 'payerMsgCount', 'sendBody']);   // v2.14.85 — + payer count / scope body
+    const fns = extractFunctions(app, ['bankTargetTemplates', 'tplIsProject', 'populatePayAccSend', 'accountDebtors', 'sendAccountDebtors', 'esc', 'confirmAccountsGap', 'accOwing', 'payerMsgCount', 'sendBody']);   // v2.14.85 — + payer count / scope body
     const run = async (opts) => {
       const els = { payAccSendBox: { style: { display: 'none' } }, payAccSend: { value: '', innerHTML: '' }, btnSendAcc: { disabled: false }, sendingStatus: { textContent: '' } };
       const posted = [], toasts = [], asked = [];
@@ -4086,7 +4086,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 
   t.section('v2.14.85 (1ו2) — settings row + payer template box EXECUTED');
   {
-    const fns = extractFunctions(app, ['renderAccountTemplates', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates',
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'projectTplRowHtml', 'tplTypeSelect', 'renderPayProjShortcut', 'esc', 'tplAmountCell', 'amtFmtMonth', 'populatePayAccSend', 'bankTargetTemplates', 'tplIsProject',
       'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort', 'renderPayerTplBox', 'anySeparateNotify', 'payerPreviewText', 'setTplNotify']);
     const mk = () => ({ accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: {} }, payerTplBox: { style: { display: 'none' } }, cfgPayerTemplate: { value: '' }, payerPreview: { textContent: '' } });
     const els = mk();
@@ -4148,6 +4148,108 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('guide: payer-message section + send box + accounts row + payer column text',
     ['id="vpg-a-set-payer-msg"', 'id="vpg-payer-send"', 'id="vpg-payer-volume"', 'תזכורת: לטלפון המשלם', 'לעולם לא עוברים מבעלים לשוכר'].every(x => gd85.includes(x)), true);
   t.eq('guide: "תגיע בגרסה הבאה" (payer column) is gone', gd85.includes('הודעה נפרדת לטלפון המשלם תגיע בגרסה הבאה'), false);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.86 (P1) — project accounts on the page (EXECUTED against the REAL server plans/views)
+// ════════════════════════════════════════════════════════════════
+{
+  const S = require('./test-lib').loadServer();
+  const gd86 = readSource('public/vaadpro-guide.js');
+  const portal86 = readSource('public/tenant-portal.html');
+  const EM = 'מרץ', MK = S.getMonthKey({ manualMonth: EM });
+  const PT = { id: 'P', label: 'שיפוץ <b>', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' }, project: { defaultInstallments: 3, defaultTotal: 2250, startMonth: MK } };
+  const mkD = () => ({ config: { amount: 230, manualMonth: EM }, closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: {}, accountTemplates: [JSON.parse(JSON.stringify(PT))],
+    tenants: [{ id: 1, name: 'אור', aptNumber: '1', phone: '0501' }, { id: 2, name: 'בן <i>', aptNumber: '2', phone: '0502', suspended: true }] });
+
+  t.section('v2.14.86 (P1) — settings: type select + project row (EXECUTED renderAccountTemplates)');
+  {
+    const fns = extractFunctions(app, ['renderAccountTemplates', 'projectTplRowHtml', 'tplTypeSelect', 'renderPayProjShortcut', 'tplIsProject', 'setTplType', 'setTplProject', 'esc', 'tplAmountCell', 'amtFmtMonth',
+      'populatePayAccSend', 'bankTargetTemplates', 'tplFreqCell', 'billFreqSelect', 'billRotationSelect', 'billRotationIndex', 'billMonthsShort', 'renderPayerTplBox', 'anySeparateNotify', 'payerPreviewText', 'setTplNotify']);
+    const els = { accountTemplatesList: { innerHTML: '' }, payAccShortcut: { style: {} }, payProjShortcut: { innerHTML: '' }, payerTplBox: { style: { display: 'none' } }, cfgPayerTemplate: { value: '' }, payerPreview: { textContent: '' } };
+    const P = runInSandbox('var accountTemplates, data = { config: { manualMonth: "יוני" } };\n' + billPageConsts(app) + (app.match(/const PAYER_TEMPLATE_DEFAULT = .*;\n/) || [''])[0] + fns
+      + '\nmodule.exports={run:function(a){accountTemplates=a;renderAccountTemplates();},type:setTplType,proj:setTplProject,get:function(){return accountTemplates;}};', { document: { getElementById: id => els[id] || null } });
+    P.run([Object.assign({ linked: 2 }, JSON.parse(JSON.stringify(PT))), { id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, linked: 3 }, { id: 'N', label: 'חדש', type: 'formula', frequency: 'monthly', amount: 40 }]);
+    const h = els.accountTemplatesList.innerHTML;
+    t.eq('project row: escaped name, defaults, start month, apply + status buttons', [h.includes('class="tpl-proj-row"'), h.includes('שיפוץ &lt;b&gt;'), h.includes('value="2250"'), h.includes('value="' + MK + '"'),
+      h.includes("openTplAction(0,'project')"), h.includes('openProjectStatus(0)'), h.includes('📨 תזכורת: הודעה נפרדת')], [true, true, true, true, true, true, true]);
+    t.eq('project row has no 📅 / required / frequency cell', [/openAmtModal\('tpl',0\)/.test(h), (h.match(/tpl-required/g) || []).length], [false, 2]);
+    t.eq('linked project: type select disabled; linked regular: \"project\" option disabled; unsaved: all open',
+      [/<select class="tpl-type" onchange="setTplType\(0, this.value\)" style="width:100%;" disabled/.test(h), /setTplType\(1[\s\S]{0,400}value="project" disabled/.test(h), /setTplType\(2[\s\S]{0,400}value="project">/.test(h)], [true, true, true]);
+    t.eq('payments-tab shortcut: one 📊 per saved project with members (escaped)', els.payProjShortcut.innerHTML.includes('📊 שיפוץ &lt;b&gt;') && els.payProjShortcut.innerHTML.includes('openProjectStatus(0)'), true);
+    P.type(2, 'project');
+    const n = P.get()[2];
+    t.eq('switch to project: fixed, monthly, amount 0, separate, not required, default 3', [n.type, n.frequency, n.amount, n.notify, n.requiredForAll, n.project], ['fixed', 'monthly', 0, { mode: 'separate' }, false, { defaultInstallments: 3 }]);
+    P.proj(2, 'defaultTotal', '1800'); P.proj(2, 'defaultInstallments', '6'); P.proj(2, 'startMonth', MK);
+    t.eq('project fields from the row', n.project, { defaultInstallments: 6, defaultTotal: 1800, startMonth: MK });
+    P.type(2, 'fixed');
+    t.eq('switch back: project block removed', 'project' in P.get()[2], false);
+  }
+
+  t.section('v2.14.86 (P1) — 👥 apply window renders the REAL plan; edits go back as rows');
+  {
+    const R = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'projApplyOnChange', 'tplNames', 'esc']) + '\nvar tplAct={rows:{}};\nmodule.exports={renderTplPlan,projApplyOnChange,rows:function(){return tplAct.rows;}};', {});
+    const d = mkD();
+    const plan = S.planProjectApply(d, 'P', { rows: { '1': { installments: 30 } } });
+    const h = R.renderTplPlan('project', plan);
+    t.eq('summary from the server (add / target / errors)', [h.includes('ייווצר ל-<strong>0</strong>'), h.includes('⚠️ 1 שורות עם שגיאה')], [true, true]);
+    t.eq('row error shown (server text); suspended member unchecked + ⏸; names escaped', [h.includes('מספר תשלומים: 1 עד 24'), /data-tid="2" data-f="include">/.test(h), h.includes('בן &lt;i&gt; <span'), h.includes('id="projApplyTable"')], [true, true, true, true]);
+    const ok = R.renderTplPlan('project', S.planProjectApply(d, 'P', {}));
+    t.eq('valid row: schedule text from the server', ok.includes('₪750 × 3 ('), true);
+    R.projApplyOnChange({ dataset: { tid: '2', f: 'include' }, checked: true });
+    R.projApplyOnChange({ dataset: { tid: '2', f: 'total' }, value: '1000' });
+    t.eq('cell changes → rows input (only what was touched)', R.rows(), { '2': { include: true, total: '1000' } });
+    t.eq('tplActBody sends rows for project; URL map has project-apply', [/if \(mode === 'project'\) b\.rows = tplAct\.rows;/.test(extractFunctions(app, ['tplActBody'])), app.includes("project: 'project-apply'")], [true, true]);
+    t.eq('commit refuses while a row has an error (no request)', /mode === 'project' && p\.errors\) \{ toast/.test(extractFunctions(app, ['tplActCommit'])), true);
+  }
+
+  t.section('v2.14.86 (P1) — 📊 status screen renders the REAL view; ✏️ change sends the right body');
+  {
+    const d = mkD();
+    S.commitProjectApply(d, S.planProjectApply(d, 'P', { rows: { '2': { include: true } } }));
+    d.sentLog['1__acc__' + d.tenants[0].extraAccounts[0].id + '_' + EM] = 'manual_paid_x_amount_2250';
+    const view = S.projectStatusView(d, 'P');
+    const V = runInSandbox(extractFunctions(app, ['projSummaryHtml', 'projRowsHtml', 'projEditHtml', 'projStatusColor', 'projEditBody', 'esc'])
+      + '\nmodule.exports={projSummaryHtml,projRowsHtml,projEditBody};', { document: { getElementById: id => ({ projEdN: { value: '4' }, projEdTotal: { value: '2250' }, projEdStart: { value: '' } })[id] || null } });
+    const sum = V.projSummaryHtml(view), rows = V.projRowsHtml(view, 1, { ok: true, from: MK, chargedBefore: 0, remaining: 2250, scheduleText: '₪562 × 3' });
+    t.eq('summary = server numbers', [sum.includes('יעד <strong>₪4500</strong>'), sum.includes('נגבה <strong>₪2250</strong> (50%)'), sum.includes('הושלם 1')], [true, true, true]);
+    t.eq('rows: status labels from the server, names escaped, ✏️ per row', [rows.includes('>הושלם<'), rows.includes('בתשלומים'), rows.includes('בן &lt;i&gt;'), (rows.match(/data-proj-op="edit"/g) || []).length], [true, true, true, 2]);
+    t.eq('edit row + plan text', [rows.includes('id="projEdN"'), rows.includes('יתרה לתכנון ₪2250'), rows.includes('₪562 × 3')], [true, true, true]);
+    t.eq('edit body: installments + total; empty month omitted', V.projEditBody(), { installments: '4', total: '2250' });
+    t.eq('error plan → shown in red', V.projRowsHtml(view, 0, { ok: false, error: 'סך לא תקין' }).includes('סך לא תקין'), true);
+    t.eq('projSend posts to /tenant-accounts/:tid/:acc/project with dryRun', /'\/tenant-accounts\/' \+ encodeURIComponent\(r\.tid\) \+ '\/' \+ encodeURIComponent\(r\.accId\) \+ '\/project'/.test(extractFunctions(app, ['projSend'])) && /body\.dryRun = dry/.test(extractFunctions(app, ['projSend'])), true);
+    t.eq('one delegated listener on #projBody (data-proj-op)', /projBody'\)\.addEventListener\('click', projOnClick\)/.test(extractFunctions(app, ['openProjectStatus'])), true);
+  }
+
+  t.section('v2.14.86 (P1) — payments cell, 💳 cell, filters, portal');
+  {
+    const cellFn = extractFunctions(app, ['renderExtraAccountsCell', 'projectProgressLines', 'esc']);
+    const cell = accs => new Function('accountsStatus', cellFn + '\n; return renderExtraAccountsCell;')({ '1': accs })('1');
+    const base = { id: 'p', label: 'שיפוץ', amount: 750, active: true, paidThisMonth: false, totalDebt: 0, owedCurrent: 750, status: 'unpaid' };
+    const h = cell([Object.assign({}, base, { project: { progressText: 'שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים', alert: false } })]);
+    t.eq('payments cell: project progress line (server text)', h.includes('📊 שיפוץ: שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים'), true);
+    t.eq('alert → \"חרג ממספר התשלומים\"', cell([Object.assign({}, base, { project: { progressText: 'x', alert: true } })]).includes('⚠️ חרג ממספר התשלומים'), true);
+    const hid = cell([Object.assign({}, base, { hidden: true, project: { progressText: 'שולם ₪2250 מתוך ₪2250 · הושלם' } })]);
+    t.eq('hidden (הושלם) → no row, no progress line', [hid.includes('שיפוץ'), hid.includes('סמן ששילם')], [false, false]);
+    const C = runInSandbox(extractFunctions(app, ['taAmountCell', 'esc', 'amtFmtMonth']) + '\nmodule.exports={taAmountCell};', {});
+    const c = C.taAmountCell({ id: 'p', amount: 750, saved: true, projectView: { progressText: 'שולם ₪0 מתוך ₪2250' } }, 0);
+    t.eq('💳 project amount: read-only, \"לפי לוח הפרויקט\", no 📅', [c.includes('לפי לוח הפרויקט · שולם ₪0 מתוך ₪2250'), c.includes('openAmtModal')], [true, false]);
+    const B = runInSandbox(extractFunctions(app, ['bankTargetTemplates', 'tplIsProject']) + '\nmodule.exports={bankTargetTemplates};', {});
+    t.eq('bank-file target: a project is not offered (P2)', B.bankTargetTemplates([Object.assign({ linked: 1 }, PT), { id: 'T1', type: 'fixed', linked: 1 }]).map(x => x.id), ['T1']);
+    t.eq('💳 \"הוסף מתבנית\": no project definitions', app.includes('accountTemplates.filter(t => !tplIsProject(t) && !existingTpl.includes(t.id)'), true);
+    t.eq('tenants-file preview: project columns explained', app.includes("if ((cols.project || []).length) h += '<div class=\"import-row warn\">ℹ️ חשבון פרויקט לא נקבע בקובץ דיירים"), true);
+    const pf = extractFunctions(portal86, ['portalEsc', 'portalMoney', 'portalAccHistoryHtml', 'renderUnifiedBreakdown']);
+    const els = { breakdownCard: { style: {} }, breakdownRows: { innerHTML: '' }, breakdownTotalAmount: { textContent: '' } };
+    new Function('document', pf + '\n; return renderUnifiedBreakdown;')({ getElementById: id => els[id] || null })(
+      { grandTotal: 750, accountsView: [{ id: 'p', label: 'שיפוץ', frequency: 'monthly', status: 'unpaid', owedNow: 750, owedCurrent: 750, owedPrior: 0, creditLeft: 0, creditApplied: 0, history: [],
+        project: { progressText: 'שולם ₪0 מתוך ₪2250 <x> · נותרו 3 תשלומים' } }] },
+      { mainPaid: true, mainPriorDebt: 0, mainLabel: 'ועד', mainAccountLabel: 'ועד בית', mainAmountDue: 0 });
+    t.eq('portal: progress line verbatim (escaped); total = server', [els.breakdownRows.innerHTML.includes('📊 שולם ₪0 מתוך ₪2250 &lt;x&gt; · נותרו 3 תשלומים'), els.breakdownTotalAmount.textContent], [true, '750 ₪']);
+  }
+
+  t.section('v2.14.86 (P1) — markup, guide');
+  t.eq('status modal markup + help anchor', ['id="projModal"', 'id="projTitle"', 'id="projSummary"', 'id="projBody"', "showHelp('settings#project')", 'id="payProjShortcut"'].every(x => app.includes(x)), true);
+  t.eq('guide: project section, payments box, bank warning', ['id="vpg-a-project"', 'id="vpg-pay-project"', 'id="vpg-project-bank"', 'פרויקט (תשלומים)', 'זכות להעברה', 'חרג ממספר התשלומים', '2,250 ב-7 = ₪321 × 6 + ₪324'].every(x => gd86.includes(x)), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

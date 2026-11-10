@@ -682,6 +682,7 @@ function vpLogout() {
           <button class="btn btn-secondary btn-sm" id="btnPortalSel" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalToSelected()" title="שולח קישור אישי לפורטל לדיירים שסימנתם ✔ בטבלה. הקישור הקודם שלהם יפסיק לעבוד">🔗 שלח פורטל לנבחרים</button>
           <button class="btn btn-secondary btn-sm" id="btnResetSent" onclick="resetSent()" title="מוחק את סימוני &quot;נשלח&quot; של החודש. תשלומים לא נמחקים">🔄 אפס סימוני נשלח</button>
           <button class="btn btn-secondary btn-sm" id="payAccShortcut" style="display:none;" onclick="goAccountTemplates()" title="מעבר להגדרות › חשבונות נוספים (שם מחילים חשבון על החברים)">💳 הגדרת חשבונות נוספים ↗</button>
+          <span id="payProjShortcut"></span>
         </div>
 
       </div>
@@ -1896,6 +1897,20 @@ function vpLogout() {
     </div>
   </div>
 
+  <!-- v2.14.86 (P1) — 📊 מצב פרויקט: status per member (read-only) + ✏️ change one member's schedule -->
+  <div class="modal-bg" id="projModal" style="display:none;" onclick="if(event.target===this)closeProjectStatus()">
+    <div class="modal" style="max-width:900px;max-height:90vh;overflow-y:auto;">
+      <h2 id="projTitle"></h2>
+      <div id="projSummary" style="margin:8px 0;"></div>
+      <div id="projBody" style="overflow-x:auto;"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="btn btn-secondary" onclick="closeProjectStatus()">סגור</button>
+        <span style="flex:1;"></span>
+        <button class="btn btn-secondary btn-sm" onclick="showHelp('settings#project')" title="מדריך: חשבון פרויקט">❓</button>
+      </div>
+    </div>
+  </div>
+
   <!-- v2.14.76 (1ג) — 📅 dated amount (definition or one member): timeline → preview → confirm -->
   <div class="modal-bg" id="amtModal" style="display:none;z-index:110;" onclick="if(event.target===this)closeAmtModal()">
     <div class="modal" style="max-width:560px;max-height:90vh;overflow-y:auto;">
@@ -1977,7 +1992,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.85';
+const HTML_VERSION = '2.14.86';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4333,6 +4348,7 @@ function tfRenderAccountPlan(plan) {
   else h += '<div class="import-row warn">ℹ️ לא נמצאו בקובץ עמודות של חשבונות נוספים — החשבונות לא ישתנו.</div>';
   if ((cols.unknown || []).length) h += '<div class="import-row warn">ℹ️ עמודות שלא זוהו (לא ייובאו): ' + cols.unknown.map(esc).join(' · ') + '</div>';
   if ((cols.computed || []).length) h += '<div class="import-row warn">ℹ️ חשבון מחושב עדיין לא נתמך בקובץ דיירים: ' + cols.computed.map(esc).join(' · ') + '</div>';
+  if ((cols.project || []).length) h += '<div class="import-row warn">ℹ️ חשבון פרויקט לא נקבע בקובץ דיירים (סך ותשלומים לכל דייר נקבעים ב"👥 החל על דיירים"): ' + cols.project.map(esc).join(' · ') + '</div>';   // v2.14.86
   if ((cols.duplicate || []).length) h += '<div class="import-row warn">ℹ️ עמודה כפולה (רק הראשונה נקראת): ' + cols.duplicate.map(esc).join(' · ') + '</div>';
   (P.errors || []).forEach(function(er){ h += '<div class="import-row err">❌ שורה ' + er.row + ': ' + esc(er.msg) + '</div>'; });
   (P.warnings || []).forEach(function(w){ h += '<div class="import-row warn">⚠️ שורה ' + w.row + ': ' + esc(w.msg) + '</div>'; });
@@ -5819,7 +5835,7 @@ function runBankAnalysis(){
 // each account is saved on its definition (server, building level).
 // ══════════════════════════════════════════════════════════════════════════
 function bankTargetTemplates(list){
-  return (Array.isArray(list) ? list : []).filter(function(t){ return t && t.id && t.type !== 'formula' && t.linked !== undefined; });
+  return (Array.isArray(list) ? list : []).filter(function(t){ return t && t.id && t.type !== 'formula' && !tplIsProject(t) && t.linked !== undefined; });   // v2.14.86 — a project: P2
 }
 function bankTargetOptionsHtml(list, mainLabel, selected){
   var tpls = bankTargetTemplates(list);
@@ -10298,6 +10314,7 @@ function renderAccountTemplates() {
   const el = document.getElementById('accountTemplatesList');
   const sc = document.getElementById('payAccShortcut');
   if (sc) sc.style.display = accountTemplates.some(function(t){ return t && t.linked !== undefined; }) ? '' : 'none';
+  renderPayProjShortcut();   // v2.14.86 (P1)
   populatePayAccSend();
   renderPayerTplBox();   // v2.14.85 (1ו2)
   if (!el) return;
@@ -10309,6 +10326,7 @@ function renderAccountTemplates() {
   // bulk actions. Counts (linked / pending) come from GET /api/account-templates.
   // Handlers take the row INDEX only (no embedded data).
   el.innerHTML = accountTemplates.map((t, i) => {
+    if (tplIsProject(t)) return projectTplRowHtml(t, i);   // v2.14.86 (P1)
     const saved = t.linked !== undefined;
     const actions = saved
       ? `<span style="font-size:0.75rem;color:var(--text2);">משויך ל-${t.linked} חברים</span>
@@ -10323,11 +10341,7 @@ function renderAccountTemplates() {
         <input type="text" value="${esc(t.label||'')}" onchange="accountTemplates[${i}].label=this.value" style="width:100%;"></div>
       <div><label style="font-size:0.75rem;">סכום ₪</label>${tplAmountCell(t, i)}</div>
       <div><label style="font-size:0.75rem;">תדירות</label>${tplFreqCell(t, i)}</div>
-      <div><label style="font-size:0.75rem;">סוג</label>
-        <select onchange="accountTemplates[${i}].type=this.value" style="width:100%;">
-          <option value="fixed" ${t.type==='fixed'?'selected':''}>קבוע</option>
-          <option value="formula" ${t.type==='formula'?'selected':''}>מחושב</option>
-        </select></div>
+      <div><label style="font-size:0.75rem;">סוג</label>${tplTypeSelect(t, i)}</div>
       <button class="btn btn-danger-soft btn-sm" onclick="accountTemplates.splice(${i},1);renderAccountTemplates();" style="height:36px;">🗑️</button>
     </div>
     <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;">
@@ -10597,18 +10611,255 @@ async function saveAccountTemplates() {
   } catch(e) { toast('שגיאת רשת', 'error'); }
 }
 
+// ══ v2.14.86 (P1) — PROJECT account: definition row, apply with schedules, 📊 status ══════
+// "פרויקט" is a third type in this page only — saved as type 'fixed' + a `project` block
+// (the server enforces monthly, never "required for all", always a separate message).
+// Every number (installments, schedule, paid, remaining, status) comes from the server.
+function tplIsProject(t) { return !!(t && t.project && typeof t.project === 'object'); }
+
+function tplTypeSelect(t, i) {
+  const proj = tplIsProject(t);
+  const linked = t && t.linked !== undefined && (t.linked || 0) > 0;
+  const cur = proj ? 'project' : (t.type === 'formula' ? 'formula' : 'fixed');
+  const dis = (v) => (linked && ((v === 'project') !== proj)) ? ' disabled' : '';
+  return '<select class="tpl-type" onchange="setTplType(' + i + ', this.value)" style="width:100%;"' + (linked && proj ? ' disabled title="משויך לדיירים — לא ניתן לשנות סוג"' : '') + '>' +
+    '<option value="fixed"' + (cur === 'fixed' ? ' selected' : '') + dis('fixed') + '>קבוע</option>' +
+    '<option value="formula"' + (cur === 'formula' ? ' selected' : '') + dis('formula') + '>מחושב</option>' +
+    '<option value="project"' + (cur === 'project' ? ' selected' : '') + dis('project') + '>פרויקט (תשלומים)</option></select>';
+}
+
+function setTplType(i, v) {
+  const t = accountTemplates[i];
+  if (!t) return;
+  if (v === 'project') {
+    t.type = 'fixed'; t.frequency = 'monthly'; t.amount = 0; delete t.billingMonths;
+    t.requiredForAll = false; t.notify = { mode: 'separate' };
+    if (!tplIsProject(t)) t.project = { defaultInstallments: 3 };
+  } else {
+    delete t.project; t.type = v === 'formula' ? 'formula' : 'fixed';
+  }
+  renderAccountTemplates();
+}
+
+function setTplProject(i, field, v) {
+  const t = accountTemplates[i];
+  if (!t || !tplIsProject(t)) return;
+  if (field === 'defaultInstallments') t.project.defaultInstallments = parseInt(v, 10) || 3;
+  else if (field === 'defaultTotal') { const n = parseFloat(v); if (n > 0) t.project.defaultTotal = n; else delete t.project.defaultTotal; }
+  else t.project[field] = String(v || '');
+}
+
+function projectTplRowHtml(t, i) {
+  const saved = t.linked !== undefined;
+  const p = t.project || {};
+  const actions = saved
+    ? '<span style="font-size:0.75rem;color:var(--text2);">משויך ל-' + t.linked + ' דיירים</span>' +
+      '<button class="btn btn-secondary btn-sm tpl-act-proj-apply" onclick="openTplAction(' + i + ',\'project\')">👥 החל על דיירים</button>' +
+      (t.linked ? '<button class="btn btn-secondary btn-sm tpl-act-proj-status" onclick="openProjectStatus(' + i + ')">📊 מצב פרויקט</button>' : '') +
+      (t.linked ? '<button class="btn btn-danger-soft btn-sm tpl-act-remove" onclick="openTplAction(' + i + ',\'remove\')">הסר מכולם</button>' : '')
+    : '<span style="font-size:0.75rem;color:var(--text3);">שמרו את התבניות כדי להחיל על דיירים</span>';
+  return '<div class="tpl-proj-row" style="padding:10px;background:var(--surface2);border-radius:8px;border:1px solid var(--border);border-inline-start:3px solid var(--accent);">' +
+    '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr auto;gap:8px;align-items:end;">' +
+      '<div><label style="font-size:0.75rem;">שם הפרויקט</label><input type="text" value="' + esc(t.label || '') + '" onchange="accountTemplates[' + i + '].label=this.value" style="width:100%;"></div>' +
+      '<div><label style="font-size:0.75rem;">סך לדייר ₪ (ברירת מחדל)</label><input type="number" class="tpl-proj-total" min="0" step="0.01" value="' + (p.defaultTotal || '') + '" onchange="setTplProject(' + i + ',\'defaultTotal\',this.value)" style="width:100%;"></div>' +
+      '<div><label style="font-size:0.75rem;">תשלומים (ברירת מחדל)</label><input type="number" class="tpl-proj-n" min="1" max="24" step="1" value="' + (p.defaultInstallments || 3) + '" onchange="setTplProject(' + i + ',\'defaultInstallments\',this.value)" style="width:100%;"></div>' +
+      '<div><label style="font-size:0.75rem;">סוג</label>' + tplTypeSelect(t, i) + '</div>' +
+      '<button class="btn btn-danger-soft btn-sm" onclick="accountTemplates.splice(' + i + ',1);renderAccountTemplates();" style="height:36px;">🗑️</button>' +
+    '</div>' +
+    '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
+      '<label style="font-size:0.75rem;" title="ברירת המחדל לחודש התחלה בחלון ההחלה (אפשר לשנות לכל דייר)">חודש התחלה: <input type="month" class="tpl-proj-start" value="' + esc(p.startMonth || '') + '" onchange="setTplProject(' + i + ',\'startMonth\',this.value)" style="width:auto;"></label>' +
+      '<label style="font-size:0.75rem;" title="מילה שתופיע בהערת ההעברה של תשלום לפרויקט — תשמש להקצאה בייבוא הבנק (P2)">מילת מפתח: <input type="text" class="tpl-proj-kw" value="' + esc(p.noteKeyword || '') + '" onchange="setTplProject(' + i + ',\'noteKeyword\',this.value)" style="width:120px;"></label>' +
+      '<label style="font-size:0.75rem;">משלם: <select onchange="accountTemplates[' + i + '].defaultPayer=this.value" style="width:auto;">' +
+        '<option value="owner"' + (t.defaultPayer !== 'tenant' ? ' selected' : '') + '>בעלים</option>' +
+        '<option value="tenant"' + (t.defaultPayer === 'tenant' ? ' selected' : '') + '>שוכר</option></select></label>' +
+      '<span style="font-size:0.75rem;color:var(--text2);" title="תזכורת של פרויקט נשלחת תמיד כהודעה נפרדת — גם לטלפון הראשי">📨 תזכורת: הודעה נפרדת</span>' +
+      actions +
+    '</div></div>';
+}
+
+// Payments tab — a shortcut per saved project with members.
+function renderPayProjShortcut() {
+  const el = document.getElementById('payProjShortcut');
+  if (!el) return;
+  el.innerHTML = accountTemplates.map(function(t, i){
+    return (tplIsProject(t) && t.linked) ? '<button class="btn btn-secondary btn-sm pay-proj-btn" onclick="openProjectStatus(' + i + ')" title="מצב הגבייה של הפרויקט לכל דייר">📊 ' + esc(t.label || 'פרויקט') + '</button>' : '';
+  }).join('');
+}
+
+function renderProjectApplyPlan(p, box) {
+  const ml = function(m){ return m ? String(m).slice(5) + '/' + String(m).slice(0, 4) : ''; };
+  let h = '<div class="tpl-plan-summary" style="' + box + '">' +
+    '➕ ייווצר ל-<strong>' + p.add + '</strong> דיירים · סה״כ יעד: <strong>₪' + p.sumTotal + '</strong>' +
+    (p.errors ? ' · <span style="color:var(--danger);">⚠️ ' + p.errors + ' שורות עם שגיאה</span>' : '') + '<br>' +
+    '✔️ כבר משויכים (ידלגו): ' + p.already.length +
+    (p.conflicts.length ? ' · ⚠️ חשבון בשם זהה שלא מקושר: ' + tplNames(p.conflicts, 10) : '') + '<br>' +
+    '📅 תשלום = הסך חלקי מספר התשלומים, מעוגל כלפי מטה; יתרת העיגול בתשלום האחרון. תשלום גבוה או נמוך מהמתוכנן עובר לתשלום הבא. דייר מושהה לא מסומן כברירת מחדל.' +
+    '</div>';
+  if (!p.rows.length) return h;
+  h += '<div style="max-height:340px;overflow:auto;margin-top:10px;"><table id="projApplyTable" style="width:100%;font-size:0.8rem;"><tr>' +
+    '<th></th><th style="text-align:right;">דירה</th><th style="text-align:right;">דייר</th><th style="text-align:right;">סך ₪</th><th style="text-align:right;">תשלומים</th><th style="text-align:right;">חודש התחלה</th><th style="text-align:right;">לוח</th></tr>' +
+    p.rows.map(function(r){
+      const tid = esc(r.tid);
+      const sched = !r.include ? '<span style="color:var(--text3);">—</span>'
+        : r.error ? '<span class="proj-row-err" style="color:var(--danger);">' + esc(r.error) + '</span>'
+        : '<span class="proj-row-sched">' + esc(r.scheduleText || '') + '</span>';
+      return '<tr><td><input type="checkbox" data-tid="' + tid + '" data-f="include"' + (r.include ? ' checked' : '') + '></td>' +
+        '<td>' + esc(r.unit) + '</td><td>' + esc(r.name) + (r.suspended ? ' <span style="color:var(--text2);">⏸</span>' : '') + '</td>' +
+        '<td><input type="number" min="0" step="0.01" data-tid="' + tid + '" data-f="total" value="' + (r.total === null ? '' : r.total) + '" style="width:90px;"></td>' +
+        '<td><input type="number" min="1" max="24" step="1" data-tid="' + tid + '" data-f="installments" value="' + esc(r.installments) + '" style="width:60px;"></td>' +
+        '<td><input type="month" data-tid="' + tid + '" data-f="startMonth" value="' + esc(r.startMonth) + '" style="width:auto;" title="' + ml(r.startMonth) + '"></td>' +
+        '<td>' + sched + '</td></tr>';
+    }).join('') + '</table></div>';
+  return h;
+}
+
+// One changed cell → the row's input for the next server preview (only what was touched).
+function projApplyOnChange(inp) {
+  if (!tplAct || !inp || !inp.dataset || !inp.dataset.tid || !inp.dataset.f) return;
+  const tid = inp.dataset.tid, f = inp.dataset.f;
+  const row = tplAct.rows[tid] || (tplAct.rows[tid] = {});
+  row[f] = f === 'include' ? inp.checked === true : inp.value;
+}
+
+// ── 📊 מצב פרויקט ─────────────────────────────────────────────────────────
+let projCtx = null;   // { tplId, label, view, edit: rowIndex|null, plan }
+let projWired = false;
+
+function openProjectStatus(i) {
+  const t = accountTemplates[i];
+  if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
+  projCtx = { tplId: t.id, label: t.label, view: null, edit: null, plan: null };
+  document.getElementById('projTitle').textContent = '📊 מצב פרויקט: ' + (t.label || '');
+  document.getElementById('projSummary').innerHTML = '';
+  document.getElementById('projBody').innerHTML = '<div style="color:var(--text2);">⏳ טוען…</div>';
+  document.getElementById('projModal').style.display = 'flex';
+  if (!projWired) { projWired = true; document.getElementById('projBody').addEventListener('click', projOnClick); }
+  projLoad();
+}
+
+function closeProjectStatus() {
+  document.getElementById('projModal').style.display = 'none';
+  projCtx = null;
+}
+
+async function projLoad() {
+  if (!projCtx) return;
+  try {
+    const r = await fetch(API + '/project-status?tpl=' + encodeURIComponent(projCtx.tplId), { headers: {} });
+    const d = await r.json();
+    if (!projCtx) return;
+    if (!d.ok) { document.getElementById('projBody').innerHTML = '<div style="color:var(--danger);">' + esc(d.error || 'שגיאה') + '</div>'; return; }
+    projCtx.view = d;
+    projRender();
+  } catch(e) { document.getElementById('projBody').innerHTML = '<div style="color:var(--danger);">שגיאת רשת</div>'; }
+}
+
+function projStatusColor(st) {
+  return { active: 'var(--text)', done: 'var(--accent)', debt: 'var(--danger)', credit: 'var(--warn)' }[st] || 'var(--text)';
+}
+
+function projSummaryHtml(v) {
+  const s = v.summary, c = s.counts;
+  return '<div class="proj-summary" style="padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.86rem;line-height:1.8;">' +
+    'יעד <strong>₪' + s.total + '</strong> · נגבה <strong>₪' + s.paid + '</strong> (' + s.pct + '%) · יתרה <strong>₪' + s.remaining + '</strong><br>' +
+    'בתשלומים ' + c.active + ' · הושלם ' + c.done + ' · <span style="color:var(--danger);">חוב שנותר ' + c.debt + '</span> · זכות להעברה ' + c.credit +
+    (s.unscheduled ? ' · <span style="color:var(--danger);">⚠️ בלי לוח: ' + s.unscheduled + '</span>' : '') +
+    (s.allDone ? '<br>✅ כל הדיירים השלימו — אפשר \"הסר מכולם\" בהגדרות.' : '') +
+    (c.credit ? '<br><span style="color:var(--text2);">\"זכות להעברה\" — העברה לדמי הוועד תתאפשר בגרסה הבאה (P3). בינתיים הזכות נשמרת בחשבון הפרויקט.</span>' : '') +
+    '</div>';
+}
+
+function projRowsHtml(v, editIdx, plan) {
+  const ml = function(m){ return m ? String(m).slice(5) + '/' + String(m).slice(0, 4) : ''; };
+  let h = '<table class="proj-table" style="width:100%;font-size:0.8rem;margin-top:10px;"><tr>' +
+    '<th style="text-align:right;">דירה</th><th style="text-align:right;">דייר</th><th>סך</th><th>שולם</th><th>יתרה</th><th>נותרו</th><th style="text-align:right;">לוח</th><th style="text-align:right;">מצב</th><th></th></tr>';
+  v.rows.forEach(function(r, i){
+    const extra = (r.alert ? ' ⚠️ חרג ממספר התשלומים' : '') + (r.behind ? ' · בפיגור ₪' + r.owedPrior : '') + (r.startsLater ? ' · מתחיל ' + ml(r.startMonth) : '') + (r.suspended ? ' · ⏸' : '') + (!r.scheduled ? ' · ⚠️ בלי לוח' : '');
+    h += '<tr class="proj-row"><td>' + esc(r.unit) + '</td><td>' + esc(r.name) + '</td><td>₪' + r.total + '</td><td>₪' + r.paid + '</td><td>₪' + r.remaining + '</td><td>' + r.left + '</td>' +
+      '<td>' + esc(r.scheduleText || '') + '</td>' +
+      '<td style="color:' + projStatusColor(r.status) + ';">' + esc(r.statusLabel) + esc(extra) + '</td>' +
+      '<td><button class="btn btn-secondary btn-sm" data-proj-op="edit" data-i="' + i + '" title="שינוי לוח לדייר">✏️</button></td></tr>';
+    if (editIdx === i) h += '<tr class="proj-edit"><td colspan="9">' + projEditHtml(r, plan) + '</td></tr>';
+  });
+  return h + '</table>';
+}
+
+function projEditHtml(r, plan) {
+  const ml = function(m){ return m ? String(m).slice(5) + '/' + String(m).slice(0, 4) : ''; };
+  let h = '<div style="padding:8px;border:1px dashed var(--border);border-radius:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;font-size:0.8rem;">' +
+    '<label>סך ₪<br><input type="number" id="projEdTotal" min="0" step="0.01" value="' + r.total + '" style="width:100px;"></label>' +
+    '<label>מספר תשלומים מעכשיו<br><input type="number" id="projEdN" min="1" max="24" step="1" value="' + Math.max(1, r.left || 1) + '" style="width:70px;"></label>' +
+    '<label>מחודש (לא חובה)<br><input type="month" id="projEdStart" value="" style="width:auto;"></label>' +
+    '<button class="btn btn-secondary btn-sm" data-proj-op="preview">🔍 תצוגה מקדימה</button>' +
+    '<button class="btn btn-green btn-sm" data-proj-op="commit">✅ אשר</button>' +
+    '<button class="btn btn-secondary btn-sm" data-proj-op="cancel">ביטול</button></div>' +
+    '<div style="font-size:0.75rem;color:var(--text2);margin-top:4px;">היתרה לתכנון = הסך פחות מה שכבר חויב לפני חודש השינוי. השינוי מתחיל בחודש הפעיל, או בחודש הבא אם החודש הפעיל כבר שולם. העבר לא משתנה; חוב שלא שולם נשאר כחוב.</div>';
+  if (plan) {
+    h += plan.ok
+      ? '<div class="proj-plan" style="margin-top:6px;font-size:0.82rem;">מ-' + ml(plan.from) + ' · כבר חויבו ₪' + plan.chargedBefore + ' · יתרה לתכנון ₪' + plan.remaining + '<br>לוח חדש: <strong>' + esc(plan.scheduleText || 'אין תשלומים נוספים') + '</strong></div>'
+      : '<div class="proj-plan" style="margin-top:6px;color:var(--danger);">' + esc(plan.error || 'שגיאה') + '</div>';
+  }
+  return h;
+}
+
+function projRender() {
+  if (!projCtx || !projCtx.view) return;
+  document.getElementById('projSummary').innerHTML = projSummaryHtml(projCtx.view);
+  document.getElementById('projBody').innerHTML = projCtx.view.rows.length
+    ? projRowsHtml(projCtx.view, projCtx.edit, projCtx.plan)
+    : '<div style="color:var(--text2);">עדיין אין דיירים בפרויקט — \"👥 החל על דיירים\" בהגדרות.</div>';
+}
+
+function projEditBody() {
+  const v = function(id){ const el = document.getElementById(id); return el ? el.value : ''; };
+  const b = { installments: v('projEdN'), total: v('projEdTotal') };
+  if (v('projEdStart')) b.startMonth = v('projEdStart');
+  return b;
+}
+
+async function projOnClick(ev) {
+  const btn = ev.target && ev.target.closest ? ev.target.closest('[data-proj-op]') : null;
+  if (!btn || !projCtx) return;
+  const op = btn.dataset.projOp;
+  if (op === 'edit') { projCtx.edit = parseInt(btn.dataset.i, 10); projCtx.plan = null; projRender(); return; }
+  if (op === 'cancel') { projCtx.edit = null; projCtx.plan = null; projRender(); return; }
+  const r = projCtx.view && projCtx.view.rows[projCtx.edit];
+  if (!r) return;
+  if (op === 'preview') { await projSend(r, true); return; }
+  if (op === 'commit') {
+    if (!projCtx.plan || !projCtx.plan.ok) { await projSend(r, true); if (!projCtx.plan || !projCtx.plan.ok) return; }
+    if (!confirm('לשנות את הלוח של ' + r.name + '? ' + (projCtx.plan.scheduleText || ''))) return;
+    await projSend(r, false);
+  }
+}
+
+async function projSend(r, dry) {
+  const body = projEditBody(); body.dryRun = dry;
+  try {
+    const res = await fetch(API + '/tenant-accounts/' + encodeURIComponent(r.tid) + '/' + encodeURIComponent(r.accId) + '/project', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    const d = await res.json();
+    if (!projCtx) return;
+    if (dry || !d.ok) { projCtx.plan = d; projRender(); return; }
+    toast(d.changed ? '✅ הלוח עודכן' : 'אין שינוי', 'success');
+    projCtx.edit = null; projCtx.plan = null;
+    await projLoad();
+    await loadAccountsStatus(); render();
+  } catch(e) { toast('שגיאת רשת', 'error'); }
+}
+
 // ══ v2.14.74 (1א) — bulk actions on an account definition ════════════════
 // Preview first (server dryRun), then one confirm. All numbers/lists come from the
 // server plan — the page only shows them (CONSUME). Writes only account DEFINITIONS.
 let tplAct = null;   // { mode, tplId, label, plan, amounts, opts }
-const TPL_ACT_URL = { apply: 'apply', remove: 'remove', start: 'start-billing' };
+const TPL_ACT_URL = { apply: 'apply', remove: 'remove', start: 'start-billing', project: 'project-apply' };   // v2.14.86 + project
 
 function openTplAction(i, mode) {
   const t = accountTemplates[i];
   if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
-  tplAct = { mode: mode, tplId: t.id, label: t.label, plan: null, amounts: {}, opts: { startSuspended: false, includeSuspended: false } };
-  const title = { apply: '👥 החלת ', remove: 'הסרת ', start: '▶ התחלת גבייה: ' }[mode] || '';
-  document.getElementById('tplApplyTitle').textContent = title + (t.label || '') + (mode === 'apply' ? ' על חברים' : mode === 'remove' ? ' מכל החברים' : '');
+  tplAct = { mode: mode, tplId: t.id, label: t.label, plan: null, amounts: {}, rows: {}, opts: { startSuspended: false, includeSuspended: false } };
+  const title = { apply: '👥 החלת ', remove: 'הסרת ', start: '▶ התחלת גבייה: ', project: '👥 פרויקט ' }[mode] || '';
+  document.getElementById('tplApplyTitle').textContent = title + (t.label || '') + (mode === 'apply' ? ' על חברים' : mode === 'remove' ? ' מכל החברים' : mode === 'project' ? ' — החלה על דיירים' : '');
   const opts = document.getElementById('tplApplyOpts');
   opts.innerHTML = mode !== 'apply' ? '' :
     '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;margin-bottom:4px;cursor:pointer;"><input type="checkbox" id="tplOptSusp"> ⏸ התחל מושהה — לא לחייב עד שאלחץ "▶ התחל גבייה לכולם"</label>' +
@@ -10632,6 +10883,7 @@ function closeTplAction() {
 function tplActBody(mode) {
   const b = { dryRun: true };
   if (mode === 'apply') { b.startSuspended = tplAct.opts.startSuspended; b.includeSuspended = tplAct.opts.includeSuspended; b.amounts = tplAct.amounts; }
+  if (mode === 'project') b.rows = tplAct.rows;   // v2.14.86 (P1) — only what the operator changed; the rest = defaults
   return b;
 }
 
@@ -10651,6 +10903,8 @@ async function tplActRefresh() {
       const inp = ev.target; if (!inp || !inp.dataset || !inp.dataset.tid) return;
       tplAct.amounts[inp.dataset.tid] = inp.value; tplActRefresh();
     });
+    const ptb = document.getElementById('projApplyTable');   // v2.14.86 (P1)
+    if (ptb) ptb.addEventListener('change', function(ev){ projApplyOnChange(ev.target); tplActRefresh(); });
   } catch(e) { document.getElementById('tplApplyBody').innerHTML = '<div style="color:var(--danger);">שגיאת רשת</div>'; }
 }
 
@@ -10662,6 +10916,7 @@ function tplNames(list, max) {
 
 function renderTplPlan(mode, p) {
   const box = 'padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;line-height:1.7;';
+  if (mode === 'project') return renderProjectApplyPlan(p, box);   // v2.14.86 (P1)
   if (mode === 'apply') {
     const mkLbl = p.mk ? p.mk.slice(5) + '/' + p.mk.slice(0, 4) : '';
     let h = '<div class="tpl-plan-summary" style="' + box + '">' +
@@ -10693,10 +10948,12 @@ function renderTplPlan(mode, p) {
 async function tplActCommit() {
   if (!tplAct || !tplAct.plan) { toast('אין תצוגה מקדימה תקינה', 'error'); return; }
   const mode = tplAct.mode, p = tplAct.plan;
-  const n = mode === 'apply' ? p.add.length + p.relink.length : mode === 'remove' ? p.del.length + p.suspend.length : p.start.length;
+  if (mode === 'project' && p.errors) { toast('יש ' + p.errors + ' שורות עם שגיאה — תקנו או בטלו את הסימון', 'error'); return; }   // v2.14.86
+  const n = mode === 'apply' ? p.add.length + p.relink.length : mode === 'remove' ? p.del.length + p.suspend.length : mode === 'project' ? p.add : p.start.length;
   if (!n) { toast('אין מה לבצע', 'error'); return; }
   // each plan shape has only its own lists → build only this mode's question
-  const q = mode === 'apply' ? 'להוסיף את "' + tplAct.label + '" ל-' + p.add.length + ' חברים?'
+  const q = mode === 'project' ? 'ליצור את "' + tplAct.label + '" ל-' + p.add + ' דיירים, סה״כ יעד ₪' + p.sumTotal + '?'
+          : mode === 'apply' ? 'להוסיף את "' + tplAct.label + '" ל-' + p.add.length + ' חברים?'
           : mode === 'remove' ? 'למחוק אצל ' + p.del.length + ' ולהשהות אצל ' + p.suspend.length + ' חברים?'
           : 'להתחיל גבייה אצל ' + p.start.length + ' חברים?';
   if (!confirm(q)) return;
@@ -10706,7 +10963,7 @@ async function tplActCommit() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
     if (!d.ok) { toast('שגיאה: ' + (d.error || ''), 'error'); return; }
-    toast(mode === 'apply' ? '✅ נוסף ל-' + d.added + ' חברים' : mode === 'remove' ? '✅ נמחק: ' + d.deleted + ' · הושהה: ' + d.suspended : '✅ הגבייה התחילה אצל ' + d.started + ' חברים', 'success');
+    toast(mode === 'project' ? '✅ הפרויקט נוסף ל-' + d.added + ' דיירים' : mode === 'apply' ? '✅ נוסף ל-' + d.added + ' חברים' : mode === 'remove' ? '✅ נמחק: ' + d.deleted + ' · הושהה: ' + d.suspended : '✅ הגבייה התחילה אצל ' + d.started + ' חברים', 'success');
     closeTplAction();
     await loadData(); await loadAccountTemplates(); await loadAccountsStatus(); render();
   } catch(e) { toast('שגיאת רשת', 'error'); }
@@ -11007,6 +11264,11 @@ function renderTenantAccountsModal() {
 // v2.14.76 (1ג, ג6-A) — a SAVED account's amount changes only by month (📅); the server
 // ignores an edit here. A new (unsaved) row takes the typed amount.
 function taAmountCell(acc, i) {
+  // v2.14.86 (P1) — a project account follows its personal schedule; changes via 📊 מצב פרויקט.
+  if (acc && acc.saved === true && acc.projectView) {
+    return '<div style="display:flex;gap:6px;align-items:center;height:36px;"><strong class="ta-amt-ro">₪' + (acc.amount || 0) + '</strong></div>' +
+      '<div class="ta-proj" style="font-size:0.7rem;color:var(--text2);">לפי לוח הפרויקט · ' + esc(acc.projectView.progressText || '') + '</div>';
+  }
   if (!acc || acc.saved !== true) {
     return '<input type="number" value="' + ((acc && acc.amount) || 0) + '" min="0" onchange="taModalAccounts[' + i + '].amount=parseFloat(this.value)||0" style="width:100%;">';
   }
@@ -11036,7 +11298,7 @@ function addTenantAccountRow() {
     // סנן תבניות שכבר קיימות אצל הדייר
     const existingLabels = taModalAccounts.map(a => a.label.trim().toLowerCase());
     const existingTpl = taModalAccounts.map(a => a.templateId).filter(Boolean);
-    const availableTemplates = accountTemplates.filter(t => !existingTpl.includes(t.id) && !existingLabels.includes(t.label.trim().toLowerCase()));
+    const availableTemplates = accountTemplates.filter(t => !tplIsProject(t) && !existingTpl.includes(t.id) && !existingLabels.includes(t.label.trim().toLowerCase()));   // v2.14.86 — a project is applied with its schedule (👥 החל על דיירים)
 
     if (!availableTemplates.length) {
       toast('כל החשבונות הזמינים כבר שויכו לדייר זה', 'error');
@@ -11879,6 +12141,7 @@ function renderExtraAccountsCell(tenantId) {
   let html = '<div style="margin-top:6px;display:flex;flex-direction:column;gap:4px;">';
   for (const acc of accs) {
     if (acc.active === false) continue;
+    if (acc.hidden === true) continue;   // v2.14.86 (P1, ק6) — a project that is "הושלם" leaves the payments tab
     const paid = acc.paidThisMonth;
     const debt = acc.totalDebt > 0 ? ` · חוב: ₪${acc.totalDebt}` : '';
     // v2.14.64 (0c) — credit shown in green; status from the server split.
@@ -11920,8 +12183,18 @@ function renderExtraAccountsCell(tenantId) {
       </div>`;
     }
   }
+  html += projectProgressLines(accs);   // v2.14.86 (P1)
   html += '</div>';
   return html;
+}
+
+// v2.14.86 (P1) — one progress line per project account (server text, CONSUMED).
+function projectProgressLines(accs) {
+  return (accs || []).filter(function(a){ return a && a.active !== false && a.hidden !== true && a.project && a.project.progressText; })
+    .map(function(a){
+      return '<div class="acc-proj-line" style="font-size:0.72rem;color:' + (a.project.alert ? 'var(--danger)' : 'var(--text2)') + ';">📊 ' + esc(a.label) + ': ' + esc(a.project.progressText) +
+        (a.project.alert ? ' · ⚠️ חרג ממספר התשלומים' : '') + '</div>';
+    }).join('');
 }
 
 function promptAccountPaid(tenantId, accountId, defaultAmount) {

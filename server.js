@@ -3521,6 +3521,7 @@ function planTemplateTariff(d, tplId, body) {
   const tpl = templates.find(t => t && t.id === tplId);
   if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
   if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'סכום מתוארך זמין לחשבון קבוע בלבד' };
+  if (isProjectTpl(tpl)) return { ok: false, error: 'בחשבון פרויקט הסכומים אישיים — שינוי לוח לדייר דרך 📊 מצב פרויקט' };   // v2.14.86 (P1)
   const op = body.op === 'cancel' ? 'cancel' : 'set';
   const v = extraValidateFromMonth(d, body.fromMonth);
   if (!v.ok) return v;
@@ -3616,6 +3617,7 @@ function planMemberTariff(d, tid, accId, body) {
   const acc = (t.extraAccounts || []).find(a => a && String(a.id) === String(accId));
   if (!acc) return { ok: false, error: 'החשבון לא נמצא — שמרו את החשבונות ונסו שוב' };
   if ((acc.type || 'fixed') !== 'fixed') return { ok: false, error: 'סכום מתוארך זמין לחשבון קבוע בלבד' };
+  if (accIsProject(d, acc)) return { ok: false, error: 'חשבון פרויקט — שינוי לוח התשלומים דרך 📊 מצב פרויקט' };   // v2.14.86 (P1)
   const op = ['revert', 'cancel'].includes(body.op) ? body.op : 'set';
   const v = extraValidateFromMonth(d, body.fromMonth);
   if (!v.ok) return v;
@@ -3857,6 +3859,7 @@ function planTemplateSchedule(d, tplId, body) {
   const tpl = templates.find(t => t && t.id === tplId);
   if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
   if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'שינוי תדירות זמין לחשבון קבוע בלבד' };
+  if (isProjectTpl(tpl)) return { ok: false, error: 'חשבון פרויקט נגבה כל חודש — אין שינוי תדירות' };   // v2.14.86 (P1)
   const op = body.op === 'cancel' ? 'cancel' : 'set';
   const v = billValidateFromMonth(d, body.fromMonth);
   if (!v.ok) return v;
@@ -4870,10 +4873,14 @@ function memberMessageSplit(d, tenant) {
   const mainKey = waPhoneKey(tenant && tenant.phone);
   const keep = [], groups = [], byKey = {};
   for (const acc of ((tenant && tenant.extraAccounts) || [])) {
-    if (!acc || acc.active === false || !accNotifySeparate(d, acc)) { keep.push(acc); continue; }
+    // v2.14.86 (P1, Tal 10.11.2026 — A) — a PROJECT account is always its own message, also
+    // when the payer's phone IS the main phone (otherwise autoSendShouldRemind would skip a
+    // member who paid the ועד but not the installment). Other accounts: ל1 unchanged.
+    const proj = !!acc && accIsProject(d, acc);
+    if (!acc || acc.active === false || (!proj && !accNotifySeparate(d, acc))) { keep.push(acc); continue; }
     const phone = resolvePayerPhone(tenant, acc);
     const k = waPhoneKey(phone);
-    if (!k || k === mainKey) { keep.push(acc); continue; }
+    if (!k || (k === mainKey && !proj)) { keep.push(acc); continue; }
     if (!byKey[k]) { byKey[k] = { phone, key: k, name: payerNameFor(tenant, acc), accounts: [] }; groups.push(byKey[k]); }
     byKey[k].accounts.push(acc);
   }
@@ -4981,10 +4988,12 @@ function payerSplitView(msgs) {
 
 // 💳 member modal (GET /api/tenant-accounts): where this account's reminder goes.
 function accNotifyText(d, tenant, acc) {
-  if (!acc || acc.active === false || !accNotifySeparate(d, acc)) return '';
+  const proj = !!acc && accIsProject(d, acc);   // v2.14.86 (P1) — a project is always a separate message
+  if (!acc || acc.active === false || (!proj && !accNotifySeparate(d, acc))) return '';
   const phone = resolvePayerPhone(tenant, acc);
   const k = waPhoneKey(phone);
   if (!k) return '📨 הודעה נפרדת — אין טלפון';
+  if (proj && k === waPhoneKey(tenant.phone)) return '📨 הודעה נפרדת לטלפון הראשי (פרויקט)';
   if (k === waPhoneKey(tenant.phone)) return '📨 בהודעה הראשית (טלפון המשלם = הטלפון הראשי)';
   return '📨 הודעה נפרדת לטלפון ' + phone + ' (' + payerNameFor(tenant, acc) + ')';
 }
@@ -8696,6 +8705,9 @@ function portalAccountsView(d, tenant, mk, em) {
   for (const acc of (tenant.extraAccounts || [])) {
     const sp = extraAccountSplit(d, tenant, acc, mk, em);
     if (!sp) continue;
+    // v2.14.86 (P1, ק6) — a project shows its progress; after "הושלם" it leaves the portal.
+    const pv = accIsProject(d, acc) ? projectMemberView(d, tenant, acc, mk, em) : null;
+    if (pv && pv.status === 'done') continue;
     const phKey = tid + '__acc__' + acc.id;
     const recs = ((d.paymentHistory || {})[phKey] || [])
       .filter(r => r && r.type !== 'wa_sent' && r.month)
@@ -8720,7 +8732,8 @@ function portalAccountsView(d, tenant, mk, em) {
       billingLabel: billMonthsLabel(sP), nextBilling: nbP, nextBillingLabel: nbP ? HEBREW_MONTHS[Number(nbP.slice(5)) - 1] + ' ' + nbP.slice(0, 4) : '',
       suspended: acc.suspended === true, status: sp.status, charge: sp.charge, paidNow: sp.paidNow,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow,
-      creditLeft: sp.creditLeft, creditApplied: sp.creditApplied, history });
+      creditLeft: sp.creditLeft, creditApplied: sp.creditApplied, history,
+      ...(pv ? { project: { total: pv.total, paid: pv.paid, remaining: pv.remaining, left: pv.left, status: pv.status, statusLabel: pv.statusLabel, progressText: pv.progressText } } : {}) });
   }
   return out;
 }
@@ -10489,6 +10502,7 @@ function planAccountBankImport(d, input) {
   const tpl = templates.find(t => t && t.id === input.templateId);
   if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות › חשבונות נוספים' };
   if (tpl.type === 'formula') return { ok: false, error: 'חשבון מחושב — קליטת קובץ בנק תתווסף בשלב 2' };
+  if (isProjectTpl(tpl)) return { ok: false, error: 'חשבון פרויקט נגבה לאותו חשבון בנק של הוועד — הקצאת העברה משולבת תתווסף ב-P2. בינתיים: סימון ידני בחשבון הפרויקט.' };   // v2.14.86 (P1)
   const rows = Array.isArray(input.rows) ? input.rows : [];
   if (rows.length < 2) return { ok: false, error: 'הקובץ ריק' };
   const mapping = input.mapping || tpl.bankMapping || d.bankMapping || {};
@@ -10920,6 +10934,7 @@ function planApplyTemplate(d, tplId, opts) {
   const tpl = templates.find(t => t && t.id === tplId);
   if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
   if ((tpl.type || 'fixed') !== 'fixed') return { ok: false, error: 'החלה על כל החברים זמינה כרגע לחשבון קבוע בלבד' };
+  if (isProjectTpl(tpl)) return { ok: false, error: 'חשבון פרויקט — השתמשו ב"👥 החל על דיירים" של הפרויקט (סך, תשלומים וחודש לכל דייר)' };   // v2.14.86 (P1)
   const k = tplNameKey(tpl.label);
   const amounts = (opts.amounts && typeof opts.amounts === 'object') ? opts.amounts : {};
   const add = [], already = [], skippedSuspended = [], relink = [], conflicts = [];
@@ -11045,7 +11060,7 @@ function stampTemplateIds(d, templates) {
 // A NEW member (POST /api/data, manual add or tenants-file import) gets every
 // "חובה לכל החברים" template. A member created suspended gets it suspended too.
 function applyRequiredAccounts(templates, tenant, mk) {
-  const list = (Array.isArray(templates) ? templates : []).filter(t => t && t.id && t.requiredForAll === true && (t.type || 'fixed') === 'fixed');
+  const list = (Array.isArray(templates) ? templates : []).filter(t => t && t.id && t.requiredForAll === true && (t.type || 'fixed') === 'fixed' && !isProjectTpl(t));   // v2.14.86 (ק10) — never a project
   let added = 0;
   for (const tpl of list) {
     if (accLinkedToTemplate(tenant, tpl, templates)) continue;
@@ -11055,6 +11070,318 @@ function applyRequiredAccounts(templates, tenant, mk) {
     added++;
   }
   return added;
+}
+
+// ══ v2.14.86 (P1) — PROJECT ACCOUNTS: a one-time collection in installments ══════════
+// Spec v2.4 "עדכון 9.11.2026 (ג)", locked ק1–ק11 + Tal 10.11.2026: a payment that differs
+// from the plan carries to the next installment (the account's own close already banks
+// the shortfall / overpay — nothing new), ≤ 24 installments (extraValidateFromMonth kept),
+// an alert when a balance is left after the last installment, and a project reminder is
+// ALWAYS its own message — also to the member's main phone (memberMessageSplit).
+// Storage (ק9): a project DEFINITION is type 'fixed' + a `project` block; the money of a
+// member is his PERSONAL amountTariffs (the 1ג intervals): 0 until the start · the
+// installment · the last installment (rounding remainder) · 0 after the end. Every money
+// path (split, the PROTECTED close, report, import) sees an ordinary fixed account.
+// Nothing here writes sentLog, paymentHistory or openingDebt.
+const PROJECT_MAX_INSTALLMENTS = 24;
+
+function isProjectTpl(tpl) {
+  return !!(tpl && tpl.project && typeof tpl.project === 'object' && !Array.isArray(tpl.project));
+}
+
+// The member account belongs to a project definition (by templateId, else unique name).
+function accIsProject(d, acc) {
+  if (!acc) return false;
+  return isProjectTpl(accTemplateFor(acc, (d && Array.isArray(d.accountTemplates)) ? d.accountTemplates : []));
+}
+
+// The definition's project block, cleaned: {startMonth?, defaultInstallments, defaultTotal?, noteKeyword?}.
+function projectSanitize(p) {
+  p = (p && typeof p === 'object') ? p : {};
+  const out = {};
+  const sm = String(p.startMonth || '');
+  if (/^\d{4}-(0[1-9]|1[0-2])$/.test(sm)) out.startMonth = sm;
+  const n = parseInt(p.defaultInstallments, 10);
+  out.defaultInstallments = (Number.isInteger(n) && n >= 1 && n <= PROJECT_MAX_INSTALLMENTS) ? n : 3;
+  const tot = Math.round(parseFloat(p.defaultTotal) * 100) / 100;
+  if (isFinite(tot) && tot > 0) out.defaultTotal = tot;
+  const kw = String(p.noteKeyword || '').trim().slice(0, 60);
+  if (kw) out.noteKeyword = kw;
+  return out;
+}
+
+// ק1 — installment = total / n rounded DOWN to a whole shekel; the remainder goes to the last.
+function projectSplitTotal(total, n) {
+  const t = Math.round(parseFloat(total) * 100) / 100;
+  const base = Math.floor(t / n);
+  return { base, last: Math.round((t - base * (n - 1)) * 100) / 100 };
+}
+
+// Intervals from fromMk on: the installments, then 0 open-ended.
+function projectSegments(fromMk, total, n) {
+  const d1 = m => m + '-01';
+  const endMk = crMonthAdd(fromMk, n);
+  if (!(Math.round(parseFloat(total) * 100) > 0)) return [{ rate: 0, startDate: d1(fromMk), endDate: null }];
+  const { base, last } = projectSplitTotal(total, n);
+  const out = [];
+  if (n > 1 && last !== base) {
+    const lastMk = crMonthAdd(fromMk, n - 1);
+    out.push({ rate: base, startDate: d1(fromMk), endDate: d1(lastMk) });
+    out.push({ rate: last, startDate: d1(lastMk), endDate: d1(endMk) });
+  } else {
+    out.push({ rate: n > 1 ? base : last, startDate: d1(fromMk), endDate: d1(endMk) });
+  }
+  out.push({ rate: 0, startDate: d1(endMk), endDate: null });
+  return out;
+}
+
+// A member's full schedule: 0 from 2000-01 (the months before the start are never charged).
+function projectIntervals(startMk, total, n) {
+  return [{ rate: 0, startDate: '2000-01-01', endDate: startMk + '-01' }].concat(projectSegments(startMk, total, n));
+}
+
+// The last month that charges something (null = none).
+function projectEndMonth(intervals) {
+  const list = (Array.isArray(intervals) ? intervals : []).filter(iv => iv && iv.startDate)
+    .slice().sort((a, b) => String(a.startDate) < String(b.startDate) ? -1 : 1);
+  let end = null;
+  list.forEach((iv, i) => {
+    if (!(parseFloat(iv.rate) > 0)) return;
+    const next = list[i + 1];
+    const e = next ? crMonthAdd(String(next.startDate).slice(0, 7), -1) : null;
+    if (e === null) { end = '9999-12'; return; }
+    if (!end || e > end) end = e;
+  });
+  return end;
+}
+
+// "₪750 × 3 (12/2026–02/2027)" — server text, the page shows it as is.
+function projectScheduleText(d, acc, fromMk) {
+  const end = projectEndMonth(acc && acc.amountTariffs);
+  if (!end || end === '9999-12') return '';
+  const parts = [];
+  for (let m = fromMk; m <= end; m = crMonthAdd(m, 1)) {
+    const a = Math.round(extraAmountForMonth(d, acc, m) * 100) / 100;
+    if (!(a > 0)) continue;
+    const last = parts[parts.length - 1];
+    if (last && last.rate === a && crMonthAdd(last.to, 1) === m) { last.to = m; last.n++; }
+    else parts.push({ rate: a, from: m, to: m, n: 1 });
+  }
+  return parts.map(p => '₪' + p.rate + (p.n > 1 ? ' × ' + p.n + ' (' + extraFmtMonth(p.from) + '–' + extraFmtMonth(p.to) + ')' : ' (' + extraFmtMonth(p.from) + ')')).join(' · ');
+}
+
+// Validate one member's plan. → {ok, base, last, endMonth} | {ok:false, error}
+function projectValidate(d, total, n, startMk) {
+  const t = Math.round(parseFloat(total) * 100) / 100;
+  if (!(isFinite(t) && t > 0)) return { ok: false, error: 'סך לא תקין' };
+  const k = Number(n);
+  if (!(Number.isInteger(k) && k >= 1 && k <= PROJECT_MAX_INSTALLMENTS)) return { ok: false, error: 'מספר תשלומים: 1 עד ' + PROJECT_MAX_INSTALLMENTS };
+  const v = extraValidateFromMonth(d, startMk);
+  if (!v.ok) return v;
+  const sp = projectSplitTotal(t, k);
+  if (!(sp.base >= 1)) return { ok: false, error: 'הסך קטן ממספר התשלומים — בחרו פחות תשלומים' };
+  return { ok: true, total: t, n: k, base: sp.base, last: sp.last, endMonth: crMonthAdd(String(startMk), k - 1) };
+}
+
+// ק6 — one member's project state (server-side; the page / portal CONSUME it).
+// remaining = what is still owed now (split: debt − credit) + the installments still to come.
+function projectMemberView(d, t, acc, mkNow, emNow) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const sp = extraAccountSplit(d, t, acc, mkNow, emNow);
+  if (!sp) return null;
+  const p = (acc && acc.project) || {};
+  const total = r2(parseFloat(p.total) || 0);
+  const end = projectEndMonth(acc.amountTariffs);
+  let future = 0, left = 0;
+  if (end && end !== '9999-12') {
+    for (let m = crMonthAdd(mkNow, 1); m <= end; m = crMonthAdd(m, 1)) {
+      const a = extraAmountForMonth(d, acc, m);
+      if (a > 0) { future += a; left++; }
+    }
+  }
+  if (sp.owedCurrent > 0) left++;
+  const remaining = r2(sp.owedNow - sp.creditLeft + future);
+  const paid = r2(total - remaining);
+  let status;
+  if (remaining < 0) status = 'credit';
+  else if (remaining === 0) status = 'done';
+  else if (end && end !== '9999-12' && mkNow > end) status = 'debt';
+  else status = 'active';
+  const label = { active: 'בתשלומים', done: 'הושלם', debt: 'חוב שנותר', credit: 'זכות להעברה' }[status];
+  const startMonth = /^\d{4}-\d{2}$/.test(String(p.startMonth || '')) ? p.startMonth : null;
+  return {
+    total, paid, remaining, left, status, statusLabel: label,
+    alert: status === 'debt',
+    behind: status === 'active' && sp.owedPrior > 0,
+    startsLater: !!(startMonth && startMonth > mkNow),
+    startMonth, endMonth: end && end !== '9999-12' ? end : null,
+    scheduled: !!(startMonth && end),
+    owedNow: sp.owedNow, owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, creditLeft: sp.creditLeft,
+    suspended: acc.suspended === true,
+    scheduleText: startMonth ? projectScheduleText(d, acc, mkNow > startMonth ? mkNow : startMonth) : '',
+    progressText: total > 0 ? 'שולם ₪' + paid + ' מתוך ₪' + total + (status === 'active' ? ' · נותרו ' + left + ' תשלומים' : ' · ' + label) : ''
+  };
+}
+
+// "📊 מצב פרויקט" — read-only screen of one project definition.
+function projectStatusView(d, tplId) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tpl = templates.find(t => t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות' };
+  if (!isProjectTpl(tpl)) return { ok: false, error: 'זה לא חשבון פרויקט' };
+  const mkNow = getMonthKey(d.config || {}), emNow = getEffectiveMonth(d.config || {});
+  const rows = [];
+  const counts = { active: 0, done: 0, debt: 0, credit: 0 };
+  let sumTotal = 0, sumPaid = 0, sumRemaining = 0;
+  for (const t of (d.tenants || [])) {
+    const acc = accLinkedToTemplate(t, tpl, templates);
+    if (!acc || acc.active === false) continue;
+    const v = projectMemberView(d, t, acc, mkNow, emNow);
+    if (!v) continue;
+    rows.push(Object.assign({ tid: String(t.id), accId: acc.id, name: t.name || String(t.id), unit: t.aptNumber || t.propertyLabel || '' }, v));
+    counts[v.status]++;
+    sumTotal += v.total; sumPaid += v.paid; sumRemaining += Math.max(0, v.remaining);
+  }
+  rows.sort((a, b) => String(a.unit).localeCompare(String(b.unit), 'he', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'he'));
+  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, project: projectSanitize(tpl.project), rows,
+    summary: { members: rows.length, total: r2(sumTotal), paid: r2(sumPaid), remaining: r2(sumRemaining),
+      pct: sumTotal > 0 ? Math.round(sumPaid / sumTotal * 1000) / 10 : 0, counts,
+      unscheduled: rows.filter(r => !r.scheduled).length,
+      allDone: rows.length > 0 && counts.done === rows.length } };
+}
+
+// Hidden after "הושלם" (ק6): portal, payments tab, messages (nothing owed). Kept in reports.
+function projectHidden(d, t, acc, mk, em) {
+  if (!accIsProject(d, acc)) return false;
+  const v = projectMemberView(d, t, acc, mk, em);
+  return !!(v && v.status === 'done');
+}
+
+// ── "👥 החל על דיירים" of a project (POST /api/account-templates/:id/project-apply) ──
+// body.rows = { tid: {include, total, installments, startMonth} } — absent = the defaults.
+function planProjectApply(d, tplId, body) {
+  body = body || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tpl = templates.find(t => t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  if (!isProjectTpl(tpl)) return { ok: false, error: 'זה לא חשבון פרויקט' };
+  const P = projectSanitize(tpl.project);
+  const mkNow = getMonthKey(d.config || {});
+  const defStart = P.startMonth && P.startMonth > mkNow ? P.startMonth : mkNow;
+  const inRows = (body.rows && typeof body.rows === 'object') ? body.rows : {};
+  const k = tplNameKey(tpl.label);
+  const rows = [], already = [], conflicts = [];
+  for (const t of (d.tenants || [])) {
+    const tid = String(t.id), name = t.name || tid;
+    if (accLinkedToTemplate(t, tpl, templates)) { already.push({ tid, name }); continue; }
+    if ((t.extraAccounts || []).some(a => a && tplNameKey(a.label) === k)) { conflicts.push({ tid, name }); continue; }
+    const inp = (inRows[tid] && typeof inRows[tid] === 'object') ? inRows[tid] : {};
+    const include = inp.include === undefined ? t.suspended !== true : inp.include === true;
+    const totalIn = inp.total !== undefined && inp.total !== null && inp.total !== '' ? parseFloat(inp.total) : (P.defaultTotal || null);
+    const nIn = inp.installments !== undefined && inp.installments !== null && inp.installments !== '' ? Number(inp.installments) : P.defaultInstallments;
+    const start = inp.startMonth ? String(inp.startMonth) : defStart;
+    const row = { tid, name, unit: t.aptNumber || t.propertyLabel || '', suspended: t.suspended === true, include,
+      total: totalIn === null || !isFinite(totalIn) ? null : r2(totalIn), installments: nIn, startMonth: start };
+    if (include) {
+      const v = projectValidate(d, totalIn, nIn, start);
+      if (!v.ok) row.error = v.error;
+      else {
+        Object.assign(row, { base: v.base, last: v.last, endMonth: v.endMonth });
+        row.scheduleText = projectScheduleText(d, { amountTariffs: projectIntervals(start, v.total, v.n) }, start);
+      }
+    }
+    rows.push(row);
+  }
+  const ok = rows.filter(r => r.include && !r.error);
+  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, defaults: { startMonth: defStart, installments: P.defaultInstallments, total: P.defaultTotal || null },
+    rows, already, conflicts, add: ok.length, errors: rows.filter(r => r.include && r.error).length,
+    sumTotal: r2(ok.reduce((s, r) => s + r.total, 0)) };
+}
+
+// Commit: re-checks the link (belt) → idempotent. Writes ONLY tenant.extraAccounts definitions.
+function commitProjectApply(d, plan) {
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tpl = templates.find(t => t.id === plan.tplId);
+  if (!tpl || !isProjectTpl(tpl)) return { added: 0 };
+  const mkNow = getMonthKey(d.config || {});
+  let added = 0;
+  for (const r of plan.rows) {
+    if (!r.include || r.error) continue;
+    const t = (d.tenants || []).find(x => String(x.id) === r.tid);
+    if (!t || accLinkedToTemplate(t, tpl, templates)) continue;
+    const acc = accFromTemplate(tpl, t, mkNow);
+    acc.amountTariffs = projectIntervals(r.startMonth, r.total, r.installments);
+    acc.project = { total: r.total, installments: r.installments, startMonth: r.startMonth };
+    acc.amount = Math.round(extraAmountForMonth(d, acc, mkNow) * 100) / 100;   // mirror of the active month (display)
+    if (!Array.isArray(t.extraAccounts)) t.extraAccounts = [];
+    t.extraAccounts.push(acc);
+    added++;
+  }
+  return { added };
+}
+
+// ── Change one member's schedule (POST /api/tenant-accounts/:tid/:accId/project) ──
+// Spec: the balance to plan = total − what was CHARGED in the months before the change;
+// the change starts in the active month, or the next one when the active month is already
+// paid (ג4-B); the past never changes. Unpaid charges stay as carried debt (not re-planned).
+// body: {total?, installments, startMonth?}
+function planProjectChange(d, tid, accId, body) {
+  body = body || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const t = (d.tenants || []).find(x => String(x.id) === String(tid));
+  if (!t) return { ok: false, error: 'חבר לא נמצא' };
+  const acc = (t.extraAccounts || []).find(a => a && String(a.id) === String(accId));
+  if (!acc) return { ok: false, error: 'החשבון לא נמצא' };
+  if (!accIsProject(d, acc)) return { ok: false, error: 'זה לא חשבון פרויקט' };
+  if (acc.active === false) return { ok: false, error: 'החשבון לא פעיל' };
+  const mkNow = getMonthKey(d.config || {});
+  const p = acc.project || {};
+  const pStart = /^\d{4}-\d{2}$/.test(String(p.startMonth || '')) ? String(p.startMonth) : null;
+  const paidNow = extraPaidInMonth(d, tid, acc, mkNow);
+  const minFrom = paidNow ? crMonthAdd(mkNow, 1) : mkNow;
+  let from = minFrom;
+  if (body.startMonth) {
+    from = String(body.startMonth);
+    if (from < minFrom) return { ok: false, error: paidNow ? 'החודש הפעיל כבר שולם — השינוי ייכנס מ-' + extraFmtMonth(minFrom) : 'לא ניתן לשנות חודש שעבר — העבר לא משתנה' };
+  } else if (pStart && pStart > from) from = pStart;
+  const v = extraValidateFromMonth(d, from);
+  if (!v.ok) return v;
+  let chargedBefore = 0, before = 0;
+  if (pStart) for (let m = pStart; m < from; m = crMonthAdd(m, 1)) {
+    const a = extraAmountForMonth(d, acc, m);
+    if (a > 0) { chargedBefore += a; before++; }
+  }
+  chargedBefore = r2(chargedBefore);
+  const total = body.total !== undefined && body.total !== null && body.total !== '' ? r2(parseFloat(body.total)) : r2(parseFloat(p.total) || 0);
+  if (!(isFinite(total) && total > 0)) return { ok: false, error: 'סך לא תקין' };
+  const remaining = r2(total - chargedBefore);
+  if (remaining < 0) return { ok: false, error: 'כבר חויבו ₪' + chargedBefore + ' — יותר מהסך החדש' };
+  const n = Number(body.installments);
+  if (remaining > 0) {
+    if (!(Number.isInteger(n) && n >= 1 && n <= PROJECT_MAX_INSTALLMENTS)) return { ok: false, error: 'מספר תשלומים: 1 עד ' + PROJECT_MAX_INSTALLMENTS };
+    if (!(projectSplitTotal(remaining, n).base >= 1)) return { ok: false, error: 'היתרה קטנה ממספר התשלומים — בחרו פחות תשלומים' };
+  }
+  const seed = Array.isArray(acc.amountTariffs) && acc.amountTariffs.length ? acc.amountTariffs : [{ rate: 0, startDate: '2000-01-01', endDate: null }];
+  // extraIntervalsFrom closes the covering interval at `from` and drops later ones; its own
+  // opened entry is replaced by the new segments.
+  const intervals = extraIntervalsFrom(seed, { rate: 0 }, from).slice(0, -1).concat(projectSegments(from, remaining, remaining > 0 ? n : 1));
+  const project = { total, installments: before + (remaining > 0 ? n : 0), startMonth: pStart && pStart < from ? pStart : from };
+  const sim = Object.assign({}, acc, { amountTariffs: intervals });
+  return { ok: true, tid: String(t.id), accId: acc.id, name: t.name || String(t.id), from, paidNow, total, chargedBefore, remaining,
+    installments: remaining > 0 ? n : 0, scheduleText: projectScheduleText(d, sim, from), intervals, project };
+}
+
+function commitProjectChange(d, plan) {
+  const t = (d.tenants || []).find(x => String(x.id) === plan.tid);
+  const acc = t && (t.extraAccounts || []).find(a => a && a.id === plan.accId);
+  if (!acc) return { changed: false };
+  const before = JSON.stringify([acc.amountTariffs, acc.project]);
+  acc.amountTariffs = plan.intervals;
+  acc.project = plan.project;
+  acc.amount = Math.round(extraAmountForMonth(d, acc, getMonthKey(d.config || {})) * 100) / 100;
+  return { changed: before !== JSON.stringify([acc.amountTariffs, acc.project]) };
 }
 
 // GET /api/validate-collection — READ-ONLY health report before billing (basic, 1א).
@@ -11067,14 +11394,14 @@ function validateCollection(d) {
   const seen = {}; templates.forEach(t => { const k = tplNameKey(t.label); (seen[k] = seen[k] || []).push(crAccountKey(t.label)); });
   push('dupTemplateNames', 'error', 'שם חשבון מופיע פעמיים בהגדרות', Object.values(seen).filter(v => v.length > 1).map(v => v[0]),
     'חשבונות בלי קישור לא יזוהו. תנו לכל חשבון שם ייחודי.');
-  push('zeroTemplate', 'warn', 'חשבון בהגדרות עם סכום ₪0', templates.filter(t => (t.type || 'fixed') === 'fixed' && !((parseFloat(t.amount) || 0) > 0)).map(t => crAccountKey(t.label)));
+  push('zeroTemplate', 'warn', 'חשבון בהגדרות עם סכום ₪0', templates.filter(t => (t.type || 'fixed') === 'fixed' && !isProjectTpl(t) && !((parseFloat(t.amount) || 0) > 0)).map(t => crAccountKey(t.label)));
   // required accounts missing
   templates.filter(t => t.requiredForAll === true).forEach(tpl => {
     push('missingRequired', 'error', 'חשבון חובה חסר: ' + crAccountKey(tpl.label),
       tenants.filter(t => !accLinkedToTemplate(t, tpl, templates)).map(t => t.name || String(t.id)),
       'השתמשו ב"👥 החל על חברים" בהגדרות › חשבונות נוספים.');
   });
-  const unlinked = [], nameOnly = [], zeroAcc = [], hidden = [], payerNoPhone = [];
+  const unlinked = [], nameOnly = [], zeroAcc = [], hidden = [], payerNoPhone = [], projNoSchedule = [];
   tenants.forEach(t => {
     const nm = t.name || String(t.id);
     (t.extraAccounts || []).forEach(a => {
@@ -11086,13 +11413,17 @@ function validateCollection(d) {
       const odebt = parseFloat(a.openingDebt) || 0;
       const unpaidHist = (((d.paymentHistory || {})[String(t.id) + '__acc__' + a.id]) || []).some(r => r && !r.paid && r.type !== 'wa_sent');
       if (a.active === false) { if (odebt !== 0 || unpaidHist) hidden.push(nm + ' · ' + lbl + ' (₪' + odebt + ')'); return; }
-      if (a.suspended !== true && (a.type || 'fixed') === 'fixed' && !(extraAmountForMonth(d, a, getMonthKey(d.config || {})) > 0)) zeroAcc.push(nm + ' · ' + lbl);
+      const proj = m && isProjectTpl(m);   // v2.14.86 (P1) — a project is ₪0 outside its schedule by design
+      if (proj && !(a.project && a.project.startMonth && Array.isArray(a.amountTariffs) && a.amountTariffs.length)) projNoSchedule.push(nm + ' · ' + lbl);
+      if (!proj && a.suspended !== true && (a.type || 'fixed') === 'fixed' && !(extraAmountForMonth(d, a, getMonthKey(d.config || {})) > 0)) zeroAcc.push(nm + ' · ' + lbl);
       if (a.payer === 'tenant' && !(t.tenant && String(t.tenant.phone || '').trim())) payerNoPhone.push(nm + ' · ' + lbl);
     });
   });
   push('hiddenDebt', 'error', 'חשבון "לא פעיל" עם יתרה — היתרה לא מוצגת ולא נגבית', hidden,
     'החזירו את החשבון לפעיל וסמנו "⏸ השהה גבייה" במקום — כך היתרה נשמרת ונראית.');
   push('zeroAccount', 'warn', 'חשבון פעיל עם סכום ₪0 — לא יחויב לעולם', zeroAcc);
+  push('projectNoSchedule', 'warn', 'חשבון פרויקט בלי לוח תשלומים — לא יחויב', projNoSchedule,
+    'פתחו 📊 מצב פרויקט ← ✏️ שנה לוח, וקבעו סך ומספר תשלומים.');
   push('unlinked', 'warn', 'חשבון חבר שלא מקושר לאף חשבון בהגדרות', unlinked,
     'לא ייכלל ב"החל על חברים" / "הסר מכולם". השוו את השם לשם שבהגדרות.');
   push('payerNoPhone', 'info', 'משלם = שוכר, אבל אין טלפון שוכר (נשלח לטלפון הראשי)', payerNoPhone);
@@ -11178,7 +11509,7 @@ function tfParseMoneyCell(raw, allowNegative) {
 // GET /api/tenant-file-accounts — the columns + each member's cells, for the export.
 function tenantFileAccountExport(d) {
   const all = (d.accountTemplates || []).filter(t => t && t.id);
-  const fixed = all.filter(t => (t.type || 'fixed') === 'fixed');
+  const fixed = all.filter(t => (t.type || 'fixed') === 'fixed' && !isProjectTpl(t));   // v2.14.86 (P1) — a project is set in its own window, not in the file
   const headers = [];
   fixed.forEach(tpl => headers.push(...tfAccHeaders(tpl)));
   const byTenant = {};
@@ -11207,13 +11538,14 @@ function planTenantFileAccounts(d, input) {
   const headers = (input && Array.isArray(input.headers)) ? input.headers : [];
   const rows = (input && Array.isArray(input.rows)) ? input.rows : [];
   const mk = getMonthKey(d.config || {});
-  const cols = [], unknown = [], computed = [], duplicate = [];
+  const cols = [], unknown = [], computed = [], duplicate = [], project = [];
   headers.forEach((h, idx) => {
     const name = String(h == null ? '' : h).trim();
     const p = tfParseAccountHeader(h, templates);
     if (!p) { if (name) unknown.push(name); return; }
     const tpl = templates.find(t => t.id === p.tplId);
     if ((tpl.type || 'fixed') !== 'fixed') { computed.push(name); return; }
+    if (isProjectTpl(tpl)) { project.push(name); return; }   // v2.14.86 (P1)
     if (cols.some(c => c.tplId === p.tplId && c.field === p.field)) { duplicate.push(name); return; }
     cols.push({ idx, tplId: p.tplId, field: p.field, header: name, label: crAccountKey(tpl.label) });
   });
@@ -11318,7 +11650,7 @@ function planTenantFileAccounts(d, input) {
   const counts = { create: 0, update: 0, delete: 0 };
   items.forEach(it => { counts[it.action]++; });
   return { ok: true, mk, templates: templates.length,
-    columns: { recognized: cols.map(c => ({ header: c.header, label: c.label, field: c.field })), unknown, computed, duplicate },
+    columns: { recognized: cols.map(c => ({ header: c.header, label: c.label, field: c.field })), unknown, computed, duplicate, project },
     items, errors, warnings, counts };
 }
 
@@ -11399,6 +11731,17 @@ app.get('/api/account-templates', authMiddleware, (req, res) => {
 app.post('/api/account-templates', authMiddleware, (req, res) => {
   const { templates } = req.body;
   if (!Array.isArray(templates)) return res.json({ ok: false, error: 'templates must be array' });
+  // v2.14.86 (P1, ק9–ק11) — "פרויקט" is a third type IN THE PAGE only: stored as 'fixed' + a
+  // `project` block; monthly, never "חובה לכל החברים", always a separate message, amount 0
+  // (the money is each member's personal schedule — the definition's amount is never billed).
+  for (const t of templates) {
+    if (!t || typeof t !== 'object') continue;
+    if (isProjectTpl(t)) {
+      t.project = projectSanitize(t.project);
+      t.type = 'fixed'; t.frequency = 'monthly'; delete t.billingMonths;
+      t.amount = 0; delete t.requiredForAll; t.notify = { mode: 'separate' };
+    } else delete t.project;
+  }
   // Validate each template
   for (const t of templates) {
     if (!t.id || !t.label) return res.json({ ok: false, error: 'כל תבנית חייבת id ו-label' });
@@ -11427,6 +11770,10 @@ app.post('/api/account-templates', authMiddleware, (req, res) => {
     delete t.bankMapping;                                                  // v2.14.78 (1ה) — saved only via /bank-mapping
     if (old && old.bankMapping) t.bankMapping = old.bankMapping;
     if (!old) continue;
+    // v2.14.86 (P1) — a definition linked to members never switches between project and not
+    if (isProjectTpl(old) !== isProjectTpl(t) && countLinkedToTemplate(d, old, d.accountTemplates || []) > 0) {
+      return res.json({ ok: false, error: 'לא ניתן לשנות את סוג החשבון "' + crAccountKey(old.label) + '" (פרויקט / לא פרויקט) כשהוא משויך לחברים', typeLocked: t.id });
+    }
     if (Array.isArray(old.amountTariffs) && old.amountTariffs.length) t.amountTariffs = old.amountTariffs;
     const was = Math.round(tplAmountForMonth(old, mkS) * 100) / 100;
     const sent = Math.round((parseFloat(t.amount) || 0) * 100) / 100;
@@ -11496,6 +11843,38 @@ app.post('/api/account-templates/:id/start-billing', authMiddleware, (req, res) 
   res.json({ ok: true, dryRun: false, started: r.started });
 });
 
+// ── v2.14.86 (P1) — project accounts: apply with a personal schedule · status · change one member ──
+// dryRun is the DEFAULT; only dryRun:false writes, after RE-PLANNING against the stored data.
+// Writes ONLY tenant.extraAccounts definitions (account, project block, personal amountTariffs).
+app.post('/api/account-templates/:id/project-apply', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planProjectApply(d, req.params.id, { rows: b.rows });
+  if (!plan.ok) return res.json(plan);
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  if (plan.errors) return res.json({ ok: false, error: 'יש ' + plan.errors + ' שורות עם שגיאה — תקנו אותן או בטלו את הסימון' });
+  const r = commitProjectApply(d, plan);
+  if (r.added) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json({ ok: true, dryRun: false, added: r.added, already: plan.already.length, conflicts: plan.conflicts.length });
+});
+
+app.get('/api/project-status', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  res.json(projectStatusView(d, String((req.query && req.query.tpl) || '')));
+});
+
+app.post('/api/tenant-accounts/:tenantId/:accountId/project', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planProjectChange(d, req.params.tenantId, req.params.accountId, b);
+  if (!plan.ok) return res.json(plan);
+  const view = Object.assign({}, plan); delete view.intervals;
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, view));
+  const r = commitProjectChange(d, plan);
+  if (r.changed) saveTenantData(req.user.tenantId, { tenants: d.tenants });
+  res.json(Object.assign({ dryRun: false, changed: r.changed }, view));
+});
+
 // GET /api/validate-collection — read-only health report (1א basic)
 app.get('/api/validate-collection', authMiddleware, (req, res) => {
   const d = loadTenantData(req.user.tenantId);
@@ -11546,6 +11925,7 @@ app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
     Object.assign(dated, extraBillingView(d, acc, mkA));
     const nt = accNotifyText(d, tenant, acc);   // v2.14.85 (1ו2) — where this account's reminder goes (display)
     if (nt) dated.notifyTo = nt;
+    if (accIsProject(d, acc)) { const pv = projectMemberView(d, tenant, acc, mkA, emA); if (pv) dated.projectView = pv; }   // v2.14.86 (P1) — display
     if (!sp) return { ...acc, ...dated, totalDebt: 0, historyDebt, hasMoney };
     return { ...acc, ...dated, totalDebt: sp.owedPrior, historyDebt, hasMoney,
       owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, owedNow: sp.owedNow, creditLeft: sp.creditLeft,
@@ -11591,6 +11971,7 @@ app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {
       // this form keeps the stored amount + dated history. A NEW account takes the sent amount.
       amount:      prev ? (parseFloat(prev.amount) || 0) : (parseFloat(acc.amount) || 0),
       ...(prev && Array.isArray(prev.amountTariffs) && prev.amountTariffs.length ? { amountTariffs: prev.amountTariffs } : {}),
+      ...(prev && prev.project && typeof prev.project === 'object' ? { project: prev.project } : {}),   // v2.14.86 (P1) — server-only, never from the page
       openingDebt: isFinite(odSent) ? odSent : (isFinite(odPrev) ? odPrev : 0),
       matchKeywords: acc.matchKeywords || '',
       formulaNote: acc.formulaNote || '',
@@ -11787,7 +12168,10 @@ app.get('/api/accounts-status', authMiddleware, (req, res) => {
         paidThisMonth, totalDebt: sp ? sp.owedPrior : 0, historyDebt, openingDebt,
         owedCurrent: sp ? sp.owedCurrent : 0, owedPrior: sp ? sp.owedPrior : 0, owedNow: sp ? sp.owedNow : 0,
         creditLeft: sp ? sp.creditLeft : 0, creditApplied: sp ? sp.creditApplied : 0,
-        monthDue: sp ? sp.monthDue : 0, paidNow: sp ? sp.paidNow : 0, status: sp ? sp.status : 'inactive'
+        monthDue: sp ? sp.monthDue : 0, paidNow: sp ? sp.paidNow : 0, status: sp ? sp.status : 'inactive',
+        // v2.14.86 (P1, ק6) — project progress (server text) + hidden after "הושלם"
+        ...(() => { if (!accIsProject(d, acc)) return {}; const pv = projectMemberView(d, tenant, acc, mk, em);
+          return pv ? { project: { progressText: pv.progressText, status: pv.status, statusLabel: pv.statusLabel, alert: pv.alert }, hidden: pv.status === 'done' } : {}; })()
       };
     });
   }

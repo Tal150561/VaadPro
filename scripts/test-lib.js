@@ -116,7 +116,11 @@ const SERVER_FNS = [
   'resolvePayerPhone', 'buildAccountsBlock', 'composeReminder', 'reminderAccountsGap', 'remindAccountIds', 'portalAccountsView',
   // v2.14.85 (1ו2) — a separate message per account to the payer phone (planner + sender)
   'waPhoneKey', 'accNotifySeparate', 'payerNameFor', 'memberMessageSplit', 'composePayerMessage', 'planMemberMessages',
-  'markPayerSent', 'pickMemberMessages', 'sendRoutedMember', 'payerSplitView', 'accNotifyText'
+  'markPayerSent', 'pickMemberMessages', 'sendRoutedMember', 'payerSplitView', 'accNotifyText',
+  // v2.14.86 (P1) — project accounts: personal installment schedules, status, change one member
+  'isProjectTpl', 'accIsProject', 'projectSanitize', 'projectSplitTotal', 'projectSegments', 'projectIntervals',
+  'projectEndMonth', 'projectScheduleText', 'projectValidate', 'projectMemberView', 'projectStatusView', 'projectHidden',
+  'planProjectApply', 'commitProjectApply', 'planProjectChange', 'commitProjectChange'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
@@ -143,7 +147,9 @@ function loadServer() {
   if (!remTpl) throw new Error('test-lib: REMINDER_DEFAULT_TEMPLATE not found in server.js');
   const payTpl = src.match(/const PAYER_DEFAULT_TEMPLATE = .*;\n/);   // v2.14.85 (1ו2)
   if (!payTpl) throw new Error('test-lib: PAYER_DEFAULT_TEMPLATE not found in server.js');
-  const code = months[0] + '\n' + billFreqs[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0] + payTpl[0]
+  const projMax = src.match(/const PROJECT_MAX_INSTALLMENTS = \d+;/);   // v2.14.86 (P1)
+  if (!projMax) throw new Error('test-lib: PROJECT_MAX_INSTALLMENTS not found in server.js');
+  const code = months[0] + '\n' + projMax[0] + '\n' + billFreqs[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0] + payTpl[0]
     + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS,PAYER_DEFAULT_TEMPLATE};';

@@ -6435,4 +6435,294 @@ const v2_14_85_async = async () => {
   }
 };
 
-(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); process.exit(t.done() ? 1 : 0); })();
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.86 (P1) — PROJECT ACCOUNTS: a one-time collection in installments
+// (spec v2.4 "עדכון 9.11.2026 (ג)", ק1–ק11 + Tal 10.11.2026). REAL helpers, REAL routes,
+// REAL protected close. Money paths see an ordinary fixed account with personal intervals.
+// ════════════════════════════════════════════════════════════════
+const v2_14_86_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const closeExtraAccountsUnpaid = lib.loadCloseExtra();
+  const HM = S.HEBREW_MONTHS;
+  const EM = 'מרץ', MK = S.getMonthKey({ manualMonth: EM });
+  const M = n => S.crMonthAdd(MK, n);
+  const heb = mk => HM[Number(String(mk).slice(5)) - 1];
+  const MP = a => 'manual_paid_2026-03-03T10:00:00.000Z_amount_' + a;
+  const PT = o => Object.assign({ id: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' },
+    project: { defaultInstallments: 3, defaultTotal: 2250 } }, o);
+  const INS = { id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50 };
+  const mem = (id, o) => Object.assign({ id, name: 'דייר' + id, aptNumber: String(id), phone: '050111111' + id }, o);
+  const base = over => Object.assign({ config: { amount: 230, manualMonth: EM, template: 'שלום {שם}! {סכום}{חשבונות}' },
+    closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: {},
+    defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }], accountTemplates: [PT()] }, over);
+  const projAcc = (tot, n, start, o) => Object.assign({ id: 'pa', templateId: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'monthly', amount: 0, openingDebt: 0,
+    payer: 'owner', active: true, amountTariffs: S.projectIntervals(start, tot, n), project: { total: tot, installments: n, startMonth: start } }, o);
+  const setMonth = (d, mk) => { d.config.manualMonth = heb(mk); };
+  const pay = (d, tid, accId, mk, amount, charge) => {
+    d.sentLog[tid + '__acc__' + accId + '_' + heb(mk)] = MP(amount);
+    (d.paymentHistory[tid + '__acc__' + accId] = d.paymentHistory[tid + '__acc__' + accId] || []).push({ month: mk, paid: true, amount: charge, paidAmount: amount, type: 'manual' });
+  };
+
+  t.section('v2.14.86 (P1, ק1) — installments: rounded DOWN, the remainder in the last');
+  {
+    t.eq('2250 / 3 = 750 × 3', S.projectSplitTotal(2250, 3), { base: 750, last: 750 });
+    t.eq('2250 / 7 = 321 × 6 + 324', S.projectSplitTotal(2250, 7), { base: 321, last: 324 });
+    t.eq('1000.5 / 3 = 333, 333, 334.5', S.projectSplitTotal(1000.5, 3), { base: 333, last: 334.5 });
+    const iv = S.projectIntervals(M(1), 2250, 7);
+    t.eq('intervals: 0 until the start · 321 · last 324 · 0 open-ended', iv.map(x => [x.rate, x.startDate, x.endDate]),
+      [[0, '2000-01-01', M(1) + '-01'], [321, M(1) + '-01', M(7) + '-01'], [324, M(7) + '-01', M(8) + '-01'], [0, M(8) + '-01', null]]);
+    const acc = { amountTariffs: iv };
+    const amts = []; for (let i = 0; i <= 9; i++) amts.push(S.extraAmountForMonth({ accountTemplates: [] }, acc, M(i)));
+    t.eq('extraAmountForMonth month by month (the SAME resolver every money path uses)', amts, [0, 321, 321, 321, 321, 321, 321, 324, 0, 0]);
+    t.eq('Σ charges = total', amts.reduce((a, b) => a + b, 0), 2250);
+    t.eq('one installment → the whole total in one month', S.projectSegments(M(0), 500, 1).map(x => x.rate), [500, 0]);
+    t.eq('projectEndMonth = last charged month', S.projectEndMonth(iv), M(7));
+    t.eq('schedule text (server)', S.projectScheduleText({ accountTemplates: [] }, acc, M(1)), '₪321 × 6 (' + S.extraFmtMonth(M(1)) + '–' + S.extraFmtMonth(M(6)) + ') · ₪324 (' + S.extraFmtMonth(M(7)) + ')');
+  }
+
+  t.section('v2.14.86 (P1) — projectValidate / projectSanitize (≤ 24, active or future month)');
+  {
+    const d = base({ tenants: [] });
+    t.eq('ok', S.projectValidate(d, 2250, 3, MK).ok, true);
+    t.eq('25 installments → refused', S.projectValidate(d, 2250, 25, MK).error, 'מספר תשלומים: 1 עד 24');
+    t.eq('24 installments → ok', S.projectValidate(d, 2400, 24, MK).ok, true);
+    t.eq('0 / text total → refused', [S.projectValidate(d, 0, 3, MK).ok, S.projectValidate(d, 'x', 3, MK).ok], [false, false]);
+    t.eq('past month → refused (the past never changes)', S.projectValidate(d, 2250, 3, M(-1)).ok, false);
+    t.eq('total smaller than the number of installments → refused', S.projectValidate(d, 2, 3, MK).error, 'הסך קטן ממספר התשלומים — בחרו פחות תשלומים');
+    t.eq('sanitize: bad fields dropped, installments default 3', S.projectSanitize({ startMonth: '2026-13', defaultInstallments: 99, defaultTotal: -5, noteKeyword: '  שיפוץ  ', x: 1 }), { defaultInstallments: 3, noteKeyword: 'שיפוץ' });
+  }
+
+  t.section('v2.14.86 (P1) — 👥 החל על דיירים: plan / commit (definitions only)');
+  {
+    const d = base({ tenants: [mem(1), mem(2, { suspended: true }), mem(3), mem(4, { extraAccounts: [{ id: 'x', label: 'שיפוץ', amount: 10 }] })],
+      sentLog: { ['1_' + EM]: MP(230) }, paymentHistory: { '1': [{ month: MK, paid: true, amount: 230 }] } });
+    d.accountTemplates[0].templateIdLinkFix = undefined;
+    const before = J(d);
+    const p = S.planProjectApply(d, 'P', { rows: { '3': { total: 1000, installments: 4, startMonth: M(2) } } });
+    t.eq('defaults: suspended member not included; the rest included', p.rows.map(r => [r.name, r.include]), [['דייר1', true], ['דייר2', false], ['דייר3', true]]);
+    t.eq('same-name unlinked account → linked by name → already (never a twin)', p.already.map(a => a.name), ['דייר4']);
+    t.eq('row 1: defaults 2250 / 3 from the active month', [p.rows[0].total, p.rows[0].installments, p.rows[0].startMonth, p.rows[0].base, p.rows[0].last], [2250, 3, MK, 750, 750]);
+    t.eq('row 3: own values', [p.rows[2].total, p.rows[2].installments, p.rows[2].startMonth, p.rows[2].scheduleText], [1000, 4, M(2), '₪250 × 4 (' + S.extraFmtMonth(M(2)) + '–' + S.extraFmtMonth(M(5)) + ')']);
+    t.eq('summary', [p.add, p.sumTotal, p.errors], [2, 3250, 0]);
+    t.eq('the plan writes nothing', JSON.stringify(d), JSON.stringify(before));
+    const bad = S.planProjectApply(d, 'P', { rows: { '1': { installments: 30 } } });
+    t.eq('a bad row → error on the row, counted', [bad.rows[0].error, bad.errors, bad.add], ['מספר תשלומים: 1 עד 24', 1, 1]);
+    const c = S.commitProjectApply(d, p);
+    t.eq('commit: 2 added', c.added, 2);
+    const a1 = d.tenants[0].extraAccounts[0];
+    t.eq('account: linked, monthly, owner, active, opening 0, project block', [a1.templateId, a1.frequency, a1.payer, a1.active, a1.openingDebt, a1.project], ['P', 'monthly', 'owner', true, 0, { total: 2250, installments: 3, startMonth: MK }]);
+    t.eq('amount mirror = the active month installment', a1.amount, 750);
+    t.eq('suspended member untouched', d.tenants[1].extraAccounts, undefined);
+    t.eq('sentLog / paymentHistory / main openingDebt byte-identical', JSON.stringify([d.sentLog, d.paymentHistory, d.tenants.map(x => x.openingDebt)]), JSON.stringify([before.sentLog, before.paymentHistory, before.tenants.map(x => x.openingDebt)]));
+    t.eq('idempotent: commit again → 0 added', S.commitProjectApply(d, p).added, 0);
+    t.eq('split of the active month: 750 unpaid', (() => { const s = S.extraAccountSplit(d, d.tenants[0], a1, MK, EM); return [s.charge, s.status]; })(), [750, 'unpaid']);
+    t.eq('a project that starts later: no charge now', S.extraAccountSplit(d, d.tenants[2], d.tenants[2].extraAccounts[0], MK, EM).charge, 0);
+    t.eq('not a project definition → refused', S.planProjectApply(base({ accountTemplates: [INS], tenants: [] }), 'T1', {}).ok, false);
+  }
+
+  t.section('v2.14.86 (P1, Tal 10.11) — a payment ≠ plan carries to the next installment (REAL protected close)');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK)] })] });
+    const tn = d.tenants[0], acc = tn.extraAccounts[0];
+    let v = S.projectMemberView(d, tn, acc, MK, EM);
+    t.eq('start: active, 0 of 2250, 3 left', [v.status, v.paid, v.remaining, v.left, v.progressText], ['active', 0, 2250, 3, 'שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים']);
+    pay(d, 1, 'pa', MK, 1000, 750);
+    v = S.projectMemberView(d, tn, acc, MK, EM);
+    t.eq('paid 1000 in month 1 (open) → paid 1000, remaining 1250, 2 left', [v.paid, v.remaining, v.left], [1000, 1250, 2]);
+    closeExtraAccountsUnpaid(d, tn, MK); setMonth(d, M(1));
+    t.eq('close: the 250 overpay banked as the account credit', acc.openingDebt, -250);
+    let sp = S.extraAccountSplit(d, tn, acc, M(1), heb(M(1)));
+    t.eq('month 2: due 750 − 250 = 500', sp.owedCurrent, 500);
+    pay(d, 1, 'pa', M(1), 300, 750);
+    closeExtraAccountsUnpaid(d, tn, M(1)); setMonth(d, M(2));
+    sp = S.extraAccountSplit(d, tn, acc, M(2), heb(M(2)));
+    t.eq('paid 300 in month 2 → month 3 due 750 + 200 carried = 950', [sp.owedCurrent, sp.owedPrior, sp.owedNow], [750, 200, 950]);
+    v = S.projectMemberView(d, tn, acc, M(2), heb(M(2)));
+    t.eq('month 3 view: paid 1300, remaining 950, behind', [v.paid, v.remaining, v.left, v.status, v.behind], [1300, 950, 1, 'active', true]);
+    pay(d, 1, 'pa', M(2), 950, 750);
+    v = S.projectMemberView(d, tn, acc, M(2), heb(M(2)));
+    t.eq('paid 950 → הושלם (remaining 0)', [v.status, v.paid, v.remaining], ['done', 2250, 0]);
+    closeExtraAccountsUnpaid(d, tn, M(2)); setMonth(d, M(3));
+    v = S.projectMemberView(d, tn, acc, M(3), heb(M(3)));
+    t.eq('after the end, closed: still done, no charge', [v.status, acc.openingDebt, S.extraAccountSplit(d, tn, acc, M(3), heb(M(3))).charge], ['done', 0, 0]);
+    t.eq('projectHidden → true', S.projectHidden(d, tn, acc, M(3), heb(M(3))), true);
+  }
+
+  t.section('v2.14.86 (P1, ק6) — חוב שנותר (alert) · זכות להעברה');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [projAcc(1500, 2, MK)] })] });
+    const tn = d.tenants[0], acc = tn.extraAccounts[0];
+    pay(d, 1, 'pa', MK, 750, 750); closeExtraAccountsUnpaid(d, tn, MK);
+    closeExtraAccountsUnpaid(d, tn, M(1)); setMonth(d, M(2));
+    const v = S.projectMemberView(d, tn, acc, M(2), heb(M(2)));
+    t.eq('schedule ended, 750 unpaid → חוב שנותר + alert, reminders continue', [v.status, v.statusLabel, v.alert, v.remaining, v.owedNow], ['debt', 'חוב שנותר', true, 750, 750]);
+    t.eq('the payer decision still sends (owed this month? no — carried only)', S.tenantOwesActiveExtra(d, tn, heb(M(2))), false);
+    const d2 = base({ tenants: [mem(1, { extraAccounts: [projAcc(1500, 2, MK)] })] });
+    pay(d2, 1, 'pa', MK, 1700, 750);
+    const v2 = S.projectMemberView(d2, d2.tenants[0], d2.tenants[0].extraAccounts[0], MK, EM);
+    t.eq('paid 1700 of 1500 → זכות להעברה (remaining −200), NOT hidden', [v2.status, v2.remaining, S.projectHidden(d2, d2.tenants[0], d2.tenants[0].extraAccounts[0], MK, EM)], ['credit', -200, false]);
+  }
+
+  t.section('v2.14.86 (P1) — projectStatusView');
+  {
+    const d = base({ tenants: [mem(2, { extraAccounts: [projAcc(2250, 3, MK)] }), mem(1, { extraAccounts: [projAcc(900, 3, MK, { id: 'pb' })] }), mem(3)] });
+    pay(d, 1, 'pb', MK, 900, 300);
+    const v = S.projectStatusView(d, 'P');
+    t.eq('rows sorted by unit; only members with the project', v.rows.map(r => r.unit), ['1', '2']);
+    t.eq('summary: total / paid / remaining / pct / counts', [v.summary.total, v.summary.paid, v.summary.remaining, v.summary.pct, v.summary.counts], [3150, 900, 2250, 28.6, { active: 1, done: 1, debt: 0, credit: 0 }]);
+    t.eq('not a project → error', S.projectStatusView(base({ accountTemplates: [INS] }), 'T1').ok, false);
+    const d2 = base({ tenants: [mem(1, { extraAccounts: [{ id: 'q', templateId: 'P', label: 'שיפוץ', amount: 0, active: true }] })] });
+    t.eq('a linked account without a schedule → counted as unscheduled', S.projectStatusView(d2, 'P').summary.unscheduled, 1);
+  }
+
+  t.section('v2.14.86 (P1) — ✏️ change one member\'s schedule (past never changes)');
+  {
+    const mk = () => base({ tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, M(-2))] })] });
+    const d = mk();
+    const p = S.planProjectChange(d, 1, 'pa', { installments: 4 });
+    t.eq('charged before the active month (2 × 750) → remaining 750 over 4', [p.ok, p.from, p.chargedBefore, p.remaining, p.scheduleText], [true, MK, 1500, 750, '₪187 × 3 (' + S.extraFmtMonth(MK) + '–' + S.extraFmtMonth(M(2)) + ') · ₪189 (' + S.extraFmtMonth(M(3)) + ')']);
+    S.commitProjectChange(d, p);
+    const acc = d.tenants[0].extraAccounts[0];
+    t.eq('the months before the change keep 750', [S.extraAmountForMonth(d, acc, M(-2)), S.extraAmountForMonth(d, acc, M(-1))], [750, 750]);
+    t.eq('from the active month: 187, 187, 187, 189, then 0', [0, 1, 2, 3, 4].map(i => S.extraAmountForMonth(d, acc, M(i))), [187, 187, 187, 189, 0]);
+    t.eq('project block: installments 2 + 4, start kept', acc.project, { total: 2250, installments: 6, startMonth: M(-2) });
+    t.eq('idempotent: same change again → unchanged', S.commitProjectChange(d, S.planProjectChange(d, 1, 'pa', { installments: 4 })).changed, false);
+    const d2 = mk(); pay(d2, 1, 'pa', MK, 750, 750);
+    const p2 = S.planProjectChange(d2, 1, 'pa', { installments: 2 });
+    t.eq('active month already paid → starts next month (ג4-B); this month counts as charged', [p2.from, p2.chargedBefore, p2.remaining], [M(1), 2250, 0]);
+    t.eq('…and an explicit active month is refused', S.planProjectChange(d2, 1, 'pa', { installments: 2, startMonth: MK }).ok, false);
+    t.eq('new total below what was charged → refused', S.planProjectChange(mk(), 1, 'pa', { total: 1000, installments: 2 }).ok, false);
+    t.eq('higher total → spread on the rest', S.planProjectChange(mk(), 1, 'pa', { total: 3000, installments: 3 }).remaining, 1500);
+    t.eq('not a project account → refused', S.planProjectChange(base({ accountTemplates: [PT(), INS], tenants: [mem(1, { extraAccounts: [{ id: 'i', templateId: 'T1', label: 'ביטוח', amount: 50 }] })] }), 1, 'i', { installments: 2 }).ok, false);
+    const d3 = base({ tenants: [mem(1, { extraAccounts: [{ id: 'q', templateId: 'P', label: 'שיפוץ', amount: 0, active: true }] })] });
+    const p3 = S.planProjectChange(d3, 1, 'q', { total: 900, installments: 3 });
+    S.commitProjectChange(d3, p3);
+    t.eq('an unscheduled account gets a schedule from the active month', [0, 1, 2, 3].map(i => S.extraAmountForMonth(d3, d3.tenants[0].extraAccounts[0], M(i))).concat([S.extraAmountForMonth(d3, d3.tenants[0].extraAccounts[0], M(-1))]), [300, 300, 300, 0, 0]);
+  }
+
+  t.section('v2.14.86 (P1) — every other path refuses / skips a project');
+  {
+    const d = base({ accountTemplates: [PT(), INS], tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK)] })] });
+    t.eq('📅 definition tariff → refused (project reason)', /פרויקט/.test(S.planTemplateTariff(d, 'P', { amount: 10, fromMonth: MK }).error), true);
+    t.eq('📅 member tariff → refused (project reason)', /פרויקט/.test(S.planMemberTariff(d, 1, 'pa', { amount: 10, fromMonth: MK }).error), true);
+    t.eq('📆 schedule → refused (project reason)', /פרויקט/.test(S.planTemplateSchedule(d, 'P', { frequency: 'quarterly', fromMonth: MK }).error), true);
+    t.eq('generic \"החל על חברים\" → refused (project reason)', /פרויקט/.test(S.planApplyTemplate(d, 'P', {}).error), true);
+    t.eq('bank file per account → refused (P2)', /P2/.test(S.planAccountBankImport(d, { templateId: 'P', rows: [['a']], mapping: {}, monthKey: MK }).error), true);
+    t.eq('required-for-all never attaches a project', (() => { const m = mem(9); S.applyRequiredAccounts(Object.assign(J(d), { accountTemplates: [PT({ requiredForAll: true })] }), m, MK); return m.extraAccounts; })(), undefined);
+    const ex = S.tenantFileAccountExport(d);
+    t.eq('tenants file export: no project columns', ex.headers.some(h => /שיפוץ/.test(h)), false);
+    const pl = S.planTenantFileAccounts(d, { headers: ['שיפוץ', 'שיפוץ – סכום'], rows: [] });
+    t.eq('tenants file import: project columns reported, not used', [pl.columns.project, pl.columns.recognized.length], [['שיפוץ', 'שיפוץ – סכום'], 0]);
+    const vc = S.validateCollection(Object.assign(J(d), { tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, M(2))] }), mem(2, { extraAccounts: [{ id: 'q', templateId: 'P', label: 'שיפוץ', amount: 0, active: true }] })] }));
+    const codes = vc.issues.map(i => i.code);
+    t.eq('🩺: no ₪0 warnings for a project; unscheduled reported', [codes.includes('zeroTemplate'), codes.includes('zeroAccount'), (vc.issues.find(i => i.code === 'projectNoSchedule') || {}).items], [false, false, ['דייר2 · שיפוץ']]);
+  }
+
+  t.section('v2.14.86 (P1, Tal 10.11 — A) — a project is ALWAYS its own message, also to the main phone');
+  {
+    const d = base({ accountTemplates: [PT(), Object.assign({}, INS, { notify: { mode: 'separate' } })],
+      tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK), { id: 'i', templateId: 'T1', label: 'ביטוח', amount: 50, payer: 'owner', active: true }] })] });
+    const sp = S.memberMessageSplit(d, d.tenants[0]);
+    t.eq('project → routed to the MAIN phone; a separate non-project on the same phone stays merged (ל1)', [sp.routed, sp.groups.map(g => [g.phone, g.accounts.map(a => a.id)]), sp.mainTenant.extraAccounts.map(a => a.id)], [true, [['0501111111', ['pa']]], ['i']]);
+    t.eq('💳 notifyTo text', S.accNotifyText(d, d.tenants[0], d.tenants[0].extraAccounts[0]), '📨 הודעה נפרדת לטלפון הראשי (פרויקט)');
+    const nd = base({ accountTemplates: [INS], tenants: [mem(1, { extraAccounts: [{ id: 'i', templateId: 'T1', label: 'ביטוח', amount: 50, active: true }] })] });
+    t.eq('a building without a project: not routed (same object)', [S.memberMessageSplit(nd, nd.tenants[0]).routed, S.memberMessageSplit(nd, nd.tenants[0]).mainTenant === nd.tenants[0]], [false, true]);
+    const ctx = { tenantDataId: 'B', month: EM, mk: MK, amount: 230, mainTmpl: d.config.template };
+    d.sentLog['1_' + EM] = MP(230);
+    const msgs = S.planMemberMessages(d, d.tenants[0], ctx);
+    t.eq('member paid the ועד, not the installment → main: no remind, project message: remind', msgs.map(m => [m.kind, m.shouldRemind]), [['main', false], ['payer', true]]);
+    t.eq('the project message lists the installment', /שיפוץ: \*750 ₪\*/.test(msgs[1].msg), true);
+    t.eq('the main message does not', /שיפוץ/.test(msgs[0].msg), false);
+  }
+
+  // ── REAL routes ──────────────────────────────────────────────────
+  const bodyOf = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  const run = async (head, d, req, extra) => {
+    const saves = []; let out;
+    const g = Object.assign({}, S, { loadTenantData: () => d, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); Object.assign(d, J(p)); },
+      sendWaMsg: async () => {}, setTimeout: f => f(), getOrCreatePortalUrl: () => 'URL', console: { log() {}, error() {} } }, extra || {});
+    const names = Object.keys(g);
+    await new AF(...names, 'req', 'res', bodyOf(head))(...names.map(n => g[n]), Object.assign({ params: {}, body: {}, query: {}, user: { tenantId: 'B' } }, req),
+      { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const APPLY = "app.post('/api/account-templates/:id/project-apply', authMiddleware, (req, res) => {";
+  const STATUS = "app.get('/api/project-status', authMiddleware, (req, res) => {";
+  const CHANGE = "app.post('/api/tenant-accounts/:tenantId/:accountId/project', authMiddleware, (req, res) => {";
+  const TPLS = "app.post('/api/account-templates', authMiddleware, (req, res) => {";
+  const TA_POST = "app.post('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const TA_GET = "app.get('/api/tenant-accounts/:tenantId', authMiddleware, (req, res) => {";
+  const ACC_ST = "app.get('/api/accounts-status', authMiddleware, (req, res) => {";
+
+  t.section('v2.14.86 (P1) — REAL project routes: dryRun default, commit re-plans, writes only tenants');
+  {
+    const d = base({ tenants: [mem(1), mem(2)] });
+    const before = J(d);
+    const dry = await run(APPLY, d, { params: { id: 'P' }, body: { rows: { '2': { include: false } } } });
+    t.eq('apply: dryRun DEFAULT → nothing saved', [dry.out.dryRun, dry.out.add, dry.saves.length, JSON.stringify(d) === JSON.stringify(before)], [true, 1, 0, true]);
+    const badC = await run(APPLY, d, { params: { id: 'P' }, body: { dryRun: false, rows: { '1': { installments: 40 } } } });
+    t.eq('apply commit with an error row → refused, nothing saved', [badC.out.ok, badC.saves.length], [false, 0]);
+    const c = await run(APPLY, d, { params: { id: 'P' }, body: { dryRun: false, rows: { '2': { include: false } } } });
+    t.eq('apply commit → 1 added, saves ONLY tenants', [c.out.added, c.saves], [1, [['tenants']]]);
+    const st = await run(STATUS, d, { query: { tpl: 'P' } });
+    t.eq('status route', [st.out.ok, st.out.rows.length, st.out.rows[0].progressText], [true, 1, 'שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים']);
+    const accId = d.tenants[0].extraAccounts[0].id;
+    const ch = await run(CHANGE, d, { params: { tenantId: '1', accountId: accId }, body: { installments: 5 } });
+    t.eq('change: dryRun DEFAULT, no intervals in the reply', [ch.out.dryRun, ch.out.remaining, 'intervals' in ch.out, ch.saves.length], [true, 2250, false, 0]);
+    const cc = await run(CHANGE, d, { params: { tenantId: '1', accountId: accId }, body: { installments: 5, dryRun: false } });
+    t.eq('change commit → saved, 450 × 5', [cc.out.changed, cc.saves, S.extraAmountForMonth(d, d.tenants[0].extraAccounts[0], MK)], [true, [['tenants']], 450]);
+    t.eq('sentLog / paymentHistory untouched by all project routes', JSON.stringify([d.sentLog, d.paymentHistory]), JSON.stringify([before.sentLog, before.paymentHistory]));
+  }
+
+  t.section('v2.14.86 (P1, ק9–ק11) — REAL POST /api/account-templates: project sanitized + type lock');
+  {
+    const d = base({ accountTemplates: [], tenants: [] });
+    const r = await run(TPLS, d, { body: { templates: [{ id: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'quarterly', billingMonths: [3, 6, 9, 12], amount: 99, requiredForAll: true,
+      project: { startMonth: M(1), defaultInstallments: 3, defaultTotal: 2250, noteKeyword: 'שיפוץ', hack: 1 } }, { id: 'T1', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, project: null }] } });
+    const p = d.accountTemplates[0];
+    t.eq('project stored: fixed, monthly, amount 0, no required, separate, clean block', [r.out.ok, p.type, p.frequency, p.billingMonths, p.amount, p.requiredForAll, p.notify, p.project],
+      [true, 'fixed', 'monthly', undefined, 0, undefined, { mode: 'separate' }, { startMonth: M(1), defaultInstallments: 3, defaultTotal: 2250, noteKeyword: 'שיפוץ' }]);
+    t.eq('a non-project keeps no project key', 'project' in d.accountTemplates[1], false);
+    const d2 = base({ tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK)] })] });
+    const r2 = await run(TPLS, d2, { body: { templates: [{ id: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'monthly', amount: 0 }] } });
+    t.eq('linked project → switching it to a regular account is refused', [r2.out.ok, r2.out.typeLocked, isFinite(d2.accountTemplates[0].project.defaultInstallments)], [false, 'P', true]);
+    const d3 = base({ accountTemplates: [INS], tenants: [mem(1, { extraAccounts: [{ id: 'i', templateId: 'T1', label: 'ביטוח', amount: 50 }] })] });
+    const r3 = await run(TPLS, d3, { body: { templates: [Object.assign({}, INS, { amount: 0, project: { defaultInstallments: 3 } })] } });
+    t.eq('linked regular → switching to a project is refused', [r3.out.ok, r3.out.typeLocked], [false, 'T1']);
+  }
+
+  t.section('v2.14.86 (P1) — REAL 💳 routes keep the schedule; accounts-status hides \"הושלם\"');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK)] })] });
+    const sent = J(d.tenants[0].extraAccounts).map(a => { delete a.project; delete a.amountTariffs; a.amount = 999; return a; });
+    await run(TA_POST, d, { params: { tenantId: '1' }, body: { accounts: sent } });
+    const a = d.tenants[0].extraAccounts[0];
+    t.eq('💳 save (page without project / intervals) → project + schedule kept', [a.project, a.amountTariffs.length, S.extraAmountForMonth(d, a, MK)], [{ total: 2250, installments: 3, startMonth: MK }, 3, 750]);
+    const g = await run(TA_GET, d, { params: { tenantId: '1' } });
+    t.eq('💳 GET: projectView (display) + notifyTo', [g.out.accounts[0].projectView.statusLabel, g.out.accounts[0].notifyTo], ['בתשלומים', '📨 הודעה נפרדת לטלפון הראשי (פרויקט)']);
+    let s = await run(ACC_ST, d, {});
+    t.eq('accounts-status: progress, not hidden', [s.out.status['1'][0].project.progressText, s.out.status['1'][0].hidden], ['שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים', false]);
+    pay(d, 1, 'pa', MK, 2250, 750);
+    s = await run(ACC_ST, d, {});
+    t.eq('paid in full → hidden in the payments tab', [s.out.status['1'][0].hidden, s.out.status['1'][0].project.status], [true, 'done']);
+    const nd = base({ accountTemplates: [INS], tenants: [mem(1, { extraAccounts: [{ id: 'i', templateId: 'T1', label: 'ביטוח', amount: 50 }] })] });
+    const ns = await run(ACC_ST, nd, {});
+    t.eq('a regular account: no project / hidden keys', ['project' in ns.out.status['1'][0], 'hidden' in ns.out.status['1'][0]], [false, false]);
+  }
+
+  t.section('v2.14.86 (P1, ק6) — REAL portal: progress line; \"הושלם\" leaves the portal');
+  {
+    const d = base({ tenants: [mem(1, { extraAccounts: [projAcc(2250, 3, MK)] })] });
+    let p = lib.loadPortalRoute(d, 1);
+    const card = p.accountsView.find(x => x.id === 'pa');
+    t.eq('portal card: project progress (server text)', [card.project.progressText, card.project.left, p.grandTotal], ['שולם ₪0 מתוך ₪2250 · נותרו 3 תשלומים', 3, 980]);
+    pay(d, 1, 'pa', MK, 2250, 750);
+    p = lib.loadPortalRoute(d, 1);
+    t.eq('paid in full → card gone; grandTotal = main only', [p.accountsView.some(x => x.id === 'pa'), p.grandTotal], [false, 230]);
+  }
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); process.exit(t.done() ? 1 : 0); })();

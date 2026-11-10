@@ -1145,6 +1145,8 @@ function renderUnifiedBreakdown(d, main) {
         (acc.creditApplied > 0 ? ' − קרדיט ' + portalMoney(acc.creditApplied) + ' ₪' : '');
       amountText = portalMoney(acc.owedNow) + ' ₪'; color = 'var(--text)';
     }
+    // v2.14.86 (P1) — project progress, server text verbatim ("שולם ₪X מתוך ₪Y · נותרו N תשלומים")
+    if (acc.project && acc.project.progressText) sub += '<br><span class="acc-proj-progress">📊 ' + portalEsc(acc.project.progressText) + '</span>';
     html += '<details class="acc-card" style="border-bottom:1px solid var(--border);">' +
       '<summary style="list-style:none;cursor:pointer;">' +
         lineHtml(portalEsc(acc.label) + ' <span style="font-size:0.72rem;color:var(--text2);font-weight:400;">▾ היסטוריה</span>', sub, amountText, color).replace('border-bottom:1px solid var(--border);', '') +
