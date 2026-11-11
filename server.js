@@ -2257,6 +2257,12 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
 //    dedicated fix endpoint) so the sync logic doesn't re-fire on bad input.
 app.post('/api/data', authMiddleware, (req, res) => {
   if (req.body && 'projectMigrations' in req.body) delete req.body.projectMigrations;   // v2.14.87 (P1ב) — server-owned log
+  // v2.14.88 (P2) — the project part of combined transfers (manual import / manual mark).
+  // Never persisted; checked and written inside the sentLog sync below (same save).
+  // (kept on `req`, not in a local: the sync block below is also run standalone by the tests)
+  req._projAllocs = (req.body && Array.isArray(req.body.projectAllocations) && req.body.projectAllocations.length) ? req.body.projectAllocations : null;
+  if (req.body && 'projectAllocations' in req.body) delete req.body.projectAllocations;
+  if (req._projAllocs && !req.body.sentLog) return res.status(400).json({ ok: false, error: 'פיצול פרויקט: חסר sentLog' });
   // בדוק מגבלת דיירים אם יש עדכון של רשימת דיירים
   if (req.body.tenants) {
     const users = loadUsers();
@@ -2387,6 +2393,10 @@ app.post('/api/data', authMiddleware, (req, res) => {
   if (req.body.sentLog) {
     const current = loadTenantData(req.user.tenantId);
     const config  = current.config || {};
+    if (req._projAllocs) {   // v2.14.88 (P2) — refuse the WHOLE save if a split no longer fits
+      const _pv = validateProjectAllocations(current, req.body.sentLog, req._projAllocs);
+      if (!_pv.ok) return res.status(400).json({ ok: false, error: _pv.error });
+    }
     // Column A (v2.13.16): lazy-seed tariff tables so the per-key freeze below
     // can resolve the historical rate for each imported month.
     const seededSync = seedTariffsIfMissing(current);
@@ -2456,6 +2466,10 @@ app.post('/api/data', authMiddleware, (req, res) => {
       }
       if (type) recordPayment(current, tenantId, keyMonthKey, type, amount, tenant.name, payerName, paidAmount);
     });
+    if (req._projAllocs) {   // v2.14.88 (P2) — project part: account sentLog + history, in this save
+      const _pw = writeProjectAllocations(current, req._projAllocs);
+      Object.assign(req.body.sentLog, _pw.sentLog);
+    }
     req.body.paymentHistory = current.paymentHistory;
     // Column A: persist lazily-seeded tariff tables (only if the caller didn't
     // already send them and seeding actually happened).
@@ -11548,6 +11562,181 @@ function commitProjectMigrateUndo(d, plan) {
   return { undone: last.rows.length };
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.88 (P2) — a combined transfer: ועד + project (manual import + manual mark)
+// ════════════════════════════════════════════════════════════════
+// Locked with Tal (11.11.2026, supersedes spec ק2/ק3 and P2.1-B):
+//   • a row whose note has a project keyword (e.g. "שיפוץ", "לובי") and does NOT
+//     mention "ועד" → the whole row goes to the project, up to the member's project
+//     balance. Keyword + "ועד" in the same note → the normal rule (לילך, 8.11).
+//   • normal rule: ועד first (this month + old ועד debt, net of credit =
+//     splitCurrentMonthDebt.owedNow), the remainder to the project (this installment,
+//     arrears and prepayment) up to its balance; anything left → ועד credit.
+//   • only the ACTIVE month, open in both closedMonths and closedMonthsExtra; a member
+//     with no active, unsuspended project account with a balance → no split.
+// READ-ONLY. The ועד part is written as an ordinary ועד payment (the PROTECTED close
+// turns its surplus into the old-debt offset / credit, as today); the project part is
+// written by writeProjectAllocations through POST /api/data (one save, so the import
+// undo record covers both accounts). No protected function changes.
+function projectKeywordList(tpl) {
+  const raw = String((tpl && tpl.project && tpl.project.noteKeyword) || '');
+  const out = [];
+  raw.split(/[,;،]/).map(s => s.trim()).forEach(w => { if (w.length >= 2 && out.indexOf(w) < 0) out.push(w); });
+  return out;
+}
+
+// A whole word, optionally behind ONE Hebrew prefix letter (ו ה ב ל מ ש כ): "לשיפוץ", "הלובי".
+function noteHasProjectWord(note, words) {
+  const s = String(note || '');
+  if (!s || !Array.isArray(words)) return null;
+  for (const w of words) {
+    const esc = String(w).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp('(?:^|[^\\u05D0-\\u05EAA-Za-z0-9])[והבלמשכ]?' + esc + '(?=[^\\u05D0-\\u05EAA-Za-z0-9]|$)').test(s)) return w;
+  }
+  return null;
+}
+
+function noteMentionsVaad(note) {
+  return /ועד/.test(String(note || ''));
+}
+
+// The member's project account that can take money now (earliest start first), or why not.
+function projectAllocAccount(d, t, mkNow, emNow) {
+  const templates = Array.isArray(d.accountTemplates) ? d.accountTemplates : [];
+  const accs = (t.extraAccounts || []).filter(a => a && accIsProject(d, a));
+  if (!accs.length) return { reason: 'noProject' };
+  const live = accs.filter(a => a.active !== false && a.suspended !== true);
+  if (!live.length) return { reason: 'suspended' };
+  const withView = live.map(a => ({ acc: a, tpl: accTemplateFor(a, templates), view: projectMemberView(d, t, a, mkNow, emNow) }))
+    .filter(x => x.view && x.view.remaining > 0);
+  if (!withView.length) return { reason: 'done' };
+  withView.sort((a, b) => String((a.acc.project || {}).startMonth || '') < String((b.acc.project || {}).startMonth || '') ? -1 : 1);
+  return withView[0];
+}
+
+// rows: [{amount, note}] — the member's rows that land in month `mk` (one bucket).
+function planProjectAllocation(d, t, rows, mk) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const cfg = d.config || {};
+  const mkNow = getMonthKey(cfg), emNow = getEffectiveMonth(cfg);
+  const list = (Array.isArray(rows) ? rows : []).map(r => ({ amount: r2(parseFloat(r && r.amount) || 0), note: String((r && r.note) || '') }))
+    .filter(r => r.amount > 0);
+  const total = r2(list.reduce((s, r) => s + r.amount, 0));
+  const out = { tenantId: t.id, name: t.name || '', month: mk || mkNow, total, split: false, vaad: total, project: 0,
+    reason: '', keywordIgnored: false, keyword: '', keywordWithVaad: false };
+  if (!(total > 0)) { out.reason = 'noAmount'; return out; }
+  // a project keyword in a note of a member with no usable project → P2.5-A note
+  const allWords = [];
+  (d.accountTemplates || []).forEach(tp => { if (isProjectTpl(tp)) projectKeywordList(tp).forEach(w => { if (allWords.indexOf(w) < 0) allWords.push(w); }); });
+  const anyKw = list.map(r => noteHasProjectWord(r.note, allWords)).filter(Boolean)[0] || '';
+  if ((mk || mkNow) !== mkNow) { out.reason = 'notActiveMonth'; return out; }
+  if ((Array.isArray(d.closedMonths) && d.closedMonths.includes(mkNow)) ||
+      (Array.isArray(d.closedMonthsExtra) && d.closedMonthsExtra.includes(mkNow))) { out.reason = 'closed'; return out; }
+  const pick = projectAllocAccount(d, t, mkNow, emNow);
+  if (!pick.acc) { out.reason = pick.reason; if (anyKw) { out.keywordIgnored = true; out.keyword = anyKw; } return out; }
+  const words = projectKeywordList(pick.tpl);
+  let kwAmount = 0, kwWord = '', kwVaad = false;
+  list.forEach(r => {
+    const w = noteHasProjectWord(r.note, words);
+    if (!w) return;
+    if (noteMentionsVaad(r.note)) { kwVaad = true; return; }
+    kwAmount = r2(kwAmount + r.amount); kwWord = kwWord || w;
+  });
+  const live = t.customAmount || cfg.amount || 300;
+  const charge = paymentRateForMonth(t, d.defaultTariffs, mkNow, live);
+  const vaadOwed = r2(Math.max(0, splitCurrentMonthDebt(d, t, mkNow, emNow, undefined, charge).owedNow));
+  const projRem = r2(pick.view.remaining);
+  const p1 = r2(Math.min(kwAmount, projRem));
+  const rest = r2(total - p1);
+  const v1 = r2(Math.min(rest, vaadOwed));
+  const p2 = r2(Math.max(0, Math.min(rest - v1, projRem - p1)));
+  const project = r2(p1 + p2);
+  Object.assign(out, {
+    accId: pick.acc.id, accLabel: pick.acc.label || '', vaadOwed, projectRemaining: projRem,
+    keyword: kwWord || (kwVaad ? (words.find(w => list.some(r => noteHasProjectWord(r.note, [w]))) || '') : ''),
+    keywordWithVaad: kwVaad && !kwAmount, keywordAmount: kwAmount
+  });
+  if (!(project > 0)) { out.reason = 'noRemainder'; return out; }
+  out.split = true;
+  out.project = project;
+  out.vaad = r2(total - project);
+  out.credit = r2(Math.max(0, out.vaad - vaadOwed));
+  return out;
+}
+
+// POST /api/data { projectAllocations } — checked against the state ON DISK (`pre`) and the
+// POSTED sentLog. Every allocation must still fit: sum, project ≤ balance, active open month,
+// a live project account, and the ועד key holds exactly the ועד part. Returns {ok, error}.
+function validateProjectAllocations(pre, postedSentLog, allocs) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const cfg = pre.config || {};
+  const mkNow = getMonthKey(cfg), emNow = getEffectiveMonth(cfg);
+  if (!Array.isArray(allocs)) return { ok: false, error: 'פיצול פרויקט: נתונים לא תקינים' };
+  if (!postedSentLog || typeof postedSentLog !== 'object') return { ok: false, error: 'פיצול פרויקט: חסר sentLog' };
+  if ((Array.isArray(pre.closedMonths) && pre.closedMonths.includes(mkNow)) ||
+      (Array.isArray(pre.closedMonthsExtra) && pre.closedMonthsExtra.includes(mkNow))) return { ok: false, error: 'פיצול פרויקט: החודש הפעיל סגור' };
+  const seen = new Set();
+  for (const a of allocs) {
+    const tid = String(a && a.tenantId);
+    const t = (pre.tenants || []).find(x => String(x.id) === tid);
+    if (!t) return { ok: false, error: 'פיצול פרויקט: דייר לא נמצא' };
+    if (seen.has(tid)) return { ok: false, error: 'פיצול פרויקט: דייר מופיע פעמיים — ' + (t.name || tid) };
+    seen.add(tid);
+    if (a.month && a.month !== mkNow) return { ok: false, error: 'פיצול פרויקט: רק בחודש הפעיל — ' + (t.name || tid) };
+    const total = r2(parseFloat(a.total)), vaad = r2(parseFloat(a.vaad)), project = r2(parseFloat(a.project));
+    if (!(total > 0) || !(project > 0) || !(vaad >= 0) || r2(vaad + project) !== total) return { ok: false, error: 'פיצול פרויקט: ועד + פרויקט ≠ הסכום — ' + (t.name || tid) };
+    const acc = (t.extraAccounts || []).find(x => x && x.id === a.accId);
+    if (!acc || !accIsProject(pre, acc) || acc.active === false || acc.suspended === true) return { ok: false, error: 'פיצול פרויקט: חשבון הפרויקט לא פעיל — ' + (t.name || tid) };
+    const view = projectMemberView(pre, t, acc, mkNow, emNow);
+    if (!view || project > r2(view.remaining) + 0.005) return { ok: false, error: 'פיצול פרויקט: יותר מיתרת הפרויקט (₪' + (view ? view.remaining : 0) + ') — ' + (t.name || tid) };
+    const key = tid + '_' + emNow;
+    const before = (pre.sentLog || {})[key], after = postedSentLog[key];
+    const kind = a.kind === 'manual' ? 'manual' : 'bank';
+    if (kind === 'manual' && sentLogIsPayment(before)) return { ok: false, error: 'פיצול פרויקט: הוועד של החודש כבר סומן כשולם — ' + (t.name || tid) };
+    if (vaad > 0) {
+      const want = kind === 'manual' ? vaad : r2((parseSentLogAmount(before) || 0) + vaad);
+      if (!sentLogIsPayment(after) || r2(parseSentLogAmount(after) || 0) !== want) return { ok: false, error: 'פיצול פרויקט: סכום הוועד לא תואם — ' + (t.name || tid) };
+    } else if (String(after || '') !== String(before || '')) return { ok: false, error: 'פיצול פרויקט: הוועד היה אמור להישאר ללא שינוי — ' + (t.name || tid) };
+  }
+  return { ok: true };
+}
+
+// Writes the project part of each (validated) allocation into d.sentLog + d.paymentHistory,
+// ADDING to what the account-month already holds (one record per account-month, as the
+// extra-account import engine writes). Returns {sentLog: {key: value}} — the keys written.
+function writeProjectAllocations(d, allocs, opts) {
+  opts = opts || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const cfg = d.config || {};
+  const mkNow = getMonthKey(cfg), emNow = getEffectiveMonth(cfg);
+  const nowIso = opts.nowIso || new Date().toISOString();
+  const today = nowIso.split('T')[0];
+  const written = {};
+  if (!d.sentLog) d.sentLog = {};
+  if (!d.paymentHistory) d.paymentHistory = {};
+  for (const a of allocs) {
+    const tid = String(a.tenantId);
+    const t = (d.tenants || []).find(x => String(x.id) === tid);
+    const acc = t && (t.extraAccounts || []).find(x => x && x.id === a.accId);
+    if (!acc) continue;
+    const project = r2(parseFloat(a.project));
+    const phKey = tid + '__acc__' + acc.id;
+    const key = phKey + '_' + emNow;
+    const paid = accumulatePaidAmount(d.sentLog[key], project);
+    const manual = a.kind === 'manual';
+    const payer = String(a.payerName || '');
+    d.sentLog[key] = manual ? ('manual_paid_' + nowIso + '_amount_' + paid) : ('bank_import_' + nowIso + '_' + paid + '_payer_' + payer);
+    written[key] = d.sentLog[key];
+    if (!d.paymentHistory[phKey]) d.paymentHistory[phKey] = [];
+    const rec = { month: mkNow, paid: true, amount: crSuspendedIn(acc, mkNow) ? 0 : extraAmountForMonth(d, acc, mkNow),
+      paidAmount: paid, date: today, type: manual ? 'manual' : 'bank_import', name: t.name, payerName: payer,
+      projectSplit: { total: r2(parseFloat(a.total)), vaad: r2(parseFloat(a.vaad)), project } };
+    const i = d.paymentHistory[phKey].findIndex(r => r && r.month === mkNow);
+    if (i >= 0) d.paymentHistory[phKey][i] = rec; else d.paymentHistory[phKey].push(rec);
+  }
+  return { sentLog: written };
+}
+
 // GET /api/validate-collection — READ-ONLY health report before billing (basic, 1א).
 function validateCollection(d) {
   const templates = (d.accountTemplates || []).filter(t => t && t.id);
@@ -12258,6 +12447,24 @@ app.post('/api/tenant-accounts/:tenantId/:accountId/tariff', authMiddleware, (re
   const r = commitMemberTariff(d, plan);
   if (r.changed) saveTenantData(req.user.tenantId, { tenants: d.tenants });
   res.json({ ok: true, dryRun: false, changed: r.changed, fromMonth: plan.fromMonth });
+});
+
+// v2.14.88 (P2) — READ-ONLY: how each member's combined transfer splits (ועד / project).
+// body {month?: 'YYYY-MM', items: [{tenantId, rows: [{amount, note}]}]}. A building without
+// a project definition answers {hasProject:false, items: []} (the page then shows nothing).
+app.post('/api/project-allocation-plan', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const hasProject = (d.accountTemplates || []).some(t => isProjectTpl(t));
+  const mkNow = getMonthKey(d.config || {});
+  if (!hasProject) return res.json({ ok: true, hasProject: false, mkNow, items: [] });
+  const items = Array.isArray(req.body && req.body.items) ? req.body.items.slice(0, 2000) : [];
+  const mk = (req.body && /^\d{4}-\d{2}$/.test(String(req.body.month || ''))) ? req.body.month : mkNow;
+  const out = [];
+  for (const it of items) {
+    const t = (d.tenants || []).find(x => String(x.id) === String(it && it.tenantId));
+    if (t) out.push(planProjectAllocation(d, t, it.rows, mk));
+  }
+  res.json({ ok: true, hasProject: true, mkNow, items: out });
 });
 
 // POST /api/mark-account-paid/:tenantId/:accountId — manual payment for extra account

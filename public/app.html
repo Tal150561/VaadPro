@@ -1992,7 +1992,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.87';
+const HTML_VERSION = '2.14.88';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4720,6 +4720,17 @@ async function markPaid(id) {
   if (input === null) return; // ביטול
   const paidAmt = parseFloat(input);
   if (isNaN(paidAmt) || paidAmt <= 0) { toast('❌ סכום לא תקין'); return; }
+  // v2.14.88 (P2.3-B) — above the ועד, with a project → the split window (server plan).
+  if (p2HasProjectDef() && paidAmt > defaultAmt) {
+    try {
+      const _p2 = (await p2PlanFetch(null, [{ tenantId: id, rows: [{ amount: paidAmt, note: '' }] }]))[0];
+      if (_p2 && _p2.split) { p2OpenMarkSplit(id, em, _p2, paidAmt); return; }
+    } catch (e) {}
+  }
+  await markPaidWrite(id, em, paidAmt);
+}
+
+async function markPaidWrite(id, em, paidAmt) {
   const ts = new Date().toISOString();
   const mpKey = id+'_'+em;
   const mpVal = 'manual_paid_'+ts+'_amount_'+paidAmt;
@@ -6803,6 +6814,191 @@ function splitOverpayAcrossMonths(buckets, opts) {
   // #bankResult, so the panel is inserted below the fresh preview (and the
   // "אשר ורשום" button's +N label reflects the current pending count).
   renderAmbiguousMatchPanel(_ambiguousRows);
+  // v2.14.88 (P2) — combined transfers: ask the server how each member's rows split.
+  renderProjectSplitPanel(null);
+  p2LoadImportPlan(window._pendingBankImport);
+}
+
+// ══ v2.14.88 (P2) — a combined transfer: ועד + project (manual import + manual mark) ══
+// The SERVER decides the split (POST /api/project-allocation-plan, read-only) and
+// re-checks it on save (POST /api/data { projectAllocations } — refused whole if it no
+// longer fits). The page only shows it and lets the operator move money between the two
+// parts; the row's sum stays fixed. Rule (Tal, 11.11): keyword without "ועד" → project;
+// otherwise ועד first (month + old debt), the rest to the project, then ועד credit.
+// The BankSync AGENT path (analyzeBankRowsServer) is NOT touched.
+function p2HasProjectDef() { return (accountTemplates || []).some(tplIsProject); }
+function p2MemberHasProject(tid) {
+  var t = (data.tenants || []).filter(function(x){ return String(x.id) === String(tid); })[0];
+  if (!t) return false;
+  return (t.extraAccounts || []).some(function(a){
+    if (!a || a.active === false || a.suspended === true) return false;
+    return (accountTemplates || []).some(function(tp){ return tplIsProject(tp) && (a.templateId ? tp.id === a.templateId : tp.label === a.label); });
+  });
+}
+function p2Nis(v) { return '₪' + (Math.round((parseFloat(v) || 0) * 100) / 100).toLocaleString('he-IL'); }
+function p2R2(v) { return Math.round((parseFloat(v) || 0) * 100) / 100; }
+function p2Explain(p) {
+  if (p.keywordIgnored) return '⚠️ מילת מפתח „' + esc(p.keyword) + '“ אבל אין פרויקט פעיל — נרשם לוועד';
+  var s;
+  if (p.keywordAmount > 0) s = 'מילת מפתח „' + esc(p.keyword) + '“ → לפרויקט';
+  else if (p.keywordWithVaad) s = '„' + esc(p.keyword) + '“ וגם „ועד“ בהערה → ועד קודם';
+  else s = 'ועד קודם (' + p2Nis(p.vaadOwed) + ' כולל חוב קודם), השאר לפרויקט';
+  if (p.project >= p.projectRemaining) s += ' · עד יתרת הפרויקט (' + p2Nis(p.projectRemaining) + ')';
+  if (p.credit > 0) s += ' · זכות בוועד ' + p2Nis(p.credit);
+  return s;
+}
+async function p2PlanFetch(month, items) {
+  var r = await fetch(API + '/project-allocation-plan', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ month: month, items: items }) });
+  var j = await r.json();
+  if (!j || !j.ok) throw new Error((j && j.error) || 'plan');
+  return j.items || [];
+}
+// Preview step: one plan per member whose rows land in ONE month (a multi-month or
+// lump-split member is left to the ועד, as before).
+async function p2LoadImportPlan(P) {
+  if (!P || !p2HasProjectDef()) return;
+  if ((Array.isArray(data.closedMonths) ? data.closedMonths : []).indexOf(P.selectedMonthKey) >= 0) return;
+  var items = (P.matched || []).filter(function(m){ return !m._buckets || m._buckets.size <= 1; }).map(function(m){
+    return { tenantId: m.tenant.id, rows: (m.payments || []).map(function(x){ return { amount: x.amount, note: x.note || '' }; }) };
+  });
+  if (!items.length) return;
+  P._projPlanPending = true;
+  var map = {};
+  try {
+    var list = await p2PlanFetch(P.selectedMonthKey, items);
+    list.forEach(function(p){
+      if (!p.split && !p.keywordIgnored) return;
+      p.on = !!p.split; p.vaadEdit = p.vaad; p.projectEdit = p.project;
+      map[String(p.tenantId)] = p;
+    });
+  } catch (e) { toast('⚠️ חישוב הפיצול ועד / פרויקט נכשל — הכול יירשם לוועד', 'warn'); }
+  P._projPlanPending = false;
+  if (window._pendingBankImport !== P) return;
+  P.projectPlan = map;
+  renderProjectSplitPanel(P);
+}
+function renderProjectSplitPanel(P) {
+  var box = document.getElementById('projectSplitPanel');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'projectSplitPanel';
+    var rd = document.getElementById('bankResult');
+    if (rd && rd.parentNode) rd.parentNode.insertBefore(box, rd.nextSibling);
+    else document.body.appendChild(box);
+  }
+  var map = (P && P.projectPlan) || {};
+  var ids = Object.keys(map);
+  if (!ids.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  var rows = ids.map(function(tid){
+    var p = map[tid];
+    var head = '<div style="font-size:0.88rem;color:var(--text);">🧩 <b>' + esc(p.name || '') + '</b> — ' + p2Nis(p.total) + '</div>';
+    var why = '<div class="p2-why" style="font-size:0.76rem;color:var(--text2);margin-top:3px;">' + p2Explain(p) + '</div>';
+    if (!p.split) return '<div class="p2-row" data-p2-tid="' + esc(tid) + '" style="padding:9px 0;border-top:1px solid rgba(255,255,255,.06);">' + head + why + '</div>';
+    return '<div class="p2-row" data-p2-tid="' + esc(tid) + '" style="padding:9px 0;border-top:1px solid rgba(255,255,255,.06);">' + head +
+      '<div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:6px;font-size:0.82rem;">' +
+        '<label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;"><input type="checkbox" class="p2-on" ' + (p.on ? 'checked' : '') + ' onchange="p2OnToggle(\'' + esc(tid) + '\',this.checked)"> לפצל</label>' +
+        '<label>ועד <input type="number" class="p2-v" min="0" step="0.01" value="' + p.vaadEdit + '" oninput="p2OnEdit(\'' + esc(tid) + '\',\'v\',this.value)" style="width:90px;"' + (p.on ? '' : ' disabled') + '></label>' +
+        '<label>' + esc(p.accLabel || 'פרויקט') + ' <input type="number" class="p2-p" min="0" step="0.01" value="' + p.projectEdit + '" oninput="p2OnEdit(\'' + esc(tid) + '\',\'p\',this.value)" style="width:90px;"' + (p.on ? '' : ' disabled') + '></label>' +
+      '</div>' + why + '</div>';
+  }).join('');
+  box.innerHTML = '<div style="background:rgba(88,166,255,.08);border:1px solid rgba(88,166,255,.35);border-radius:10px;padding:12px 14px;margin:12px 0;">' +
+    '<div style="font-weight:700;color:var(--accent);margin-bottom:4px;">🧩 העברה משולבת — ועד + פרויקט</div>' +
+    '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:8px;">הסכום של כל שורה קבוע; אפשר להזיז כסף בין הוועד לפרויקט. ביטול „לפצל“ = הכול לוועד, כמו לפני P2. נרשם רק ב„✅ אשר ורשום“.</div>' +
+    rows + '</div>';
+  box.style.display = 'block';
+}
+function p2OnToggle(tid, on) {
+  var P = window._pendingBankImport; var p = P && P.projectPlan && P.projectPlan[tid];
+  if (!p) return;
+  p.on = !!on;
+  var row = document.querySelector('#projectSplitPanel [data-p2-tid="' + tid + '"]');
+  if (row) row.querySelectorAll('.p2-v,.p2-p').forEach(function(el){ el.disabled = !p.on; });
+}
+// The two inputs always add up to the row's sum; the project part never exceeds the
+// project balance the server reported (the server re-checks on save).
+function p2Balance(p, which, val) {
+  var total = p2R2(p.total), cap = Math.min(total, p2R2(p.projectRemaining));
+  var v = p2R2(val);
+  if (isNaN(v) || v < 0) v = 0;
+  var proj = which === 'p' ? Math.min(v, cap) : Math.min(cap, Math.max(0, p2R2(total - Math.min(v, total))));
+  return { project: p2R2(proj), vaad: p2R2(total - proj) };
+}
+function p2OnEdit(tid, which, val) {
+  var P = window._pendingBankImport; var p = P && P.projectPlan && P.projectPlan[tid];
+  if (!p) return;
+  var b = p2Balance(p, which, val);
+  p.projectEdit = b.project; p.vaadEdit = b.vaad;
+  var row = document.querySelector('#projectSplitPanel [data-p2-tid="' + tid + '"]');
+  if (!row) return;
+  var other = row.querySelector(which === 'p' ? '.p2-v' : '.p2-p');
+  if (other) other.value = which === 'p' ? b.vaad : b.project;
+}
+// The allocation commitBankImport writes for member m, or null (→ all to the ועד, as before).
+function p2AllocFor(P, m) {
+  var p = P && P.projectPlan && P.projectPlan[String(m.tenant.id)];
+  if (!p || !p.split || !p.on || !(p.projectEdit > 0)) return null;
+  if (p2R2(p.total) !== p2R2(m.amount)) return null;
+  return { tenantId: m.tenant.id, accId: p.accId, month: P.selectedMonthKey, total: p2R2(m.amount), vaad: p2R2(p.vaadEdit), project: p2R2(p.projectEdit), kind: 'bank', payerName: (m.payments[0] && m.payments[0].payerName) || '' };
+}
+
+// Manual mark (P2.3-B): an amount above the ועד for a member with a project → an editable
+// split window, prefilled by the same server plan. "הכול לוועד" = the old behaviour.
+function p2OpenMarkSplit(id, em, plan, paidAmt) {
+  var box = document.getElementById('p2MarkModal');
+  if (!box) { box = document.createElement('div'); box.id = 'p2MarkModal'; document.body.appendChild(box); }
+  window._p2Mark = { id: id, em: em, plan: plan, paidAmt: paidAmt };
+  plan.vaadEdit = plan.vaad; plan.projectEdit = plan.project;
+  box.innerHTML = '<div class="modal-overlay" style="position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;z-index:9999;">' +
+    '<div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:16px 18px;max-width:420px;width:92%;color:var(--text);" dir="rtl">' +
+      '<div style="font-weight:700;margin-bottom:6px;">🧩 ' + esc(plan.name || '') + ' — ' + p2Nis(plan.total) + '</div>' +
+      '<div style="font-size:0.82rem;color:var(--text2);margin-bottom:10px;">הסכום גבוה מהוועד ולדייר יש פרויקט. כך יתחלק (אפשר לשנות):</div>' +
+      '<div style="display:flex;gap:12px;flex-wrap:wrap;font-size:0.85rem;">' +
+        '<label>ועד <input type="number" id="p2mV" min="0" step="0.01" value="' + plan.vaad + '" oninput="p2MarkEdit(\'v\',this.value)" style="width:100px;"></label>' +
+        '<label>' + esc(plan.accLabel || 'פרויקט') + ' <input type="number" id="p2mP" min="0" step="0.01" value="' + plan.project + '" oninput="p2MarkEdit(\'p\',this.value)" style="width:100px;"></label>' +
+      '</div>' +
+      '<div style="font-size:0.76rem;color:var(--text2);margin-top:8px;">' + p2Explain(plan) + '</div>' +
+      '<div style="display:flex;gap:8px;justify-content:flex-start;margin-top:14px;flex-wrap:wrap;">' +
+        '<button class="btn btn-sm" style="background:var(--accent);color:#fff;" onclick="p2MarkCommit()">✅ אשר</button>' +
+        '<button class="btn btn-secondary btn-sm" onclick="p2MarkAllVaad()">הכול לוועד</button>' +
+        '<button class="btn btn-ghost btn-sm" onclick="p2MarkClose()">ביטול</button>' +
+      '</div></div></div>';
+  box.style.display = 'block';
+}
+function p2MarkEdit(which, val) {
+  var M = window._p2Mark; if (!M) return;
+  var b = p2Balance(M.plan, which, val);
+  M.plan.projectEdit = b.project; M.plan.vaadEdit = b.vaad;
+  var other = document.getElementById(which === 'p' ? 'p2mV' : 'p2mP');
+  if (other) other.value = which === 'p' ? b.vaad : b.project;
+}
+function p2MarkClose() {
+  var box = document.getElementById('p2MarkModal');
+  if (box) { box.style.display = 'none'; box.innerHTML = ''; }
+  window._p2Mark = null;
+}
+async function p2MarkAllVaad() {
+  var M = window._p2Mark; if (!M) return;
+  p2MarkClose();
+  await markPaidWrite(M.id, M.em, M.paidAmt);
+}
+async function p2MarkCommit() {
+  var M = window._p2Mark; if (!M) return;
+  var p = M.plan;
+  if (!(p.projectEdit > 0)) { return p2MarkAllVaad(); }
+  p2MarkClose();
+  var key = M.id + '_' + M.em;
+  if (p.vaadEdit > 0) data.sentLog[key] = 'manual_paid_' + new Date().toISOString() + '_amount_' + p.vaadEdit;
+  var body = { sentLog: data.sentLog, projectAllocations: [{ tenantId: M.id, accId: p.accId, month: p.month, total: p2R2(p.total), vaad: p.vaadEdit, project: p.projectEdit, kind: 'manual' }] };
+  var j = null;
+  try {
+    var r = await fetch(API + '/data', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    j = await r.json();
+  } catch (e) { j = null; }
+  await loadData();
+  try { await loadAccountsStatus(); } catch (e) {}
+  render();
+  if (j && j.ok) toast('💵 נרשם: ועד ' + p2Nis(p.vaadEdit) + ' · ' + (p.accLabel || 'פרויקט') + ' ' + p2Nis(p.projectEdit), 'success');
+  else toast('❌ ' + ((j && j.error) || 'השמירה נכשלה — לא נרשם דבר'), 'error');
 }
 
 // ── v2.14.16: commit step for the manual (UI) bank import ──────────────────────
@@ -6814,6 +7010,8 @@ function commitBankImport(){
   var P = window._pendingBankImport;
   if(!P){ toast('אין ייבוא ממתין לאישור','error'); return; }
   var matched = P.matched, hebOfMk = P.hebOfMk, em = P.em;
+  if (P._projPlanPending) { toast('⏳ מחשב פיצול ועד / פרויקט — נסה שוב בעוד רגע', 'info'); return; }
+  var _p2Allocs = [], _p2ByTid = {};   // v2.14.88 (P2)
 
   // v2.14.39b — OPTION 1 (locked with Tal, session 22): the whole file is imported
   // to ONE selected month. If that month is CLOSED, splitting makes no sense — the
@@ -6908,10 +7106,14 @@ function commitBankImport(){
                                 charge: m.amount, payerName: payerName, note: _bankNote, prevDebt: _prevDebt });
       } else {
         var _sKey = m.tenant.id + '_' + em;
+        // v2.14.88 (P2) — a combined transfer: only the ועד part goes to the ועד key; the
+        // project part travels as projectAllocations (the server writes it in this save).
+        var _p2a = P.projectPlan ? p2AllocFor(P, m) : null;
+        if (_p2a) { _p2Allocs.push(_p2a); _p2ByTid[String(m.tenant.id)] = _p2a; }
         // v2.14.58: ADD to an earlier import of the same month (never overwrite) —
         // the Tami bug: 230 (2.9) + 230 (27.9) in two imports must read 460.
-        data.sentLog[_sKey] =
-          'bank_import_' + new Date().toISOString() + '_' + accumulatePaidAmountGlobal(data.sentLog[_sKey], m.amount) + '_payer_' + payerName;
+        if (!_p2a || _p2a.vaad > 0) data.sentLog[_sKey] =
+          'bank_import_' + new Date().toISOString() + '_' + accumulatePaidAmountGlobal(data.sentLog[_sKey], _p2a ? _p2a.vaad : m.amount) + '_payer_' + payerName;
       }
     }
     delete m._buckets;
@@ -6949,6 +7151,8 @@ function commitBankImport(){
         var _priorSet = new Set(P.priorFp || []);
         if (bankFpAlreadySeen(_priorSet, bankFpPrefixes(P.priorFp || []), _afp0, _afp0)) { _ambIgnored++; return; }
         var _key = t.id + '_' + em;
+        var _p2w = _p2ByTid[String(t.id)];   // v2.14.88 (P2) — ועד money: keeps the server check exact
+        if (_p2w) { _p2w.vaad = Math.round((_p2w.vaad + (parseFloat(r.amount)||0)) * 100) / 100; _p2w.total = Math.round((_p2w.total + (parseFloat(r.amount)||0)) * 100) / 100; }
         var _accrued = Math.round((_readSentLogAmount(_key) + (parseFloat(r.amount)||0)) * 100) / 100;
         data.sentLog[_key] =
           'bank_import_' + new Date().toISOString() + '_' + _accrued + '_payer_' + (r.payerName||'');
@@ -6973,6 +7177,7 @@ function commitBankImport(){
   // so this import can be undone (↩️ בטל ייבוא אחרון, settings). Never persisted.
   const payload = { sentLog: data.sentLog, importedBankFingerprints: allFp, bankImportCommit: true };
   if (P.selectedMonthKey) payload.bankMonthOverride = P.selectedMonthKey;
+  if (_p2Allocs.length) payload.projectAllocations = _p2Allocs;   // v2.14.88 (P2)
   // v2.14.52 — keep the save promise so we can RELOAD after it lands (see the end
   // of this function). Previously fire-and-forget + render() of LOCAL data: the
   // status badges updated (sentLog is local) but the SERVER-computed totalDebt /
@@ -6981,6 +7186,7 @@ function commitBankImport(){
   // confirmImport(). Manual UI path only — the BankSync agent path is untouched.
   var _bankSaveP = fetch(API+'/data',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})
     .then(function(r){ return r.json(); })
+    .then(function(j){ if (j && j.ok === false) toast('❌ הייבוא לא נשמר: ' + (j.error || 'שגיאה') + ' — לא נרשם דבר', 'error'); return j; })
     .catch(function(){ toast('❌ שמירת הייבוא נכשלה — רענן ובדוק','error'); return null; });
 
   if (P.dupWarnings.length) {
@@ -6995,6 +7201,11 @@ function commitBankImport(){
 
   var mCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
   toast('✅ נרשמו ' + mCount + ' תשלומים ל-' + matched.length + ' דיירים','success');
+  if (_p2Allocs.length) {   // v2.14.88 (P2)
+    var _p2Sum = _p2Allocs.reduce(function(s, a){ return Math.round((s + a.project) * 100) / 100; }, 0);
+    toast('🧩 ' + _p2Allocs.length + ' העברות פוצלו — ' + p2Nis(_p2Sum) + ' לפרויקט', 'info');
+  }
+  if (P.projectPlan) renderProjectSplitPanel(null);
 
   // v2.14.41 (A): report ambiguous-row outcomes and clear that panel.
   if ((P.ambiguousRows || []).length) {
@@ -7249,9 +7460,12 @@ function renderClosedMonthApprovals(hits){
   var safeCount = 0;
   var rowsHtml = '';
   hits.forEach(function(hit, i){
-    var safe = _cmIsSafe(hit);
-    if (safe) safeCount++;
     var amt = (hit.charge!=null?hit.charge:hit.amount);
+    // v2.14.88 (P2.4-B) — above the dues for a member with a project: maybe project money.
+    // Approving still credits the WHOLE sum to the ועד (as before); never pre-checked.
+    var p2tag = hit.scope !== 'extra' && p2MemberHasProject(hit.tenantId) && (parseFloat(amt)||0) > _cmMonthlyCharge(hit);
+    var safe = _cmIsSafe(hit) && !p2tag;
+    if (safe) safeCount++;
     var bankLine = '';
     if (hit.payerName || hit.note) {
       bankLine = '<div style="font-size:0.76rem;color:var(--text2);margin-top:3px;">🏦 מהבנק: '
@@ -7265,6 +7479,7 @@ function renderClosedMonthApprovals(hits){
       +   '<div style="font-size:0.88rem;color:var(--text);">💰 <b>'+ esc(hit.name||'') +'</b> — '+ (amt!=null?nis(amt):'') +' עבור <b>'+ hebOf(hit.month) +'</b>'
       +     (hit.scope==='extra'?' <span style="color:var(--text2);">(חשבון נוסף)</span>':'') +'</div>'
       +   bankLine
+      +   (p2tag ? '<div class="cm-p2-tag" style="font-size:0.76rem;color:var(--warn);margin-top:3px;">⚠️ ייתכן שכולל תשלום פרויקט — זקיפה כאן הולכת כולה לוועד. את חלק הפרויקט רשמו ידנית בשורת הפרויקט.</div>' : '')
       +   '<div style="font-size:0.76rem;color:var(--text2);margin-top:3px;">🏷️ למה כאן: החודש כבר נסגר והחוב שלו כבר נצבר — '
       +     (safe? 'הסכום תואם דמי הוועד (סומן אוטומטית).' : '<span style="color:var(--warn);">סכום/הערה חריגים — בדוק לפני אישור.</span>') +'</div>'
       +   '<div style="font-size:0.76rem;color:var(--accent);margin-top:3px;">👁️ אם תזקוף: '+ preview(hit) +'</div>'
@@ -7363,6 +7578,7 @@ function dismissClosedMonthPayment(idx){
 function cancelBankImport(){
   // Discard the pending import — nothing was ever written, so this is a pure UI reset.
   window._pendingBankImport = null;
+  renderProjectSplitPanel(null);   // v2.14.88 (P2)
   document.getElementById('bankResult').style.display='none';
   toast('הייבוא בוטל — לא נשמר דבר (אין טביעות אצבע)','info');
 }
@@ -10669,7 +10885,7 @@ function projectTplRowHtml(t, i) {
     '</div>' +
     '<div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-top:8px;">' +
       '<label style="font-size:0.75rem;" title="ברירת המחדל לחודש התחלה בחלון ההחלה (אפשר לשנות לכל דייר)">חודש התחלה: <input type="month" class="tpl-proj-start" value="' + esc(p.startMonth || '') + '" onchange="setTplProject(' + i + ',\'startMonth\',this.value)" style="width:auto;"></label>' +
-      '<label style="font-size:0.75rem;" title="מילה שתופיע בהערת ההעברה של תשלום לפרויקט — תשמש להקצאה בייבוא הבנק (P2)">מילת מפתח: <input type="text" class="tpl-proj-kw" value="' + esc(p.noteKeyword || '') + '" onchange="setTplProject(' + i + ',\'noteKeyword\',this.value)" style="width:120px;"></label>' +
+      '<label style="font-size:0.75rem;" title="מילים בהערת ההעברה (מופרדות בפסיק, למשל: שיפוץ, לובי). מילה בלי „ועד“ בהערה → כל ההעברה לפרויקט. בלי מילה → ועד קודם, השאר לפרויקט.">מילות מפתח: <input type="text" class="tpl-proj-kw" placeholder="שיפוץ, לובי" value="' + esc(p.noteKeyword || '') + '" onchange="setTplProject(' + i + ',\'noteKeyword\',this.value)" style="width:150px;"></label>' +
       '<label style="font-size:0.75rem;">משלם: <select onchange="accountTemplates[' + i + '].defaultPayer=this.value" style="width:auto;">' +
         '<option value="owner"' + (t.defaultPayer !== 'tenant' ? ' selected' : '') + '>בעלים</option>' +
         '<option value="tenant"' + (t.defaultPayer === 'tenant' ? ' selected' : '') + '>שוכר</option></select></label>' +

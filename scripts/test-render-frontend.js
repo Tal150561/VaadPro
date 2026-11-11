@@ -864,7 +864,7 @@ t.section('app.html — #3 multi-month split (v2.14.4)');
   // v2.14.72 (C): one confirm covers dated multi-month rows AND lump splits.
   t.eq('split write is gated behind a confirm', /doSplit = confirm\(\s*\n?\s*_q \+/.test(app) && app.includes("'הקובץ מכיל תשלומים בתאריכים מ-'"), true);
   t.eq('declining the split writes into the chosen month (em)',
-    /var _sKey = m\.tenant\.id \+ '_' \+ em;\s*[\s\S]{0,200}?data\.sentLog\[_sKey\] =/.test(app), true);
+    /var _sKey = m\.tenant\.id \+ '_' \+ em;\s*[\s\S]{0,700}?data\.sentLog\[_sKey\] =/.test(app), true);
   t.eq('accepting the split writes per-month keys',
     /var _bKey = m\.tenant\.id \+ '_' \+ hebMk;\s*[\s\S]{0,120}?data\.sentLog\[_bKey\] =/.test(app), true);
   t.eq('the Map is not shipped to showBankResult', /delete m\._buckets;/.test(app), true);
@@ -2138,7 +2138,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   const commit58 = app58.slice(app58.indexOf('function commitBankImport(){'), app58.indexOf('function cancelBankImport'));
   t.eq('commit: no bare overwrite with m.amount', /'_' \+ m\.amount \+ '_payer_'/.test(commit58), false);
   t.eq('commit: no bare overwrite with b.sum', /'_' \+ b\.sum \+ '_payer_'/.test(commit58), false);
-  t.eq('commit: single write uses accumulatePaidAmountGlobal', /accumulatePaidAmountGlobal\(data\.sentLog\[_sKey\], m\.amount\)/.test(commit58), true);
+  t.eq('commit: single write uses accumulatePaidAmountGlobal', /accumulatePaidAmountGlobal\(data\.sentLog\[_sKey\], _p2a \? _p2a\.vaad : m\.amount\)/.test(commit58), true);
   t.eq('commit: bucket write uses accumulatePaidAmountGlobal', /accumulatePaidAmountGlobal\(data\.sentLog\[_bKey\], b\.sum\)/.test(commit58), true);
   t.eq('_readSentLogAmount uses the shared parser', /function _readSentLogAmount\(key\)\{[\s\S]{0,120}?sentLogPaidAmountGlobal/.test(app58), true);
   t.eq('old manual_paid year-grabbing regex is gone', app58.includes('manual_paid_([\\d.]+)'), false);
@@ -4295,6 +4295,142 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     t.eq('undo click → projUndoMigration → POST …/project-migrate-undo dryRun:false', [/if \(op === 'undo'\) \{ await projUndoMigration\(\); return; \}/.test(app), /'\/project-migrate-undo'[\s\S]{0,160}dryRun: false/.test(extractFunctions(app, ['projUndoMigration']))], [true, true]);
   }
   t.eq('guide: 🔁 section', ['id="vpg-a-project-migrate"', 'שולם לפני', '↩️ ביטול'].every(x => readSource('public/vaadpro-guide.js').includes(x)), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.88 (P2) — combined transfer: the page (EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const mkRun = (names, scope) => new Function(Object.keys(scope).join(','), extractFunctions(app, names) + '\n; return {' + names.join(',') + '};')
+    .apply(null, Object.keys(scope).map(k => scope[k]));
+  t.section('v2.14.88 (P2) — split inputs keep the sum and the project cap');
+  {
+    const F = mkRun(['p2R2', 'p2Balance'], {});
+    const p = { total: 1250, projectRemaining: 2250 };
+    t.eq('project 900 → ועד 350', F.p2Balance(p, 'p', '900'), { project: 900, vaad: 350 });
+    t.eq('ועד 100 → project 1150', F.p2Balance(p, 'v', '100'), { project: 1150, vaad: 100 });
+    t.eq('project above the sum → clamped to the sum', F.p2Balance(p, 'p', '5000'), { project: 1250, vaad: 0 });
+    t.eq('project cap (balance 300) → ועד takes the rest', F.p2Balance({ total: 1250, projectRemaining: 300 }, 'v', '0'), { project: 300, vaad: 950 });
+    t.eq('negative / not a number → 0', [F.p2Balance(p, 'p', '-5'), F.p2Balance(p, 'v', 'x')], [{ project: 0, vaad: 1250 }, { project: 1250, vaad: 0 }]);
+  }
+
+  t.section('v2.14.88 (P2) — the preview panel (server plan → rows, escaped)');
+  {
+    const box = { style: {}, innerHTML: '', parentNode: null };
+    const F = mkRun(['esc', 'p2R2', 'p2Nis', 'p2Explain', 'renderProjectSplitPanel'], {
+      document: { getElementById: id => id === 'projectSplitPanel' ? box : null, createElement: () => box, body: { appendChild() {} } } });
+    const P = { projectPlan: {
+      '1': { tenantId: 1, name: 'רוני <b>', total: 1250, split: true, on: true, vaad: 250, project: 1000, vaadEdit: 250, projectEdit: 1000, vaadOwed: 250, projectRemaining: 2250, credit: 0, accLabel: 'שיפוץ לובי', keyword: '', keywordAmount: 0 },
+      '2': { tenantId: 2, name: 'לילך', total: 1250, split: true, on: true, vaad: 250, project: 1000, vaadEdit: 250, projectEdit: 1000, vaadOwed: 250, projectRemaining: 2250, credit: 0, accLabel: 'שיפוץ לובי', keyword: 'שיפוץ', keywordWithVaad: true, keywordAmount: 0 },
+      '6': { tenantId: 6, name: 'לימור', total: 500, split: false, keywordIgnored: true, keyword: 'שיפוץ' } } };
+    F.renderProjectSplitPanel(P);
+    const h = box.innerHTML;
+    t.eq('panel shown with a row per member, name escaped', [box.style.display, (h.match(/class="p2-row"/g) || []).length, h.includes('רוני &lt;b&gt;')], ['block', 3, true]);
+    t.eq('editable ועד / project inputs + „לפצל” on the split rows only', [(h.match(/class="p2-v"/g) || []).length, (h.match(/class="p2-p"/g) || []).length, (h.match(/class="p2-on"/g) || []).length], [2, 2, 2]);
+    t.eq('reasons: normal rule / keyword + ועד / keyword without a project', [h.includes('ועד קודם (₪250 כולל חוב קודם), השאר לפרויקט'), h.includes('„שיפוץ“ וגם „ועד“ בהערה → ועד קודם'), h.includes('⚠️ מילת מפתח „שיפוץ“ אבל אין פרויקט פעיל — נרשם לוועד')], [true, true, true]);
+    F.renderProjectSplitPanel(null);
+    t.eq('no plan → hidden + emptied', [box.style.display, box.innerHTML], ['none', '']);
+  }
+
+  t.section('v2.14.88 (P2) — commitBankImport sends the split (EXECUTED)');
+  {
+    const run = (plan, amb) => {
+      let posted = null; const toasts = [];
+      const P = { matched: [{ tenant: { id: 1, name: 'רוני', openingDebt: 0 }, amount: 1250, count: 1, payments: [{ payerName: 'ליעד רוני', amount: 1250, note: 'ועד' }], _buckets: new Map([['2026-11', { sum: 1250, payerName: 'ליעד רוני', count: 1 }]]) },
+                           { tenant: { id: 2, name: 'מירי', openingDebt: 0 }, amount: 250, count: 2, payments: [{ payerName: 'מירי', amount: 230 }, { payerName: 'מירי', amount: 20 }], _buckets: new Map([['2026-11', { sum: 250, payerName: 'מירי', count: 2 }]]) }],
+        unmatched: [], alreadyImportedSkips: [], dupWarnings: [], newFp: ['fp1'], priorFp: [], em: 'נובמבר', selectedMonthKey: '2026-11',
+        hebOfMk: () => 'נובמבר', splitMonths: null, total: 3, ta: 0, fileName: 'x.xls', filterByAmount: false, projectPlan: plan, ambiguousRows: amb || [] };
+      let panelCleared = 0;
+      const scope = {
+        window: { _pendingBankImport: P, _closedMonthApprovals: null },
+        data: { closedMonths: ['2026-10'], sentLog: { '1_נובמבר': 'sent_x' }, importedBankFingerprints: [], tenants: [{ id: 1, name: 'רוני', openingDebt: 0 }] },
+        VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+        API: '', fetch: (u, o) => { posted = JSON.parse(o.body); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); },
+        toast: m => toasts.push(m), render() {}, showBankResult() {}, resetDropZone() {}, renderAmbiguousMatchPanel() {}, renderClosedMonthApprovals() {},
+        renderProjectSplitPanel: () => { panelCleared++; }, loadData: () => Promise.resolve(), confirm: () => true, console,
+        localStorage: { getItem: () => 't' }, document: { getElementById: () => null, querySelector: () => null, createElement: () => ({ style: {}, appendChild() {} }), body: { appendChild() {} } }
+      };
+      const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'p2R2', 'p2Nis', 'p2AllocFor', 'commitBankImport']) + '\n; return commitBankImport;')
+        .apply(null, Object.keys(scope).map(k => scope[k]));
+      F();
+      return { posted, toasts, panelCleared, sl: scope.data.sentLog };
+    };
+    const plan = { '1': { tenantId: 1, total: 1250, split: true, on: true, vaadEdit: 250, projectEdit: 1000, accId: 'acc1', projectRemaining: 2250 } };
+    const r = run(plan);
+    t.eq('ועד key gets ONLY the ועד part (250); מירי unchanged (250)', [/_250_payer_ליעד רוני$/.test(r.sl['1_נובמבר']), /_250_payer_מירי$/.test(r.sl['2_נובמבר'])], [true, true]);
+    t.eq('payload.projectAllocations = the split (bank, payer, month)', r.posted.projectAllocations, [{ tenantId: 1, accId: 'acc1', month: '2026-11', total: 1250, vaad: 250, project: 1000, kind: 'bank', payerName: 'ליעד רוני' }]);
+    t.eq('still one save with bankImportCommit + fingerprints', [r.posted.bankImportCommit, r.posted.importedBankFingerprints], [true, ['fp1']]);
+    t.eq('toast + panel cleared', [r.toasts.some(m => m.includes('🧩 1 העברות פוצלו — ₪1,000 לפרויקט')), r.panelCleared], [true, 1]);
+    const edited = run({ '1': Object.assign({}, plan['1'], { vaadEdit: 0, projectEdit: 1250 }) });
+    t.eq('edited to all-project → ועד key untouched, project 1250', [edited.sl['1_נובמבר'], edited.posted.projectAllocations[0].project], ['sent_x', 1250]);
+    const off = run({ '1': Object.assign({}, plan['1'], { on: false }) });
+    t.eq('„לפצל” off → the old write (1250 to the ועד), no allocations', [/_1250_payer_ליעד רוני$/.test(off.sl['1_נובמבר']), 'projectAllocations' in off.posted], [true, false]);
+    const stale = run({ '1': Object.assign({}, plan['1'], { total: 1300 }) });
+    t.eq('plan total ≠ the member\'s sum (stale plan) → no split, the old write', [/_1250_payer_ליעד רוני$/.test(stale.sl['1_נובמבר']), 'projectAllocations' in stale.posted], [true, false]);
+    const none = run(undefined);
+    t.eq('no plan (building without a project) → byte-for-byte the old payload keys', [Object.keys(none.posted).sort(), none.panelCleared], [['bankImportCommit', 'bankMonthOverride', 'importedBankFingerprints', 'sentLog'], 0]);
+    const amb = run(plan, [{ rowIdx: 9, amount: 100, date: '1', payerName: 'x', rawText: 'x', _decision: 'assign', _assignTo: 1 }]);
+    t.eq('an ambiguous row assigned to the same member is ועד money → allocation widened (350 / 1350)', [amb.posted.projectAllocations[0].vaad, amb.posted.projectAllocations[0].total, /_350_payer_x$/.test(amb.sl['1_נובמבר'])], [350, 1350, true]);
+    t.eq('a pending plan blocks the commit (no save)', (() => { const s = { window: { _pendingBankImport: { _projPlanPending: true } }, toast() {} }; return new Function('window,toast', extractFunctions(app, ['commitBankImport']) + '\n;commitBankImport(); return window._pendingBankImport._projPlanPending;')(s.window, s.toast); })(), true);
+    t.eq('a refused save (ok:false) is surfaced', /if \(j && j\.ok === false\) toast\('❌ הייבוא לא נשמר: '/.test(app), true);
+    t.eq('preview asks the server after the ambiguous panel', /renderAmbiguousMatchPanel\(_ambiguousRows\);\s*\/\/ v2\.14\.88[^\n]*\n\s*renderProjectSplitPanel\(null\);\s*p2LoadImportPlan\(window\._pendingBankImport\);/.test(app), true);
+  }
+
+  t.section('v2.14.88 (P2) — preview: which members are asked (EXECUTED)');
+  {
+    let sent = null; let rendered = 0;
+    const P = { selectedMonthKey: '2026-11', matched: [
+      { tenant: { id: 1 }, payments: [{ amount: 1250, note: 'ועד' }], _buckets: new Map([['2026-11', {}]]) },
+      { tenant: { id: 3 }, payments: [{ amount: 500 }, { amount: 500 }], _buckets: new Map([['2026-10', {}], ['2026-11', {}]]) }] };
+    const scope = { window: { _pendingBankImport: P }, data: { closedMonths: ['2026-10'] }, accountTemplates: [{ id: 'P', project: {} }], API: '', toast() {},
+      fetch: (u, o) => { sent = { u, b: JSON.parse(o.body) }; return Promise.resolve({ json: () => Promise.resolve({ ok: true, items: [{ tenantId: 1, split: true, vaad: 250, project: 1000 }, { tenantId: 9, split: false }] }) }); },
+      renderProjectSplitPanel: () => { rendered++; } };
+    const F = mkRun(['tplIsProject', 'p2HasProjectDef', 'p2PlanFetch', 'p2LoadImportPlan'], scope);
+    global.__crRuns = (global.__crRuns || []).concat([F.p2LoadImportPlan(P).then(() => {
+      t.eq('asks /project-allocation-plan for single-month members only (3 is multi-month)', [sent.u, sent.b.month, sent.b.items.map(i => i.tenantId)], ['/project-allocation-plan', '2026-11', [1]]);
+      t.eq('stores only split rows, editable copies, then renders', [Object.keys(P.projectPlan), P.projectPlan['1'].vaadEdit, P.projectPlan['1'].projectEdit, P.projectPlan['1'].on, P._projPlanPending, rendered], [['1'], 250, 1000, true, false, 1]);
+    })]);
+    const P2 = { selectedMonthKey: '2026-11', matched: [{ tenant: { id: 1 }, payments: [{ amount: 1250 }] }] };
+    const F2 = mkRun(['tplIsProject', 'p2HasProjectDef', 'p2PlanFetch', 'p2LoadImportPlan'], Object.assign({}, scope, { accountTemplates: [{ id: 'A', amount: 50 }], fetch: () => { throw new Error('must not call'); } }));
+    global.__crRuns.push(F2.p2LoadImportPlan(P2).then(() => t.eq('no project definition → no request, no plan', P2.projectPlan, undefined)));
+  }
+
+  t.section('v2.14.88 (P2.3-B) — manual mark above the ועד opens the split window (EXECUTED)');
+  {
+    const mk = (planItem) => {
+      const calls = []; let opened = null;
+      const scope = { data: { config: { manualMonth: 'נובמבר', amount: 250 }, tenants: [{ id: 1, name: 'רוני', customAmount: 250 }], sentLog: {} },
+        accountTemplates: [{ id: 'P', project: {} }], API: '', prompt: () => '1250', toast() {}, render() {}, loadData: () => Promise.resolve(),
+        fetch: (u, o) => { calls.push(u); return Promise.resolve({ json: () => Promise.resolve(u === '/project-allocation-plan' ? { ok: true, items: [planItem] } : { ok: true }) }); },
+        p2OpenMarkSplit: (id, em, p, amt) => { opened = [id, em, p.vaad, p.project, amt]; } };
+      const F = mkRun(['tplIsProject', 'p2HasProjectDef', 'p2PlanFetch', 'markPaid', 'markPaidWrite'], scope);
+      return F.markPaid(1).then(() => ({ calls, opened, sl: scope.data.sentLog }));
+    };
+    global.__crRuns.push(mk({ split: true, vaad: 250, project: 1000 }).then(r => t.eq('split → window opened, nothing written', [r.opened, r.calls], [[1, 'נובמבר', 250, 1000, 1250], ['/project-allocation-plan']])));
+    global.__crRuns.push(mk({ split: false, vaad: 1250, project: 0 }).then(r => t.eq('no split → the old sentlog-key write (1250)', [r.opened, r.calls, /_amount_1250$/.test(r.sl['1_נובמבר'])], [null, ['/project-allocation-plan', '/sentlog-key'], true])));
+    let posted = null;
+    const scope = { window: { _p2Mark: { id: 1, em: 'נובמבר', paidAmt: 1250, plan: { accId: 'acc1', month: '2026-11', total: 1250, vaadEdit: 250, projectEdit: 1000, accLabel: 'שיפוץ' } } },
+      data: { sentLog: {} }, API: '', toast() {}, render() {}, loadData: () => Promise.resolve(), loadAccountsStatus: () => Promise.resolve(),
+      document: { getElementById: () => null }, fetch: (u, o) => { posted = { u, b: JSON.parse(o.body) }; return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); } };
+    const F = mkRun(['p2R2', 'p2Nis', 'p2MarkClose', 'p2MarkCommit'], scope);
+    global.__crRuns.push(F.p2MarkCommit().then(() => t.eq('✅ → POST /data: ועד manual_paid 250 + allocation kind manual', [posted.u, /^manual_paid_.*_amount_250$/.test(posted.b.sentLog['1_נובמבר']), posted.b.projectAllocations],
+      ['/data', true, [{ tenantId: 1, accId: 'acc1', month: '2026-11', total: 1250, vaad: 250, project: 1000, kind: 'manual' }]])));
+  }
+
+  t.section('v2.14.88 (P2.4-B) — closed-month approvals: project tag, never pre-checked (EXECUTED)');
+  {
+    const box = { style: {}, innerHTML: '' };
+    const F = mkRun(['esc', 'tplIsProject', 'p2MemberHasProject', '_cmMonthlyCharge', '_cmIsSafe', 'renderClosedMonthApprovals'], {
+      data: { config: { amount: 250 }, tenants: [{ id: 1, name: 'רוני', customAmount: 250, extraAccounts: [{ id: 'a', templateId: 'P' }] }, { id: 2, name: 'טל', customAmount: 250, extraAccounts: [] }] },
+      accountTemplates: [{ id: 'P', project: {} }], VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+      document: { getElementById: id => id === 'closedMonthApprovals' ? box : null, createElement: () => box, body: { appendChild() {} } } });
+    F.renderClosedMonthApprovals([{ tenantId: 1, name: 'רוני', month: '2026-10', scope: 'main', charge: 1250 }, { tenantId: 2, name: 'טל', month: '2026-10', scope: 'main', charge: 500 }, { tenantId: 1, name: 'רוני', month: '2026-10', scope: 'main', charge: 250 }]);
+    const h = box.innerHTML;
+    t.eq('tag only on the project member above the dues', (h.match(/class="cm-p2-tag"/g) || []).length, 1);
+    t.eq('the tagged row is NOT pre-checked (1250 = 5×250 used to be); others as before', [/data-cm-chk="0"\s+style/.test(h), /data-cm-chk="1" checked/.test(h), /data-cm-chk="2" checked/.test(h)], [true, true, true]);
+  }
+  t.eq('guide: combined transfer explained (import + manual mark)', ['id="vpg-project-bank"', '🧩 העברה משולבת', 'מילות מפתח', 'id="vpg-pay-project-split"', 'הכול לוועד', 'ייתכן שכולל תשלום פרויקט'].every(x => readSource('public/vaadpro-guide.js').includes(x)), true);
+  t.eq('settings: keyword field = several words, comma', app.includes('placeholder="שיפוץ, לובי"') && app.includes('>מילות מפתח: <input'), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

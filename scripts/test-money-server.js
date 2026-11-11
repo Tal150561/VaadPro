@@ -3937,6 +3937,7 @@ const v2_14_64_async = async () => {
   const s1 = run(H.save, store, 'advanced', { body: { from: '2026-07', to: '2026-08' } });
   t.eq('save → 200 + meta + count', [s1.status, s1.body.report.label, s1.body.count], [200, 'יולי – אוגוסט 2026', 1]);
   t.eq('stored snapshot computed by the SERVER (totals == report)', store.d.collectionReports[0].totals.charged, R(fx(), { from: '2026-07', to: '2026-08' }).totals.charged);
+  { const t0 = Date.now(); while (Date.now() - t0 < 3) {} }   // v2.14.87 — snapshot ids come from Date.now(): two saves in the same ms collided (flaky compare/delete)
   const s2 = run(H.save, store, 'trial', { body: { from: '2026-07', to: '2026-09' } });
   t.eq('trial ("all") can save', s2.status, 200);
   const ls = run(H.list, store, 'advanced', {});
@@ -6892,4 +6893,185 @@ const v2_14_87_async = async () => {
   }
 };
 
-(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); process.exit(t.done() ? 1 : 0); })();
+// ════════════════════════════════════════════════════════════════
+// v2.14.88 (P2) — a combined transfer: ועד + project (manual import + manual mark)
+// Rule (Tal 11.11): keyword without "ועד" → project; else ועד first (month + old debt,
+// net of credit), the rest to the project up to its balance, then ועד credit.
+// ════════════════════════════════════════════════════════════════
+const v2_14_88_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const HM = S.HEBREW_MONTHS;
+  const EM = 'נובמבר', MK = S.getMonthKey({ manualMonth: EM });
+  const M = n => S.crMonthAdd(MK, n);
+  const heb = mk => HM[Number(String(mk).slice(5)) - 1];
+  const BK = (a, p) => 'bank_import_2026-11-08T10:00:00.000Z_' + a + '_payer_' + (p || 'x');
+  const PT = o => Object.assign({ id: 'P', label: 'שיפוץ לובי', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' },
+    project: { startMonth: MK, defaultInstallments: 3, defaultTotal: 2250, noteKeyword: 'שיפוץ, לובי' } }, o);
+  const mem = (id, od, o) => Object.assign({ id, name: 'דייר' + id, aptNumber: String(id), phone: '05011111' + id, openingDebt: od, customAmount: 250,
+    personalTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }] }, o);
+  const fx = () => {
+    const d = { config: { amount: 250, manualMonth: EM }, closedMonths: [M(-1)], closedMonthsExtra: [M(-1)], paymentHistory: {}, sentLog: {},
+      defaultTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }], accountTemplates: [PT()],
+      tenants: [mem(1, 0), mem(2, 0), mem(3, -100), mem(4, 500), mem(5, 0), mem(6, 0)] };
+    S.commitProjectApply(d, S.planProjectApply(d, 'P', { rows: { '6': { include: false } } }));
+    d.tenants[4].extraAccounts[0].suspended = true;
+    return d;
+  };
+  const T = (d, id) => d.tenants.find(x => x.id === id);
+  const acc = (d, id) => T(d, id).extraAccounts[0];
+  const plan = (d, id, rows, mk) => S.planProjectAllocation(d, T(d, id), rows, mk || MK);
+  const VP = p => [p.split, p.vaad, p.project];
+
+  t.section('v2.14.88 (P2) — the allocation rule (planProjectAllocation, read-only)');
+  {
+    const d = fx(); const before = JSON.stringify(d);
+    t.eq('fixture: 5 project accounts, member 6 has none', d.tenants.map(x => (x.extraAccounts || []).length), [1, 1, 1, 1, 1, 0]);
+    t.eq('keyword list: comma / semicolon, trimmed, deduped, 1-letter dropped', S.projectKeywordList({ project: { noteKeyword: 'שיפוץ, לובי;x ,  שיפוץ' } }), ['שיפוץ', 'לובי']);
+    t.eq('no keyword: ועד 250 first, the rest (1000) to the project', VP(plan(d, 1, [{ amount: 1250, note: '(ועד בית (הערת לקוח' }])), [true, 250, 1000]);
+    const lil = plan(d, 1, [{ amount: 1250, note: '1000 שח שיפוץ 250 ועד בית' }]);
+    t.eq('keyword + "ועד" in the same note → the normal rule (לילך)', [VP(lil), lil.keywordWithVaad, lil.keyword], [[true, 250, 1000], true, 'שיפוץ']);
+    const kw = plan(d, 1, [{ amount: 1250, note: 'לובי' }]);
+    t.eq('keyword alone → the WHOLE row to the project', [VP(kw), kw.keywordAmount, kw.keyword], [[true, 0, 1250], 1250, 'לובי']);
+    t.eq('one prefix letter is the same word ("הלובי")', VP(plan(d, 1, [{ amount: 1250, note: 'תשלום הלובי' }])), [true, 0, 1250]);
+    t.eq('a longer word is not the keyword ("לוביסט") → normal rule', VP(plan(d, 1, [{ amount: 1250, note: 'לוביסט' }])), [true, 250, 1000]);
+    const cap = plan(d, 1, [{ amount: 3000, note: 'לשיפוץ' }]);
+    t.eq('keyword above the project balance → project 2250, rest by the rule: ועד 250 + credit 500', [VP(cap), cap.credit, cap.projectRemaining], [[true, 750, 2250], 500, 2250]);
+    t.eq('old ועד debt is covered BEFORE the project (500 + 250 → project 500)', VP(plan(d, 4, [{ amount: 1250, note: '' }])), [true, 750, 500]);
+    t.eq('ועד credit nets first (−100 → ועד owes 150)', [VP(plan(d, 3, [{ amount: 1250, note: '' }])), plan(d, 3, [{ amount: 1250, note: '' }]).vaadOwed], [[true, 150, 1100], 150]);
+    const mir = plan(d, 2, [{ amount: 230, note: 'ועד נובמבר' }, { amount: 20, note: 'השלמה ועד' }]);
+    t.eq('230 + 20 (two rows) = the ועד → no split', [VP(mir), mir.reason], [[false, 250, 0], 'noRemainder']);
+    const no = plan(d, 6, [{ amount: 500, note: 'שיפוץ' }]);
+    t.eq('keyword, member without a project → ועד + note (P2.5-A)', [VP(no), no.reason, no.keywordIgnored, no.keyword], [[false, 500, 0], 'noProject', true, 'שיפוץ']);
+    t.eq('suspended project account → no split', [plan(d, 5, [{ amount: 1250 }]).split, plan(d, 5, [{ amount: 1250 }]).reason], [false, 'suspended']);
+    t.eq('not the active month → no split', [plan(d, 1, [{ amount: 1250 }], M(-1)).split, plan(d, 1, [{ amount: 1250 }], M(-1)).reason], [false, 'notActiveMonth']);
+    const dc = fx(); dc.closedMonthsExtra.push(MK);
+    t.eq('active month closed for the accounts → no split', plan(dc, 1, [{ amount: 1250 }]).reason, 'closed');
+    const dp = fx(); dp.sentLog['1__acc__' + acc(dp, 1).id + '_' + EM] = BK(750);
+    t.eq('installment already paid this month → balance 1500, prepay continues', [VP(plan(dp, 1, [{ amount: 2000 }])), plan(dp, 1, [{ amount: 2000 }]).credit], [[true, 500, 1500], 250]);
+    const dv = fx(); dv.sentLog['1_' + EM] = BK(250);
+    t.eq('ועד already paid this month → the whole transfer to the project', VP(plan(dv, 1, [{ amount: 1000 }])), [true, 0, 1000]);
+    const dd = fx(); dd.sentLog['1__acc__' + acc(dd, 1).id + '_' + EM] = BK(2250);
+    t.eq('project fully paid → no split (rest = ועד credit)', [plan(dd, 1, [{ amount: 1250 }]).split, plan(dd, 1, [{ amount: 1250 }]).reason], [false, 'done']);
+    t.eq('the plan writes nothing', JSON.stringify(d) === before, true);
+  }
+
+  // The REAL POST /api/data sentLog-sync block, with projectAllocations (req._projAllocs).
+  const pd = src.slice(src.indexOf("app.post('/api/data', authMiddleware, (req, res) => {"));
+  const blk = pd.slice(pd.indexOf('  if (req.body.sentLog) {'), pd.indexOf('  if (_undoPrev) {'));
+  const sync = (disk, newKeys, allocs) => {
+    const body = { sentLog: Object.assign({}, disk.sentLog, newKeys), bankMonthOverride: MK };
+    let status = 200, out = null;
+    const res = { status(c) { status = c; return this; }, json(o) { out = o; return o; } };
+    new Function('req', 'res', 'loadTenantData', 'seedTariffsIfMissing', 'getMonthKey', 'hebMonthToMonthKey', 'paymentRateForMonth', 'recordPayment',
+      'validateProjectAllocations', 'writeProjectAllocations', 'console', blk)
+      ({ body, user: { tenantId: 'B' }, _projAllocs: allocs || null }, res, () => JSON.parse(JSON.stringify(disk)), S.seedTariffsIfMissing, S.getMonthKey, S.hebMonthToMonthKey,
+        S.paymentRateForMonth, S.recordPayment, S.validateProjectAllocations, S.writeProjectAllocations, { error() {}, log() {} });
+    if (status !== 200) return { status, out, body };
+    const prev = JSON.parse(JSON.stringify(disk));
+    disk.sentLog = body.sentLog; disk.paymentHistory = body.paymentHistory;
+    if (body.tenants) disk.tenants = body.tenants; if (body.defaultTariffs) disk.defaultTariffs = body.defaultTariffs;
+    return { status, out, body, prev };
+  };
+  const AL = (d, id, o) => Object.assign({ tenantId: id, accId: acc(d, id).id, month: MK, total: 1250, vaad: 250, project: 1000, kind: 'bank', payerName: 'ליעד רוני' }, o);
+  const pk = (d, id) => id + '__acc__' + acc(d, id).id;
+
+  t.section('v2.14.88 (P2) — POST /api/data writes the project part in the SAME save (REAL sync block)');
+  {
+    const d = fx();
+    const r = sync(d, { ['1_' + EM]: BK(250, 'ליעד רוני') }, [AL(d, 1)]);
+    t.eq('saved', r.status, 200);
+    t.eq('ועד key = 250 (the ועד part only)', S.parseSentLogAmount(d.sentLog['1_' + EM]), 250);
+    t.eq('project key = 1000, bank_import, payer kept', [S.parseSentLogAmount(d.sentLog[pk(d, 1) + '_' + EM]), /^bank_import_.*_payer_ליעד רוני$/.test(d.sentLog[pk(d, 1) + '_' + EM])], [1000, true]);
+    const rec = d.paymentHistory[pk(d, 1)].find(x => x.month === MK);
+    t.eq('project history: one record, charge 750, paid 1000, split receipt', [d.paymentHistory[pk(d, 1)].length, rec.amount, rec.paidAmount, rec.paid, rec.projectSplit], [1, 750, 1000, true, { total: 1250, vaad: 250, project: 1000 }]);
+    t.eq('ועד history: recordPayment 250 (sanctioned path)', d.paymentHistory['1'].find(x => x.month === MK).paidAmount, 250);
+    t.eq('member view after: paid 1000, remaining 1250', [S.projectMemberView(d, T(d, 1), acc(d, 1), MK, EM).paid, S.projectMemberView(d, T(d, 1), acc(d, 1), MK, EM).remaining], [1000, 1250]);
+    const r2 = sync(d, {}, [AL(d, 1, { total: 1250, vaad: 0, project: 1250, payerName: 'x' })]);
+    t.eq('a second import ADDS to the project month (1000 + 1250 = 2250), one record', [r2.status, S.parseSentLogAmount(d.sentLog[pk(d, 1) + '_' + EM]), d.paymentHistory[pk(d, 1)].length], [200, 2250, 1]);
+    t.eq('vaad 0 → the ועד key untouched', S.parseSentLogAmount(d.sentLog['1_' + EM]), 250);
+    const plain = fx(); const rp = sync(plain, { ['2_' + EM]: BK(250) }, null);
+    t.eq('no allocations → exactly the old save (no account keys)', [rp.status, Object.keys(plain.sentLog).filter(k => k.includes('__acc__')).length], [200, 0]);
+  }
+
+  t.section('v2.14.88 (P2) — the server refuses a split that no longer fits (whole save, nothing written)');
+  {
+    const bad = (mut, keys) => { const d = fx(); const before = JSON.stringify(d); const a = AL(d, 1); const k = keys || { ['1_' + EM]: BK(250) }; const o = mut(d, a, k) || [a]; const r = sync(d, k, o); return [r.status, r.out && r.out.ok, JSON.stringify(d) === before, (r.out && r.out.error) || '']; };
+    let x = bad((d, a) => { a.project = 900; });
+    t.eq('sum ≠ total → 400', [x[0], x[1], x[2], /≠ הסכום/.test(x[3])], [400, false, true, true]);
+    x = bad((d, a, k) => { a.total = 3250; a.project = 3000; k['1_' + EM] = BK(250); });
+    t.eq('project above the balance → 400', [x[0], /יותר מיתרת הפרויקט/.test(x[3])], [400, true]);
+    x = bad((d, a) => { a.month = M(-1); });
+    t.eq('not the active month → 400', [x[0], /רק בחודש הפעיל/.test(x[3])], [400, true]);
+    x = bad(d => { acc(d, 1).suspended = true; });
+    t.eq('project account suspended → 400', [x[0], /לא פעיל/.test(x[3])], [400, true]);
+    x = bad((d, a, k) => { k['1_' + EM] = BK(1250); });
+    t.eq('ועד key holds the WHOLE sum (page wrote the old way) → 400', [x[0], /סכום הוועד לא תואם/.test(x[3])], [400, true]);
+    x = bad((d, a, k) => { a.vaad = 0; a.project = 1250; });
+    t.eq('vaad 0 but the ועד key changed → 400', [x[0], /ללא שינוי/.test(x[3])], [400, true]);
+    x = bad((d, a) => [a, Object.assign({}, a)]);
+    t.eq('same member twice → 400', [x[0], /פעמיים/.test(x[3])], [400, true]);
+    x = bad(d => { d.closedMonths.push(MK); });
+    t.eq('active month closed → 400', [x[0], /סגור/.test(x[3])], [400, true]);
+    x = bad((d, a) => { d.sentLog['1_' + EM] = 'manual_paid_2026-11-01T00:00:00.000Z_amount_250'; a.kind = 'manual'; }, { ['1_' + EM]: 'manual_paid_2026-11-09T00:00:00.000Z_amount_250' });
+    t.eq('manual mark on a month already paid → 400', [x[0], /כבר סומן/.test(x[3])], [400, true]);
+    const d = fx(); d.sentLog['1_' + EM] = BK(100);
+    const r = sync(d, { ['1_' + EM]: BK(350) }, [AL(d, 1)]);
+    t.eq('bank: ועד ADDS to an earlier import (100 + 250 = 350) → accepted', [r.status, S.parseSentLogAmount(d.sentLog['1_' + EM])], [200, 350]);
+  }
+
+  t.section('v2.14.88 (P2) — manual mark (kind manual) + undo covers BOTH accounts');
+  {
+    const d = fx();
+    const r = sync(d, { ['1_' + EM]: 'manual_paid_2026-11-09T00:00:00.000Z_amount_250' }, [AL(d, 1, { kind: 'manual' })]);
+    t.eq('manual: ועד manual_paid 250, project manual_paid 1000, type manual', [r.status, S.parseSentLogAmount(d.sentLog['1_' + EM]), /^manual_paid_.*_amount_1000$/.test(d.sentLog[pk(d, 1) + '_' + EM]), d.paymentHistory[pk(d, 1)][0].type], [200, 250, true, 'manual']);
+    const d2 = fx(); const prev = JSON.parse(JSON.stringify(d2));
+    const r2 = sync(d2, { ['1_' + EM]: BK(250) }, [AL(d2, 1)]);
+    const u = S.buildImportUndo(prev, r2.body, { source: 'manual', month: MK });
+    t.eq('undo record lists the ועד AND the project key, both histories', [Object.keys(u.sentLogBefore).sort(), Object.keys(u.phBefore).sort()], [['1_' + EM, pk(d2, 1) + '_' + EM].sort(), ['1', pk(d2, 1)].sort()]);
+    d2.lastImportUndo = u;
+    const ur = lib.loadUndoRoute(d2, {});
+    t.eq('↩️ undo → both accounts back to before', [ur.result && ur.result.ok, d2.sentLog['1_' + EM] || null, d2.sentLog[pk(d2, 1) + '_' + EM] || null, (d2.paymentHistory[pk(d2, 1)] || []).length], [true, null, null, 0]);
+  }
+
+  t.section('v2.14.88 (P2) — the REAL closes keep ועד and project apart (prepay = project credit)');
+  {
+    const d = fx();
+    sync(d, { ['1_' + EM]: BK(250) }, [AL(d, 1)]);
+    sync(d, { ['4_' + EM]: BK(750) }, [AL(d, 4, { vaad: 750, project: 500 })]);
+    lib.loadCloseMonth(d).runForBuilding(d, MK, EM);
+    const closeExtra = lib.loadCloseExtra();
+    d.tenants.forEach(x => closeExtra(d, x, MK));
+    t.eq('member 1: ועד 0; project 1000 − 750 → credit 250', [T(d, 1).openingDebt, acc(d, 1).openingDebt], [0, -250]);
+    t.eq('member 4: old ועד debt 500 cleared by the ועד part; project short 250', [T(d, 4).openingDebt, acc(d, 4).openingDebt], [0, 250]);
+    d.config.manualMonth = heb(M(1)); d.closedMonths.push(MK); d.closedMonthsExtra.push(MK);
+    const v1 = S.projectMemberView(d, T(d, 1), acc(d, 1), M(1), heb(M(1)));
+    t.eq('next month: member 1 owes 500 (750 − 250 credit), remaining 1250', [v1.owedNow, v1.remaining], [500, 1250]);
+  }
+
+  // ── REAL route ──────────────────────────────────────────────────
+  const bodyOf = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  const run = async (head, d, req) => {
+    const saves = []; let out;
+    const g = Object.assign({}, S, { loadTenantData: () => d, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); } });
+    const names = Object.keys(g);
+    await new AF(...names, 'req', 'res', bodyOf(head))(...names.map(n => g[n]), Object.assign({ params: {}, body: {}, query: {}, user: { tenantId: 'B' } }, req),
+      { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const PLAN = "app.post('/api/project-allocation-plan', authMiddleware, (req, res) => {";
+  t.section('v2.14.88 (P2) — REAL route: POST /api/project-allocation-plan (read-only)');
+  {
+    const d = fx();
+    const r = await run(PLAN, d, { body: { month: MK, items: [{ tenantId: 1, rows: [{ amount: 1250, note: 'ועד' }] }, { tenantId: 6, rows: [{ amount: 250 }] }, { tenantId: 999, rows: [] }] } });
+    t.eq('plans per known member, nothing saved', [r.out.ok, r.out.hasProject, r.out.items.map(VP), r.saves.length], [true, true, [[true, 250, 1000], [false, 250, 0]], 0]);
+    const nd = fx(); nd.accountTemplates = [];
+    const r2 = await run(PLAN, nd, { body: { items: [{ tenantId: 1, rows: [{ amount: 1250 }] }] } });
+    t.eq('a building without a project → hasProject false, no items', [r2.out.hasProject, r2.out.items.length], [false, 0]);
+    t.eq('POST /api/data drops projectAllocations from the body (never persisted)', /if \(req\.body && 'projectAllocations' in req\.body\) delete req\.body\.projectAllocations;/.test(src), true);
+    t.eq('POST /api/data: allocations without sentLog → 400', /if \(req\._projAllocs && !req\.body\.sentLog\) return res\.status\(400\)/.test(src), true);
+  }
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); await v2_14_88_async(); process.exit(t.done() ? 1 : 0); })();

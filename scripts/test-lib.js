@@ -122,7 +122,10 @@ const SERVER_FNS = [
   'projectEndMonth', 'projectScheduleText', 'projectValidate', 'projectMemberView', 'projectStatusView', 'projectHidden',
   'planProjectApply', 'commitProjectApply', 'planProjectChange', 'commitProjectChange',
   // v2.14.87 (P1ב) — opening debt → project account
-  'projectMigrateUnpaidLast', 'projectMigrateSurplusNow', 'planProjectMigrate', 'commitProjectMigrate', 'planProjectMigrateUndo', 'commitProjectMigrateUndo'
+  'projectMigrateUnpaidLast', 'projectMigrateSurplusNow', 'planProjectMigrate', 'commitProjectMigrate', 'planProjectMigrateUndo', 'commitProjectMigrateUndo',
+  // v2.14.88 (P2) — combined transfer: ועד + project
+  'projectKeywordList', 'noteHasProjectWord', 'noteMentionsVaad', 'projectAllocAccount', 'planProjectAllocation',
+  'validateProjectAllocations', 'writeProjectAllocations'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
@@ -626,9 +629,12 @@ function runManualImport(opts) {
     loadData: () => Promise.resolve(), localStorage: { getItem: () => null, setItem() {} }, sessionStorage: { getItem: () => null, setItem() {} },
     console: { log() {}, warn() {}, error() {} }, alert: () => {}, setTimeout: () => 0,
     confirm: q => { confirms.push(q); return typeof opts.confirm === 'function' ? opts.confirm(q) : !!opts.confirm; },
-    fetch: (u, o) => { env._posted = o && o.body ? JSON.parse(o.body) : null; return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) }); }
+    fetch: (u, o) => { env._posted = o && o.body ? JSON.parse(o.body) : null; return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) }); },
+    accountTemplates: []   // v2.14.88 (P2) — page global read by the preview's split step
   };
-  const names = new Set(['analyzeBankRows', 'commitBankImport', 'showBankResult', 'parseDate']);
+  Object.assign(env, opts.env || {});
+  const names = new Set(['analyzeBankRows', 'commitBankImport', 'showBankResult', 'parseDate',
+    'p2HasProjectDef', 'tplIsProject']);   // v2.14.88 — read inside the ASYNC split step (a rejection there is not caught by the retry loop)
   const snap = JSON.stringify({ sentLog: data.sentLog || {}, fp: data.importedBankFingerprints || [] });
   for (let guard = 0; guard < 200; guard++) {
     const s0 = JSON.parse(snap); data.sentLog = s0.sentLog; data.importedBankFingerprints = s0.fp;
