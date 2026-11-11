@@ -2256,6 +2256,7 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
 // ⚠️ When repairing corrupt data, bypass this route (direct file edit / a
 //    dedicated fix endpoint) so the sync logic doesn't re-fire on bad input.
 app.post('/api/data', authMiddleware, (req, res) => {
+  if (req.body && 'projectMigrations' in req.body) delete req.body.projectMigrations;   // v2.14.87 (P1ב) — server-owned log
   // בדוק מגבלת דיירים אם יש עדכון של רשימת דיירים
   if (req.body.tenants) {
     const users = loadUsers();
@@ -11218,6 +11219,7 @@ function projectMemberView(d, t, acc, mkNow, emNow) {
     scheduled: !!(startMonth && end),
     owedNow: sp.owedNow, owedCurrent: sp.owedCurrent, owedPrior: sp.owedPrior, creditLeft: sp.creditLeft,
     suspended: acc.suspended === true,
+    paidBefore: parseFloat(p.paidBefore) > 0 ? Math.round(parseFloat(p.paidBefore) * 100) / 100 : 0,   // v2.14.87 (P1ב) — display
     scheduleText: startMonth ? projectScheduleText(d, acc, mkNow > startMonth ? mkNow : startMonth) : '',
     progressText: total > 0 ? 'שולם ₪' + paid + ' מתוך ₪' + total + (status === 'active' ? ' · נותרו ' + left + ' תשלומים' : ' · ' + label) : ''
   };
@@ -11244,7 +11246,11 @@ function projectStatusView(d, tplId) {
     sumTotal += v.total; sumPaid += v.paid; sumRemaining += Math.max(0, v.remaining);
   }
   rows.sort((a, b) => String(a.unit).localeCompare(String(b.unit), 'he', { numeric: true }) || String(a.name).localeCompare(String(b.name), 'he'));
-  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, project: projectSanitize(tpl.project), rows,
+  // v2.14.87 (P1ב) — the last opening-debt migration of THIS project (display + undo state)
+  const lastMig = (Array.isArray(d.projectMigrations) ? d.projectMigrations : []).slice(-1)[0];
+  const migration = lastMig && lastMig.tplId === tpl.id && lastMig.undone !== true
+    ? (() => { const u = planProjectMigrateUndo(d, tpl.id); return { at: lastMig.at, count: lastMig.rows.length, canUndo: !!u.canUndo, blocks: u.blocks || [] }; })() : null;
+  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, project: projectSanitize(tpl.project), rows, migration,
     summary: { members: rows.length, total: r2(sumTotal), paid: r2(sumPaid), remaining: r2(sumRemaining),
       pct: sumTotal > 0 ? Math.round(sumPaid / sumTotal * 1000) / 10 : 0, counts,
       unscheduled: rows.filter(r => !r.scheduled).length,
@@ -11382,6 +11388,164 @@ function commitProjectChange(d, plan) {
   acc.project = plan.project;
   acc.amount = Math.round(extraAmountForMonth(d, acc, getMonthKey(d.config || {})) * 100) / 100;
   return { changed: before !== JSON.stringify([acc.amountTariffs, acc.project]) };
+}
+
+// ══ v2.14.87 (P1ב) — move the project part of the ועד opening debt into a project account ══
+// Locked with Tal 10.11.2026 (נ1–נ6): a one-time, single-building tool. Per ticked member:
+// main openingDebt −= part; a project account is created with the FULL total, the schedule
+// spread on `part` only, and paidBefore = total − part (what was already paid / credited the
+// old way). נ1 — a CONSCIOUS exception to "only the close writes openingDebt" (like the
+// tenants file): preview first, logged in d.projectMigrations (before/after per member).
+// נ2 — a member with a ועד surplus in the ACTIVE month (money that may belong to the project
+// and is not closed yet) is flagged and not ticked by default. נ3 — ticked by default: debt > 0,
+// not suspended, no surplus flag. נ4 — one-level undo, blocked after a close / any change.
+// Nothing here writes sentLog or paymentHistory.
+
+// What the member did NOT pay of the main account in the last CLOSED month (it sits in the
+// opening debt and is ועד, not project). Used only for the suggestion — the operator edits.
+function projectMigrateUnpaidLast(d, t, mkNow) {
+  const last = crMonthAdd(mkNow, -1);
+  if (!(Array.isArray(d.closedMonths) && d.closedMonths.includes(last))) return 0;
+  if (t.suspended === true || crSuspendedIn(t, last)) return 0;   // a suspended member is not charged at the close
+  const hist = (d.paymentHistory || {})[String(t.id)] || [];
+  const rec = hist.find(r => r && r.month === last && r.type !== 'wa_sent');
+  const r2 = n => Math.round(n * 100) / 100;
+  if (rec && rec.paid === true) {
+    if (!rec.shortfallBanked) return 0;
+    return Math.max(0, r2((parseFloat(rec.amount) || 0) - (parseFloat(rec.paidAmount ?? rec.amount) || 0)));
+  }
+  const fb = parseFloat(t.customAmount || (d.config && d.config.amount)) || 0;
+  return r2(getExpectedAmount(hist, last, resolveTariffRate(t, d.defaultTariffs || [], last, fb)));
+}
+
+// נ2 — a ועד payment above this month's charge, not closed yet (could be project money).
+function projectMigrateSurplusNow(d, t, mkNow, emNow) {
+  const paid = parseSentLogAmount((d.sentLog || {})[String(t.id) + '_' + emNow]);
+  if (!(paid > 0)) return 0;
+  const hist = (d.paymentHistory || {})[String(t.id)] || [];
+  const fb = parseFloat(t.customAmount || (d.config && d.config.amount)) || 0;
+  const charge = getExpectedAmount(hist, mkNow, paymentRateForMonth(t, d.defaultTariffs || [], mkNow, fb));
+  return Math.max(0, Math.round((paid - charge) * 100) / 100);
+}
+
+// body.rows = { tid: {include, part, total, installments, startMonth} } — absent = suggestions.
+function planProjectMigrate(d, tplId, body) {
+  body = body || {};
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tpl = templates.find(t => t.id === tplId);
+  if (!tpl) return { ok: false, error: 'החשבון לא נמצא בהגדרות — שמרו את ההגדרות ונסו שוב' };
+  if (!isProjectTpl(tpl)) return { ok: false, error: 'זה לא חשבון פרויקט' };
+  const P = projectSanitize(tpl.project);
+  if (!P.defaultTotal) return { ok: false, error: 'קבעו \"סך לדייר\" בהגדרת הפרויקט ושמרו — הוא הבסיס להצעה' };
+  const mkNow = getMonthKey(d.config || {}), emNow = getEffectiveMonth(d.config || {});
+  const defStart = P.startMonth && P.startMonth > mkNow ? P.startMonth : mkNow;
+  const inRows = (body.rows && typeof body.rows === 'object') ? body.rows : {};
+  const k = tplNameKey(tpl.label);
+  const rows = [], already = [];
+  for (const t of (d.tenants || [])) {
+    const tid = String(t.id), name = t.name || tid;
+    const od = r2(parseFloat(t.openingDebt) || 0);
+    if (accLinkedToTemplate(t, tpl, templates) || (t.extraAccounts || []).some(a => a && tplNameKey(a.label) === k)) { if (od > 0) already.push({ tid, name }); continue; }
+    if (!(od > 0)) continue;
+    const inp = (inRows[tid] && typeof inRows[tid] === 'object') ? inRows[tid] : {};
+    const unpaidLast = projectMigrateUnpaidLast(d, t, mkNow);
+    const surplusNow = projectMigrateSurplusNow(d, t, mkNow, emNow);
+    const has = v => v !== undefined && v !== null && v !== '';
+    const total = has(inp.total) ? r2(parseFloat(inp.total)) : P.defaultTotal;
+    const suggest = r2(Math.max(0, Math.min(od - unpaidLast, total)));
+    const part = has(inp.part) ? r2(parseFloat(inp.part)) : suggest;
+    const n = has(inp.installments) ? Number(inp.installments) : P.defaultInstallments;
+    const start = inp.startMonth ? String(inp.startMonth) : defStart;
+    const include = inp.include === undefined ? (t.suspended !== true && !(surplusNow > 0) && suggest > 0) : inp.include === true;
+    const row = { tid, name, unit: t.aptNumber || t.propertyLabel || '', suspended: t.suspended === true, include,
+      od, unpaidLast, surplusNow, suggest, part, total, installments: n, startMonth: start,
+      leftVaad: isFinite(part) ? r2(od - part) : null, paidBefore: isFinite(part) && isFinite(total) ? r2(total - part) : null };
+    if (include) {
+      let err = null;
+      if (!(isFinite(total) && total > 0)) err = 'סך לא תקין';
+      else if (!(isFinite(part) && part > 0)) err = 'חלק הפרויקט חייב להיות גדול מ-0';
+      else if (part > od) err = 'חלק הפרויקט גדול מחוב הפתיחה (₪' + od + ')';
+      else if (part > total) err = 'חלק הפרויקט גדול מסך הפרויקט';
+      if (!err) { const v = projectValidate(d, part, n, start); if (!v.ok) err = v.error; }
+      if (err) row.error = err;
+      else row.scheduleText = projectScheduleText(d, { amountTariffs: projectIntervals(start, part, n) }, start);
+    }
+    row.check = !!(row.include && !row.error && row.leftVaad > 0);   // ועד debt stays — look at it
+    rows.push(row);
+  }
+  const ok = rows.filter(r => r.include && !r.error);
+  return { ok: true, tplId: tpl.id, label: crAccountKey(tpl.label), mkNow, defaults: { total: P.defaultTotal, installments: P.defaultInstallments, startMonth: defStart },
+    rows, already, add: ok.length, errors: rows.filter(r => r.include && r.error).length,
+    sumPart: r2(ok.reduce((s, r) => s + r.part, 0)), sumTotal: r2(ok.reduce((s, r) => s + r.total, 0)) };
+}
+
+function commitProjectMigrate(d, plan, at) {
+  const r2 = n => Math.round(n * 100) / 100;
+  const templates = (d.accountTemplates || []).filter(t => t && t.id);
+  const tpl = templates.find(t => t.id === plan.tplId);
+  if (!tpl || !isProjectTpl(tpl)) return { moved: 0 };
+  const mkNow = getMonthKey(d.config || {});
+  const log = [];
+  for (const r of plan.rows) {
+    if (!r.include || r.error) continue;
+    const t = (d.tenants || []).find(x => String(x.id) === r.tid);
+    if (!t || accLinkedToTemplate(t, tpl, templates)) continue;
+    const odBefore = r2(parseFloat(t.openingDebt) || 0);
+    if (odBefore !== r.od) continue;   // changed since the preview — skip (belt)
+    const acc = accFromTemplate(tpl, t, mkNow);
+    acc.amountTariffs = projectIntervals(r.startMonth, r.part, r.installments);
+    acc.project = { total: r.total, installments: r.installments, startMonth: r.startMonth, paidBefore: r.paidBefore, migratedFromOpeningDebt: r.part };
+    acc.amount = r2(extraAmountForMonth(d, acc, mkNow));
+    if (!Array.isArray(t.extraAccounts)) t.extraAccounts = [];
+    t.extraAccounts.push(acc);
+    t.openingDebt = r2(odBefore - r.part);
+    log.push({ tid: r.tid, name: r.name, accId: acc.id, odBefore, odAfter: t.openingDebt, part: r.part, total: r.total,
+      sched: JSON.stringify([acc.amountTariffs, acc.project]) });
+  }
+  if (!log.length) return { moved: 0 };
+  if (!Array.isArray(d.projectMigrations)) d.projectMigrations = [];
+  d.projectMigrations.push({ id: 'pm_' + Date.now().toString(36), at: at || new Date().toISOString(), tplId: tpl.id, label: crAccountKey(tpl.label), mk: mkNow, rows: log });
+  if (d.projectMigrations.length > 20) d.projectMigrations = d.projectMigrations.slice(-20);
+  return { moved: log.length };
+}
+
+// נ4 — undo the LAST migration (one level). Blocked when a month was closed since, or
+// anything the migration wrote changed afterwards (opening debt, the account, its schedule,
+// a payment or reminder on it).
+function planProjectMigrateUndo(d, tplId) {
+  const list = Array.isArray(d.projectMigrations) ? d.projectMigrations : [];
+  const last = list[list.length - 1];
+  if (!last || last.undone === true) return { ok: false, error: 'אין העברה לביטול' };
+  if (tplId && last.tplId !== tplId) return { ok: false, error: 'ההעברה האחרונה שייכת לפרויקט אחר (\"' + last.label + '\")' };
+  const blocks = [];
+  const closedAfter = (d.closedMonths || []).concat(d.closedMonthsExtra || []).some(m => String(m).slice(0, 7) >= last.mk);
+  if (closedAfter) blocks.push('נסגר חודש מאז ההעברה');
+  for (const r of last.rows) {
+    const t = (d.tenants || []).find(x => String(x.id) === r.tid);
+    const acc = t && (t.extraAccounts || []).find(a => a && a.id === r.accId);
+    if (!t || !acc) { blocks.push(r.name + ': החשבון נמחק'); continue; }
+    if (Math.round((parseFloat(t.openingDebt) || 0) * 100) / 100 !== r.odAfter) blocks.push(r.name + ': חוב הפתיחה שונה');
+    if (JSON.stringify([acc.amountTariffs, acc.project]) !== r.sched) blocks.push(r.name + ': הלוח שונה');
+    const ph = r.tid + '__acc__' + r.accId;
+    if (((d.paymentHistory || {})[ph] || []).length || Object.keys(d.sentLog || {}).some(k2 => k2.startsWith(ph + '_')) || (parseFloat(acc.openingDebt) || 0) !== 0)
+      blocks.push(r.name + ': נרשם תשלום או תזכורת');
+  }
+  return { ok: true, id: last.id, at: last.at, label: last.label, count: last.rows.length, canUndo: blocks.length === 0, blocks };
+}
+
+function commitProjectMigrateUndo(d, plan) {
+  if (!plan.canUndo) return { undone: 0 };
+  const last = d.projectMigrations[d.projectMigrations.length - 1];
+  if (!last || last.id !== plan.id) return { undone: 0 };
+  for (const r of last.rows) {
+    const t = d.tenants.find(x => String(x.id) === r.tid);
+    t.extraAccounts = (t.extraAccounts || []).filter(a => !(a && a.id === r.accId));
+    t.openingDebt = r.odBefore;
+  }
+  last.undone = true;
+  last.undoneAt = new Date().toISOString();
+  return { undone: last.rows.length };
 }
 
 // GET /api/validate-collection — READ-ONLY health report before billing (basic, 1א).
@@ -11856,6 +12020,31 @@ app.post('/api/account-templates/:id/project-apply', authMiddleware, (req, res) 
   const r = commitProjectApply(d, plan);
   if (r.added) saveTenantData(req.user.tenantId, { tenants: d.tenants });
   res.json({ ok: true, dryRun: false, added: r.added, already: plan.already.length, conflicts: plan.conflicts.length });
+});
+
+// v2.14.87 (P1ב) — move the project part of the opening debt; dryRun DEFAULT; commit re-plans.
+// Writes tenants (openingDebt + the new accounts) and projectMigrations ONLY.
+app.post('/api/account-templates/:id/project-migrate', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const b = req.body || {};
+  const plan = planProjectMigrate(d, req.params.id, { rows: b.rows });
+  if (!plan.ok) return res.json(plan);
+  if (b.dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  if (plan.errors) return res.json({ ok: false, error: 'יש ' + plan.errors + ' שורות עם שגיאה — תקנו אותן או בטלו את הסימון' });
+  const r = commitProjectMigrate(d, plan);
+  if (r.moved) saveTenantData(req.user.tenantId, { tenants: d.tenants, projectMigrations: d.projectMigrations });
+  res.json({ ok: true, dryRun: false, moved: r.moved });
+});
+
+app.post('/api/account-templates/:id/project-migrate-undo', authMiddleware, (req, res) => {
+  const d = loadTenantData(req.user.tenantId);
+  const plan = planProjectMigrateUndo(d, req.params.id);
+  if (!plan.ok) return res.json(plan);
+  if ((req.body || {}).dryRun !== false) return res.json(Object.assign({ dryRun: true }, plan));
+  if (!plan.canUndo) return res.json({ ok: false, error: 'לא ניתן לבטל: ' + plan.blocks.join(' · ') });
+  const r = commitProjectMigrateUndo(d, plan);
+  if (r.undone) saveTenantData(req.user.tenantId, { tenants: d.tenants, projectMigrations: d.projectMigrations });
+  res.json({ ok: true, dryRun: false, undone: r.undone });
 });
 
 app.get('/api/project-status', authMiddleware, (req, res) => {

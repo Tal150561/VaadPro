@@ -3161,7 +3161,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
 
   t.section('v2.14.74 — preview renderers consume the server plan (EXECUTED renderTplPlan)');
   {
-    const S = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan};', {});
+    const S = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'renderProjectMigratePlan', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan};', {});
     const P = { mk: '2026-10', add: [{ tid: '1', name: 'אור', amount: 50 }, { tid: '4', name: 'דנה', amount: 75 }], already: [{ name: 'בן' }], skippedSuspended: [{ name: 'גיל' }], conflicts: [], relink: [], totalPerCharge: 125, startSuspended: false, includeSuspended: false };
     const h = S.renderTplPlan('apply', P);
     t.eq('apply: counts + total from the plan', [h.includes('יתווסף ל-<strong>2</strong>'), h.includes('₪125'), h.includes('כבר משויכים (ידלגו): 1'), h.includes('(ידלגו): 1')], [true, true, true, true]);
@@ -4188,7 +4188,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 
   t.section('v2.14.86 (P1) — 👥 apply window renders the REAL plan; edits go back as rows');
   {
-    const R = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'projApplyOnChange', 'tplNames', 'esc']) + '\nvar tplAct={rows:{}};\nmodule.exports={renderTplPlan,projApplyOnChange,rows:function(){return tplAct.rows;}};', {});
+    const R = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'renderProjectMigratePlan', 'projApplyOnChange', 'tplNames', 'esc']) + '\nvar tplAct={rows:{}};\nmodule.exports={renderTplPlan,projApplyOnChange,rows:function(){return tplAct.rows;}};', {});
     const d = mkD();
     const plan = S.planProjectApply(d, 'P', { rows: { '1': { installments: 30 } } });
     const h = R.renderTplPlan('project', plan);
@@ -4199,8 +4199,8 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     R.projApplyOnChange({ dataset: { tid: '2', f: 'include' }, checked: true });
     R.projApplyOnChange({ dataset: { tid: '2', f: 'total' }, value: '1000' });
     t.eq('cell changes → rows input (only what was touched)', R.rows(), { '2': { include: true, total: '1000' } });
-    t.eq('tplActBody sends rows for project; URL map has project-apply', [/if \(mode === 'project'\) b\.rows = tplAct\.rows;/.test(extractFunctions(app, ['tplActBody'])), app.includes("project: 'project-apply'")], [true, true]);
-    t.eq('commit refuses while a row has an error (no request)', /mode === 'project' && p\.errors\) \{ toast/.test(extractFunctions(app, ['tplActCommit'])), true);
+    t.eq('tplActBody sends rows for project; URL map has project-apply', [/if \(mode === 'project' \|\| mode === 'migrate'\) b\.rows = tplAct\.rows;/.test(extractFunctions(app, ['tplActBody'])), app.includes("project: 'project-apply'")], [true, true]);
+    t.eq('commit refuses while a row has an error (no request)', /\(mode === 'project' \|\| mode === 'migrate'\) && p\.errors\) \{ toast/.test(extractFunctions(app, ['tplActCommit'])), true);
   }
 
   t.section('v2.14.86 (P1) — 📊 status screen renders the REAL view; ✏️ change sends the right body');
@@ -4250,6 +4250,51 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.section('v2.14.86 (P1) — markup, guide');
   t.eq('status modal markup + help anchor', ['id="projModal"', 'id="projTitle"', 'id="projSummary"', 'id="projBody"', "showHelp('settings#project')", 'id="payProjShortcut"'].every(x => app.includes(x)), true);
   t.eq('guide: project section, payments box, bank warning', ['id="vpg-a-project"', 'id="vpg-pay-project"', 'id="vpg-project-bank"', 'פרויקט (תשלומים)', 'זכות להעברה', 'חרג ממספר התשלומים', '2,250 ב-7 = ₪321 × 6 + ₪324'].every(x => gd86.includes(x)), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.87 (P1ב) — 🔁 opening debt → project: the window and the status block (EXECUTED vs REAL plans)
+// ════════════════════════════════════════════════════════════════
+{
+  const S = require('./test-lib').loadServer();
+  const EM = 'מרץ', MK = S.getMonthKey({ manualMonth: EM });
+  const d = { config: { amount: 230, manualMonth: EM }, closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: { ['3_' + EM]: 'manual_paid_x_amount_980' },
+    defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    accountTemplates: [{ id: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'monthly', amount: 0, project: { defaultInstallments: 3, defaultTotal: 2250 } }],
+    tenants: [{ id: 1, name: 'אור <b>', aptNumber: '1', openingDebt: 2250 }, { id: 2, name: 'בן', aptNumber: '2', openingDebt: 2480 }, { id: 3, name: 'גל', aptNumber: '3', openingDebt: 2250 },
+      { id: 4, name: 'דן', aptNumber: '4', openingDebt: 2250, suspended: true }, { id: 5, name: 'זו', aptNumber: '5', openingDebt: 0 }] };
+  const R = runInSandbox(extractFunctions(app, ['renderTplPlan', 'renderProjectApplyPlan', 'renderProjectMigratePlan', 'projMigrationHtml', 'tplNames', 'esc']) + '\nmodule.exports={renderTplPlan,projMigrationHtml};', {});
+
+  t.section('v2.14.87 (P1ב) — 🔁 window renders the REAL plan');
+  {
+    const plan = S.planProjectMigrate(d, 'P', { rows: { '2': { part: 2250 }, '1': { part: 9999 } } });
+    const h = R.renderTplPlan('migrate', plan);
+    t.eq('summary from the server', [h.includes('יועבר אצל <strong>' + plan.add + '</strong>'), h.includes('₪' + plan.sumPart), h.includes('⚠️ 1 שורות עם שגיאה')], [true, true, true]);
+    t.eq('rows: escaped name, error text, 🔎 on a ועד remainder, ⚠️ surplus untick, ⏸ suspended untick', [h.includes('אור &lt;b&gt;'), h.includes('חלק הפרויקט גדול מחוב הפתיחה (₪2250)'),
+      /בן <span class="mig-check"/.test(h), /data-tid="3" data-f="include">/.test(h) && h.includes('class="mig-surplus"'), /data-tid="4" data-f="include">/.test(h), h.includes('זו')], [true, true, true, true, true, false]);
+    t.eq('editable inputs: part / total / installments / start month; table id for the delegated listener', ['data-f="part"', 'data-f="total"', 'data-f="installments"', 'data-f="startMonth"', 'id="projMigrateTable"'].every(x => h.includes(x)), true);
+    t.eq('row numbers = server (ועד remainder 230, paid before 0)', /data-tid="2" data-f="part" value="2250"[\s\S]*?₪230<\/td>[\s\S]*?₪0<\/td>/.test(h), true);
+    t.eq('body + URL + commit guard + listener for migrate', [/if \(mode === 'project' \|\| mode === 'migrate'\) b\.rows = tplAct\.rows;/.test(app), app.includes("migrate: 'project-migrate'"),
+      /\(mode === 'project' \|\| mode === 'migrate'\) && p\.errors\) \{ toast/.test(app), app.includes("document.getElementById('projApplyTable') || document.getElementById('projMigrateTable')")], [true, true, true, true]);
+    t.eq('row button 🔁 in the project row', app.includes("onclick=\"openTplAction(' + i + ',\\'migrate\\')\""), true);
+  }
+
+  t.section('v2.14.87 (P1ב) — status: last migration + ↩️ undo (server state)');
+  {
+    const d2 = JSON.parse(JSON.stringify(d));
+    S.commitProjectMigrate(d2, S.planProjectMigrate(d2, 'P', {}), '2026-12-01T08:00:00.000Z');
+    const v = S.projectStatusView(d2, 'P');
+    const h = R.projMigrationHtml(v);
+    t.eq('can undo → button + date', [h.includes('data-proj-op="undo"'), h.includes('01.12.2026'), h.includes('אצל ' + v.migration.count + ' דיירים')], [true, true, true]);
+    d2.closedMonths.push(MK);
+    const hb = R.projMigrationHtml(S.projectStatusView(d2, 'P'));
+    t.eq('blocked → reason, no button', [hb.includes('data-proj-op="undo"'), hb.includes('לא ניתן לבטל: נסגר חודש מאז ההעברה')], [false, true]);
+    t.eq('no migration → nothing', R.projMigrationHtml({ migration: null }), '');
+    const V = runInSandbox(extractFunctions(app, ['projRowsHtml', 'projEditHtml', 'projStatusColor', 'esc']) + '\nmodule.exports={projRowsHtml};', {});
+    t.eq('row: \"כולל ₪X לפני המעבר\"', V.projRowsHtml({ rows: [{ unit: '1', name: 'א', total: 2250, paid: 1000, remaining: 1250, left: 3, scheduleText: '', status: 'active', statusLabel: 'בתשלומים', paidBefore: 1000, scheduled: true }] }, null, null).includes('כולל ₪1000 לפני המעבר'), true);
+    t.eq('undo click → projUndoMigration → POST …/project-migrate-undo dryRun:false', [/if \(op === 'undo'\) \{ await projUndoMigration\(\); return; \}/.test(app), /'\/project-migrate-undo'[\s\S]{0,160}dryRun: false/.test(extractFunctions(app, ['projUndoMigration']))], [true, true]);
+  }
+  t.eq('guide: 🔁 section', ['id="vpg-a-project-migrate"', 'שולם לפני', '↩️ ביטול'].every(x => readSource('public/vaadpro-guide.js').includes(x)), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

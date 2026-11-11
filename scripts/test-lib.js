@@ -120,7 +120,9 @@ const SERVER_FNS = [
   // v2.14.86 (P1) — project accounts: personal installment schedules, status, change one member
   'isProjectTpl', 'accIsProject', 'projectSanitize', 'projectSplitTotal', 'projectSegments', 'projectIntervals',
   'projectEndMonth', 'projectScheduleText', 'projectValidate', 'projectMemberView', 'projectStatusView', 'projectHidden',
-  'planProjectApply', 'commitProjectApply', 'planProjectChange', 'commitProjectChange'
+  'planProjectApply', 'commitProjectApply', 'planProjectChange', 'commitProjectChange',
+  // v2.14.87 (P1ב) — opening debt → project account
+  'projectMigrateUnpaidLast', 'projectMigrateSurplusNow', 'planProjectMigrate', 'commitProjectMigrate', 'planProjectMigrateUndo', 'commitProjectMigrateUndo'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through

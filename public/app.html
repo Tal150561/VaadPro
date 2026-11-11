@@ -1992,7 +1992,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.86';
+const HTML_VERSION = '2.14.87';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -10655,6 +10655,7 @@ function projectTplRowHtml(t, i) {
   const actions = saved
     ? '<span style="font-size:0.75rem;color:var(--text2);">משויך ל-' + t.linked + ' דיירים</span>' +
       '<button class="btn btn-secondary btn-sm tpl-act-proj-apply" onclick="openTplAction(' + i + ',\'project\')">👥 החל על דיירים</button>' +
+      '<button class="btn btn-secondary btn-sm tpl-act-proj-migrate" onclick="openTplAction(' + i + ',\'migrate\')" title="העברת הסכום שנרשם בחוב הפתיחה של הוועד לחשבון הפרויקט (חד-פעמי)">🔁 העברה מחוב פתיחה</button>' +
       (t.linked ? '<button class="btn btn-secondary btn-sm tpl-act-proj-status" onclick="openProjectStatus(' + i + ')">📊 מצב פרויקט</button>' : '') +
       (t.linked ? '<button class="btn btn-danger-soft btn-sm tpl-act-remove" onclick="openTplAction(' + i + ',\'remove\')">הסר מכולם</button>' : '')
     : '<span style="font-size:0.75rem;color:var(--text3);">שמרו את התבניות כדי להחיל על דיירים</span>';
@@ -10711,6 +10712,50 @@ function renderProjectApplyPlan(p, box) {
         '<td>' + sched + '</td></tr>';
     }).join('') + '</table></div>';
   return h;
+}
+
+// v2.14.87 (P1ב) — the opening-debt migration table (every number from the server plan).
+function renderProjectMigratePlan(p, box) {
+  let h = '<div class="tpl-plan-summary" style="' + box + '">' +
+    '🔁 יועבר אצל <strong>' + p.add + '</strong> דיירים · סה״כ מחוב הפתיחה לפרויקט: <strong>₪' + p.sumPart + '</strong> · יעד הפרויקט שלהם: ₪' + p.sumTotal +
+    (p.errors ? ' · <span style="color:var(--danger);">⚠️ ' + p.errors + ' שורות עם שגיאה</span>' : '') + '<br>' +
+    (p.already.length ? '✔️ כבר בפרויקט (ידלגו): ' + tplNames(p.already, 10) + '<br>' : '') +
+    'לכל שורה מסומנת: חוב הפתיחה של הוועד יורד ב\"חלק הפרויקט\", ונפתח חשבון פרויקט עם הסך המלא, \"שולם לפני המעבר\" = סך פחות חלק הפרויקט, ולוח על חלק הפרויקט בלבד. ' +
+    'ההצעה = חוב הפתיחה פחות מה שלא שולם לוועד בחודש האחרון שנסגר, ולא יותר מהסך — בדקו כל שורה. 🔎 = נשאר חוב לוועד. ⚠️ = שילם בחודש הפעיל יותר מדמי הוועד (אולי כסף של הפרויקט שעוד לא נסגר) — לא מסומן.' +
+    '</div>';
+  if (!p.rows.length) return h + '<div style="margin-top:8px;color:var(--text2);">אין דיירים עם חוב פתיחה שאינם בפרויקט.</div>';
+  h += '<div style="max-height:360px;overflow:auto;margin-top:10px;"><table id="projMigrateTable" style="width:100%;font-size:0.78rem;"><tr>' +
+    '<th></th><th style="text-align:right;">דירה</th><th style="text-align:right;">דייר</th><th>חוב פתיחה</th><th>חלק הפרויקט ₪</th><th>נשאר בוועד</th><th>סך פרויקט ₪</th><th>שולם לפני</th><th>תשלומים</th><th>חודש התחלה</th><th style="text-align:right;">לוח</th></tr>' +
+    p.rows.map(function(r){
+      const tid = esc(r.tid);
+      const flags = (r.surplusNow > 0 ? ' <span class="mig-surplus" title="שילם בחודש הפעיל ₪' + r.surplusNow + ' מעבר לדמי הוועד">⚠️</span>' : '') + (r.check ? ' <span class="mig-check" title="נשאר חוב לוועד — בדקו">🔎</span>' : '') + (r.suspended ? ' <span title="מושהה בוועד">⏸</span>' : '');
+      const sched = !r.include ? '<span style="color:var(--text3);">—</span>'
+        : r.error ? '<span class="mig-row-err" style="color:var(--danger);">' + esc(r.error) + '</span>'
+        : '<span class="mig-row-sched">' + esc(r.scheduleText || '') + '</span>';
+      return '<tr><td><input type="checkbox" data-tid="' + tid + '" data-f="include"' + (r.include ? ' checked' : '') + '></td>' +
+        '<td>' + esc(r.unit) + '</td><td>' + esc(r.name) + flags + '</td><td>₪' + r.od + '</td>' +
+        '<td><input type="number" min="0" step="0.01" data-tid="' + tid + '" data-f="part" value="' + (r.part === null ? '' : r.part) + '" style="width:85px;"></td>' +
+        '<td' + (r.leftVaad > 0 ? ' style="color:var(--danger);"' : '') + '>₪' + (r.leftVaad === null ? '—' : r.leftVaad) + '</td>' +
+        '<td><input type="number" min="0" step="0.01" data-tid="' + tid + '" data-f="total" value="' + r.total + '" style="width:85px;"></td>' +
+        '<td>₪' + (r.paidBefore === null ? '—' : r.paidBefore) + '</td>' +
+        '<td><input type="number" min="1" max="24" step="1" data-tid="' + tid + '" data-f="installments" value="' + esc(r.installments) + '" style="width:55px;"></td>' +
+        '<td><input type="month" data-tid="' + tid + '" data-f="startMonth" value="' + esc(r.startMonth) + '" style="width:auto;"></td>' +
+        '<td>' + sched + '</td></tr>';
+    }).join('') + '</table></div>';
+  return h;
+}
+
+// v2.14.87 (P1ב) — the last migration of this project in the status screen (+ ↩️ undo).
+function projMigrationHtml(v) {
+  const m = v && v.migration;
+  if (!m) return '';
+  const when = String(m.at || '').slice(0, 10).split('-').reverse().join('.');
+  return '<div class="proj-migration" style="margin-top:8px;padding:8px 10px;border-radius:8px;border:1px dashed var(--border);font-size:0.8rem;">' +
+    '🔁 הועבר מחוב פתיחה ב-' + esc(when) + ' אצל ' + m.count + ' דיירים. ' +
+    (m.canUndo
+      ? '<button class="btn btn-secondary btn-sm" data-proj-op="undo">↩️ בטל העברה</button> <span style="color:var(--text2);">(מחזיר את חוב הפתיחה ומוחק את חשבונות הפרויקט שנוצרו)</span>'
+      : '<span style="color:var(--text2);">לא ניתן לבטל: ' + esc((m.blocks || []).slice(0, 3).join(' · ')) + ((m.blocks || []).length > 3 ? ' …' : '') + '</span>') +
+    '</div>';
 }
 
 // One changed cell → the row's input for the next server preview (only what was touched).
@@ -10774,7 +10819,7 @@ function projRowsHtml(v, editIdx, plan) {
   let h = '<table class="proj-table" style="width:100%;font-size:0.8rem;margin-top:10px;"><tr>' +
     '<th style="text-align:right;">דירה</th><th style="text-align:right;">דייר</th><th>סך</th><th>שולם</th><th>יתרה</th><th>נותרו</th><th style="text-align:right;">לוח</th><th style="text-align:right;">מצב</th><th></th></tr>';
   v.rows.forEach(function(r, i){
-    const extra = (r.alert ? ' ⚠️ חרג ממספר התשלומים' : '') + (r.behind ? ' · בפיגור ₪' + r.owedPrior : '') + (r.startsLater ? ' · מתחיל ' + ml(r.startMonth) : '') + (r.suspended ? ' · ⏸' : '') + (!r.scheduled ? ' · ⚠️ בלי לוח' : '');
+    const extra = (r.paidBefore > 0 ? ' · כולל ₪' + r.paidBefore + ' לפני המעבר' : '') + (r.alert ? ' ⚠️ חרג ממספר התשלומים' : '') + (r.behind ? ' · בפיגור ₪' + r.owedPrior : '') + (r.startsLater ? ' · מתחיל ' + ml(r.startMonth) : '') + (r.suspended ? ' · ⏸' : '') + (!r.scheduled ? ' · ⚠️ בלי לוח' : '');
     h += '<tr class="proj-row"><td>' + esc(r.unit) + '</td><td>' + esc(r.name) + '</td><td>₪' + r.total + '</td><td>₪' + r.paid + '</td><td>₪' + r.remaining + '</td><td>' + r.left + '</td>' +
       '<td>' + esc(r.scheduleText || '') + '</td>' +
       '<td style="color:' + projStatusColor(r.status) + ';">' + esc(r.statusLabel) + esc(extra) + '</td>' +
@@ -10805,9 +10850,9 @@ function projEditHtml(r, plan) {
 function projRender() {
   if (!projCtx || !projCtx.view) return;
   document.getElementById('projSummary').innerHTML = projSummaryHtml(projCtx.view);
-  document.getElementById('projBody').innerHTML = projCtx.view.rows.length
+  document.getElementById('projBody').innerHTML = projMigrationHtml(projCtx.view) + (projCtx.view.rows.length   // v2.14.87 (P1ב)
     ? projRowsHtml(projCtx.view, projCtx.edit, projCtx.plan)
-    : '<div style="color:var(--text2);">עדיין אין דיירים בפרויקט — \"👥 החל על דיירים\" בהגדרות.</div>';
+    : '<div style="color:var(--text2);">עדיין אין דיירים בפרויקט — \"👥 החל על דיירים\" בהגדרות.</div>');
 }
 
 function projEditBody() {
@@ -10823,6 +10868,7 @@ async function projOnClick(ev) {
   const op = btn.dataset.projOp;
   if (op === 'edit') { projCtx.edit = parseInt(btn.dataset.i, 10); projCtx.plan = null; projRender(); return; }
   if (op === 'cancel') { projCtx.edit = null; projCtx.plan = null; projRender(); return; }
+  if (op === 'undo') { await projUndoMigration(); return; }   // v2.14.87 (P1ב)
   const r = projCtx.view && projCtx.view.rows[projCtx.edit];
   if (!r) return;
   if (op === 'preview') { await projSend(r, true); return; }
@@ -10831,6 +10877,20 @@ async function projOnClick(ev) {
     if (!confirm('לשנות את הלוח של ' + r.name + '? ' + (projCtx.plan.scheduleText || ''))) return;
     await projSend(r, false);
   }
+}
+
+async function projUndoMigration() {
+  if (!projCtx) return;
+  if (!confirm('לבטל את ההעברה האחרונה? חוב הפתיחה של הוועד יחזור, וחשבונות הפרויקט שנוצרו בהעברה יימחקו.')) return;
+  try {
+    const res = await fetch(API + '/account-templates/' + encodeURIComponent(projCtx.tplId) + '/project-migrate-undo', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ dryRun: false }) });
+    const d = await res.json();
+    if (!d.ok) { toast(d.error || 'שגיאה', 'error'); return; }
+    toast('↩️ ההעברה בוטלה אצל ' + d.undone + ' דיירים', 'success');
+    await projLoad();
+    await loadAccountsStatus(); render();
+  } catch(e) { toast('שגיאת רשת', 'error'); }
 }
 
 async function projSend(r, dry) {
@@ -10852,14 +10912,14 @@ async function projSend(r, dry) {
 // Preview first (server dryRun), then one confirm. All numbers/lists come from the
 // server plan — the page only shows them (CONSUME). Writes only account DEFINITIONS.
 let tplAct = null;   // { mode, tplId, label, plan, amounts, opts }
-const TPL_ACT_URL = { apply: 'apply', remove: 'remove', start: 'start-billing', project: 'project-apply' };   // v2.14.86 + project
+const TPL_ACT_URL = { apply: 'apply', remove: 'remove', start: 'start-billing', project: 'project-apply', migrate: 'project-migrate' };   // v2.14.87 + migrate   // v2.14.86 + project
 
 function openTplAction(i, mode) {
   const t = accountTemplates[i];
   if (!t || t.linked === undefined) { toast('שמרו את התבניות קודם', 'error'); return; }
   tplAct = { mode: mode, tplId: t.id, label: t.label, plan: null, amounts: {}, rows: {}, opts: { startSuspended: false, includeSuspended: false } };
-  const title = { apply: '👥 החלת ', remove: 'הסרת ', start: '▶ התחלת גבייה: ', project: '👥 פרויקט ' }[mode] || '';
-  document.getElementById('tplApplyTitle').textContent = title + (t.label || '') + (mode === 'apply' ? ' על חברים' : mode === 'remove' ? ' מכל החברים' : mode === 'project' ? ' — החלה על דיירים' : '');
+  const title = { apply: '👥 החלת ', remove: 'הסרת ', start: '▶ התחלת גבייה: ', project: '👥 פרויקט ', migrate: '🔁 פרויקט ' }[mode] || '';
+  document.getElementById('tplApplyTitle').textContent = title + (t.label || '') + (mode === 'apply' ? ' על חברים' : mode === 'remove' ? ' מכל החברים' : mode === 'project' ? ' — החלה על דיירים' : mode === 'migrate' ? ' — העברה מחוב פתיחה' : '');
   const opts = document.getElementById('tplApplyOpts');
   opts.innerHTML = mode !== 'apply' ? '' :
     '<label style="display:flex;gap:6px;align-items:center;font-size:0.85rem;margin-bottom:4px;cursor:pointer;"><input type="checkbox" id="tplOptSusp"> ⏸ התחל מושהה — לא לחייב עד שאלחץ "▶ התחל גבייה לכולם"</label>' +
@@ -10883,7 +10943,7 @@ function closeTplAction() {
 function tplActBody(mode) {
   const b = { dryRun: true };
   if (mode === 'apply') { b.startSuspended = tplAct.opts.startSuspended; b.includeSuspended = tplAct.opts.includeSuspended; b.amounts = tplAct.amounts; }
-  if (mode === 'project') b.rows = tplAct.rows;   // v2.14.86 (P1) — only what the operator changed; the rest = defaults
+  if (mode === 'project' || mode === 'migrate') b.rows = tplAct.rows;   // v2.14.87 + migrate   // v2.14.86 (P1) — only what the operator changed; the rest = defaults
   return b;
 }
 
@@ -10903,7 +10963,7 @@ async function tplActRefresh() {
       const inp = ev.target; if (!inp || !inp.dataset || !inp.dataset.tid) return;
       tplAct.amounts[inp.dataset.tid] = inp.value; tplActRefresh();
     });
-    const ptb = document.getElementById('projApplyTable');   // v2.14.86 (P1)
+    const ptb = document.getElementById('projApplyTable') || document.getElementById('projMigrateTable');   // v2.14.86 (P1) / v2.14.87 (P1ב)
     if (ptb) ptb.addEventListener('change', function(ev){ projApplyOnChange(ev.target); tplActRefresh(); });
   } catch(e) { document.getElementById('tplApplyBody').innerHTML = '<div style="color:var(--danger);">שגיאת רשת</div>'; }
 }
@@ -10917,6 +10977,7 @@ function tplNames(list, max) {
 function renderTplPlan(mode, p) {
   const box = 'padding:10px 12px;border-radius:8px;background:var(--surface2);border:1px solid var(--border);font-size:0.85rem;line-height:1.7;';
   if (mode === 'project') return renderProjectApplyPlan(p, box);   // v2.14.86 (P1)
+  if (mode === 'migrate') return renderProjectMigratePlan(p, box);   // v2.14.87 (P1ב)
   if (mode === 'apply') {
     const mkLbl = p.mk ? p.mk.slice(5) + '/' + p.mk.slice(0, 4) : '';
     let h = '<div class="tpl-plan-summary" style="' + box + '">' +
@@ -10948,11 +11009,12 @@ function renderTplPlan(mode, p) {
 async function tplActCommit() {
   if (!tplAct || !tplAct.plan) { toast('אין תצוגה מקדימה תקינה', 'error'); return; }
   const mode = tplAct.mode, p = tplAct.plan;
-  if (mode === 'project' && p.errors) { toast('יש ' + p.errors + ' שורות עם שגיאה — תקנו או בטלו את הסימון', 'error'); return; }   // v2.14.86
-  const n = mode === 'apply' ? p.add.length + p.relink.length : mode === 'remove' ? p.del.length + p.suspend.length : mode === 'project' ? p.add : p.start.length;
+  if ((mode === 'project' || mode === 'migrate') && p.errors) { toast('יש ' + p.errors + ' שורות עם שגיאה — תקנו או בטלו את הסימון', 'error'); return; }   // v2.14.86
+  const n = mode === 'apply' ? p.add.length + p.relink.length : mode === 'remove' ? p.del.length + p.suspend.length : (mode === 'project' || mode === 'migrate') ? p.add : p.start.length;
   if (!n) { toast('אין מה לבצע', 'error'); return; }
   // each plan shape has only its own lists → build only this mode's question
-  const q = mode === 'project' ? 'ליצור את "' + tplAct.label + '" ל-' + p.add + ' דיירים, סה״כ יעד ₪' + p.sumTotal + '?'
+  const q = mode === 'migrate' ? 'להעביר ₪' + p.sumPart + ' מחוב הפתיחה של ' + p.add + ' דיירים לחשבון "' + tplAct.label + '"? (אפשר לבטל עד שייסגר חודש או שיירשם תשלום לפרויקט)'
+          : mode === 'project' ? 'ליצור את "' + tplAct.label + '" ל-' + p.add + ' דיירים, סה״כ יעד ₪' + p.sumTotal + '?'
           : mode === 'apply' ? 'להוסיף את "' + tplAct.label + '" ל-' + p.add.length + ' חברים?'
           : mode === 'remove' ? 'למחוק אצל ' + p.del.length + ' ולהשהות אצל ' + p.suspend.length + ' חברים?'
           : 'להתחיל גבייה אצל ' + p.start.length + ' חברים?';
@@ -10963,7 +11025,7 @@ async function tplActCommit() {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
     const d = await r.json();
     if (!d.ok) { toast('שגיאה: ' + (d.error || ''), 'error'); return; }
-    toast(mode === 'project' ? '✅ הפרויקט נוסף ל-' + d.added + ' דיירים' : mode === 'apply' ? '✅ נוסף ל-' + d.added + ' חברים' : mode === 'remove' ? '✅ נמחק: ' + d.deleted + ' · הושהה: ' + d.suspended : '✅ הגבייה התחילה אצל ' + d.started + ' חברים', 'success');
+    toast(mode === 'migrate' ? '✅ הועבר לחשבון הפרויקט אצל ' + d.moved + ' דיירים' : mode === 'project' ? '✅ הפרויקט נוסף ל-' + d.added + ' דיירים' : mode === 'apply' ? '✅ נוסף ל-' + d.added + ' חברים' : mode === 'remove' ? '✅ נמחק: ' + d.deleted + ' · הושהה: ' + d.suspended : '✅ הגבייה התחילה אצל ' + d.started + ' חברים', 'success');
     closeTplAction();
     await loadData(); await loadAccountTemplates(); await loadAccountsStatus(); render();
   } catch(e) { toast('שגיאת רשת', 'error'); }

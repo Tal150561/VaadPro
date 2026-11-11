@@ -6725,4 +6725,171 @@ const v2_14_86_async = async () => {
   }
 };
 
-(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); process.exit(t.done() ? 1 : 0); })();
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.87 (P1ב) — opening debt (the old way) → project account. REAL main close first,
+// then the REAL plan / commit / undo and routes. Locked נ1–נ6 (Tal 10.11.2026).
+// ════════════════════════════════════════════════════════════════
+const v2_14_87_async = async () => {
+  const lib = require('./test-lib');
+  const src = lib.readSource('server.js');
+  const HM = S.HEBREW_MONTHS;
+  const EM = 'מרץ', MK = S.getMonthKey({ manualMonth: EM });
+  const M = n => S.crMonthAdd(MK, n);
+  const heb = mk => HM[Number(String(mk).slice(5)) - 1];
+  const MP = a => 'manual_paid_2026-03-03T10:00:00.000Z_amount_' + a;
+  const PT = o => Object.assign({ id: 'P', label: 'שיפוץ', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' },
+    project: { defaultInstallments: 3, defaultTotal: 2250 } }, o);
+  const mem = (id, od, o) => Object.assign({ id, name: 'דייר' + id, aptNumber: String(id), phone: '05011111' + id, openingDebt: od }, o);
+  const paidMain = (d, tid, mk, amt) => {
+    d.sentLog[tid + '_' + heb(mk)] = MP(amt);
+    (d.paymentHistory[String(tid)] = d.paymentHistory[String(tid)] || []).push({ month: mk, paid: true, amount: 230, paidAmount: amt, type: 'manual' });
+  };
+  // The old way: 2250 written into every owner's opening debt; month MK paid / not paid; then the REAL close.
+  const oldWay = () => {
+    const d = { config: { amount: 230, manualMonth: EM }, closedMonths: [M(-1)], closedMonthsExtra: [], paymentHistory: {}, sentLog: {},
+      defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }], accountTemplates: [PT()],
+      tenants: [mem(1, 2250), mem(2, 2250), mem(3, 2250), mem(4, 8), mem(5, 2250, { suspended: true }), mem(6, 0), mem(7, 2250)] };
+    paidMain(d, 1, MK, 230); paidMain(d, 2, MK, 1230); paidMain(d, 6, MK, 230); paidMain(d, 7, MK, 230);
+    lib.loadCloseMonth(d).runForBuilding(d, MK, EM);
+    d.config.manualMonth = heb(M(1));
+    return d;
+  };
+
+  t.section('v2.14.87 (P1ב) — the suggestion after the REAL main close (Tal\'s building shape)');
+  {
+    const d = oldWay();
+    t.eq('the REAL close: 2250 / 1250 (1000 surplus) / 2480 / 238 / 2250 (suspended) / 0 / 2250', d.tenants.map(x => x.openingDebt), [2250, 1250, 2480, 238, 2250, 0, 2250]);
+    const p = S.planProjectMigrate(d, 'P', { rows: { '7': { include: false } } });
+    const R = Object.fromEntries(p.rows.map(r => [r.tid, r]));
+    t.eq('rows = members with opening debt > 0 (no 6)', p.rows.map(r => r.tid), ['1', '2', '3', '4', '5', '7']);
+    t.eq('paid ועד → whole debt is project', [R[1].part, R[1].leftVaad, R[1].paidBefore, R[1].include, R[1].check], [2250, 0, 0, true, false]);
+    t.eq('paid 1000 extra the old way → part 1250, paidBefore 1000', [R[2].part, R[2].leftVaad, R[2].paidBefore], [1250, 0, 1000]);
+    t.eq('unpaid ועד month stays ועד (🔎)', [R[3].unpaidLast, R[3].part, R[3].leftVaad, R[3].check], [230, 2250, 230, true]);
+    t.eq('credit used for the project (8 left) + unpaid month → part 8, paidBefore 2242', [R[4].part, R[4].leftVaad, R[4].paidBefore], [8, 230, 2242]);
+    t.eq('suspended member: suggested, NOT ticked (נ3)', [R[5].suggest, R[5].include, R[5].unpaidLast], [2250, false, 0]);
+    t.eq('operator untick', R[7].include, false);
+    t.eq('schedule on the part only', [R[2].scheduleText, R[1].scheduleText], ['₪416 × 2 (' + S.extraFmtMonth(M(1)) + '–' + S.extraFmtMonth(M(2)) + ') · ₪418 (' + S.extraFmtMonth(M(3)) + ')', '₪750 × 3 (' + S.extraFmtMonth(M(1)) + '–' + S.extraFmtMonth(M(3)) + ')']);
+    t.eq('summary', [p.add, p.sumPart, p.sumTotal, p.errors], [4, 5758, 9000, 0]);
+  }
+
+  t.section('v2.14.87 (P1ב, נ2) — a ועד surplus in the ACTIVE month is flagged and not ticked');
+  {
+    const d = oldWay();
+    d.sentLog['1_' + heb(M(1))] = MP(980);
+    d.paymentHistory['1'].push({ month: M(1), paid: true, amount: 230, paidAmount: 980, type: 'manual' });
+    const r = S.planProjectMigrate(d, 'P', {}).rows.find(x => x.tid === '1');
+    t.eq('surplusNow 750 → not ticked', [r.surplusNow, r.include], [750, false]);
+    t.eq('the operator can still tick it', S.planProjectMigrate(d, 'P', { rows: { '1': { include: true } } }).rows.find(x => x.tid === '1').include, true);
+  }
+
+  t.section('v2.14.87 (P1ב) — validation');
+  {
+    const d = oldWay();
+    const err = rows => Object.fromEntries(S.planProjectMigrate(d, 'P', { rows }).rows.filter(r => r.error).map(r => [r.tid, r.error]));
+    t.eq('part > opening debt / > total / 0 / 30 installments', err({ '1': { part: 3000, total: 4000 }, '2': { part: 2300, total: 2250 }, '3': { part: 0 }, '7': { installments: 30 } }),
+      { '1': 'חלק הפרויקט גדול מחוב הפתיחה (₪2250)', '2': 'חלק הפרויקט גדול מחוב הפתיחה (₪1250)', '3': 'חלק הפרויקט חייב להיות גדול מ-0', '7': 'מספר תשלומים: 1 עד 24' });
+    t.eq('part > total', err({ '1': { part: 2250, total: 2000 } }), { '1': 'חלק הפרויקט גדול מסך הפרויקט' });
+    const nc = oldWay(); nc.closedMonths = nc.closedMonths.filter(m => m !== MK);
+    t.eq('last month NOT closed → nothing subtracted (unpaidLast 0)', [S.projectMigrateUnpaidLast(nc, nc.tenants[2], M(1)), S.projectMigrateUnpaidLast(d, d.tenants[2], M(1))], [0, 230]);
+    const d2 = oldWay(); d2.accountTemplates = [PT({ project: { defaultInstallments: 3 } })];
+    t.eq('no default total on the definition → refused', /סך לדייר/.test(S.planProjectMigrate(d2, 'P', {}).error), true);
+    t.eq('not a project → refused', S.planProjectMigrate(Object.assign(oldWay(), { accountTemplates: [{ id: 'T1', label: 'ביטוח', type: 'fixed', amount: 50 }] }), 'T1', {}).ok, false);
+    const before = JSON.stringify(d); S.planProjectMigrate(d, 'P', {});
+    t.eq('the plan writes nothing', JSON.stringify(d), before);
+  }
+
+  t.section('v2.14.87 (P1ב) — commit: ועד debt down, project account with paidBefore, log; money untouched');
+  {
+    const d = oldWay();
+    const keep = JSON.stringify([d.sentLog, d.paymentHistory, d.closedMonths]);
+    const p = S.planProjectMigrate(d, 'P', { rows: { '5': { include: true }, '7': { include: false } } });
+    const c = S.commitProjectMigrate(d, p, '2026-12-01T08:00:00.000Z');
+    t.eq('moved 5', c.moved, 5);
+    t.eq('opening debts after (7 unticked → untouched)', d.tenants.map(x => x.openingDebt), [0, 0, 230, 230, 0, 0, 2250]);
+    const a2 = d.tenants[1].extraAccounts[0];
+    t.eq('account: project block with paidBefore + migrated part', a2.project, { total: 2250, installments: 3, startMonth: M(1), paidBefore: 1000, migratedFromOpeningDebt: 1250 });
+    t.eq('account opening debt 0; schedule Σ = part', [a2.openingDebt, [1, 2, 3, 4].reduce((s, i) => s + S.extraAmountForMonth(d, a2, M(i)), 0)], [0, 1250]);
+    t.eq('sentLog / paymentHistory / closedMonths byte-identical', JSON.stringify([d.sentLog, d.paymentHistory, d.closedMonths]), keep);
+    const log = d.projectMigrations[0];
+    t.eq('log: per member before/after/part', [log.tplId, log.mk, log.at, log.rows.map(r => [r.tid, r.odBefore, r.odAfter, r.part])],
+      ['P', M(1), '2026-12-01T08:00:00.000Z', [['1', 2250, 0, 2250], ['2', 1250, 0, 1250], ['3', 2480, 230, 2250], ['4', 238, 230, 8], ['5', 2250, 0, 2250]]]);
+    t.eq('idempotent: commit the same plan again → 0, no second log', [S.commitProjectMigrate(d, p).moved, d.projectMigrations.length], [0, 1]);
+    const v = S.projectStatusView(d, 'P');
+    const r2 = v.rows.find(r => r.tid === '2'), r4 = v.rows.find(r => r.tid === '4');
+    t.eq('status: paid = paidBefore, remaining = part', [r2.paid, r2.remaining, r2.paidBefore, r4.paid, r4.remaining], [1000, 1250, 1000, 2242, 8]);
+    t.eq('status summary + migration info', [v.summary.total, v.summary.paid, v.summary.remaining, v.migration.count, v.migration.canUndo], [11250, 3242, 8008, 5, true]);
+    t.eq('the ועד split of the active month is untouched by the move', S.extraAccountSplit(d, d.tenants[2], d.tenants[2].extraAccounts[0], M(1), heb(M(1))).charge, 750);
+    const d2 = oldWay(); const p2 = S.planProjectMigrate(d2, 'P', {}); d2.tenants[0].openingDebt = 100;
+    t.eq('belt: debt changed between preview and commit → that member skipped', [S.commitProjectMigrate(d2, p2).moved, d2.tenants[0].openingDebt, (d2.tenants[0].extraAccounts || []).length], [4, 100, 0]);
+  }
+
+  t.section('v2.14.87 (P1ב, נ4) — one-level undo, blocked after any change');
+  {
+    const fresh = () => { const d = oldWay(); S.commitProjectMigrate(d, S.planProjectMigrate(d, 'P', {})); return d; };
+    const d = fresh();
+    const u = S.planProjectMigrateUndo(d, 'P');
+    t.eq('undo possible', [u.ok, u.canUndo, u.count], [true, true, 5]);
+    S.commitProjectMigrateUndo(d, u);
+    t.eq('undo: opening debts back, accounts gone, entry undone', [d.tenants.map(x => x.openingDebt), d.tenants.some(x => (x.extraAccounts || []).length), d.projectMigrations[0].undone], [[2250, 1250, 2480, 238, 2250, 0, 2250], false, true]);
+    t.eq('second undo → nothing to undo', S.planProjectMigrateUndo(d, 'P').error, 'אין העברה לביטול');
+    const blk = mut => { const x = fresh(); mut(x); const pl = S.planProjectMigrateUndo(x, 'P'); return [pl.canUndo, pl.blocks.join(' | ')]; };
+    t.eq('blocked: a month closed since', blk(x => x.closedMonths.push(M(1)))[1], 'נסגר חודש מאז ההעברה');
+    t.eq('blocked: opening debt changed', blk(x => { x.tenants[0].openingDebt = 5; }), [false, 'דייר1: חוב הפתיחה שונה']);
+    t.eq('blocked: schedule changed (✏️)', blk(x => S.commitProjectChange(x, S.planProjectChange(x, 1, x.tenants[0].extraAccounts[0].id, { installments: 5 }))), [false, 'דייר1: הלוח שונה']);
+    t.eq('blocked: a payment on the project', blk(x => { x.sentLog['2__acc__' + x.tenants[1].extraAccounts[0].id + '_' + heb(M(1))] = MP(416); }), [false, 'דייר2: נרשם תשלום או תזכורת']);
+    t.eq('blocked: a reminder on the project', blk(x => { x.sentLog['2__acc__' + x.tenants[1].extraAccounts[0].id + '_' + heb(M(1))] = 'sent_2026'; })[0], false);
+    t.eq('blocked: account removed', blk(x => { x.tenants[0].extraAccounts = []; }), [false, 'דייר1: החשבון נמחק']);
+    t.eq('a blocked undo does not commit', (() => { const x = fresh(); x.closedMonths.push(M(1)); S.commitProjectMigrateUndo(x, S.planProjectMigrateUndo(x, 'P')); return x.tenants[0].openingDebt; })(), 0);
+    t.eq('another project\'s undo → refused', /פרויקט אחר/.test(S.planProjectMigrateUndo(fresh(), 'Q').error), true);
+    const sv = fresh(); sv.closedMonths.push(M(1));
+    t.eq('status: migration shown, undo blocked with reason', [sv && S.projectStatusView(sv, 'P').migration.canUndo, S.projectStatusView(sv, 'P').migration.blocks], [false, ['נסגר חודש מאז ההעברה']]);
+  }
+
+  t.section('v2.14.87 (P1ב) — the next REAL closes after the move: ועד and project apart');
+  {
+    const d = oldWay();
+    S.commitProjectMigrate(d, S.planProjectMigrate(d, 'P', {}));
+    paidMain(d, 1, M(1), 230);
+    lib.loadCloseMonth(d).runForBuilding(d, M(1), heb(M(1)));
+    const closeExtra = lib.loadCloseExtra();
+    d.tenants.forEach(x => closeExtra(d, x, M(1)));
+    t.eq('member 1 paid ועד, not the installment → ועד 0, project carried 750', [d.tenants[0].openingDebt, d.tenants[0].extraAccounts[0].openingDebt], [0, 750]);
+    t.eq('member 3 (230 ועד left) paid nothing → ועד 460, project 750', [d.tenants[2].openingDebt, d.tenants[2].extraAccounts[0].openingDebt], [460, 750]);
+  }
+
+  // ── REAL routes ──────────────────────────────────────────────────
+  const bodyOf = head => { const st = src.indexOf(head); if (st < 0) throw new Error('route not found: ' + head); return src.slice(st + head.length, src.indexOf('\n});\n', st)); };
+  const AF = Object.getPrototypeOf(async function () {}).constructor;
+  const run = async (head, d, req) => {
+    const saves = []; let out;
+    const g = Object.assign({}, S, { loadTenantData: () => d, saveTenantData: (id, p) => { saves.push(Object.keys(p).sort()); Object.assign(d, J(p)); } });
+    const names = Object.keys(g);
+    await new AF(...names, 'req', 'res', bodyOf(head))(...names.map(n => g[n]), Object.assign({ params: {}, body: {}, query: {}, user: { tenantId: 'B' } }, req),
+      { json: o => { out = o; }, status() { return this; } });
+    return { out, saves };
+  };
+  const MIG = "app.post('/api/account-templates/:id/project-migrate', authMiddleware, (req, res) => {";
+  const UNDO = "app.post('/api/account-templates/:id/project-migrate-undo', authMiddleware, (req, res) => {";
+
+  t.section('v2.14.87 (P1ב) — REAL routes: dryRun default, commit re-plans, saves only tenants + log');
+  {
+    const d = oldWay(); const before = JSON.stringify(d);
+    const dry = await run(MIG, d, { params: { id: 'P' } });
+    t.eq('migrate: dryRun DEFAULT → nothing saved', [dry.out.dryRun, dry.out.add, dry.saves.length, JSON.stringify(d) === before], [true, 5, 0, true]);
+    const bad = await run(MIG, d, { params: { id: 'P' }, body: { dryRun: false, rows: { '1': { part: 9999 } } } });
+    t.eq('commit with an error row → refused, nothing saved', [bad.out.ok, bad.saves.length], [false, 0]);
+    const c = await run(MIG, d, { params: { id: 'P' }, body: { dryRun: false } });
+    t.eq('commit → moved 5, saves tenants + projectMigrations only', [c.out.moved, c.saves], [5, [['projectMigrations', 'tenants']]]);
+    const ud = await run(UNDO, d, { params: { id: 'P' } });
+    t.eq('undo: dryRun DEFAULT', [ud.out.dryRun, ud.out.canUndo, ud.saves.length], [true, true, 0]);
+    const uc = await run(UNDO, d, { params: { id: 'P' }, body: { dryRun: false } });
+    t.eq('undo commit → restored', [uc.out.undone, uc.saves, d.tenants.map(x => x.openingDebt)], [5, [['projectMigrations', 'tenants']], [2250, 1250, 2480, 238, 2250, 0, 2250]]);
+    const d2 = oldWay(); await run(MIG, d2, { params: { id: 'P' }, body: { dryRun: false } }); d2.closedMonths.push(M(1));
+    const ub = await run(UNDO, d2, { params: { id: 'P' }, body: { dryRun: false } });
+    t.eq('blocked undo → error with the reason, nothing saved', [ub.out.ok, /נסגר חודש/.test(ub.out.error), ub.saves.length], [false, true, 0]);
+    t.eq('POST /api/data never carries projectMigrations (server-owned)', /app\.post\('\/api\/data'[^\n]*\n  if \(req\.body && 'projectMigrations' in req\.body\) delete req\.body\.projectMigrations;/.test(src), true);
+  }
+};
+
+(async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); process.exit(t.done() ? 1 : 0); })();
