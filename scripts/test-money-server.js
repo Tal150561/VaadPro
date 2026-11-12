@@ -7074,4 +7074,36 @@ const v2_14_88_async = async () => {
   }
 };
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.89 — collection report: account filter ("סוג חשבון")
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.89 — buildCollectionReport({account}) counts ONE account');
+  const EM = 'נובמבר', MK = S.getMonthKey({ manualMonth: EM });
+  const d = { config: { amount: 250, manualMonth: EM }, closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: {},
+    defaultTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }],
+    accountTemplates: [{ id: 'P', label: 'שיפוץ לובי', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' }, project: { startMonth: MK, defaultInstallments: 3, defaultTotal: 2250 } }],
+    tenants: [1, 2, 3].map(i => ({ id: i, name: 'דייר' + i, aptNumber: String(i), openingDebt: 0, customAmount: 250, personalTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }] })) };
+  S.commitProjectApply(d, S.planProjectApply(d, 'P', { rows: { '3': { include: false } } }));
+  d.sentLog['1_' + EM] = 'bank_import_2026-11-08T10:00:00.000Z_250_payer_x';
+  d.sentLog['1__acc__' + d.tenants[0].extraAccounts[0].id + '_' + EM] = 'bank_import_2026-11-08T10:00:00.000Z_1000_payer_x';
+  const all = S.buildCollectionReport(d, { from: MK, to: MK });
+  const pk = 'x:שיפוץ לובי';
+  t.eq('options: every account of the building (main first)', all.accountOptions, [{ key: 'main', label: null }, { key: pk, label: 'שיפוץ לובי' }]);
+  t.eq('no filter → account null, both rows', [all.account, all.accounts.map(a => a.key)], [null, ['main', pk]]);
+  const m = S.buildCollectionReport(d, { from: MK, to: MK, account: 'main' });
+  const p = S.buildCollectionReport(d, { from: MK, to: MK, account: pk });
+  t.eq('main only: charged 750, paid 250, one account row', [m.account, m.totals.charged, m.totals.paid, m.accounts.map(a => a.key), m.members.length], ['main', 750, 250, ['main'], 3]);
+  t.eq('project only: charged 1500, paid 1000, no ועד row, member without the project dropped', [p.totals.charged, p.totals.paid, p.accounts.map(a => a.key), p.members.map(x => x.id).sort()], [1500, 1000, [pk], [1, 2]]);
+  t.eq('filtered parts add up to the whole (charged / paid / debt / credit)', [m.totals.charged + p.totals.charged, m.totals.paid + p.totals.paid, m.totals.balanceDebt + p.totals.balanceDebt, m.totals.balanceCredit + p.totals.balanceCredit],
+    [all.totals.charged, all.totals.paid, all.totals.balanceDebt, all.totals.balanceCredit]);
+  t.eq('member balance = that account only (דייר1: project credit 250, no ועד)', p.members.find(x => x.id === 1).balance, { debt: 0, credit: 250, accounts: [{ key: pk, label: 'שיפוץ לובי', debt: 0, credit: 250 }] });
+  t.eq('monthly series filtered too', [p.monthly[0].charged, Object.keys(p.monthly[0].byAccount)], [1500, [pk]]);
+  const one = S.buildCollectionReport(d, { from: MK, to: MK, account: pk, tenantId: 3 });
+  t.eq('a requested member without the account is still returned (empty)', [one.member && one.member.id, one.member && one.member.charged], [3, 0]);
+  t.eq('unknown account → empty report, nothing thrown', [S.buildCollectionReport(d, { from: MK, to: MK, account: 'x:אין' }).totals.charged], [0]);
+  const src89 = require('./test-lib').readSource('server.js');
+  t.eq('route: account must be main or x:<label>; passed through', /const account = \/\^\(main\|x:\.\{1,120\}\)\$\/\.test\(String\(req\.query\.account \|\| ''\)\)/.test(src89) && /allRows: req\.query\.rows === 'all', account \}\)/.test(src89), true);
+}
+
 (async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); await v2_14_88_async(); process.exit(t.done() ? 1 : 0); })();

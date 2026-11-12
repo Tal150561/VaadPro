@@ -2298,7 +2298,8 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   if (cs < 0 || ce < 0) { console.error('  ❌ v2.14.60 markers moved (CR_HEB / crMembersOpen) — fix, do NOT delete'); process.exit(1); }
   const head60 = app60.slice(cs, app60.indexOf('\n', ce) + 1);
   const fns60 = extractFunctions(app60, ['crMonthLabel', 'crMoney', 'crPct', 'crAccLabel', 'crStatusLabel', 'crSourceLabel', 'crBalanceOf', 'crBalanceCell', 'crBalanceHeadline', 'crPaidLine', 'crNetLine',
-    'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc']);
+    'crDefaultRange', 'crFillMembers', 'crOnEnter', 'crRun', 'crRender', 'crMemberHtml', 'esc',
+    'crAccName', 'crFillAccounts', 'crFilterText']);   // v2.14.89 — account filter helpers used by crRun / crRender
   const LBL = { mainAccount: 'ערבות הדדית', persons: 'חברים', person: 'חבר', unit: 'גוש/חלקה' };
   function load60(opts) {
     opts = opts || {};
@@ -4431,6 +4432,59 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   }
   t.eq('guide: combined transfer explained (import + manual mark)', ['id="vpg-project-bank"', '🧩 העברה משולבת', 'מילות מפתח', 'id="vpg-pay-project-split"', 'הכול לוועד', 'ייתכן שכולל תשלום פרויקט'].every(x => readSource('public/vaadpro-guide.js').includes(x)), true);
   t.eq('settings: keyword field = several words, comma', app.includes('placeholder="שיפוץ, לובי"') && app.includes('>מילות מפתח: <input'), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.89 — debtors card "⏸ מושהה מגבייה" + collection report "סוג חשבון" (EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const run89 = (names, scope) => new Function(Object.keys(scope).join(','), extractFunctions(app, names) + '\n; return {' + names.join(',') + '};')
+    .apply(null, Object.keys(scope).map(k => scope[k]));
+  t.section('v2.14.89 — debtors card: a suspended member is "מושהה מגבייה", not "שילם את החודש"');
+  {
+    const els = {};
+    const doc = { getElementById: id => (els[id] = els[id] || { innerHTML: '', style: {} }) };
+    const tenants = [
+      { id: 1, name: 'לימור', suspended: true, currentBalance: { status: 'exempt', shortfall: 0, expected: 0, paidAmount: 0 }, owedCurrent: 0, owedPrior: 2760 },
+      { id: 2, name: 'מירי', currentBalance: { status: 'paid', shortfall: 0, expected: 250, paidAmount: 250 }, owedCurrent: 0, owedPrior: 100 },
+      { id: 3, name: 'ארז', suspended: true, currentBalance: { status: 'paid', shortfall: 0, expected: 250, paidAmount: 250 }, owedCurrent: 0, owedPrior: 50 } ];
+    const F = run89(['buildTenantStatusRows', 'tenantOffsetNote', 'showTenantStatusList'], {
+      data: { tenants, paymentHistory: {} }, accountsStatus: {}, document: doc, getEffectiveMonth: () => 'נובמבר', VP_MONTHS: [] });
+    const rows = F.buildTenantStatusRows();
+    t.eq('row flag: exempt for the suspended + unpaid; a suspended member who PAID is not', rows.map(r => r.exempt), [true, false, false]);
+    F.showTenantStatusList('pending');
+    const h = Object.values(els).map(e => e.innerHTML).join('');
+    const block = n => h.slice(h.indexOf(n), h.indexOf(n) + 400);
+    t.eq('לימור: ⏸ מושהה מגבייה + her old debt, no "שילם את החודש"', [block('לימור').includes('⏸ מושהה מגבייה'), block('לימור').includes('שילם את החודש'), block('לימור').includes('חוב קודם')], [true, false, true]);
+    t.eq('מירי (paid) and ארז (suspended but paid) keep "שילם את החודש ✓"', [block('מירי').includes('שילם את החודש ✓'), block('ארז').includes('שילם את החודש ✓')], [true, true]);
+  }
+
+  t.section('v2.14.89 — collection report: "סוג חשבון" filter (page side)');
+  {
+    const sel = { value: '', innerHTML: '' };
+    const F = run89(['crAccName', 'crFillAccounts', 'crFilterText'], { document: { getElementById: id => id === 'crAccount' ? sel : null }, t: k => k === 'mainAccount' ? 'ועד בית' : k, esc: x => String(x) });
+    const r = { account: null, accountOptions: [{ key: 'main', label: null }, { key: 'x:שיפוץ לובי', label: 'שיפוץ לובי' }] };
+    F.crFillAccounts(r);
+    t.eq('options: all / ועד בית / each account', (sel.innerHTML.match(/<option value="[^"]*">[^<]*/g) || []), ['<option value="">— כל החשבונות —', '<option value="main">ועד בית', '<option value="x:שיפוץ לובי">שיפוץ לובי']);
+    sel.value = 'x:שיפוץ לובי'; F.crFillAccounts(Object.assign({}, r, { account: 'x:שיפוץ לובי' }));
+    t.eq('the chosen account stays selected after a run', sel.value, 'x:שיפוץ לובי');
+    F.crFillAccounts({ account: null, accountOptions: [{ key: 'main', label: null }] }); 
+    t.eq('an account that no longer exists → back to "כל החשבונות"', sel.value, '');
+    t.eq('filter text: main → mainAccount label, extra → its label, none → empty', [F.crFilterText({ account: 'main', accountOptions: r.accountOptions }), F.crFilterText({ account: 'x:שיפוץ לובי', accountOptions: r.accountOptions }), F.crFilterText({ account: null })], ['ועד בית', 'שיפוץ לובי', '']);
+    // crRun sends the key
+    let url = null;
+    const vals = { crFrom: { value: '2026-11' }, crTo: { value: '2026-11' }, crMember: { value: '' }, crAccount: { value: 'x:שיפוץ לובי' }, crStatus: { textContent: '' } };
+    const R = run89(['crRun'], { document: { getElementById: id => vals[id] || null }, API: '', fetch: u => { url = u; return Promise.resolve({ status: 200, ok: true, json: () => Promise.resolve({ ok: true }) }); },
+      crFillAccounts() {}, crRender() {}, showPlanUpgradeModal() {}, crLast: null });
+    global.__crRuns = (global.__crRuns || []).concat([R.crRun().then(() => t.eq('הפק דוח sends &account=<key>', url, '/collection-report?from=2026-11&to=2026-11&account=' + encodeURIComponent('x:שיפוץ לובי')))]);
+    t.eq('print / Excel re-fetch keep the filter', /\(crLast\.account \? '&account=' \+ encodeURIComponent\(crLast\.account\) : ''\)/.test(app), true);
+    t.eq('report notes + print + Excel name the account', [/notes\.push\('🔎 חשבון: <strong>'/.test(app), /meta\.push\('חשבון: ' \+ esc\(crFilterText\(r\)\) \+ ' בלבד'\)/.test(app), /if \(r\.account\) summary\.splice\(2, 0, \['חשבון', crFilterText\(r\) \+ ' בלבד'\]\);/.test(app)], [true, true, true]);
+    let posted = false; const toasts = [];
+    const Sv = run89(['crSaveSnapshot'], { planHasFeature: () => true, showPlanUpgradeModal() {}, toast: m => toasts.push(m), API: '', fetch: () => { posted = true; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); },
+      crLast: { range: { from: '2026-11', to: '2026-11' }, account: 'main' }, ctSavedDirty: false });
+    global.__crRuns.push(Sv.crSaveSnapshot().then(() => t.eq('💾 שמור למגמות on a filtered report → not saved, explained', [posted, toasts.some(m => m.includes('כל החשבונות'))], [false, true])));
+    t.eq('filter control in the report form', app.includes('<select id="crAccount"') && app.includes('>סוג חשבון</label>'), true);
+  }
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

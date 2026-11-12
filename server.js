@@ -2021,7 +2021,9 @@ app.get('/api/collection-report', authMiddleware, (req, res) => {
       return res.status(400).json({ error: 'טווח חודשים לא תקין' });
     }
     const d = loadTenantData(req.user.tenantId);
-    res.json(buildCollectionReport(d, { from, to, tenantId: req.query.tenantId || null, allRows: req.query.rows === 'all' }));
+    // v2.14.89 — optional account filter: 'main' or 'x:<label>' (anything else = all accounts)
+    const account = /^(main|x:.{1,120})$/.test(String(req.query.account || '')) ? String(req.query.account) : null;
+    res.json(buildCollectionReport(d, { from, to, tenantId: req.query.tenantId || null, allRows: req.query.rows === 'all', account }));
   } catch (e) {
     console.error('[collection-report]', e);
     res.status(500).json({ error: 'שגיאה בהפקת הדוח' });
@@ -4135,6 +4137,10 @@ function buildCollectionReport(d, opts) {
   const members = [];
   let detail = null;
   const wantId = opts.tenantId != null && opts.tenantId !== '' ? String(opts.tenantId) : null;
+  // v2.14.89 — account filter ("סוג חשבון"): 'main' or 'x:<label>'. Every aggregate below
+  // (accounts, totals, monthly, members, balances) then counts THAT account only.
+  const onlyAcc = (opts.account && typeof opts.account === 'string') ? opts.account : null;
+  const accountOptions = new Map([['main', null]]);
 
   for (const t of (d.tenants || [])) {
     const tid = String(t.id);
@@ -4151,7 +4157,10 @@ function buildCollectionReport(d, opts) {
     const m = { id: t.id, name: t.name || '', unit: t.aptNumber || t.gushChelka || t.propertyLabel || '',
       suspended: t.suspended === true, charged: 0, paid: 0, covered: 0, excess: 0, gap: 0, startMonth: tStart };
     const rows = [];
+    let inAcc = !onlyAcc;
     const add = (key, label, M, cell) => {
+      if (onlyAcc && key !== onlyAcc) return;
+      inAcc = true;
       const a = acc0(key, label);
       a.charged += cell.charged; a.paid += cell.paid; a.covered += cell.covered; a.excess += cell.excess; a.gap += cell.gap;
       if (cell.source === 'bank') a.bank += cell.paid; else if (cell.source === 'manual') a.manual += cell.paid;
@@ -4171,6 +4180,7 @@ function buildCollectionReport(d, opts) {
       if (M < tStart) continue;
       add('main', null, M, crMainMonth(d, t, M, c));
       for (const acc of (t.extraAccounts || [])) {
+        if (onlyAcc && 'x:' + crAccountKey(acc.label) !== onlyAcc) continue;
         const cell = crExtraMonth(d, t, acc, M, c);
         if (cell) add('x:' + crAccountKey(acc.label), crAccountKey(acc.label), M, cell);
       }
@@ -4180,10 +4190,16 @@ function buildCollectionReport(d, opts) {
     // v2.14.63 — balance AS OF NOW (not end of range): main consumed from
     // splitCurrentMonthDebt (owedNow / creditLeft), extras from extraAccountBalance.
     const split = splitCurrentMonthDebt(d, t, mkNow, emNow, null);
-    const balAccounts = [{ key: 'main', label: null, debt: r2(split.owedNow), credit: r2(split.creditLeft) }];
+    let balAccounts = [{ key: 'main', label: null, debt: r2(split.owedNow), credit: r2(split.creditLeft) }];
     for (const acc of (t.extraAccounts || [])) {
+      accountOptions.set('x:' + crAccountKey(acc.label), crAccountKey(acc.label));
       const b = extraAccountBalance(d, t, acc, mkNow, emNow);
       if (b && (b.debt > 0 || b.credit > 0)) balAccounts.push({ key: 'x:' + crAccountKey(acc.label), label: crAccountKey(acc.label), debt: b.debt, credit: b.credit });
+    }
+    if (onlyAcc) {
+      balAccounts = balAccounts.filter(b => b.key === onlyAcc);
+      // a member with no such account (no month cell, no balance) is not in a filtered report
+      if (!inAcc && wantId !== tid && !balAccounts.some(b => b.debt > 0 || b.credit > 0)) continue;
     }
     m.balance = {
       debt: r2(balAccounts.reduce((sum, b) => sum + b.debt, 0)),
@@ -4205,7 +4221,7 @@ function buildCollectionReport(d, opts) {
     out.netPaid = r2(out.paid - out.charged);
     out.members = a._members.size; out.payers = a._payers.size; out.debtors = a._debtors.size; out.exempt = a._exempt.size;
     return out;
-  }).filter(a => a.key === 'main' || a.members > 0 || a.openDebt > 0 || a.credit > 0);
+  }).filter(a => (onlyAcc ? a.key === onlyAcc : (a.key === 'main' || a.members > 0 || a.openDebt > 0 || a.credit > 0)));
   accList.sort((x, y) => (x.key === 'main' ? -1 : y.key === 'main' ? 1 : String(x.label).localeCompare(String(y.label), 'he')));
 
   const totals = { charged: 0, paid: 0, covered: 0, excess: 0, gap: 0 };
@@ -4252,7 +4268,11 @@ function buildCollectionReport(d, opts) {
       Object.keys(x.byAccount).forEach(k => { const v = x.byAccount[k]; byAccount[k] = { label: v.label, charged: r2(v.charged), paid: r2(v.paid), covered: r2(v.covered) }; });
       return { month: x.month, charged: r2(x.charged), paid: r2(x.paid), covered: r2(x.covered), byAccount };
     }),
-    members, member: detail, warnings
+    members, member: detail, warnings,
+    // v2.14.89 — the filter in force + every account the building has (the page's "סוג חשבון")
+    account: onlyAcc,
+    accountOptions: [...accountOptions.entries()].map(([key, label]) => ({ key, label }))
+      .sort((x, y) => (x.key === 'main' ? -1 : y.key === 'main' ? 1 : String(x.label).localeCompare(String(y.label), 'he')))
   };
 }
 

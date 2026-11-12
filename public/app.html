@@ -820,6 +820,7 @@ function vpLogout() {
             <div><label style="font-size:0.78rem;color:var(--text2);display:block;">מחודש</label><input type="month" id="crFrom"></div>
             <div><label style="font-size:0.78rem;color:var(--text2);display:block;">עד חודש</label><input type="month" id="crTo"></div>
             <div style="flex:1;min-width:180px;"><label style="font-size:0.78rem;color:var(--text2);display:block;" id="crMemberLabel">בדיקה פרטנית</label><select id="crMember" style="width:100%;"><option value="">— כולם —</option></select></div>
+            <div style="min-width:160px;"><label style="font-size:0.78rem;color:var(--text2);display:block;">סוג חשבון</label><select id="crAccount" style="width:100%;"><option value="">— כל החשבונות —</option></select></div>
             <button class="btn btn-green btn-sm" id="crRunBtn">📊 הפק דוח</button>
           </div>
           <div id="crStatus" style="font-size:0.82rem;color:var(--text2);margin-top:8px;"></div>
@@ -1992,7 +1993,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.88';
+const HTML_VERSION = '2.14.89';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -2330,6 +2331,24 @@ function crFillMembers() {
   if (lbl) lbl.textContent = 'בדיקת ' + t('person') + ' פרטני';
 }
 
+// v2.14.89 — "סוג חשבון": the options come from the server (accountOptions, every account
+// the building has); the page only lists them and sends the chosen key back.
+function crAccName(key, label) { return key === 'main' ? t('mainAccount') : label; }
+function crFillAccounts(r) {
+  const sel = document.getElementById('crAccount');
+  if (!sel || !r || !Array.isArray(r.accountOptions)) return;
+  const keep = r.account || sel.value || '';
+  sel.innerHTML = '<option value="">— כל החשבונות —</option>' + r.accountOptions.map(function(o) {
+    return '<option value="' + esc(o.key) + '">' + esc(crAccName(o.key, o.label)) + '</option>';
+  }).join('');
+  sel.value = r.accountOptions.some(function(o) { return o.key === keep; }) ? keep : '';
+}
+function crFilterText(r) {
+  if (!r || !r.account) return '';
+  const o = (r.accountOptions || []).filter(function(x) { return x.key === r.account; })[0];
+  return crAccName(r.account, o ? o.label : String(r.account).replace(/^x:/, ''));
+}
+
 function crOnEnter() {
   crFillMembers();
   const f = document.getElementById('crFrom'), to = document.getElementById('crTo');
@@ -2341,18 +2360,21 @@ async function crRun() {
   const f = (document.getElementById('crFrom') || {}).value || '';
   const to = (document.getElementById('crTo') || {}).value || '';
   const mem = (document.getElementById('crMember') || {}).value || '';
+  const accSel = (document.getElementById('crAccount') || {}).value || '';
   const st = document.getElementById('crStatus');
   if (!/^\d{4}-\d{2}$/.test(f) || !/^\d{4}-\d{2}$/.test(to)) { if (st) st.textContent = 'בחרו חודש התחלה וחודש סיום'; return; }
   if (f > to) { if (st) st.textContent = 'חודש ההתחלה מאוחר מחודש הסיום'; return; }
   if (st) st.textContent = '⏳ מפיק דוח...';
   try {
-    const q = 'from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(to) + (mem ? '&tenantId=' + encodeURIComponent(mem) : '');
+    const q = 'from=' + encodeURIComponent(f) + '&to=' + encodeURIComponent(to) + (mem ? '&tenantId=' + encodeURIComponent(mem) : '') +
+      (accSel ? '&account=' + encodeURIComponent(accSel) : '');
     const res = await fetch(API + '/collection-report?' + q);
     const body = await res.json().catch(function() { return {}; });
     if (res.status === 403) { if (st) st.textContent = ''; showPlanUpgradeModal(body.requiredPlan || 'Basic'); return; }
     if (!res.ok) { if (st) st.textContent = '❌ ' + (body.error || 'שגיאה בהפקת הדוח'); return; }
     crLast = body;
     if (st) st.textContent = '';
+    crFillAccounts(body);
     crRender(body);
   } catch (e) {
     if (st) st.textContent = '❌ שגיאת תקשורת — נסו שוב';
@@ -2371,6 +2393,7 @@ function crRender(r) {
   // notes
   const notes = [];
   notes.push('📅 ' + esc(crMonthLabel(r.range.from)) + (r.range.to !== r.range.from ? ' – ' + esc(crMonthLabel(r.range.to)) : ''));
+  if (r.account) notes.push('🔎 חשבון: <strong>' + esc(crFilterText(r)) + '</strong> — כל המספרים בדוח הם של החשבון הזה בלבד');
   if (r.range.requestedFrom < r.range.from) notes.push('הדוח מתחיל ב' + esc(crMonthLabel(r.range.from)) + ' — תחילת הגבייה במערכת');
   if (r.range.months.indexOf(r.openMonth) !== -1) notes.push('⏳ ' + esc(crMonthLabel(r.openMonth)) + ' עדיין פתוח — הנתונים שלו יתעדכנו עד סגירת החודש');
   (r.warnings || []).forEach(function(w) {
@@ -2486,7 +2509,8 @@ function crToggleMembers() {
 async function crFetchFull() {
   if (!crLast || !crLast.range || !crLast.range.from) { toast('הפיקו דוח קודם', 'error'); return null; }
   const q = 'from=' + encodeURIComponent(crLast.range.from) + '&to=' + encodeURIComponent(crLast.range.to) + '&rows=all' +
-    (crLast.member ? '&tenantId=' + encodeURIComponent(crLast.member.id) : '');
+    (crLast.member ? '&tenantId=' + encodeURIComponent(crLast.member.id) : '') +
+    (crLast.account ? '&account=' + encodeURIComponent(crLast.account) : '');
   try {
     const res = await fetch(API + '/collection-report?' + q);
     const body = await res.json().catch(function() { return {}; });
@@ -2521,6 +2545,7 @@ function crBuildPrintHtml(r, opts) {
     '</style></head><body>';
   h += '<h1>דוח גבייה — ' + esc(bld) + '</h1>';
   const meta = ['תקופה: ' + esc(crRangeText(r)), 'הופק: ' + esc(printed)];
+  if (r.account) meta.push('חשבון: ' + esc(crFilterText(r)) + ' בלבד');
   if (r.range.months.indexOf(r.openMonth) !== -1) meta.push(esc(crMonthLabel(r.openMonth)) + ' עדיין פתוח — נתוניו עשויים להשתנות עד סגירת החודש');
   if (r.range.requestedFrom < r.range.from) meta.push('הדוח מתחיל ב' + esc(crMonthLabel(r.range.from)) + ' — תחילת הגבייה במערכת');
   h += '<div class="meta">' + meta.join('<br>') + '</div>';
@@ -2612,6 +2637,7 @@ function crBuildSheets(r, building) {
     [],
     ['חשבון', 'חיוב', 'כיסוי חיוב', 'נגבה בפועל', 'אחוז גבייה', 'פער', 'בנק', 'ידני', 'משלמים', t('persons'), 'מושהים', 'חוב פתוח (היום)', 'זכות (היום)', 'יחס גבייה בפועל %']
   ];
+  if (r.account) summary.splice(2, 0, ['חשבון', crFilterText(r) + ' בלבד']);   // v2.14.89 — filtered report only
   r.accounts.forEach(function(a) {
     summary.push([accName(a), a.charged, a.covered, a.paid, a.pct === null ? '' : a.pct, a.gap, a.bank, a.manual, a.payers, a.members, a.exempt || 0, a.openDebt || 0, a.credit || 0, (a.paidPct === null || a.paidPct === undefined) ? '' : a.paidPct]);
   });
@@ -2673,6 +2699,8 @@ document.addEventListener('input', function(e) {
 async function crSaveSnapshot() {
   if (!planHasFeature('trends')) { showPlanUpgradeModal('Advanced'); return; }
   if (!crLast || !crLast.range || !crLast.range.from) { toast('הפיקו דוח קודם', 'error'); return; }
+  // v2.14.89 — trends compare WHOLE-building reports; a filtered report is not saved.
+  if (crLast.account) { toast('מגמות נשמרות לכל החשבונות — בחרו „כל החשבונות”, הפיקו ושמרו', 'info'); return; }
   try {
     const res = await fetch(API + '/collection-reports', { method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ from: crLast.range.from, to: crLast.range.to }) });
@@ -11811,7 +11839,9 @@ function buildTenantStatusRows() {
                                            : ((credit > 0 && totalDebt === 0) ? credit : 0),
       creditApplied: Math.max(0, parseFloat(t.creditApplied) || 0),
       owed: owed,
-      bucket: owed > 0 ? 'pending' : 'paid'
+      bucket: owed > 0 ? 'pending' : 'paid',
+      // v2.14.89 — suspended from collection this month (same test as the payments tab)
+      exempt: (bal.status === 'exempt') || (t.suspended === true && !(bal.status === 'paid' || bal.status === 'partial'))
     });
   }
   return rows;
@@ -12309,6 +12339,8 @@ function showTenantStatusList(bucket) {
         } else {
           parts.push('דמי ועד ' + getEffectiveMonth() + ': ' + nis(r.currentMonthDebt));
         }
+      } else if (r.exempt) {
+        parts.push('<span style="color:var(--text2);">⏸ מושהה מגבייה</span>');
       } else if (isPending) {
         parts.push('<span style="color:#22c55e;">שילם את החודש ✓</span>');
       }
