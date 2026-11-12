@@ -1117,17 +1117,19 @@ function vpLogout() {
         <div style="margin-top:16px;"><div class="msg-preview" id="msgPreview"></div></div>
         <div id="payerTplBox" style="display:none;margin-top:18px;padding-top:14px;border-top:1px dashed var(--border);">
           <div style="font-weight:600;font-size:0.88rem;margin-bottom:4px;">📨 הודעה לטלפון המשלם <button class="help-btn" onclick="showHelp('settings#set-payer-msg')" style="margin-right:6px;">?</button></div>
-          <div style="font-size:0.75rem;color:var(--text2);margin-bottom:6px;">נשלחת כשחשבון נוסף מוגדר "תזכורת: לטלפון המשלם" והמשלם (שוכר/בעלים) בטלפון אחר מהטלפון הראשי. אותו משלם לכמה חשבונות — הודעה אחת. החשבון לא מופיע בהודעה הראשית.</div>
+          <div style="font-size:0.75rem;color:var(--text2);margin-bottom:6px;">נשלחת כשחשבון נוסף מוגדר "תזכורת: לטלפון המשלם" והמשלם (שוכר/בעלים) בטלפון אחר מהטלפון הראשי — ותמיד לחשבון פרויקט (גם כשהטלפון זהה). אותו משלם לכמה חשבונות — הודעה אחת. החשבון לא מופיע בהודעה הראשית.</div>
           <textarea id="cfgPayerTemplate" onInput="renderPayerTplBox()" style="min-height:90px;unicode-bidi:plaintext;text-align:right;"></textarea>
           <div class="var-tags">
             <span style="font-size:0.74rem;color:var(--text2);align-self:center;">הכנס משתנה:</span>
             <span class="var-tag" onclick="insertVar('{שם}','cfgPayerTemplate')">{ שם }</span>
             <span class="var-tag" onclick="insertVar('{שם_חבר}','cfgPayerTemplate')">{ שם_חבר }</span>
+            <span class="var-tag" onclick="insertVar('{דירה}','cfgPayerTemplate')">{ דירה }</span>
+            <span class="var-tag" onclick="insertVar('{התקדמות}','cfgPayerTemplate')">{ התקדמות }</span>
             <span class="var-tag" onclick="insertVar('{חודש}','cfgPayerTemplate')">{ חודש }</span>
             <span class="var-tag" onclick="insertVar('{חשבונות}','cfgPayerTemplate')">{ חשבונות }</span>
             <span class="var-tag" onclick="insertVar('{סה&quot;כ}','cfgPayerTemplate')">{ סה״כ }</span>
           </div>
-          <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שם} = שם המשלם (שוכר/בעלים; אם חסר — שם החבר) &nbsp;|&nbsp; {שם_חבר} = שם החבר &nbsp;|&nbsp; {חשבונות} = רק החשבונות של המשלם הזה &nbsp;|&nbsp; {סה״כ} = הסכום שלהם &nbsp;|&nbsp; אין לינק לפורטל (הפורטל הוא של החבר). נשמר עם "💾 שמור תבנית".</div>
+          <div style="font-size:0.72rem;color:var(--text3);margin-top:5px;">💡 {שם} = שם המשלם (שוכר/בעלים; אם חסר — שם החבר) &nbsp;|&nbsp; {שם_חבר} = שם החבר &nbsp;|&nbsp; {דירה} = "דירה 6" (מספר היחידה של החבר) &nbsp;|&nbsp; {התקדמות} = שורת 📊 לכל פרויקט: שולם / מתוך / נותר לתשלום / נותרו תשלומים (ריק בחשבון רגיל) &nbsp;|&nbsp; {חשבונות} = רק החשבונות של המשלם הזה &nbsp;|&nbsp; {סה״כ} = הסכום שלהם &nbsp;|&nbsp; אין לינק לפורטל (הפורטל הוא של החבר). נשמר עם "💾 שמור תבנית".</div>
           <div style="margin-top:10px;"><div class="msg-preview" id="payerPreview"></div></div>
         </div>
       </div>
@@ -1993,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.89';
+const HTML_VERSION = '2.14.90';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3614,7 +3616,8 @@ function sendResultText(d) {
 // Settings › ✉️ — the payer-message template (shown only when a definition is "separate").
 // The page default is a TEXT copy of the server's PAYER_DEFAULT_TEMPLATE (a render test
 // keeps them equal); an empty field = the server default.
-const PAYER_TEMPLATE_DEFAULT = 'שלום {שם}!\nתזכורת לתשלום עבור {שם_חבר} לחודש {חודש}:{חשבונות}\nסה"כ לתשלום: *{סה"כ} ₪*\n\nתודה!';
+// v2.14.90 — copy of server PAYER_DEFAULT_TEMPLATE ({דירה} + {התקדמות})
+const PAYER_TEMPLATE_DEFAULT = 'שלום {שם}!\nתזכורת לתשלום עבור {דירה} לחודש {חודש}:{חשבונות}{התקדמות}\nסה"כ לתשלום לחודש {חודש}: *{סה"כ} ₪*\n\nתודה!';
 function anySeparateNotify(tpls) {
   return (tpls || []).some(function(t){ return t && t.notify && t.notify.mode === 'separate'; });
 }
@@ -3625,6 +3628,8 @@ function setTplNotify(i, v) {
 }
 function payerPreviewText(tmpl, month) {
   return String(tmpl || PAYER_TEMPLATE_DEFAULT)
+    .replace(/{דירה}/g, (typeof t === 'function' ? t('unit') : 'דירה') + ' 7')   // v2.14.90
+    .replace(/{התקדמות}/g, '\n📊 שיפוץ לובי: שולם ₪1000 מתוך ₪2250 · נותר לתשלום ₪1250 · נותרו 2 תשלומים')
     .replace(/{שם_חבר}/g, 'משפחת כהן').replace(/{שם}/g, 'דנה לוי')
     .replace(/{חודש}/g, month || '?')
     .replace(/{חשבונות}/g, '\n• ביטוח מבנה: *240 ₪*')

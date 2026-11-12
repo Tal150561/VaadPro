@@ -4880,7 +4880,8 @@ function remindAccountIds(d, tenant, mk, em) {
 //     the month with find() and does not skip wa_sent).
 //  ל9 grouping is per member only.
 // ══════════════════════════════════════════════════════════════════════════
-const PAYER_DEFAULT_TEMPLATE = 'שלום {שם}!\nתזכורת לתשלום עבור {שם_חבר} לחודש {חודש}:{חשבונות}\nסה"כ לתשלום: *{סה"כ} ₪*\n\nתודה!';
+// v2.14.90 — default names the unit ({דירה}) and shows project progress ({התקדמות}); Tal 12.11.
+const PAYER_DEFAULT_TEMPLATE = 'שלום {שם}!\nתזכורת לתשלום עבור {דירה} לחודש {חודש}:{חשבונות}{התקדמות}\nסה"כ לתשלום לחודש {חודש}: *{סה"כ} ₪*\n\nתודה!';
 
 // Same normalization as sendWaMsg (digits, leading 0 → 972) — used only to compare phones.
 function waPhoneKey(phone) {
@@ -4924,10 +4925,34 @@ function memberMessageSplit(d, tenant) {
 }
 
 // ל3 — the payer message. Figures = buildAccountsBlock over the group (CONSUME).
+// v2.14.90 — {דירה}: the org's unit word + the member's unit ("דירה 6"); no unit → member name.
+function payerUnitText(d, tenant) {
+  const num = String(tenant.aptNumber || tenant.gushChelka || tenant.propertyLabel || '').trim();
+  if (!num) return String(tenant.name || '');
+  return (getLabels((d && d.config) || {}).unit || 'דירה') + ' ' + num;
+}
+// v2.14.90 — {התקדמות}: one "📊" line per ACTIVE project account in the message. Figures
+// are CONSUMED from projectMemberView (the same view the payments tab shows); '' otherwise.
+function payerProgressText(d, tenant, accounts, mk, em) {
+  const cfg = (d && d.config) || {};
+  const mkX = mk || getMonthKey(cfg), emX = em || getEffectiveMonth(cfg);
+  let out = '';
+  for (const acc of (accounts || [])) {
+    if (!acc || !accIsProject(d, acc)) continue;
+    const v = projectMemberView(d, tenant, acc, mkX, emX);
+    if (!v || !(v.total > 0) || v.status !== 'active') continue;
+    out += '\n📊 ' + (acc.label || 'פרויקט') + ': שולם ₪' + v.paid + ' מתוך ₪' + v.total + ' · נותר לתשלום ₪' + v.remaining +
+      (v.left > 1 ? ' · נותרו ' + v.left + ' תשלומים' : v.left === 1 ? ' · נותר תשלום אחרון' : '');
+  }
+  return out;
+}
+
 function composePayerMessage(d, tenant, group, tmpl, ctx) {
   const pseudo = Object.assign({}, tenant, { extraAccounts: group.accounts });
   const acc = buildAccountsBlock(d, pseudo, ctx.month);
   const msg = String(tmpl || PAYER_DEFAULT_TEMPLATE)
+    .replace(/{דירה}/g, payerUnitText(d, tenant))
+    .replace(/{התקדמות}/g, payerProgressText(d, tenant, group.accounts, ctx.mk, ctx.month))
     .replace(/{שם_חבר}/g, String(tenant.name || ''))
     .replace(/{שם}/g, group.name)
     .replace(/{חודש}/g, ctx.month)

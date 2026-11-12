@@ -6259,7 +6259,7 @@ const v2_14_85_async = async () => {
     const msgs = S.planMemberMessages(d, m1, ctx(d));
     t.eq('two messages: main first (main phone), payer second (renter phone)', msgs.map(m => [m.kind, m.phone]), [['main', '0501111111'], ['payer', '0522222221']]);
     t.eq('payer message = DEFAULT template, only its account, its total',
-      msgs[1].msg, 'שלום שוכר1!\nתזכורת לתשלום עבור חבר1 לחודש ספטמבר:\n• ביטוח: *50 ₪* + חוב קודם 20 ₪ = *70 ₪*\nסה"כ לתשלום: *70 ₪*\n\nתודה!');
+      msgs[1].msg, 'שלום שוכר1!\nתזכורת לתשלום עבור חבר1 לחודש ספטמבר:\n• ביטוח: *50 ₪* + חוב קודם 20 ₪ = *70 ₪*\nסה"כ לתשלום לחודש ספטמבר: *70 ₪*\n\nתודה!');   // v2.14.90: new default (no unit in this fixture → {דירה} = member name)
     t.eq('payer view fields', [msgs[1].accIds, msgs[1].tplIds, msgs[1].labels, msgs[1].total, msgs[1].shouldRemind], [['i1'], ['T1'], ['ביטוח'], 70, true]);
     t.eq('MAIN message has NO ביטוח line, {סה"כ_כולל} = 230 + מים 80 only', [msgs[0].msg.includes('ביטוח'), msgs[0].msg, msgs[0].total], [false, 'שלום חבר1! 230\n• מים: *80 ₪* כולל 310', 310]);
     t.eq('main message == composeReminder over the member WITHOUT ביטוח (the composer is unchanged)',
@@ -7104,6 +7104,51 @@ const v2_14_88_async = async () => {
   t.eq('unknown account → empty report, nothing thrown', [S.buildCollectionReport(d, { from: MK, to: MK, account: 'x:אין' }).totals.charged], [0]);
   const src89 = require('./test-lib').readSource('server.js');
   t.eq('route: account must be main or x:<label>; passed through', /const account = \/\^\(main\|x:\.\{1,120\}\)\$\/\.test\(String\(req\.query\.account \|\| ''\)\)/.test(src89) && /allRows: req\.query\.rows === 'all', account \}\)/.test(src89), true);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.90 — payer message: {דירה} + {התקדמות} (project progress) + new default
+// ════════════════════════════════════════════════════════════════
+{
+  t.section('v2.14.90 — {דירה}: the org unit word + the member unit');
+  t.eq('vaad: "דירה 6"', S.payerUnitText({ config: {} }, { name: 'אורי', aptNumber: '6' }), 'דירה 6');
+  t.eq('kibbutz: "גוש/חלקה 12/4"', S.payerUnitText({ config: { orgType: 'kibbutz' } }, { name: 'אבי', gushChelka: '12/4' }), 'גוש/חלקה 12/4');
+  t.eq('label override is used', S.payerUnitText({ config: { labelOverrides: { he: { unit: 'יחידה' } } } }, { name: 'x', aptNumber: '3' }), 'יחידה 3');
+  t.eq('no unit → the member name', S.payerUnitText({ config: {} }, { name: 'חבר1' }), 'חבר1');
+
+  t.section('v2.14.90 — {התקדמות}: one 📊 line per ACTIVE project account (consumed from projectMemberView)');
+  const EM = 'נובמבר', MK = S.getMonthKey({ manualMonth: EM });
+  const fx = () => {
+    const d = { config: { amount: 250, manualMonth: EM }, closedMonths: [], closedMonthsExtra: [], paymentHistory: {}, sentLog: {},
+      defaultTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }],
+      accountTemplates: [{ id: 'P', label: 'שיפוץ לובי', type: 'fixed', frequency: 'monthly', amount: 0, notify: { mode: 'separate' }, project: { startMonth: MK, defaultInstallments: 3, defaultTotal: 2250 } },
+                         { id: 'B', label: 'ביטוח', type: 'fixed', frequency: 'monthly', amount: 50, notify: { mode: 'separate' } }],
+      tenants: [6, 12].map(n => ({ id: n, name: 'אורי', aptNumber: String(n), phone: '0544825217', openingDebt: 0, customAmount: 250, personalTariffs: [{ rate: 250, startDate: '2000-01-01', endDate: null }] })) };
+    S.commitProjectApply(d, S.planProjectApply(d, 'P', {}));
+    return d;
+  };
+  const d = fx(); const T6 = d.tenants[0], acc6 = T6.extraAccounts[0];
+  t.eq('nothing paid: full line', S.payerProgressText(d, T6, [acc6], MK, EM), '\n📊 שיפוץ לובי: שולם ₪0 מתוך ₪2250 · נותר לתשלום ₪2250 · נותרו 3 תשלומים');
+  d.sentLog['6__acc__' + acc6.id + '_' + EM] = 'bank_import_2026-11-08T10:00:00.000Z_1000_payer_x';
+  t.eq('1000 paid (750 due + 250 ahead): paid / remaining / 2 left', S.payerProgressText(d, T6, [acc6], MK, EM), '\n📊 שיפוץ לובי: שולם ₪1000 מתוך ₪2250 · נותר לתשלום ₪1250 · נותרו 2 תשלומים');
+  const d1 = fx(); d1.tenants[0].extraAccounts[0].openingDebt = -1492;   // חנה-like: one installment of 8 left later
+  const v1 = S.projectMemberView(d1, d1.tenants[0], d1.tenants[0].extraAccounts[0], MK, EM);
+  t.eq('one installment left → "נותר תשלום אחרון"', S.payerProgressText(d1, d1.tenants[0], d1.tenants[0].extraAccounts[0] ? [d1.tenants[0].extraAccounts[0]] : [], MK, EM).endsWith(v1.left === 1 ? ' · נותר תשלום אחרון' : ' · נותרו ' + v1.left + ' תשלומים'), true);
+  const dOne = fx(); S.commitProjectChange(dOne, S.planProjectChange(dOne, 6, dOne.tenants[0].extraAccounts[0].id, { total: 2250, installments: 1 }));
+  t.eq('a single installment left → "נותר תשלום אחרון" (not "נותרו 1")', S.payerProgressText(dOne, dOne.tenants[0], [dOne.tenants[0].extraAccounts[0]], MK, EM), '\n📊 שיפוץ לובי: שולם ₪0 מתוך ₪2250 · נותר לתשלום ₪2250 · נותר תשלום אחרון');
+  const dd = fx(); dd.sentLog['6__acc__' + dd.tenants[0].extraAccounts[0].id + '_' + EM] = 'bank_import_2026-11-08T10:00:00.000Z_2250_payer_x';
+  t.eq('project done → no line', S.payerProgressText(dd, dd.tenants[0], [dd.tenants[0].extraAccounts[0]], MK, EM), '');
+  t.eq('a non-project account → no line', S.payerProgressText(d, T6, [{ id: 'b1', label: 'ביטוח', templateId: 'B', active: true }], MK, EM), '');
+
+  t.section('v2.14.90 — two apartments, one owner: two DIFFERENT messages (default template)');
+  const dm = fx();
+  const msg = n => S.planMemberMessages(dm, dm.tenants.find(x => x.id === n), { tenantDataId: 'B', month: EM, mk: MK, amount: 250, mainTmpl: '', payerTmpl: undefined }).filter(m => m.kind === 'payer').map(m => m.msg)[0];
+  t.eq('apt 6', msg(6), 'שלום אורי!\nתזכורת לתשלום עבור דירה 6 לחודש נובמבר:\n• שיפוץ לובי: *750 ₪*\n📊 שיפוץ לובי: שולם ₪0 מתוך ₪2250 · נותר לתשלום ₪2250 · נותרו 3 תשלומים\nסה"כ לתשלום לחודש נובמבר: *750 ₪*\n\nתודה!');
+  t.eq('apt 12 differs only by the unit', msg(12), msg(6).replace('דירה 6', 'דירה 12'));
+  const custom = S.planMemberMessages(dm, dm.tenants[0], { tenantDataId: 'B', month: EM, mk: MK, amount: 250, mainTmpl: '', payerTmpl: 'היי {שם}, {סה"כ}' }).filter(m => m.kind === 'payer')[0].msg;
+  t.eq('a saved custom template without the new variables is unchanged', custom, 'היי אורי, 750');
+  const withVars = S.planMemberMessages(dm, dm.tenants[0], { tenantDataId: 'B', month: EM, mk: MK, amount: 250, mainTmpl: '', payerTmpl: '{דירה}|{התקדמות}' }).filter(m => m.kind === 'payer')[0].msg;
+  t.eq('custom template with both variables', withVars, 'דירה 6|\n📊 שיפוץ לובי: שולם ₪0 מתוך ₪2250 · נותר לתשלום ₪2250 · נותרו 3 תשלומים');
 }
 
 (async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); await v2_14_88_async(); process.exit(t.done() ? 1 : 0); })();

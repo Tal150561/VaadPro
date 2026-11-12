@@ -4487,4 +4487,14 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   }
 }
 
+// v2.14.90 — payer template: {דירה} / {התקדמות} in the page preview + chips
+{
+  t.section('v2.14.90 — payer template preview + chips');
+  const F = new Function('t', extractFunctions(app, ['payerPreviewText']) + '\n; const PAYER_TEMPLATE_DEFAULT = ' + JSON.stringify((app.match(/const PAYER_TEMPLATE_DEFAULT = '(.*)';\n/) || [])[1] || '').replace(/\\\\n/g, '\\n') + '; return payerPreviewText;')(k => k === 'unit' ? 'דירה' : k);
+  const pv = F('{דירה}|{התקדמות}', 'נובמבר');
+  t.eq('preview fills {דירה} and {התקדמות}', pv, 'דירה 7|\n📊 שיפוץ לובי: שולם ₪1000 מתוך ₪2250 · נותר לתשלום ₪1250 · נותרו 2 תשלומים');
+  t.eq('chips for the two new variables', app.includes("insertVar('{דירה}','cfgPayerTemplate')") && app.includes("insertVar('{התקדמות}','cfgPayerTemplate')"), true);
+  t.eq('the box says a project always gets its own message', app.includes('ותמיד לחשבון פרויקט (גם כשהטלפון זהה)'), true);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

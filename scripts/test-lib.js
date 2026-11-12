@@ -125,7 +125,7 @@ const SERVER_FNS = [
   'projectMigrateUnpaidLast', 'projectMigrateSurplusNow', 'planProjectMigrate', 'commitProjectMigrate', 'planProjectMigrateUndo', 'commitProjectMigrateUndo',
   // v2.14.88 (P2) — combined transfer: ועד + project
   'projectKeywordList', 'noteHasProjectWord', 'noteMentionsVaad', 'projectAllocAccount', 'planProjectAllocation',
-  'validateProjectAllocations', 'writeProjectAllocations'
+  'validateProjectAllocations', 'writeProjectAllocations', 'payerUnitText', 'payerProgressText', 'getLabels'
 ];
 
 // v2.14.76 (1ג) — every money path of an extra account resolves its amount through
@@ -154,7 +154,11 @@ function loadServer() {
   if (!payTpl) throw new Error('test-lib: PAYER_DEFAULT_TEMPLATE not found in server.js');
   const projMax = src.match(/const PROJECT_MAX_INSTALLMENTS = \d+;/);   // v2.14.86 (P1)
   if (!projMax) throw new Error('test-lib: PROJECT_MAX_INSTALLMENTS not found in server.js');
-  const code = months[0] + '\n' + projMax[0] + '\n' + billFreqs[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0] + payTpl[0]
+  // v2.14.90 — payerUnitText reads getLabels (LABELS + LABEL_LANG)
+  const labelsSrc = src.match(/const LABELS = \{[\s\S]*?\n\};\n/);
+  const labelLang = src.match(/const LABEL_LANG = [^;]*;/);
+  if (!labelsSrc || !labelLang) throw new Error('test-lib: LABELS / LABEL_LANG not found in server.js');
+  const code = labelLang[0] + '\n' + labelsSrc[0] + months[0] + '\n' + projMax[0] + '\n' + billFreqs[0] + '\n' + (splitHe ? splitHe[0] + '\n' : '') + exDefault[0] + '\n' + exTpl[0] + '\n' + remTpl[0] + payTpl[0]
     + 'function getOrCreatePortalUrl(){ return "https://portal.test/x"; }\n'
     + extractFunctions(src, SERVER_FNS)
     + 'module.exports={' + SERVER_FNS.join(',') + ',HEBREW_MONTHS,PAYER_DEFAULT_TEMPLATE};';
