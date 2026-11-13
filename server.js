@@ -4432,8 +4432,13 @@ function autoSendShouldRemind(d, tenant, mk) {
   const live = (tenant.customAmount) || ((d.config || {}).amount) || 300;
   const expected = getExpectedAmount(history, mk, live);
   const bal = calcMonthBalance(val, expected);
-  // paid in full → skip; partial → remind for the balance.
-  return bal.status !== 'paid';
+  // partial → remind for the balance. v2.14.91 — paid in full: the MAIN account is no
+  // reason to remind, but an active extra account (project, insurance, …) still owed THIS
+  // month is (same rule as the suspended / credit-covered branches above). Before, a member
+  // who paid ועד but owed an extra account was never auto-reminded, and when EVERY member
+  // had paid ועד the cron pre-check below bailed and sent nothing at all.
+  if (bal.status !== 'paid') return true;
+  return tenantOwesActiveExtra(d, tenant, month);
 }
 
 // ════════════════════════════════════════════════════════════════
@@ -7627,6 +7632,9 @@ async function runAutoSendCron() {
       // agree (otherwise the cron would bail here and never enter doAutoSend).
       const month = getEffectiveMonth(config);
       const mk    = getMonthKey(config);
+      // v2.14.91 — autoSendShouldRemind now counts an extra account still owed this month
+      // (incl. accounts sent as their own payer message), so this asks "does ANYONE have a
+      // message to send", not only "did anyone not pay ועד".
       const hasUnsent = (d.tenants || []).some(t => autoSendShouldRemind(d, t, mk));
       if (!hasUnsent) {
         console.log(`[AutoSend] ${user.email} — all tenants already paid for ${month}, skipping`);

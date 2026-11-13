@@ -6279,13 +6279,14 @@ const v2_14_85_async = async () => {
     const dec = (sl, accO) => { const d = base({ sentLog: sl || {} }); return S.planMemberMessages(d, mem(1, { extraAccounts: [ins(accO), wat()] }), ctx(d)).map(m => m.shouldRemind); };
     t.eq('main + water paid, renter owes ביטוח → main NO, payer YES (the member is not nagged)', dec({ ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) }), [false, true]);
     t.eq('main unpaid, ביטוח paid → main YES, payer NO', dec({ ['1__acc__i1_' + EM]: BI(50) }), [true, false]);
-    // ⚠️ PRE-EXISTING rule of autoSendShouldRemind (unchanged, tracked): a main account PAID in
-    // full (sentLog payment) skips the member even if a merged extra account is unpaid — the
-    // extra accounts count only in the suspended / credit-in-advance branches. 1ו2 keeps it.
-    t.eq('main paid, water unpaid (stays in main), ביטוח paid → main NO (the 2.14.84 rule), payer NO', dec({ ['1_' + EM]: BI(230), ['1__acc__i1_' + EM]: BI(50) }), [false, false]);
+    // v2.14.91 (Tal 12.11) — CHANGED ON PURPOSE: a main account PAID in full no longer skips the
+    // member when an extra account in the main message is still owed this month (was the tracked
+    // 2.14.84 rule: extras counted only in the suspended / credit-in-advance branches).
+    t.eq('main paid, water unpaid (stays in main), ביטוח paid → main YES (for the water), payer NO', dec({ ['1_' + EM]: BI(230), ['1__acc__i1_' + EM]: BI(50) }), [true, false]);
+    t.eq('main + water paid, ביטוח paid → nothing to send', dec({ ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80), ['1__acc__i1_' + EM]: BI(50) }), [false, false]);
     t.eq('ביטוח suspended → payer NO', dec({}, { suspended: true })[1], false);
     t.eq('ביטוח month paid, carried debt only → payer NO (carried debt alone never sends)', dec({ ['1__acc__i1_' + EM]: BI(50) }, { openingDebt: 40 })[1], false);
-    t.eq('2.14.84 on the WHOLE member in case 1 → no reminder at all (the renter debt was never sent)', S.autoSendShouldRemind(base({ sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) } }), mem(1, { extraAccounts: [ins(), wat()] }), MK), false);
+    t.eq('v2.14.91: the WHOLE member in case 1 (main + water paid, ביטוח owed) → YES — the cron pre-check now sees the payer message', S.autoSendShouldRemind(base({ sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) } }), mem(1, { extraAccounts: [ins(), wat()] }), MK), true);
     t.eq('main SUSPENDED, water paid, ביטוח unpaid: 2.14.84 reminded the MEMBER for the renter\'s debt → now main NO, payer YES', (() => { const d = base({ sentLog: { ['1__acc__w1_' + EM]: BI(80) } }); const m = mem(1, { suspended: true, extraAccounts: [ins(), wat()] }); return [S.autoSendShouldRemind(d, m, MK), S.planMemberMessages(d, m, ctx(d)).map(x => x.shouldRemind)]; })(), [true, [false, true]]);
   }
 
@@ -6382,6 +6383,29 @@ const v2_14_85_async = async () => {
     t.eq('lastAutoSend counts messages', a.d.config.lastAutoSend.sent, 2);
     const b = await run(base({ tenants: [mem(1, { extraAccounts: [ins(), wat()] })], sentLog: { ['1__acc__i1_' + EM]: BI(50) } }));
     t.eq('renter paid, member owes → only the main phone, ביטוח not in it', [b.sends.map(s => s.phone), b.sends[0].msg.includes('ביטוח')], [['0501111111'], false]);
+  }
+
+  t.section('v2.14.91 — reminders for an extra account still owed when the ועד is paid (REAL doAutoSend + the cron pre-check)');
+  {
+    const run = async d => { const E = env(d); const k = Object.keys(E.g);
+      const fn = new Function(...k, lib.extractFunctions(src, ['doAutoSend']) + '\n; return doAutoSend;')(...k.map(x => E.g[x]));
+      const r = await fn({ tenantId: 'B', email: 'x@y' }); return { r, sends: E.sends, d }; };
+    const plain = o => base(Object.assign({ accountTemplates: TPL().map(x => { delete x.notify; return x; }) }, o));   // kibbutz-like: extras inside the main message
+    const a = await run(plain({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, { extraAccounts: [ins(), wat()] })],
+      sentLog: { ['1_' + EM]: BI(230), ['2_' + EM]: BI(230), ['2__acc__i1_' + EM]: BI(50), ['2__acc__w1_' + EM]: BI(80) } }));
+    t.eq('main paid, extras owed (merged) → reminded; main + extras paid → not', [a.sends.map(s => s.phone), a.r.sent], [['0501111111'], 1]);
+    t.eq('…the reminder carries the extra lines', /ביטוח/.test(a.sends[0].msg) && /מים/.test(a.sends[0].msg), true);
+    t.eq('…the paid ועד keeps its payment (no sent_ over it)', a.d.sentLog['1_' + EM], BI(230));
+    const pre = d => (d.tenants || []).some(t => S.autoSendShouldRemind(d, t, MK));   // = the cron pre-check line
+    const allPaid = plain({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, {})], sentLog: { ['1_' + EM]: BI(230), ['2_' + EM]: BI(230) } });
+    t.eq('cron pre-check: EVERY member paid the ועד, one still owes extras → runs (was: skipped the whole send)', pre(allPaid), true);
+    const nothing = plain({ tenants: [mem(1, { extraAccounts: [ins(), wat()] }), mem(2, {})], sentLog: { ['1_' + EM]: BI(230), ['2_' + EM]: BI(230), ['1__acc__i1_' + EM]: BI(50), ['1__acc__w1_' + EM]: BI(80) } });
+    t.eq('cron pre-check: nothing owed this month → does not run', pre(nothing), false);
+    const carried = plain({ tenants: [mem(1, { extraAccounts: [ins({ openingDebt: 40 }), wat()] })], sentLog: { ['1_' + EM]: BI(230), ['1__acc__i1_' + EM]: BI(50), ['1__acc__w1_' + EM]: BI(80) } });
+    t.eq('carried extra debt alone (month paid) → no reminder (unchanged rule)', S.autoSendShouldRemind(carried, carried.tenants[0], MK), false);
+    const susp = plain({ tenants: [mem(1, { extraAccounts: [ins({ suspended: true }), wat()] })], sentLog: { ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) } });
+    t.eq('a suspended extra account → no reminder', S.autoSendShouldRemind(susp, susp.tenants[0], MK), false);
+    t.eq('the cron pre-check still asks autoSendShouldRemind for every member', /const hasUnsent = \(d\.tenants \|\| \[\]\)\.some\(t => autoSendShouldRemind\(d, t, mk\)\);/.test(src), true);
   }
 
   t.section('v2.14.85 (1ו2) — REAL GET /api/data');
@@ -6633,7 +6657,10 @@ const v2_14_86_async = async () => {
     const ctx = { tenantDataId: 'B', month: EM, mk: MK, amount: 230, mainTmpl: d.config.template };
     d.sentLog['1_' + EM] = MP(230);
     const msgs = S.planMemberMessages(d, d.tenants[0], ctx);
-    t.eq('member paid the ועד, not the installment → main: no remind, project message: remind', msgs.map(m => [m.kind, m.shouldRemind]), [['main', false], ['payer', true]]);
+    // v2.14.91 — the merged ביטוח (50, unpaid) is still owed in the MAIN message → main reminds for it
+    t.eq('member paid the ועד, not the installment (ביטוח unpaid in the main message) → main: remind (ביטוח), project: remind', msgs.map(m => [m.kind, m.shouldRemind]), [['main', true], ['payer', true]]);
+    const dI = J(d); dI.sentLog['1__acc__i_' + EM] = MP(50);
+    t.eq('…ביטוח paid too → main: no remind, project message: remind', S.planMemberMessages(dI, dI.tenants[0], ctx).map(m => [m.kind, m.shouldRemind]), [['main', false], ['payer', true]]);
     t.eq('the project message lists the installment', /שיפוץ: \*750 ₪\*/.test(msgs[1].msg), true);
     t.eq('the main message does not', /שיפוץ/.test(msgs[0].msg), false);
   }
