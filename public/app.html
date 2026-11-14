@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.91';
+const HTML_VERSION = '2.14.92';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -5536,6 +5536,9 @@ function render() {
         return (d || 0) * paySortDir;
       });
     }
+    // v2.14.92 — main-account label before the debt cell, in a building that has extra
+    // accounts (Tal 13.11: every row there; none in a building without extra accounts).
+    const _mainLbl = payMainLabelPrefix();
     _payRows.forEach(function(t){
       const key=t.id+'_'+vm, lv=data.sentLog[key], paid=!!lv;
       const isM=paid&&String(lv).startsWith('manual_paid');
@@ -5585,53 +5588,52 @@ function render() {
        // inside render() -> empty table -> checkStatus catch -> false
        // "disconnected" WA badge looping every 2.5s.)
        const emBal = t.currentBalance || { status: 'unpaid', shortfall: 0 };
-       const currentMonthDebt = paidThisMonth
-         ? (emBal.status === 'partial' ? (parseFloat(emBal.shortfall) || 0) : 0)
-         : Math.max(0, totalDebt - Math.max(0, openingDebt));
-       const historyDebt = Math.max(0, totalDebt - Math.max(0, openingDebt) - currentMonthDebt);
        let debtCell;
-      // 💳 v2.14.57 — credit netted immediately (server: owedNow / creditApplied /
-      // creditLeft). A credit that reduced THIS bill is shown as such, instead of
-      // "קרדיט X — יקוזז בחודש הבא" next to a month the tenant still owes.
-      const owedNow = parseFloat(t.owedNow) || 0;
+      // v2.14.92 — CONSUME the server split (owedNow = owedCurrent + owedPrior, net of credit).
+      // Before, the page re-derived "this month" from totalDebt − openingDebt; early in the
+      // month (no reminder yet) totalDebt does not include the month → an unpaid member read
+      // "סה״כ ₪0" in red, and a suspended member's old months read "החודש".
+      // (an older payload without the split → its totalDebt, all as "carried")
+      const owedNow = t.owedNow != null ? (parseFloat(t.owedNow) || 0) : totalDebt;
+      const owedCurrent = t.owedCurrent != null ? (parseFloat(t.owedCurrent) || 0) : 0;
+      const owedPrior = t.owedPrior != null ? (parseFloat(t.owedPrior) || 0) : Math.max(0, owedNow - owedCurrent);
       const creditApplied = parseFloat(t.creditApplied) || 0;
       const creditLeft = parseFloat(t.creditLeft) || 0;
+      const openPart = Math.min(owedPrior, Math.max(0, openingDebt));   // display split of owedPrior only
+      const histPart = Math.round((owedPrior - openPart) * 100) / 100;
       if (creditApplied > 0 && owedNow > 0) {
         debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+owedNow+'₪</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">אחרי קיזוז קרדיט '+creditApplied+'₪</span>';
       } else if (creditApplied > 0) {
         debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ הקרדיט מכסה את החודש</span>'
           + (creditLeft > 0 ? '<span style="font-size:0.7rem;color:var(--text3);display:block;">נותר קרדיט ₪'+creditLeft+'</span>' : '');
-      } else if (creditBalance > 0 && totalDebt === 0) {
+      } else if (owedNow === 0 && creditBalance > 0) {
         debtCell = '<span style="color:#22c55e;font-weight:700;font-size:0.85rem;">✅ קרדיט: ₪'+creditBalance+'</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">יתרה תקוזז בחודש הבא</span>';
-      } else if (paidThisMonth && totalDebt === 0) {
+      } else if (owedNow === 0) {
         debtCell = '<span style="color:var(--accent);font-size:0.82rem;">✓ אין חוב</span>';
-      } else if (paidThisMonth && emBal.status === 'partial') {
-        // v2.13.11: short payment this month — label the shortfall correctly
-        // instead of calling it "חוב קודם" (it is THIS month's balance).
-        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+totalDebt+'₪</span>'
+      } else if (paidThisMonth && emBal.status === 'partial' && owedPrior === 0) {
+        // v2.13.11: short payment this month — THIS month's balance, not "חוב קודם".
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+owedNow+'₪</span>'
           + '<span style="font-size:0.72rem;color:var(--warn);margin-right:4px;">חסר החודש</span>';
-      } else if (paidThisMonth && totalDebt > 0) {
-        // Paid this month but has prior accumulated debt
-        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+totalDebt+'₪</span>'
-          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">חוב קודם</span>';
-      } else if (totalDebt === amount && openingDebt === 0 && historyDebt === 0) {
-        // Only owes current month, clean slate
-        debtCell = '<span style="color:var(--warn);font-weight:700;font-size:0.85rem;">'+amount+'₪</span>'
-          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">החודש</span>';
+      } else if (owedCurrent === 0) {
+        // the month is settled (paid / exempt) — only carried debt is left
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">'+owedNow+'₪</span>'
+          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">חוב קודם</span>'
+          + (histPart > 0 && openPart > 0 ? '<span style="font-size:0.7rem;color:var(--text3);display:block;">חודשים קודמים: '+histPart+'₪ · יתרת פתיחה: '+openPart+'₪</span>' : '');
+      } else if (owedPrior === 0) {
+        // only this month
+        debtCell = '<span style="color:var(--warn);font-weight:700;font-size:0.85rem;">'+owedCurrent+'₪</span>'
+          + '<span style="font-size:0.72rem;color:var(--text3);margin-right:4px;">'+(emBal.status === 'partial' ? 'חסר החודש' : 'החודש')+'</span>';
       } else {
-        // Owes current month + prior debt — show breakdown
-        let breakdown = [];
-        if (currentMonthDebt > 0) breakdown.push('החודש: '+currentMonthDebt+'₪');
-        if (historyDebt > 0) breakdown.push('חודשים קודמים: '+historyDebt+'₪');
-        if (openingDebt > 0) breakdown.push('יתרת פתיחה: '+openingDebt+'₪');
-        // v2.14.68 — only a REAL remaining credit (תמי: openingDebt −230 offset by an unpaid
-        // June record → creditBalance 0 used to print "קרדיט: ₪0").
-        if (openingDebt < 0 && creditBalance > 0) breakdown.push('קרדיט: ₪'+creditBalance);
-        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+totalDebt+'₪</span>'
+        // this month + carried debt — show the breakdown
+        let breakdown = ['החודש: '+owedCurrent+'₪'];
+        if (histPart > 0) breakdown.push('חודשים קודמים: '+histPart+'₪');
+        if (openPart > 0) breakdown.push('יתרת פתיחה: '+openPart+'₪');
+        debtCell = '<span style="color:var(--danger);font-weight:700;font-size:0.85rem;">סה״כ '+owedNow+'₪</span>'
           + '<span style="font-size:0.7rem;color:var(--text3);display:block;">'+breakdown.join(' · ')+'</span>';
       }
+      if (_mainLbl) debtCell = _mainLbl + debtCell;
             h+='<tr>';
       h+='<td><input type="checkbox" class="pay-select" data-id="'+t.id+'" data-name="'+t.name.replace(/"/g,'&quot;')+'" data-phone="'+t.phone+'"'+(histView?' disabled':'')+'></td>';
       h+='<td><strong>'+tenantDisplayName(t)+'</strong></td>';
@@ -6859,6 +6861,14 @@ function splitOverpayAcrossMonths(buckets, opts) {
 // parts; the row's sum stays fixed. Rule (Tal, 11.11): keyword without "ועד" → project;
 // otherwise ועד first (month + old debt), the rest to the project, then ועד credit.
 // The BankSync AGENT path (analyzeBankRowsServer) is NOT touched.
+// v2.14.92 — "ועד בית:" / "ערבות הדדית:" before the payments-tab debt cell, ONLY in a
+// building that has extra accounts (a definition or any member account). '' otherwise.
+function payMainLabelPrefix() {
+  var has = (accountTemplates || []).length > 0 ||
+    ((data && data.tenants) || []).some(function(x){ return (x.extraAccounts || []).length > 0; });
+  if (!has) return '';
+  return '<span class="pay-main-lbl" style="font-size:0.74rem;color:var(--text2);font-weight:600;margin-left:4px;">' + esc(t('mainAccount')) + ':</span>';
+}
 function p2HasProjectDef() { return (accountTemplates || []).some(tplIsProject); }
 function p2MemberHasProject(tid) {
   var t = (data.tenants || []).filter(function(x){ return String(x.id) === String(tid); })[0];

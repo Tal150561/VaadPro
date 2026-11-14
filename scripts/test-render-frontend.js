@@ -43,10 +43,11 @@ try {
   process.exit(1);
 }
 
-function renderDebtCell(tenant, isM, isB) {
+function renderDebtCell(tenant, isM, isB, mainLbl) {
   const data = { config: { amount: 230 } };
-  const fn = new Function('t', 'isM', 'isB', 'data', block + '\n; return debtCell;');
-  return fn(tenant, isM, isB, data);
+  // v2.14.92 — the row loop computes _mainLbl once (payMainLabelPrefix) before this block
+  const fn = new Function('t', 'isM', 'isB', 'data', '_mainLbl', block + '\n; return debtCell;');
+  return fn(tenant, isM, isB, data, mainLbl || '');
 }
 
 const T = o => Object.assign({
@@ -81,8 +82,8 @@ t.noThrow('totalDebt is a string', () =>
   renderDebtCell(T({ totalDebt: '150', currentBalance: { status: 'partial', shortfall: 150 } }), false, true));
 
 t.section('app.html debtCell — content sanity');
-const partialCell = String(renderDebtCell(
-  T({ totalDebt: 80, currentBalance: { status: 'partial', shortfall: 80 } }), false, true));
+const partialCell = String(renderDebtCell(   // v2.14.92 — the cell CONSUMES owedNow / owedCurrent / owedPrior
+  T({ totalDebt: 80, owedNow: 80, owedCurrent: 80, owedPrior: 0, currentBalance: { status: 'partial', shortfall: 80 } }), false, true));
 t.eq('a short payment is labelled "חסר החודש", not "חוב קודם"',
   partialCell.includes('חסר החודש') && !partialCell.includes('חוב קודם'), true);
 const creditCell = String(renderDebtCell(
@@ -2908,7 +2909,9 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   t.eq('unparseable expense date → label from the fields (old behaviour)', runSave([{ date: '?' }], '2026-07-01', '2026-07-31').saved[0].label, 'יולי 2026');
 
   t.section('v2.14.68 — "קרדיט: ₪0" and the ₪0 fee');
-  t.eq('credit line only when creditBalance > 0', app68.includes("if (openingDebt < 0 && creditBalance > 0) breakdown.push('קרדיט: ₪'+creditBalance);") && !app68.includes("        if (openingDebt < 0) breakdown.push('קרדיט: ₪'+creditBalance);"), true);
+  // v2.14.92 — the cell consumes owedNow (already net of credit): no "קרדיט" breakdown line at all,
+  // so "קרדיט: ₪0" cannot come back; a real credit shows via creditApplied / creditBalance.
+  t.eq('no credit line in the debt breakdown (owedNow is net of credit)', !/breakdown\.push\('קרדיט/.test(app68), true);
   const feeExpr = app68.match(/const zeroFee = [^\n]*\n\s*const amtInner = [\s\S]*?ברירת מחדל<\/span>'\);/)[0];
   const fee = v => new Function('t', feeExpr + '\nreturn amtInner;')({ customAmount: v });
   t.eq('explicit ₪0 → "ברירת מחדל ⓘ" with the why (suspend instead)', fee(0).includes('ברירת מחדל ⓘ') && fee(0).includes('השתמשו בהשהיה'), true);
@@ -4495,6 +4498,33 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('preview fills {דירה} and {התקדמות}', pv, 'דירה 7|\n📊 שיפוץ לובי: שולם ₪1000 מתוך ₪2250 · נותר לתשלום ₪1250 · נותרו 2 תשלומים');
   t.eq('chips for the two new variables', app.includes("insertVar('{דירה}','cfgPayerTemplate')") && app.includes("insertVar('{התקדמות}','cfgPayerTemplate')"), true);
   t.eq('the box says a project always gets its own message', app.includes('ותמיד לחשבון פרויקט (גם כשהטלפון זהה)'), true);
+}
+
+// v2.14.92 — payments-tab debt cell CONSUMES owedNow / owedCurrent / owedPrior + main-account label
+{
+  t.section('v2.14.92 — debt cell from the server split (the "סה״כ ₪0" bug)');
+  const cell = (o, isM, isB, lbl) => String(renderDebtCell(T(o), isM, isB, lbl));
+  const gil = cell({ totalDebt: 0, owedNow: 250, owedCurrent: 250, owedPrior: 0, currentBalance: { status: 'unpaid', shortfall: 250 } }, false, false);
+  t.eq('unpaid, nothing carried, early month (totalDebt 0) → "250₪ החודש", never "סה״כ 0₪"', [gil.includes('>250₪<'), gil.includes('החודש'), gil.includes('סה״כ')], [true, true, false]);
+  const lim = cell({ totalDebt: 2760, openingDebt: 2070, owedNow: 2760, owedCurrent: 0, owedPrior: 2760, suspended: true, currentBalance: { status: 'exempt', shortfall: 0 } }, false, false);
+  t.eq('suspended with old debt → "חוב קודם" 2760, split 690 / 2070, no "החודש"', [lim.includes('>2760₪<'), lim.includes('חוב קודם'), lim.includes('חודשים קודמים: 690₪ · יתרת פתיחה: 2070₪'), lim.includes('החודש')], [true, true, true, false]);
+  const both = cell({ totalDebt: 100, owedNow: 350, owedCurrent: 250, owedPrior: 100, currentBalance: { status: 'unpaid', shortfall: 250 } }, false, false);
+  t.eq('this month + carried → "סה״כ 350₪" + "החודש: 250₪ · חודשים קודמים: 100₪"', [both.includes('סה״כ 350₪'), both.includes('החודש: 250₪ · חודשים קודמים: 100₪')], [true, true]);
+  t.eq('suspended, nothing owed (not paid) → "✓ אין חוב" (was "סה״כ 0₪")', cell({ owedNow: 0, owedCurrent: 0, owedPrior: 0, suspended: true, currentBalance: { status: 'exempt', shortfall: 0 } }, false, false).includes('✓ אין חוב'), true);
+  t.eq('paid in full → "✓ אין חוב"', cell({ owedNow: 0, owedCurrent: 0, owedPrior: 0, currentBalance: { status: 'paid', shortfall: 0 } }, false, true).includes('✓ אין חוב'), true);
+  const alb = cell({ openingDebt: -500, creditBalance: 500, owedNow: 0, owedCurrent: 0, owedPrior: 0, creditApplied: 250, creditLeft: 250, currentBalance: { status: 'unpaid', shortfall: 250 } }, false, false);
+  t.eq('credit covers the month → "✅ הקרדיט מכסה" + left 250', [alb.includes('הקרדיט מכסה את החודש'), alb.includes('נותר קרדיט ₪250')], [true, true]);
+  t.eq('paid + carried → "חוב קודם"', cell({ owedNow: 100, owedCurrent: 0, owedPrior: 100, currentBalance: { status: 'paid', shortfall: 0 } }, false, true).includes('חוב קודם'), true);
+
+  t.section('v2.14.92 — "ועד בית:" before the debt cell, only in a building with extra accounts');
+  const lbl = '<span class="pay-main-lbl">ועד בית:</span>';
+  t.eq('label prefixed when given', cell({ owedNow: 0, currentBalance: { status: 'paid', shortfall: 0 } }, false, true, lbl).startsWith(lbl), true);
+  t.eq('no label → cell unchanged', cell({ owedNow: 0, currentBalance: { status: 'paid', shortfall: 0 } }, false, true).startsWith('<span style'), true);
+  const P = (tpls, tenants) => new Function('accountTemplates', 'data', 't', 'esc', extractFunctions(app, ['payMainLabelPrefix']) + '\n; return payMainLabelPrefix();')(tpls, { tenants }, k => k === 'mainAccount' ? 'ערבות הדדית' : k, x => String(x));
+  t.eq('a definition exists → label (org word)', P([{ id: 'P' }], [{ id: 1 }]).includes('>ערבות הדדית:<'), true);
+  t.eq('no definition, a member account → label', P([], [{ id: 1, extraAccounts: [{ id: 'a' }] }]).includes('ערבות הדדית:'), true);
+  t.eq('no extra accounts at all → no label', P([], [{ id: 1 }, { id: 2, extraAccounts: [] }]), '');
+  t.eq('the row loop computes the label once and prefixes the cell', /const _mainLbl = payMainLabelPrefix\(\);\s*\n\s*_payRows\.forEach\(function\(t\)\{/.test(app) && app.includes('if (_mainLbl) debtCell = _mainLbl + debtCell;'), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
