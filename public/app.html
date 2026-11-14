@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.93';
+const HTML_VERSION = '2.14.94';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -11092,7 +11092,7 @@ function projSummaryHtml(v) {
     '</div>';
 }
 
-function projRowsHtml(v, editIdx, plan) {
+function projRowsHtml(v, editIdx, plan, input) {
   const ml = function(m){ return m ? String(m).slice(5) + '/' + String(m).slice(0, 4) : ''; };
   let h = '<table class="proj-table" style="width:100%;font-size:0.8rem;margin-top:10px;"><tr>' +
     '<th style="text-align:right;">דירה</th><th style="text-align:right;">דייר</th><th>סך</th><th>שולם</th><th>יתרה</th><th>נותרו</th><th style="text-align:right;">לוח</th><th style="text-align:right;">מצב</th><th></th></tr>';
@@ -11102,17 +11102,23 @@ function projRowsHtml(v, editIdx, plan) {
       '<td>' + esc(r.scheduleText || '') + '</td>' +
       '<td style="color:' + projStatusColor(r.status) + ';">' + esc(r.statusLabel) + esc(extra) + '</td>' +
       '<td><button class="btn btn-secondary btn-sm" data-proj-op="edit" data-i="' + i + '" title="שינוי לוח לדייר">✏️</button></td></tr>';
-    if (editIdx === i) h += '<tr class="proj-edit"><td colspan="9">' + projEditHtml(r, plan) + '</td></tr>';
+    if (editIdx === i) h += '<tr class="proj-edit"><td colspan="9">' + projEditHtml(r, plan, input) + '</td></tr>';
   });
   return h + '</table>';
 }
 
-function projEditHtml(r, plan) {
+// v2.14.94 — `input` = what the operator typed (kept across the preview re-draw). Before,
+// the re-draw put back the row's CURRENT total, so "✅ אשר" sent the old total → nothing changed.
+function projEditHtml(r, plan, input) {
   const ml = function(m){ return m ? String(m).slice(5) + '/' + String(m).slice(0, 4) : ''; };
+  const inp = input || {};
+  const vTotal = inp.total !== undefined ? inp.total : r.total;
+  const vN = inp.installments !== undefined ? inp.installments : Math.max(1, r.left || 1);
+  const vStart = inp.startMonth || '';
   let h = '<div style="padding:8px;border:1px dashed var(--border);border-radius:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:end;font-size:0.8rem;">' +
-    '<label>סך ₪<br><input type="number" id="projEdTotal" min="0" step="0.01" value="' + r.total + '" style="width:100px;"></label>' +
-    '<label>מספר תשלומים מעכשיו<br><input type="number" id="projEdN" min="1" max="24" step="1" value="' + Math.max(1, r.left || 1) + '" style="width:70px;"></label>' +
-    '<label>מחודש (לא חובה)<br><input type="month" id="projEdStart" value="" style="width:auto;"></label>' +
+    '<label>סך ₪<br><input type="number" id="projEdTotal" min="0" step="0.01" value="' + esc(vTotal) + '" style="width:100px;"></label>' +
+    '<label>מספר תשלומים מעכשיו<br><input type="number" id="projEdN" min="1" max="24" step="1" value="' + esc(vN) + '" style="width:70px;"></label>' +
+    '<label>מחודש (לא חובה)<br><input type="month" id="projEdStart" value="' + esc(vStart) + '" style="width:auto;"></label>' +
     '<button class="btn btn-secondary btn-sm" data-proj-op="preview">🔍 תצוגה מקדימה</button>' +
     '<button class="btn btn-green btn-sm" data-proj-op="commit">✅ אשר</button>' +
     '<button class="btn btn-secondary btn-sm" data-proj-op="cancel">ביטול</button></div>' +
@@ -11129,7 +11135,7 @@ function projRender() {
   if (!projCtx || !projCtx.view) return;
   document.getElementById('projSummary').innerHTML = projSummaryHtml(projCtx.view);
   document.getElementById('projBody').innerHTML = projMigrationHtml(projCtx.view) + (projCtx.view.rows.length   // v2.14.87 (P1ב)
-    ? projRowsHtml(projCtx.view, projCtx.edit, projCtx.plan)
+    ? projRowsHtml(projCtx.view, projCtx.edit, projCtx.plan, projCtx.input)
     : '<div style="color:var(--text2);">עדיין אין דיירים בפרויקט — \"👥 החל על דיירים\" בהגדרות.</div>');
 }
 
@@ -11144,14 +11150,20 @@ async function projOnClick(ev) {
   const btn = ev.target && ev.target.closest ? ev.target.closest('[data-proj-op]') : null;
   if (!btn || !projCtx) return;
   const op = btn.dataset.projOp;
-  if (op === 'edit') { projCtx.edit = parseInt(btn.dataset.i, 10); projCtx.plan = null; projRender(); return; }
-  if (op === 'cancel') { projCtx.edit = null; projCtx.plan = null; projRender(); return; }
+  if (op === 'edit') { projCtx.edit = parseInt(btn.dataset.i, 10); projCtx.plan = null; projCtx.input = null; projCtx.planFor = null; projRender(); return; }
+  if (op === 'cancel') { projCtx.edit = null; projCtx.plan = null; projCtx.input = null; projCtx.planFor = null; projRender(); return; }
   if (op === 'undo') { await projUndoMigration(); return; }   // v2.14.87 (P1ב)
   const r = projCtx.view && projCtx.view.rows[projCtx.edit];
   if (!r) return;
   if (op === 'preview') { await projSend(r, true); return; }
   if (op === 'commit') {
-    if (!projCtx.plan || !projCtx.plan.ok) { await projSend(r, true); if (!projCtx.plan || !projCtx.plan.ok) return; }
+    // v2.14.94 — the confirm must describe exactly what is sent: no preview yet, or the
+    // fields changed since the preview → preview first (the operator presses ✅ again).
+    if (!projCtx.plan || !projCtx.plan.ok || projCtx.planFor !== JSON.stringify(projEditBody())) {
+      await projSend(r, true);
+      if (projCtx && projCtx.plan && projCtx.plan.ok) toast('בדקו את התצוגה המקדימה ולחצו ✅ אשר', 'info');
+      return;
+    }
     if (!confirm('לשנות את הלוח של ' + r.name + '? ' + (projCtx.plan.scheduleText || ''))) return;
     await projSend(r, false);
   }
@@ -11172,7 +11184,9 @@ async function projUndoMigration() {
 }
 
 async function projSend(r, dry) {
-  const body = projEditBody(); body.dryRun = dry;
+  const body = projEditBody();
+  if (projCtx) { projCtx.input = Object.assign({}, body); if (dry) projCtx.planFor = JSON.stringify(body); }   // v2.14.94
+  body.dryRun = dry;
   try {
     const res = await fetch(API + '/tenant-accounts/' + encodeURIComponent(r.tid) + '/' + encodeURIComponent(r.accId) + '/project', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -11180,7 +11194,7 @@ async function projSend(r, dry) {
     if (!projCtx) return;
     if (dry || !d.ok) { projCtx.plan = d; projRender(); return; }
     toast(d.changed ? '✅ הלוח עודכן' : 'אין שינוי', 'success');
-    projCtx.edit = null; projCtx.plan = null;
+    projCtx.edit = null; projCtx.plan = null; projCtx.input = null; projCtx.planFor = null;
     await projLoad();
     await loadAccountsStatus(); render();
   } catch(e) { toast('שגיאת רשת', 'error'); }

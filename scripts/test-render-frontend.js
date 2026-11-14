@@ -4551,4 +4551,44 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('render() uses the same function', /var pending = refreshStatusCounts\(\);/.test(app), true);
 }
 
+// v2.14.94 — 📊 ✏️: typed values survive the preview; ✅ sends exactly what was previewed
+{
+  t.section('v2.14.94 — ✏️ project change: preview keeps the typed total, ✅ commits it (EXECUTED)');
+  const row = { tid: '10', accId: 'a1', name: 'טל', unit: '10', total: 2250, paid: 1250, remaining: 1000, left: 2, scheduleText: '', status: 'active', statusLabel: 'בתשלומים', scheduled: true };
+  const inputs = { projEdTotal: { value: '2250' }, projEdN: { value: '2' }, projEdStart: { value: '' } };
+  const posts = []; const toasts = []; let confirmed = 0;
+  const body = { innerHTML: '' };
+  const doc = { getElementById: id => {
+    if (inputs[id]) return inputs[id];
+    if (id === 'projBody' || id === 'projSummary') return body;
+    return null; } };
+  const scope = { document: doc, API: '', toast: m => toasts.push(m), confirm: () => { confirmed++; return true; },
+    projLoad: () => Promise.resolve(), loadAccountsStatus: () => Promise.resolve(), render() {}, projUndoMigration() {},
+    projSummaryHtml: () => '', projMigrationHtml: () => '',
+    fetch: (u, o) => { const b = JSON.parse(o.body); posts.push(b);
+      const total = parseFloat(b.total);
+      return Promise.resolve({ json: () => Promise.resolve(b.dryRun ? { ok: true, from: '2026-12', chargedBefore: 750, remaining: total - 750, scheduleText: '₪' + ((total - 750) / 2) + ' × 2' } : { ok: true, changed: true }) }); } };
+  const F = new Function(Object.keys(scope).join(','), 'var projCtx = null;\n' + extractFunctions(app, ['esc', 'projStatusColor', 'projRowsHtml', 'projEditHtml', 'projRender', 'projEditBody', 'projOnClick', 'projSend'])
+    + '\n; return { set: c => { projCtx = c; }, get: () => projCtx, projOnClick };').apply(null, Object.keys(scope).map(k => scope[k]));
+  F.set({ tplId: 'P', view: { rows: [row] }, edit: 0, plan: null, input: null, planFor: null });
+  const click = op => F.projOnClick({ target: { closest: () => ({ dataset: { projOp: op, i: '0' } }) } });
+  global.__crRuns = (global.__crRuns || []).concat([(async () => {
+    inputs.projEdTotal.value = '3000';
+    await click('preview');
+    t.eq('preview sent 3000', [posts[0].total, posts[0].dryRun], ['3000', true]);
+    t.eq('the re-drawn edit row KEEPS 3000 (was: back to 2250)', /id="projEdTotal"[^>]*value="3000"/.test(body.innerHTML), true);
+    await click('commit');
+    t.eq('✅ commits 3000, after one confirm', [posts[1].total, posts[1].dryRun, confirmed], ['3000', false, 1]);
+    // changed after preview → re-preview, no commit
+    F.set({ tplId: 'P', view: { rows: [row] }, edit: 0, plan: null, input: null, planFor: null });
+    posts.length = 0; confirmed = 0;
+    inputs.projEdTotal.value = '3000'; await click('preview');
+    inputs.projEdTotal.value = '3500'; await click('commit');
+    t.eq('fields changed after the preview → ✅ previews again, no confirm, no write', [posts.map(p => [p.total, p.dryRun]), confirmed], [[['3000', true], ['3500', true]], 0]);
+    t.eq('…and asks to check the preview', toasts.some(m => m.includes('בדקו את התצוגה המקדימה')), true);
+    await click('commit');
+    t.eq('second ✅ → commits 3500', [posts[2].total, posts[2].dryRun, confirmed], ['3500', false, 1]);
+  })()]);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
