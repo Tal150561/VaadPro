@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.92';
+const HTML_VERSION = '2.14.93';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -5292,6 +5292,32 @@ var accountsStatus = {};   // { tenantId: [{id,label,amount,paidThisMonth,totalD
 
 // Recompute and repaint the "סה״כ לגביה" card. Called from render() and again
 // from loadAccountsStatus() once the extra-accounts fetch resolves.
+// v2.14.93 — the "דיירים רשומים" / "ללא חוב" / "חייבים" cards + the tab badge.
+// Active month: the SAME classifier as the click-through lists (buildTenantStatusRows,
+// incl. extra accounts). Historical view: the old sentLog split (active-month figures say
+// nothing about a past month). Called by render() AND loadAccountsStatus(). Returns pending.
+function refreshStatusCounts() {
+  var vm = getViewMonth();
+  var paidCount, pending;
+  if (isHistoricalView()) {
+    paidCount = data.tenants.filter(function(t){ var lv = data.sentLog[t.id+'_'+vm]; return lv && (String(lv).startsWith('manual_paid') || String(lv).startsWith('bank_import')); }).length;
+    pending = data.tenants.length - paidCount;
+  } else {
+    var rows = buildTenantStatusRows();
+    pending = rows.filter(function(r){ return r.bucket === 'pending'; }).length;
+    paidCount = rows.length - pending;
+  }
+  var set = function(id, v){ var el = document.getElementById(id); if (el) el.textContent = v; };
+  set('sTenants', data.tenants.length);
+  set('sSent', paidCount);
+  set('sPending', pending);
+  set('tbT', data.tenants.length);
+  set('tbP', pending);
+  var tb = document.getElementById('tbP');
+  if (tb) tb.className = pending > 0 ? 'tbadge' : 'tbadge green';
+  return pending;
+}
+
 function refreshCollectionCard() {
   var amt = document.getElementById('sAmount');
   if (!amt) return;
@@ -5408,18 +5434,9 @@ function render() {
   // total equals the "סה״כ לגביה" card by construction.
   // Historical view keeps the old sentLog-based split: priorDebt/currentBalance
   // are ACTIVE-month figures and say nothing about a past month.
-  var paidCount, pending;
-  if (histView) {
-    paidCount=data.tenants.filter(function(t){var lv=data.sentLog[t.id+'_'+vm];return lv&&(String(lv).startsWith('manual_paid')||String(lv).startsWith('bank_import'));}).length;
-    pending=data.tenants.length-paidCount;
-  } else {
-    var _statusRows=buildTenantStatusRows();
-    pending=_statusRows.filter(function(r){return r.bucket==='pending';}).length;
-    paidCount=_statusRows.length-pending;
-  }
-  document.getElementById('sTenants').textContent=data.tenants.length;
-  document.getElementById('sSent').textContent=paidCount;
-  document.getElementById('sPending').textContent=pending;
+  // v2.14.93 — moved to refreshStatusCounts() so loadAccountsStatus() can repaint the
+  // counts once the extra accounts arrive (they were painted with ועד only).
+  var pending = refreshStatusCounts();
   // v2.14.32 — "מתוכם N מושהים" sub-line under דיירים רשומים. Display-only count
   // of tenants flagged suspended (⏸). Shown ONLY when at least one exists (0 →
   // blank, no noise). Does NOT change the חייבים/ללא חוב counts — a suspended
@@ -5444,9 +5461,6 @@ function render() {
   // never block render(). Skipped in historical view — priorDebt/currentBalance
   // are ACTIVE-month figures (same rule as the חייבים/ללא חוב cards above).
   if (!histView) { refreshExcessDebtCard(); }
-  document.getElementById('tbT').textContent=data.tenants.length;
-  document.getElementById('tbP').textContent=pending;
-  document.getElementById('tbP').className=pending>0?'tbadge':'tbadge green';
   updateSchedule(); updatePreview();
 
   // Tenants tab
@@ -10564,6 +10578,11 @@ async function loadAccountsStatus() {
       // ביטוח ₪50 appeared in his row and in the portal but not on the
       // dashboard. Recompute the card here too.
       refreshCollectionCard();
+      // ⚠️ v2.14.93 — same lesson for the "חייבים" / "ללא חוב" counts: they classify
+      // with buildTenantStatusRows(), which reads accountsStatus. Painted by render()
+      // before this fetch resolved, a member who owes ONLY an extra account (project)
+      // was counted "ללא חוב" — the card read 3 / 12 while its own list showed 10 / 5.
+      refreshStatusCounts();
     }
   } catch(e) {}
 }

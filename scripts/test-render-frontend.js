@@ -542,8 +542,9 @@ t.section('app.html — extra accounts survive the async race (v2.13.33)');
   t.eq('card label is "ללא חוב" (not the month-only "שילמו החודש")',
     /id="sSentCard"[\s\S]{0,300}?stat-label">ללא חוב/.test(app), true);
   t.eq('שילמו card is bound to the list', /id="sSentCard"[^>]*onclick="showTenantStatusList\('paid'\)"/.test(app), true);
+  // v2.14.93 — the counts live in refreshStatusCounts() (spacing changed)
   t.eq('stat counts derive from the shared classifier',
-    /buildTenantStatusRows\(\)[\s\S]{0,200}?bucket==='pending'/.test(app), true);
+    /buildTenantStatusRows\(\)[\s\S]{0,200}?bucket === 'pending'/.test(app), true);
 }
 
 // ══════════════════════════════════════════════════════════════════
@@ -4525,6 +4526,29 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('no definition, a member account → label', P([], [{ id: 1, extraAccounts: [{ id: 'a' }] }]).includes('ערבות הדדית:'), true);
   t.eq('no extra accounts at all → no label', P([], [{ id: 1 }, { id: 2, extraAccounts: [] }]), '');
   t.eq('the row loop computes the label once and prefixes the cell', /const _mainLbl = payMainLabelPrefix\(\);\s*\n\s*_payRows\.forEach\(function\(t\)\{/.test(app) && app.includes('if (_mainLbl) debtCell = _mainLbl + debtCell;'), true);
+}
+
+
+// v2.14.93 — "חייבים" / "ללא חוב" cards repaint when the extra accounts arrive
+{
+  t.section('v2.14.93 — dashboard counts include extra accounts (EXECUTED)');
+  const els = {};
+  const doc = { getElementById: id => (els[id] = els[id] || { textContent: '', className: '' }) };
+  const tenants = [
+    { id: 1, name: 'גיל', owedCurrent: 250, owedPrior: 0, currentBalance: { status: 'unpaid' } },
+    { id: 2, name: 'מירי', owedCurrent: 0, owedPrior: 0, currentBalance: { status: 'paid' } },
+    { id: 3, name: 'טל', owedCurrent: 0, owedPrior: 0, currentBalance: { status: 'paid' } } ];
+  const scope = { data: { tenants, sentLog: {} }, accountsStatus: {}, document: doc, getViewMonth: () => 'נובמבר', isHistoricalView: () => false };
+  const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['buildTenantStatusRows', 'refreshStatusCounts']) + '\n; return { refreshStatusCounts, setAcc: v => { accountsStatus = v; } };')
+    .apply(null, Object.keys(scope).map(k => scope[k]));
+  F.refreshStatusCounts();
+  t.eq('before accounts load: ועד only → 1 חייב / 2 ללא חוב', [els.sPending.textContent, els.sSent.textContent, els.tbP.textContent], [1, 2, 1]);
+  F.setAcc({ '2': [{ label: 'שיפוץ לובי', owedCurrent: 750, owedPrior: 0 }], '3': [{ label: 'שיפוץ לובי', owedCurrent: 0, owedPrior: 0 }] });
+  F.refreshStatusCounts();
+  t.eq('after: מירי owes the project → 2 חייבים / 1 ללא חוב (= the lists)', [els.sPending.textContent, els.sSent.textContent, els.sTenants.textContent], [2, 1, 3]);
+  const la = app.slice(app.indexOf('async function loadAccountsStatus()'), app.indexOf('// ── Render account templates list'));
+  t.eq('loadAccountsStatus repaints the counts (not only the total)', /refreshCollectionCard\(\);[\s\S]*refreshStatusCounts\(\);/.test(la), true);
+  t.eq('render() uses the same function', /var pending = refreshStatusCounts\(\);/.test(app), true);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
