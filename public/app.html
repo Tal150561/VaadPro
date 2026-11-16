@@ -3602,9 +3602,11 @@ function confirmPayerSplit(list, scope) {
   var n = 0, who = [];
   (list || []).forEach(function(t){ var c = payerMsgCount(t, scope); if (c > 0) { n += c; if (who.length < 3) who.push(t.name || ''); } });
   if (!n) return true;
-  return confirm('בנוסף להודעה הראשית יישלחו ' + n + (n === 1 ? ' הודעה נפרדת' : ' הודעות נפרדות') +
+  // v2.14.96 — scope 'all': a member whose main message has nothing to pay gets the payer one(s) only
+  var skip = scope === 'all' && (list || []).some(function(t){ return t && t.sendAllMain === false; });
+  return confirm((skip ? '' : 'בנוסף להודעה הראשית ') + 'יישלחו ' + n + (n === 1 ? ' הודעה נפרדת' : ' הודעות נפרדות') +
     ' לטלפון המשלם (שוכר/בעלים) של חשבון נוסף' + (who.length ? ' — ' + who.join(', ') + ((list || []).length > who.length && n > who.length ? '…' : '') : '') +
-    '.\nהחשבון הזה לא מופיע בהודעה הראשית.\nלהמשיך?');
+    '.\nהחשבון הזה לא מופיע בהודעה הראשית.' + (skip ? '\nהודעה ראשית לא תישלח למי שאין לו מה לשלם בה.' : '') + '\nלהמשיך?');
 }
 function sendResultText(d) {
   var s = (d && typeof d.sent === 'number') ? d.sent : 1;
@@ -5544,7 +5546,7 @@ function render() {
       '<th>שם</th>' + _sortTh('debt','חוב') +
       _sortTh('status', _accN ? 'סטטוס · ' + esc(_accN) : 'סטטוס תשלום') +
       _sortTh('manual', _accN ? 'סימון ידני · ' + esc(_accN) : 'סימון ידני') +
-      (_accN ? '<th>חשבונות נוספים</th><th>שליחת תזכורת</th>' : '<th>הוסף חשבון</th><th>שליחה</th>') +
+      (_accN ? '<th>חשבונות נוספים</th><th>שליחת תזכורת</th>' : '<th>הוסף חשבון</th><th>שליחה</th>') + '<th>פורטל</th>' +
       '</tr></thead><tbody>';
     const _payRows = data.tenants.slice();
     if (paySortKey) {
@@ -5660,10 +5662,13 @@ function render() {
       // v2.14.2 — dedicated "הוסף חשבון" column; injectExtraAccountsCells()
       // fills it after render (cell index 5).
       h+='<td class="acc-mgr-cell" style="white-space:nowrap;"></td>';
+      // v2.14.96 (Tal 16.11) — 🔗 in its OWN column: one under the other whatever the width of
+      // "📱 שלח" (was in the send cell, which was also display:flex on a <td>).
       if (histView) {
-        h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td>';
+        h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td><td></td>';
       } else {
-        h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')"'+(_accN?' title="'+esc(paySendTitle(paySendTargets(t,_accN)))+'"':'')+'>'+paySendBtnHtml(t)+'</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
+        h+='<td><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')"'+(_accN?' title="'+esc(paySendTitle(paySendTargets(t,_accN),_accN))+'"':'')+'>'+paySendBtnHtml(t)+'</button></td>'
+          + '<td><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
       }
       h+='</tr>';
     });
@@ -6901,10 +6906,11 @@ function payBtnLabel(main, sub) {
   return '<span style="display:inline-flex;flex-direction:column;align-items:center;line-height:1.25;">' + main +
     '<span class="pay-btn-acc" style="font-size:0.68rem;font-weight:500;white-space:nowrap;margin-top:1px;">' + esc(sub) + '</span></span>';
 }
-// What "📱 שלח" sends for this member (scope 'all', CONSUMED from the server's t.payerSplit):
-// the main message always, plus each separate message that has something to pay.
+// What "📱 שלח" sends for this member (scope 'all', CONSUMED from the server): the main message
+// unless the server says it is skipped (t.sendAllMain === false — nothing to pay in it, v2.14.96),
+// plus each separate message that has something to pay.
 function paySendTargets(tn, mainName) {
-  var out = [mainName];
+  var out = (tn && tn.sendAllMain === false) ? [] : [mainName];
   ((tn && Array.isArray(tn.payerSplit)) ? tn.payerSplit : []).forEach(function(p){
     if (!((parseFloat(p.total) || 0) > 0)) return;
     (p.labels || []).forEach(function(l){ if (l && out.indexOf(l) < 0) out.push(String(l)); });
@@ -6916,9 +6922,10 @@ function paySendBtnHtml(tn) {
   var n = payMainAccName();
   return payBtnLabel('📱 שלח', n ? paySendTargets(tn, n).join(' + ') : '');
 }
-function paySendTitle(targets) {
-  var s = 'שולח הודעה ל' + targets[0] + ' (כולל חשבונות שמופיעים בה)';
-  if (targets.length > 1) s += ' + הודעה נפרדת: ' + targets.slice(1).join(', ');
+function paySendTitle(targets, mainName) {
+  var hasMain = targets[0] === mainName, sep = hasMain ? targets.slice(1) : targets;
+  var s = hasMain ? 'שולח הודעה ל' + mainName + ' (כולל חשבונות שמופיעים בה)' : 'אין מה לשלם ב' + mainName + ' — ההודעה שלו לא תישלח';
+  if (sep.length) s += (hasMain ? ' + הודעה נפרדת: ' : ' · נשלחת הודעה נפרדת: ') + sep.join(', ');
   return s;
 }
 function p2HasProjectDef() { return (accountTemplates || []).some(tplIsProject); }

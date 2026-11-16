@@ -2124,7 +2124,9 @@ app.get('/api/data', authMiddleware, (req, res) => {
             // created by the 2.5s poll); only the decisions and the payer totals are used here.
             const msgsD = planMemberMessages(d, t, { tenantDataId: req.user.tenantId, month: emNow, mk: mkNow, amount: live,
               mainTmpl: '', payerTmpl: (d.config || {}).payerTemplate });
+            // v2.14.96 — sendAllMain: does "📱 שלח" / "WA לכולם" (scope 'all') send the main message?
             return { shouldRemind: msgsD.some(m => m.shouldRemind), mainShouldRemind: msgsD[0].shouldRemind,
+              sendAllMain: pickMemberMessages(msgsD, 'all').some(m => m.kind === 'main'),
               accOwedNow: buildAccountsBlock(d, spD.mainTenant, emNow).total, payerSplit: payerSplitView(msgsD) };
           } catch (e) { console.error('[data] payerSplit', e.message); return {}; }
         })() : {})
@@ -5002,7 +5004,7 @@ function markPayerSent(d, tenant, accIds, month, iso) {
 }
 
 // ל7 — which messages a send path delivers for a member that HAS a payer message.
-//   'all'    (📱 שלח, WA לכולם): main always (as today) + each payer message with a line
+//   'all'    (📱 שלח, WA לכולם): main only if it has something to pay (v2.14.96) + each payer message with a line; nothing to pay anywhere → main
 //   'remind' (WA למי שלא שילם, automatic): every message whose own rule says remind
 //   'acc'    (WA לחייבים בחשבון X): the payer message holding X, else the main message
 function pickMemberMessages(msgs, scope, tplId) {
@@ -5011,7 +5013,14 @@ function pickMemberMessages(msgs, scope, tplId) {
     const g = msgs.find(m => m.kind === 'payer' && tplId && m.tplIds.includes(tplId));
     return g ? [g] : [msgs[0]];
   }
-  return msgs.filter(m => m.kind === 'main' || m.total > 0);
+  // v2.14.96 (Tal 16.11) — CHANGED ON PURPOSE (was ל7 "main always", 9.11 — before P1 made a
+  // project ALWAYS its own message): the main message goes only when it has something to pay
+  // (total > 0). A member who paid / is suspended from the ועד but owes the project got
+  // "ועד בית: 0 ₪ · סה"כ לתשלום: 0". Nothing to pay anywhere → the main message, as before
+  // (the page asks "אין לו מה לשלם — לשלוח בכל זאת?" first).
+  const payers = msgs.filter(m => m.kind === 'payer' && m.total > 0);
+  if (!payers.length) return [msgs[0]];
+  return (msgs[0].total > 0 ? [msgs[0]] : []).concat(payers);
 }
 
 // Delivers the picked messages of ONE routed member. Main message = the SAME bookkeeping as

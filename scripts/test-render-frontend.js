@@ -4622,8 +4622,14 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('שלח: no payerSplit (accounts inside the main message) → the main message only', A.paySendTargets({ id: 1 }, 'ועד בית'), ['ועד בית']);
   t.eq('שלח: two accounts in one payer message + duplicate label → listed once each',
     A.paySendTargets({ payerSplit: [{ labels: ['ביטוח', 'מים'], total: 90 }, { labels: ['ביטוח'], total: 40 }] }, 'ועד בית'), ['ועד בית', 'ביטוח', 'מים']);
-  t.eq('tooltip names the main message and the separate ones', [A.paySendTitle(['ועד בית', 'שיפוץ לובי']), A.paySendTitle(['ועד בית'])],
+  t.eq('tooltip names the main message and the separate ones', [A.paySendTitle(['ועד בית', 'שיפוץ לובי'], 'ועד בית'), A.paySendTitle(['ועד בית'], 'ועד בית')],
     ['שולח הודעה לועד בית (כולל חשבונות שמופיעים בה) + הודעה נפרדת: שיפוץ לובי', 'שולח הודעה לועד בית (כולל חשבונות שמופיעים בה)']);
+  // v2.14.96 — אילן (suspended) / ארז (paid): the server skips the main message (sendAllMain:false)
+  const ilan = { id: 4, sendAllMain: false, payerSplit: [{ labels: ['שיפוץ לובי'], total: 750 }] };
+  t.eq('sendAllMain:false → "שלח" lists only the separate message', A.paySendTargets(ilan, 'ועד בית'), ['שיפוץ לובי']);
+  t.eq('…its label says so', COL('📱 שלח', 'שיפוץ לובי').test(A.paySendBtnHtml(ilan)), true);
+  t.eq('…and the tooltip says the main message is not sent', A.paySendTitle(['שיפוץ לובי'], 'ועד בית'), 'אין מה לשלם בועד בית — ההודעה שלו לא תישלח · נשלחת הודעה נפרדת: שיפוץ לובי');
+  t.eq('sendAllMain absent (older server / member without a payer message) → main listed', A.paySendTargets({ payerSplit: [{ labels: ['x'], total: 5 }] }, 'ועד בית')[0], 'ועד בית');
   // wiring in renderPayments (shape: the row loop needs the whole page to run)
   t.eq('headers: "סטטוס · / סימון ידני · <name>", "חשבונות נוספים", "שליחת תזכורת"; old headers when no name',
     app.includes("_sortTh('status', _accN ? 'סטטוס · ' + esc(_accN) : 'סטטוס תשלום')") && app.includes("_sortTh('manual', _accN ? 'סימון ידני · ' + esc(_accN) : 'סימון ידני')")
@@ -4633,7 +4639,10 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
       && app.includes("' title=\"מסמן תשלום ל'+esc(_accN)+' בלבד.") && app.includes("' title=\"מבטל את הסימון של '+esc(_accN)+' בלבד."), true);
   t.eq('📱 שלח label: "ועד בית + שיפוץ לובי" under it; no extra accounts → plain "📱 שלח"',
     [COL('📱 שלח', 'ועד בית + שיפוץ לובי').test(A.paySendBtnHtml(randi)), N.paySendBtnHtml(randi)], [true, '📱 שלח']);
-  t.eq('the row uses that label + the tooltip', app.includes(">'+paySendBtnHtml(t)+'</button>") && app.includes("' title=\"'+esc(paySendTitle(paySendTargets(t,_accN)))+'\"'"), true);
+  t.eq('the row uses that label + the tooltip', app.includes(">'+paySendBtnHtml(t)+'</button>") && app.includes("' title=\"'+esc(paySendTitle(paySendTargets(t,_accN),_accN))+'\"'"), true);
+  t.eq('🔗 in its own column (aligned whatever the width of שלח); header "פורטל"; history view keeps the column count',
+    app.includes("'+paySendBtnHtml(t)+'</button></td>'\n          + '<td><button class=\"btn btn-sm\"") && app.includes("+ '<th>פורטל</th>' +")
+      && app.includes("🔒 לקריאה בלבד</td><td></td>';") && !/<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-/.test(app), true);
   t.eq('💳 → "💳 ניהול" in a building with extra accounts', app.includes("btn.textContent = payMainAccName() ? '💳 ניהול' : '💳';"), true);
   t.eq('guide explains the labels', /id="vpg-pay-acc-labels"[\s\S]{0,400}?לחשבון הראשי <strong>בלבד<\/strong>/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8')), true);
   // sendOne: a failed send restores the button WITH its account line (was: plain "📱 שלח")
