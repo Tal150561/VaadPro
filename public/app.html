@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.94';
+const HTML_VERSION = '2.14.95';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -6902,6 +6902,7 @@ function p2Explain(p) {
   else s = 'ועד קודם (' + p2Nis(p.vaadOwed) + ' כולל חוב קודם), השאר לפרויקט';
   if (p.project >= p.projectRemaining) s += ' · עד יתרת הפרויקט (' + p2Nis(p.projectRemaining) + ')';
   if (p.credit > 0) s += ' · זכות בוועד ' + p2Nis(p.credit);
+  if (p.ambAmount > 0) s += ' · כולל ' + p2Nis(p.ambAmount) + ' משורה שזקפת ידנית';   // v2.14.95
   return s;
 }
 async function p2PlanFetch(month, items) {
@@ -6931,8 +6932,79 @@ async function p2LoadImportPlan(P) {
   } catch (e) { toast('⚠️ חישוב הפיצול ועד / פרויקט נכשל — הכול יירשם לוועד', 'warn'); }
   P._projPlanPending = false;
   if (window._pendingBankImport !== P) return;
+  // v2.14.95 — an entry already re-planned with assigned ambiguous rows (ambIdx) is the
+  // more complete one: keep it (the operator may have clicked before this answer came).
+  Object.keys(P.projectPlan || {}).forEach(function(k){ if (P.projectPlan[k] && P.projectPlan[k].ambIdx) map[k] = P.projectPlan[k]; });
   P.projectPlan = map;
   renderProjectSplitPanel(P);
+}
+
+// ══ v2.14.95 — an AMBIGUOUS row assigned by the operator joins the ועד / project split ══
+// Bug (Tal 16.11, אורי apts 6 + 12, same search words): "גונן שרון" 1500 "שיפוץ הלובי" had
+// no apartment number → ambiguous → assigned to apt 6 → the whole 1500 went to the ועד
+// (credit) because the plan was built for P.matched only. Now every assign / re-assign
+// re-asks the SAME server plan (POST /api/project-allocation-plan, read-only) for that
+// member with ALL its rows (matched + assigned). Unchanged: multi-month members, closed
+// month, no project → ועד as before; the BankSync agent path is not touched.
+// The assigned rows of member `tid` (index + amount + note), rows a prior import already
+// wrote excluded (same belt as the commit).
+function p2AmbRowsFor(P, tid) {
+  var out = [];
+  var prior = P.priorFp || [], priorSet = new Set(prior), prefixes = bankFpPrefixes(prior);
+  (P.ambiguousRows || []).forEach(function(r, i){
+    if (!r || r._decision !== 'assign' || r._assignTo == null || String(r._assignTo) !== String(tid)) return;
+    var fp = bankRowFingerprintGlobal(r.date, r.amount, r.rawText || r.payerName || '', '');
+    if (bankFpAlreadySeen(priorSet, prefixes, fp, fp)) return;
+    out.push({ i: i, amount: p2R2(r.amount), note: String(r.note || ''), payerName: r.payerName || '' });
+  });
+  return out;
+}
+// The plan still describes exactly the rows assigned now (same indexes)?
+function p2AmbPlanCurrent(P, tid, p) {
+  if (!p || !p.ambIdx) return true;           // a preview plan without assigned rows
+  var now = p2AmbRowsFor(P, tid).map(function(a){ return a.i; });
+  return now.length === p.ambIdx.length && now.every(function(i, k){ return i === p.ambIdx[k]; });
+}
+async function p2RefreshAmbPlan(P, tid) {
+  if (!P || tid == null || !p2HasProjectDef()) return;
+  if ((Array.isArray(data.closedMonths) ? data.closedMonths : []).indexOf(P.selectedMonthKey) >= 0) return;
+  var key = String(tid);
+  P.projectPlan = P.projectPlan || {};
+  var m = (P.matched || []).filter(function(x){ return String(x.tenant.id) === key; })[0];
+  var amb = p2AmbRowsFor(P, tid);
+  if (!p2MemberHasProject(tid) || (m && m._buckets && m._buckets.size > 1)) {
+    if (P.projectPlan[key] && P.projectPlan[key].ambIdx) { delete P.projectPlan[key]; renderProjectSplitPanel(P); }
+    return;
+  }
+  var rows = (m ? (m.payments || []) : []).map(function(x){ return { amount: x.amount, note: x.note || '' }; })
+    .concat(amb.map(function(a){ return { amount: a.amount, note: a.note }; }));
+  if (!rows.length) { delete P.projectPlan[key]; renderProjectSplitPanel(P); return; }
+  P._p2SeqBy = P._p2SeqBy || {};
+  var seq = P._p2SeqBy[key] = (P._p2SeqBy[key] || 0) + 1;
+  P._p2AmbBusy = (P._p2AmbBusy || 0) + 1;
+  var p = null, failed = false;
+  try { p = (await p2PlanFetch(P.selectedMonthKey, [{ tenantId: tid, rows: rows }]))[0] || null; }
+  catch (e) { failed = true; }
+  P._p2AmbBusy--;
+  if (window._pendingBankImport !== P || P._p2SeqBy[key] !== seq) return;   // a newer click won
+  if (failed) toast('⚠️ חישוב הפיצול ועד / פרויקט נכשל — השורה תירשם לוועד', 'warn');
+  if (failed || !p || (!p.split && !p.keywordIgnored)) delete P.projectPlan[key];
+  else {
+    p.on = !!p.split; p.vaadEdit = p.vaad; p.projectEdit = p.project;
+    p.ambIdx = amb.map(function(a){ return a.i; });
+    p.ambAmount = p2R2(amb.reduce(function(s, a){ return s + a.amount; }, 0));
+    p.matchedAmount = m ? p2R2(m.amount) : 0;
+    p.ambPayerName = (amb[0] && amb[0].payerName) || '';
+    P.projectPlan[key] = p;
+  }
+  renderProjectSplitPanel(P);
+}
+// The allocation for a member whose ONLY rows are assigned ambiguous rows, or null.
+function p2AllocForAmbOnly(P, tid) {
+  var p = P && P.projectPlan && P.projectPlan[String(tid)];
+  if (!p || !p.ambIdx || !p.ambIdx.length || p.matchedAmount || !p.split || !p.on || !(p.projectEdit > 0)) return null;
+  if (!p2AmbPlanCurrent(P, tid, p) || p2R2(p.total) !== p2R2(p.ambAmount)) return null;
+  return { tenantId: tid, accId: p.accId, month: P.selectedMonthKey, total: p2R2(p.total), vaad: p2R2(p.vaadEdit), project: p2R2(p.projectEdit), kind: 'bank', payerName: p.ambPayerName || '' };
 }
 function renderProjectSplitPanel(P) {
   var box = document.getElementById('projectSplitPanel');
@@ -6994,8 +7066,10 @@ function p2OnEdit(tid, which, val) {
 function p2AllocFor(P, m) {
   var p = P && P.projectPlan && P.projectPlan[String(m.tenant.id)];
   if (!p || !p.split || !p.on || !(p.projectEdit > 0)) return null;
-  if (p2R2(p.total) !== p2R2(m.amount)) return null;
-  return { tenantId: m.tenant.id, accId: p.accId, month: P.selectedMonthKey, total: p2R2(m.amount), vaad: p2R2(p.vaadEdit), project: p2R2(p.projectEdit), kind: 'bank', payerName: (m.payments[0] && m.payments[0].payerName) || '' };
+  // v2.14.95: a plan re-asked with assigned ambiguous rows covers them too (ambAmount).
+  if (!p2AmbPlanCurrent(P, m.tenant.id, p)) return null;
+  if (p2R2(p.total) !== p2R2(m.amount + (p.ambIdx ? (p.ambAmount || 0) : 0))) return null;
+  return { tenantId: m.tenant.id, accId: p.accId, month: P.selectedMonthKey, total: p2R2(p.total), vaad: p2R2(p.vaadEdit), project: p2R2(p.projectEdit), kind: 'bank', payerName: (m.payments[0] && m.payments[0].payerName) || '' };
 }
 
 // Manual mark (P2.3-B): an amount above the ועד for a member with a project → an editable
@@ -7067,8 +7141,9 @@ function commitBankImport(){
   var P = window._pendingBankImport;
   if(!P){ toast('אין ייבוא ממתין לאישור','error'); return; }
   var matched = P.matched, hebOfMk = P.hebOfMk, em = P.em;
-  if (P._projPlanPending) { toast('⏳ מחשב פיצול ועד / פרויקט — נסה שוב בעוד רגע', 'info'); return; }
+  if (P._projPlanPending || P._p2AmbBusy) { toast('⏳ מחשב פיצול ועד / פרויקט — נסה שוב בעוד רגע', 'info'); return; }
   var _p2Allocs = [], _p2ByTid = {};   // v2.14.88 (P2)
+  var _p2Covered = {};                 // v2.14.95 — ambiguous rows already inside an allocation
 
   // v2.14.39b — OPTION 1 (locked with Tal, session 22): the whole file is imported
   // to ONE selected month. If that month is CLOSED, splitting makes no sense — the
@@ -7193,7 +7268,25 @@ function commitBankImport(){
     // v2.14.58: shared parser (the old manual_paid regex read the ISO year).
     return sentLogPaidAmountGlobal((data.sentLog||{})[key]);
   }
-  (P.ambiguousRows || []).forEach(function(r){
+  // v2.14.95 — a member whose only rows are assigned ambiguous rows: its split is written
+  // once here (ועד part to the ועד key, project part as an allocation); its rows are then
+  // fingerprinted below without a second ועד write. Open selected month only.
+  if (P.projectPlan && !_selClosed && !_closedMainSet.has(P.selectedMonthKey)) {
+    Object.keys(P.projectPlan).forEach(function(k){
+      // a matched member's allocation (p2AllocFor) already includes its planned assigned rows
+      if (_p2ByTid[k]) { (P.projectPlan[k].ambIdx || []).forEach(function(i){ _p2Covered[i] = true; }); return; }
+      var _ao = p2AllocForAmbOnly(P, P.projectPlan[k].tenantId);
+      if (!_ao) return;
+      _p2Allocs.push(_ao); _p2ByTid[k] = _ao;
+      P.projectPlan[k].ambIdx.forEach(function(i){ _p2Covered[i] = true; });
+      if (_ao.vaad > 0) {
+        var _aoKey = k + '_' + em;
+        data.sentLog[_aoKey] = 'bank_import_' + new Date().toISOString() + '_' +
+          accumulatePaidAmountGlobal(data.sentLog[_aoKey], _ao.vaad) + '_payer_' + _ao.payerName;
+      }
+    });
+  }
+  (P.ambiguousRows || []).forEach(function(r, _ri){
     if (r._decision === 'assign' && r._assignTo != null) {
       var t = data.tenants.filter(function(x){ return x.id === r._assignTo; })[0];
       if (!t) { _ambPending++; return; }
@@ -7208,6 +7301,11 @@ function commitBankImport(){
         var _priorSet = new Set(P.priorFp || []);
         if (bankFpAlreadySeen(_priorSet, bankFpPrefixes(P.priorFp || []), _afp0, _afp0)) { _ambIgnored++; return; }
         var _key = t.id + '_' + em;
+        if (_p2Covered[_ri]) {   // v2.14.95 — already written through the split above
+          var _cfp = bankRowFingerprintGlobal(r.date, r.amount, r.rawText || r.payerName || '', '');
+          if (P.newFp.indexOf(_cfp) < 0 && (P.priorFp || []).indexOf(_cfp) < 0) P.newFp.push(_cfp);
+          _ambApplied++; return;
+        }
         var _p2w = _p2ByTid[String(t.id)];   // v2.14.88 (P2) — ועד money: keeps the server check exact
         if (_p2w) { _p2w.vaad = Math.round((_p2w.vaad + (parseFloat(r.amount)||0)) * 100) / 100; _p2w.total = Math.round((_p2w.total + (parseFloat(r.amount)||0)) * 100) / 100; }
         var _accrued = Math.round((_readSentLogAmount(_key) + (parseFloat(r.amount)||0)) * 100) / 100;
@@ -7371,8 +7469,13 @@ function resolveAmbiguousRow(i, tenantId){
   var P = window._pendingBankImport;
   if (!P || !P.ambiguousRows || !P.ambiguousRows[i]) return;
   var row = P.ambiguousRows[i];
+  var _prevTo = row._assignTo;
   row._decision = (tenantId == null) ? 'ignore' : 'assign';
   row._assignTo = (tenantId == null) ? null : tenantId;
+  // v2.14.95 — re-plan the ועד / project split for the new member (and the one it left)
+  var _p2r = [];
+  if (tenantId != null) _p2r.push(p2RefreshAmbPlan(P, tenantId));
+  if (_prevTo != null && String(_prevTo) !== String(tenantId)) _p2r.push(p2RefreshAmbPlan(P, _prevTo));
   var statusEl = document.querySelector('[data-amb-status="'+i+'"]');
   if (statusEl) {
     if (tenantId == null) { statusEl.textContent = '— התעלמת'; statusEl.style.color = 'var(--text2,#8b949e)'; }
@@ -7385,6 +7488,7 @@ function resolveAmbiguousRow(i, tenantId){
   // dim the buttons on this row to show the choice is locked (re-clickable to change)
   var rowEl = document.querySelector('[data-amb-row="'+i+'"]');
   if (rowEl) rowEl.querySelectorAll('button').forEach(function(b){ b.style.opacity = '0.55'; });
+  return Promise.all(_p2r);
 }
 
 // ── v2.14.42: AGENT ambiguous-queue panel ──────────────────────────────────

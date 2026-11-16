@@ -4355,7 +4355,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
         renderProjectSplitPanel: () => { panelCleared++; }, loadData: () => Promise.resolve(), confirm: () => true, console,
         localStorage: { getItem: () => 't' }, document: { getElementById: () => null, querySelector: () => null, createElement: () => ({ style: {}, appendChild() {} }), body: { appendChild() {} } }
       };
-      const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'p2R2', 'p2Nis', 'p2AllocFor', 'commitBankImport']) + '\n; return commitBankImport;')
+      const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'p2R2', 'p2Nis', 'p2AmbRowsFor', 'p2AmbPlanCurrent', 'p2AllocFor', 'p2AllocForAmbOnly', 'commitBankImport']) + '\n; return commitBankImport;')
         .apply(null, Object.keys(scope).map(k => scope[k]));
       F();
       return { posted, toasts, panelCleared, sl: scope.data.sentLog };
@@ -4398,6 +4398,77 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     const P2 = { selectedMonthKey: '2026-11', matched: [{ tenant: { id: 1 }, payments: [{ amount: 1250 }] }] };
     const F2 = mkRun(['tplIsProject', 'p2HasProjectDef', 'p2PlanFetch', 'p2LoadImportPlan'], Object.assign({}, scope, { accountTemplates: [{ id: 'A', amount: 50 }], fetch: () => { throw new Error('must not call'); } }));
     global.__crRuns.push(F2.p2LoadImportPlan(P2).then(() => t.eq('no project definition → no request, no plan', P2.projectPlan, undefined)));
+  }
+
+  t.section('v2.14.95 — an ambiguous row assigned by hand joins the ועד / project split (EXECUTED)');
+  {
+    // Tal 16.11: אורי owns apts 6 + 12 (same search words) → "גונן שרון" 1500 "שיפוץ הלובי" was ambiguous,
+    // assigned to 6, and went ALL to the ועד. Now the commit writes the re-asked plan.
+    const ambRow = (to, extra) => Object.assign({ rowIdx: 2, amount: 1500, date: '15/11/2026', payerName: 'גונן שרון', rawText: 'גונן שרון', note: 'שיפוץ הלובי', _decision: 'assign', _assignTo: to }, extra || {});
+    const run = (plan, amb, matched, opts) => {
+      opts = opts || {};
+      let posted = null; const toasts = [];
+      const P = { matched: matched || [], unmatched: [], alreadyImportedSkips: [], dupWarnings: [], newFp: [], priorFp: opts.priorFp || [], em: 'נובמבר', selectedMonthKey: '2026-11',
+        hebOfMk: () => 'נובמבר', splitMonths: null, total: 1, ta: 0, fileName: 'x.xls', filterByAmount: false, projectPlan: plan, ambiguousRows: amb || [], _p2AmbBusy: opts.busy || 0 };
+      const scope = {
+        window: { _pendingBankImport: P, _closedMonthApprovals: null },
+        data: { closedMonths: opts.closed || ['2026-10'], sentLog: { '6_נובמבר': 'bank_import_2026-11-03T08:05:16.747Z_250_payer_גונן שרון' }, importedBankFingerprints: [], tenants: [{ id: 6, name: 'אורי', openingDebt: 0 }, { id: 12, name: 'אורי', openingDebt: 0 }] },
+        VP_MONTHS: ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'],
+        API: '', fetch: (u, o) => { posted = JSON.parse(o.body); return Promise.resolve({ json: () => Promise.resolve({ ok: true }) }); },
+        toast: m => toasts.push(m), render() {}, showBankResult() {}, resetDropZone() {}, renderAmbiguousMatchPanel() {}, renderClosedMonthApprovals() {},
+        renderProjectSplitPanel() {}, loadData: () => Promise.resolve(), confirm: () => true, console,
+        localStorage: { getItem: () => 't' }, document: { getElementById: () => null, querySelector: () => null, createElement: () => ({ style: {}, appendChild() {} }), body: { appendChild() {} } }
+      };
+      const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'sentLogPaidAmountGlobal', 'accumulatePaidAmountGlobal', 'p2R2', 'p2Nis', 'p2AmbRowsFor', 'p2AmbPlanCurrent', 'p2AllocFor', 'p2AllocForAmbOnly', 'commitBankImport']) + '\n; return commitBankImport;')
+        .apply(null, Object.keys(scope).map(k => scope[k]));
+      F();
+      return { posted, toasts, sl: scope.data.sentLog, P };
+    };
+    const planOri = { '6': { tenantId: 6, name: 'אורי', total: 1500, split: true, on: true, vaad: 0, project: 1500, vaadEdit: 0, projectEdit: 1500, accId: 'acc_mwbnnskfaquv', projectRemaining: 2250, keyword: 'שיפוץ', keywordAmount: 1500, ambIdx: [0], ambAmount: 1500, matchedAmount: 0, ambPayerName: 'גונן שרון' } };
+    const r = run(planOri, [ambRow(6)]);
+    t.eq('Tal\'s case: ועד key of apt 6 untouched (still 250), 1500 → project allocation', [r.sl['6_נובמבר'], r.posted.projectAllocations], ['bank_import_2026-11-03T08:05:16.747Z_250_payer_גונן שרון', [{ tenantId: 6, accId: 'acc_mwbnnskfaquv', month: '2026-11', total: 1500, vaad: 0, project: 1500, kind: 'bank', payerName: 'גונן שרון' }]]);
+    t.eq('the row is still fingerprinted once + counted applied', [r.P.newFp.length, r.P.newFp[0].indexOf('|1500|') > 0], [1, true]);
+    const v = run({ '6': Object.assign({}, planOri['6'], { total: 1500, vaadEdit: 250, projectEdit: 1250 }) }, [ambRow(6)]);
+    t.eq('ambiguous-only member with a ועד part → ועד key ACCUMULATES the ועד part (250 + 250 = 500)', [/_500_payer_גונן שרון$/.test(v.sl['6_נובמבר']), v.posted.projectAllocations[0].vaad, v.posted.projectAllocations[0].project], [true, 250, 1250]);
+    const stale = run(planOri, [ambRow(12)]);
+    t.eq('row re-assigned elsewhere (plan stale) → no split, the old ועד write to the new member', [/_1500_payer_גונן שרון$/.test(stale.sl['12_נובמבר']), stale.sl['6_נובמבר'].endsWith('_250_payer_גונן שרון'), 'projectAllocations' in stale.posted], [true, true, false]);
+    const off = run({ '6': Object.assign({}, planOri['6'], { on: false }) }, [ambRow(6)]);
+    t.eq('„לפצל” off → the old write (250 + 1500 = 1750 to the ועד)', [/_1750_payer_גונן שרון$/.test(off.sl['6_נובמבר']), 'projectAllocations' in off.posted], [true, false]);
+    const closed = run(planOri, [ambRow(6)], null, { closed: ['2026-10', '2026-11'] });
+    t.eq('closed selected month → no split, the row goes to the closed-month approvals as before', ['projectAllocations' in closed.posted, closed.sl['6_נובמבר'].endsWith('_250_payer_גונן שרון')], [false, true]);
+    // matched member + an assigned row inside the plan: ONE allocation, ועד written once (no widen)
+    const matched = [{ tenant: { id: 6, name: 'אורי', openingDebt: 0 }, amount: 250, count: 1, payments: [{ payerName: 'גונן שרון', amount: 250, note: 'ועד בית דירה 6' }], _buckets: new Map([['2026-11', { sum: 250, payerName: 'גונן שרון', count: 1 }]]) }];
+    const both = run({ '6': Object.assign({}, planOri['6'], { total: 1750, vaadEdit: 250, projectEdit: 1500, matchedAmount: 250 }) }, [ambRow(6)], matched);
+    t.eq('matched 250 + assigned 1500 → one allocation 1750 = 250 / 1500, ועד key +250 only', [both.posted.projectAllocations.length, both.posted.projectAllocations[0].total, both.posted.projectAllocations[0].vaad, /_500_payer_גונן שרון$/.test(both.sl['6_נובמבר'])], [1, 1750, 250, true]);
+    const busy = run(planOri, [ambRow(6)], null, { busy: 1 });
+    t.eq('a re-plan still running blocks the commit (no save)', [busy.posted, busy.toasts.some(m => m.includes('⏳'))], [null, true]);
+  }
+
+  t.section('v2.14.95 — assigning re-asks the server plan for that member (EXECUTED)');
+  {
+    const sent = []; let rendered = 0;
+    let answer = it => ({ tenantId: it.tenantId, split: true, total: it.rows.reduce((s, r) => s + r.amount, 0), vaad: 0, project: 1500, accId: 'acc6' });
+    const P = { selectedMonthKey: '2026-11', priorFp: [], matched: [], projectPlan: {},
+      ambiguousRows: [{ rowIdx: 2, amount: 1500, date: '15/11/2026', payerName: 'גונן שרון', rawText: 'גונן שרון', note: 'שיפוץ הלובי', candidates: [{ id: 6 }, { id: 12 }] }] };
+    const acc = { active: true, templateId: 'tpl' };
+    const scope = { window: { _pendingBankImport: P }, data: { closedMonths: ['2026-10'], tenants: [{ id: 6, name: 'אורי', extraAccounts: [acc] }, { id: 12, name: 'אורי', extraAccounts: [acc] }] },
+      accountTemplates: [{ id: 'tpl', project: {} }], API: '', toast() {},
+      fetch: (u, o) => { const b = JSON.parse(o.body); sent.push(b); return Promise.resolve({ json: () => Promise.resolve({ ok: true, items: b.items.map(answer) }) }); },
+      renderProjectSplitPanel: () => { rendered++; }, document: { querySelector: () => null } };
+    const F = mkRun(['tplIsProject', 'p2HasProjectDef', 'p2MemberHasProject', 'p2R2', 'bankRowFingerprintGlobal', 'bankFpPrefixes', 'bankFpAlreadySeen', 'p2PlanFetch', 'p2AmbRowsFor', 'p2RefreshAmbPlan', 'resolveAmbiguousRow'], scope);
+    global.__crRuns = (global.__crRuns || []).concat([F.resolveAmbiguousRow(0, 6).then(() => {
+      t.eq('assign → asks the plan for apt 6 with the row (amount + note)', [sent.length, (sent[0] || {}).month, ((sent[0] || {}).items || [{}])[0].tenantId, ((sent[0] || {}).items || [{}])[0].rows], [1, '2026-11', 6, [{ amount: 1500, note: 'שיפוץ הלובי' }]]);
+      t.eq('plan stored with the assigned row (ambIdx / ambAmount), editable, rendered', (p6 => [p6.ambIdx, p6.ambAmount, p6.projectEdit, p6.on, P._p2AmbBusy, rendered > 0])(P.projectPlan['6'] || {}), [[0], 1500, 1500, true, 0, true]);
+      return F.resolveAmbiguousRow(0, 12);
+    }).then(() => {
+      t.eq('re-assign 6 → 12: 12 planned, 6 dropped (no rows left)', [Object.keys(P.projectPlan), (P.projectPlan['12'] || {}).ambIdx], [['12'], [0]]);
+      return F.resolveAmbiguousRow(0, null);
+    }).then(() => {
+      t.eq('ignore → the plan entry goes away', Object.keys(P.projectPlan), []);
+    })]);
+    t.eq('the preview loader keeps an entry already re-planned with assigned rows', /if \(P\.projectPlan\[k\] && P\.projectPlan\[k\]\.ambIdx\) map\[k\] = P\.projectPlan\[k\];/.test(app), true);
+    t.eq('explain line names the hand-assigned part', (() => { const G = mkRun(['esc', 'p2R2', 'p2Nis', 'p2Explain'], {}); return G.p2Explain({ keywordAmount: 1500, keyword: 'שיפוץ', project: 1500, projectRemaining: 2250, ambAmount: 1500 }).includes('כולל ₪1,500 משורה שזקפת ידנית'); })(), true);
+    t.eq('guide explains the ambiguous-row split', /שורה שדורשת הכרעה \(🔀\)[\s\S]{0,300}?אחרי „זקוף ל־…” הפיצול מחושב מחדש/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8')), true);
   }
 
   t.section('v2.14.88 (P2.3-B) — manual mark above the ועד opens the split window (EXECUTED)');
