@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.95';
+const HTML_VERSION = '2.14.96';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -4511,8 +4511,8 @@ async function sendOne(id) {
     if(d.ok){
       // השרת כבר שמר את sentLog ב-/api/send/:id — loadData יטען את המצב העדכני
       await loadData(); render(); toast(sendResultText(d),(d.failed>0)?'error':'success');
-    } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
-  }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML='📱 שלח';} }
+    } else { toast('❌ '+d.error,'error'); if(btn){btn.disabled=false;btn.innerHTML=paySendBtnHtml(_t1);} }
+  }catch(e){ toast('❌ שגיאה בשליחה','error'); if(btn){btn.disabled=false;btn.innerHTML=paySendBtnHtml(_t1);} }
 }
 
 // 💳 v2.14.57 — consume-only: owedNow (net of credit) + shouldRemind (extras).
@@ -5538,10 +5538,13 @@ function render() {
     const _sortTh = function(k,label){
       return '<th onclick="setPaySort(\''+k+'\')" style="cursor:pointer;user-select:none;" title="לחץ למיון">'+label+_arrow(k)+'</th>';
     };
+    const _accN = payMainAccName();   // v2.14.96 — '' in a building without extra accounts
     let h='<div class="table-wrap"><table><thead><tr>' +
       '<th><input type="checkbox" id="paySelectAll" onchange="togglePaySelectAll(this)" title="בחר הכל"></th>' +
-      '<th>שם</th>' + _sortTh('debt','חוב') + _sortTh('status','סטטוס תשלום') + _sortTh('manual','סימון ידני') +
-      '<th>הוסף חשבון</th><th>שליחה</th>' +
+      '<th>שם</th>' + _sortTh('debt','חוב') +
+      _sortTh('status', _accN ? 'סטטוס · ' + esc(_accN) : 'סטטוס תשלום') +
+      _sortTh('manual', _accN ? 'סימון ידני · ' + esc(_accN) : 'סימון ידני') +
+      (_accN ? '<th>חשבונות נוספים</th><th>שליחת תזכורת</th>' : '<th>הוסף חשבון</th><th>שליחה</th>') +
       '</tr></thead><tbody>';
     const _payRows = data.tenants.slice();
     if (paySortKey) {
@@ -5583,8 +5586,8 @@ function render() {
       const toggle = histView
         ? '<span style="font-size:0.75rem;color:var(--text3);">🔒</span>'
         : (paid
-          ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')">✕ בטל</button>'
-          :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')">✓ שילם</button>');
+          ?'<button class="btn btn-sm" style="background:rgba(248,81,73,.12);color:var(--danger);border:1px solid rgba(248,81,73,.2);" onclick="markUnpaid('+t.id+')"'+(_accN?' title="מבטל את הסימון של '+esc(_accN)+' בלבד. חשבונות נוספים — בעמודת החוב"':'')+'>'+payBtnLabel('✕ בטל',_accN)+'</button>'
+          :'<button class="btn btn-sm" style="background:rgba(37,211,102,.12);color:var(--accent);border:1px solid rgba(37,211,102,.25);" onclick="markPaid('+t.id+')"'+(_accN?' title="מסמן תשלום ל'+esc(_accN)+' בלבד. חשבונות נוספים — „סמן ששילם” בעמודת החוב"':'')+'>'+payBtnLabel('✓ שילם',_accN)+'</button>');
        // ⚠️ v2.13.10 — CONSUME, DO NOT COMPUTE.
        // totalDebt / creditBalance / currentBalance are computed ONCE on the
        // server (GET /api/data) and shipped per tenant. The page must never
@@ -5660,7 +5663,7 @@ function render() {
       if (histView) {
         h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td>';
       } else {
-        h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')">📱 שלח</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
+        h+='<td style="display:flex;gap:6px;align-items:center;"><button id="send-btn-'+t.id+'" class="btn btn-green btn-sm" onclick="sendOne('+t.id+')"'+(_accN?' title="'+esc(paySendTitle(paySendTargets(t,_accN)))+'"':'')+'>'+paySendBtnHtml(t)+'</button><button class="btn btn-sm" style="background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);" onclick="sendPortalLink('+t.id+',\''+t.name.replace(/'/g,"\'")+'\')" title="שלח לינק פורטל אישי">🔗</button></td>';
       }
       h+='</tr>';
     });
@@ -6882,6 +6885,41 @@ function payMainLabelPrefix() {
     ((data && data.tenants) || []).some(function(x){ return (x.extraAccounts || []).length > 0; });
   if (!has) return '';
   return '<span class="pay-main-lbl" style="font-size:0.74rem;color:var(--text2);font-weight:600;margin-left:4px;">' + esc(t('mainAccount')) + ':</span>';
+}
+// v2.14.96 (Tal 16.11) — which account a row button acts on. In a building with extra
+// accounts the main-account name (t('mainAccount'): ועד בית / ערבות הדדית) goes on the
+// headers and under "שילם / בטל"; "שלח" lists every message it sends. No extra
+// accounts → '' and the row is the old one.
+function payMainAccName() {
+  var has = (accountTemplates || []).length > 0 ||
+    ((data && data.tenants) || []).some(function(x){ return (x.extraAccounts || []).length > 0; });
+  return has ? String(t('mainAccount') || '') : '';
+}
+// .btn is a row (inline-flex) → label + account go in one column: label on top, account under it.
+function payBtnLabel(main, sub) {
+  if (!sub) return main;
+  return '<span style="display:inline-flex;flex-direction:column;align-items:center;line-height:1.25;">' + main +
+    '<span class="pay-btn-acc" style="font-size:0.68rem;font-weight:500;white-space:nowrap;margin-top:1px;">' + esc(sub) + '</span></span>';
+}
+// What "📱 שלח" sends for this member (scope 'all', CONSUMED from the server's t.payerSplit):
+// the main message always, plus each separate message that has something to pay.
+function paySendTargets(tn, mainName) {
+  var out = [mainName];
+  ((tn && Array.isArray(tn.payerSplit)) ? tn.payerSplit : []).forEach(function(p){
+    if (!((parseFloat(p.total) || 0) > 0)) return;
+    (p.labels || []).forEach(function(l){ if (l && out.indexOf(l) < 0) out.push(String(l)); });
+  });
+  return out;
+}
+// The "📱 שלח" label of a row — the row and sendOne (restore after a failure) share it.
+function paySendBtnHtml(tn) {
+  var n = payMainAccName();
+  return payBtnLabel('📱 שלח', n ? paySendTargets(tn, n).join(' + ') : '');
+}
+function paySendTitle(targets) {
+  var s = 'שולח הודעה ל' + targets[0] + ' (כולל חשבונות שמופיעים בה)';
+  if (targets.length > 1) s += ' + הודעה נפרדת: ' + targets.slice(1).join(', ');
+  return s;
 }
 function p2HasProjectDef() { return (accountTemplates || []).some(tplIsProject); }
 function p2MemberHasProject(tid) {
@@ -12710,7 +12748,7 @@ function injectExtraAccountsCells() {
       btn.className = 'btn btn-sm acc-mgr-btn';
       btn.style.cssText = 'background:rgba(99,102,241,.12);color:#818cf8;border:1px solid rgba(99,102,241,.2);font-size:0.74rem;margin-right:4px;';
       btn.title = 'נהל חשבונות נוספים';
-      btn.textContent = '💳';
+      btn.textContent = payMainAccName() ? '💳 ניהול' : '💳';   // v2.14.96
       btn.onclick = (function(id, name){ return function(){ openTenantAccounts(id, name); }; })(tid, tenant.name);
       actionCell.insertBefore(btn, actionCell.firstChild);
     }

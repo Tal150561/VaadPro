@@ -4600,6 +4600,62 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 }
 
 
+// v2.14.96 — payments tab: which account each row button acts on (Tal 16.11)
+{
+  t.section('v2.14.96 — account names on headers / שילם / בטל / שלח (EXECUTED)');
+  const esc = x => String(x).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+  const H = (tpls, tenants, word) => new Function('accountTemplates', 'data', 't', 'esc',
+    extractFunctions(app, ['payMainAccName', 'payBtnLabel', 'paySendTargets', 'paySendBtnHtml', 'paySendTitle']) + '\n; return { payMainAccName, payBtnLabel, paySendTargets, paySendBtnHtml, paySendTitle };')(
+    tpls, { tenants }, k => k === 'mainAccount' ? (word || 'ועד בית') : k, esc);
+  const A = H([{ id: 'P', label: 'שיפוץ לובי' }], [{ id: 3 }]);
+  const N = H([], [{ id: 1 }, { id: 2, extraAccounts: [] }]);
+  t.eq('building with extra accounts → the main-account name; without → "" (old row)', [A.payMainAccName(), N.payMainAccName()], ['ועד בית', '']);
+  t.eq('the org word follows the building (ערבות הדדית)', H([{ id: 'P' }], [], 'ערבות הדדית').payMainAccName(), 'ערבות הדדית');
+  t.eq('a member account alone (no definition) also counts', H([], [{ id: 1, extraAccounts: [{ id: 'a' }] }]).payMainAccName(), 'ועד בית');
+  const COL = (main, sub) => new RegExp('^<span style="display:inline-flex;flex-direction:column;[^"]*">' + main.replace(/[+]/g, '\\+') + '<span class="pay-btn-acc"[^>]*>' + sub.replace(/[+]/g, '\\+') + '<\\/span><\\/span>$');
+  t.eq('label: main on top, account under it (one column — .btn is a row); no account → the old label', [COL('✓ שילם', 'ועד בית').test(A.payBtnLabel('✓ שילם', 'ועד בית')), A.payBtnLabel('✓ שילם', '')], [true, '✓ שילם']);
+  t.eq('the account line never carries raw markup', A.payBtnLabel('x', 'a<b').includes('a&lt;b'), true);
+  // רנדי ומירי: the project message has 750 to pay → "ועד בית + שיפוץ לובי"
+  const randi = { id: 3, payerSplit: [{ labels: ['שיפוץ לובי'], total: 750 }] };
+  t.eq('שלח: main + a separate message with something to pay', A.paySendTargets(randi, 'ועד בית'), ['ועד בית', 'שיפוץ לובי']);
+  t.eq('שלח: a separate message with nothing to pay is not listed (the server skips it)', A.paySendTargets({ payerSplit: [{ labels: ['שיפוץ לובי'], total: 0 }] }, 'ועד בית'), ['ועד בית']);
+  t.eq('שלח: no payerSplit (accounts inside the main message) → the main message only', A.paySendTargets({ id: 1 }, 'ועד בית'), ['ועד בית']);
+  t.eq('שלח: two accounts in one payer message + duplicate label → listed once each',
+    A.paySendTargets({ payerSplit: [{ labels: ['ביטוח', 'מים'], total: 90 }, { labels: ['ביטוח'], total: 40 }] }, 'ועד בית'), ['ועד בית', 'ביטוח', 'מים']);
+  t.eq('tooltip names the main message and the separate ones', [A.paySendTitle(['ועד בית', 'שיפוץ לובי']), A.paySendTitle(['ועד בית'])],
+    ['שולח הודעה לועד בית (כולל חשבונות שמופיעים בה) + הודעה נפרדת: שיפוץ לובי', 'שולח הודעה לועד בית (כולל חשבונות שמופיעים בה)']);
+  // wiring in renderPayments (shape: the row loop needs the whole page to run)
+  t.eq('headers: "סטטוס · / סימון ידני · <name>", "חשבונות נוספים", "שליחת תזכורת"; old headers when no name',
+    app.includes("_sortTh('status', _accN ? 'סטטוס · ' + esc(_accN) : 'סטטוס תשלום')") && app.includes("_sortTh('manual', _accN ? 'סימון ידני · ' + esc(_accN) : 'סימון ידני')")
+      && app.includes("(_accN ? '<th>חשבונות נוספים</th><th>שליחת תזכורת</th>' : '<th>הוסף חשבון</th><th>שליחה</th>')"), true);
+  t.eq('✓ שילם / ✕ בטל carry the name + a "main only" tooltip',
+    app.includes(">'+payBtnLabel('✓ שילם',_accN)+'</button>'") && app.includes(">'+payBtnLabel('✕ בטל',_accN)+'</button>'")
+      && app.includes("' title=\"מסמן תשלום ל'+esc(_accN)+' בלבד.") && app.includes("' title=\"מבטל את הסימון של '+esc(_accN)+' בלבד."), true);
+  t.eq('📱 שלח label: "ועד בית + שיפוץ לובי" under it; no extra accounts → plain "📱 שלח"',
+    [COL('📱 שלח', 'ועד בית + שיפוץ לובי').test(A.paySendBtnHtml(randi)), N.paySendBtnHtml(randi)], [true, '📱 שלח']);
+  t.eq('the row uses that label + the tooltip', app.includes(">'+paySendBtnHtml(t)+'</button>") && app.includes("' title=\"'+esc(paySendTitle(paySendTargets(t,_accN)))+'\"'"), true);
+  t.eq('💳 → "💳 ניהול" in a building with extra accounts', app.includes("btn.textContent = payMainAccName() ? '💳 ניהול' : '💳';"), true);
+  t.eq('guide explains the labels', /id="vpg-pay-acc-labels"[\s\S]{0,400}?לחשבון הראשי <strong>בלבד<\/strong>/.test(require('fs').readFileSync(require('path').join(__dirname, '..', 'public', 'vaadpro-guide.js'), 'utf8')), true);
+  // sendOne: a failed send restores the button WITH its account line (was: plain "📱 שלח")
+  global.__crRuns = (global.__crRuns || []).concat([(async () => {
+    const orig = '⏳ stale';   // whatever was there — the restore rebuilds the label from data
+    const out = [];
+    for (const reply of [{ ok: false, error: 'x' }, null]) {
+      const btn = { innerHTML: orig, disabled: false };
+      const X = runInSandbox('var data, accountTemplates;\n' + extractFunctions(app, ['sendOne', 'sendBody', 'payerMsgCount', 'confirmPayerSplit', 'sendResultText', 'accOwing', 'confirmAccountsGap', 'accountDebtors', 't1OwesNothing', 'payMainAccName', 'payBtnLabel', 'paySendTargets', 'paySendBtnHtml'])
+        + '\nmodule.exports={set:function(d){data=d;accountTemplates=[{ id: \'P\', label: \'שיפוץ לובי\' }];},go:sendOne};', {
+          t: k => k === 'mainAccount' ? 'ועד בית' : k, esc: x => String(x),
+          document: { getElementById: id => id === 'send-btn-1' ? btn : null }, API: '/api',
+          fetch: async () => { if (!reply) throw new Error('net'); return { json: async () => reply }; },
+          toast: () => {}, confirm: () => true, confirmManualSend: () => true, loadData: async () => {}, render: () => {}, Promise });
+      X.set({ tenants: [{ id: 1, name: 'רנדי', shouldRemind: true, payerSplit: [{ labels: ['שיפוץ לובי'], total: 750 }] }], config: {} });
+      await X.go(1);
+      out.push([/^<span style="display:inline-flex;flex-direction:column;[^"]*">📱 שלח<span class="pay-btn-acc"[^>]*>ועד בית \+ שיפוץ לובי<\/span><\/span>$/.test(btn.innerHTML), btn.disabled]);
+    }
+    t.eq('failed send / network error → the button gets back its label WITH the account line, enabled', out, [[true, false], [true, false]]);
+  })()]);
+}
+
 // v2.14.93 — "חייבים" / "ללא חוב" cards repaint when the extra accounts arrive
 {
   t.section('v2.14.93 — dashboard counts include extra accounts (EXECUTED)');
