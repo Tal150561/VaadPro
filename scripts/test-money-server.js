@@ -6293,7 +6293,7 @@ const v2_14_85_async = async () => {
   t.section('v2.14.85 (1ו2, ל7) — pickMemberMessages scopes');
   {
     const M = [{ kind: 'main', shouldRemind: false, total: 0, tplIds: [] }, { kind: 'payer', shouldRemind: true, total: 50, tplIds: ['T1'] }, { kind: 'payer', shouldRemind: false, total: 0, tplIds: ['T3'] }];
-    // v2.14.96 (Tal 16.11) — CHANGED ON PURPOSE: was "'all' → main always + payer with a line" (ל7).
+    // v2.14.97 (Tal 16.11) — CHANGED ON PURPOSE: was "'all' → main always + payer with a line" (ל7).
     // A main message with nothing to pay (paid / suspended ועד) is no longer sent next to a payer message.
     t.eq("'all' → main with nothing to pay is NOT sent next to a payer with a line", S.pickMemberMessages(M, 'all').map(m => m.tplIds[0] || 'main'), ['T1']);
     const M2 = [Object.assign({}, M[0], { total: 230 }), M[1], M[2]];
@@ -6340,10 +6340,10 @@ const v2_14_85_async = async () => {
     const fx = (sl, accO) => base({ tenants: [mem(1, { extraAccounts: [ins(accO), wat()] }), mem(9, { extraAccounts: [wat()] })], sentLog: sl || {} });
     const a = await runSend(fx(), 1);
     t.eq('📱 שלח (all): main → main phone, payer → renter phone', a.sends.map(s => s.phone), ['0501111111', '0522222221']);
-    // v2.14.96 (Tal 16.11, אילן / ארז) — ועד paid (water in the main message paid too), ביטוח owed:
+    // v2.14.97 (Tal 16.11, אילן / ארז) — ועד paid (water in the main message paid too), ביטוח owed:
     // 📱 שלח sends ONLY the payer message — no "ועד בית: 0 ₪" message, the main month is untouched.
     const z = await runSend(fx({ ['1_' + EM]: BI(230), ['1__acc__w1_' + EM]: BI(80) }), 1);
-    t.eq('v2.14.96: main paid + payer owes → 📱 שלח sends ONLY the payer message; main untouched, no wa_sent',
+    t.eq('v2.14.97: main paid + payer owes → 📱 שלח sends ONLY the payer message; main untouched, no wa_sent',
       [z.sends.map(s => s.phone), z.out.sent, z.out.payerSent, z.d.sentLog['1_' + EM], ((z.d.paymentHistory || {})['1'] || []).length], [['0522222221'], 1, 1, BI(230), 0]);
     t.eq('response counts', [a.out.ok, a.out.sent, a.out.payerSent, a.out.failed], [true, 2, 1, 0]);
     t.eq('main: sent_ + wa_sent record (as today); account: sent_ mark, NO history key', [/^sent_/.test(a.d.sentLog['1_' + EM]), (a.d.paymentHistory['1'] || []).map(r => r.type), /^sent_/.test(a.d.sentLog['1__acc__i1_' + EM]), '1__acc__i1' in a.d.paymentHistory], [true, ['wa_sent'], true, false]);
@@ -6429,9 +6429,9 @@ const v2_14_85_async = async () => {
     const t1 = out.tenants.find(x => x.id === 1);
     t.eq('routed member: shouldRemind true (renter owes), mainShouldRemind false, accOwedNow = main block only (0)', [t1.shouldRemind, t1.mainShouldRemind, t1.accOwedNow], [true, false, 0]);
     t.eq('payerSplit = the server view', t1.payerSplit, [{ phone: '0522222221', name: 'שוכר1', tplIds: ['T1'], labels: ['ביטוח'], total: 50, shouldRemind: true }]);
-    t.eq('v2.14.96: sendAllMain false (main paid, renter owes) — the page labels "שלח" from it', t1.sendAllMain, false);
+    t.eq('v2.14.97: sendAllMain false (main paid, renter owes) — the page labels "שלח" from it', t1.sendAllMain, false);
     const d2 = base({ config: { amount: 230, manualMonth: EM, template: 'x' }, tenants: [mem(1, { extraAccounts: [ins(), wat()] })], sentLog: {} });
-    t.eq('v2.14.96: main owes → sendAllMain true', runData(d2).out.tenants[0].sendAllMain, true);
+    t.eq('v2.14.97: main owes → sendAllMain true', runData(d2).out.tenants[0].sendAllMain, true);
     t.eq('other members: no payerSplit / mainShouldRemind / sendAllMain keys', out.tenants.filter(x => x.id !== 1).some(x => 'payerSplit' in x || 'mainShouldRemind' in x || 'sendAllMain' in x), false);
     t.eq('the 2.5s poll never creates a portal link', portal, 0);
     t.eq('reminderAccountsGap counts the MAIN message only (member 1 owes only via the renter)', out.reminderAccountsGap, { covered: true, owing: 1 });

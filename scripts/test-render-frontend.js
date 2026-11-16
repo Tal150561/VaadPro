@@ -4624,7 +4624,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
     A.paySendTargets({ payerSplit: [{ labels: ['ביטוח', 'מים'], total: 90 }, { labels: ['ביטוח'], total: 40 }] }, 'ועד בית'), ['ועד בית', 'ביטוח', 'מים']);
   t.eq('tooltip names the main message and the separate ones', [A.paySendTitle(['ועד בית', 'שיפוץ לובי'], 'ועד בית'), A.paySendTitle(['ועד בית'], 'ועד בית')],
     ['שולח הודעה לועד בית (כולל חשבונות שמופיעים בה) + הודעה נפרדת: שיפוץ לובי', 'שולח הודעה לועד בית (כולל חשבונות שמופיעים בה)']);
-  // v2.14.96 — אילן (suspended) / ארז (paid): the server skips the main message (sendAllMain:false)
+  // v2.14.97 — אילן (suspended) / ארז (paid): the server skips the main message (sendAllMain:false)
   const ilan = { id: 4, sendAllMain: false, payerSplit: [{ labels: ['שיפוץ לובי'], total: 750 }] };
   t.eq('sendAllMain:false → "שלח" lists only the separate message', A.paySendTargets(ilan, 'ועד בית'), ['שיפוץ לובי']);
   t.eq('…its label says so', COL('📱 שלח', 'שיפוץ לובי').test(A.paySendBtnHtml(ilan)), true);

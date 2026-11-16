@@ -1995,7 +1995,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.96';
+const HTML_VERSION = '2.14.97';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3602,7 +3602,7 @@ function confirmPayerSplit(list, scope) {
   var n = 0, who = [];
   (list || []).forEach(function(t){ var c = payerMsgCount(t, scope); if (c > 0) { n += c; if (who.length < 3) who.push(t.name || ''); } });
   if (!n) return true;
-  // v2.14.96 — scope 'all': a member whose main message has nothing to pay gets the payer one(s) only
+  // v2.14.97 — scope 'all': a member whose main message has nothing to pay gets the payer one(s) only
   var skip = scope === 'all' && (list || []).some(function(t){ return t && t.sendAllMain === false; });
   return confirm((skip ? '' : 'בנוסף להודעה הראשית ') + 'יישלחו ' + n + (n === 1 ? ' הודעה נפרדת' : ' הודעות נפרדות') +
     ' לטלפון המשלם (שוכר/בעלים) של חשבון נוסף' + (who.length ? ' — ' + who.join(', ') + ((list || []).length > who.length && n > who.length ? '…' : '') : '') +
@@ -5662,7 +5662,7 @@ function render() {
       // v2.14.2 — dedicated "הוסף חשבון" column; injectExtraAccountsCells()
       // fills it after render (cell index 5).
       h+='<td class="acc-mgr-cell" style="white-space:nowrap;"></td>';
-      // v2.14.96 (Tal 16.11) — 🔗 in its OWN column: one under the other whatever the width of
+      // v2.14.97 (Tal 16.11) — 🔗 in its OWN column: one under the other whatever the width of
       // "📱 שלח" (was in the send cell, which was also display:flex on a <td>).
       if (histView) {
         h+='<td style="font-size:0.75rem;color:var(--text3);">🔒 לקריאה בלבד</td><td></td>';
@@ -6907,7 +6907,7 @@ function payBtnLabel(main, sub) {
     '<span class="pay-btn-acc" style="font-size:0.68rem;font-weight:500;white-space:nowrap;margin-top:1px;">' + esc(sub) + '</span></span>';
 }
 // What "📱 שלח" sends for this member (scope 'all', CONSUMED from the server): the main message
-// unless the server says it is skipped (t.sendAllMain === false — nothing to pay in it, v2.14.96),
+// unless the server says it is skipped (t.sendAllMain === false — nothing to pay in it, v2.14.97),
 // plus each separate message that has something to pay.
 function paySendTargets(tn, mainName) {
   var out = (tn && tn.sendAllMain === false) ? [] : [mainName];
