@@ -118,6 +118,17 @@
   .drop-zone .dz-icon{font-size:1.9rem;margin-bottom:7px;}
   .drop-zone p{font-size:0.86rem;}
   .drop-zone small{font-size:0.74rem;opacity:.6;}
+  /* v2.14.98 — compact bank drop zone (one line) + loaded-file state */
+  .drop-zone.dz-compact{padding:9px 14px;display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;}
+  .drop-zone.dz-compact .dz-icon{font-size:1.25rem;margin:0;}
+  .drop-zone.dz-compact p{margin:0;}
+  .drop-zone.dz-compact.dz-loaded{border-style:solid;border-color:var(--accent);color:var(--text);}
+  /* v2.14.98 — bank preview: collapsible sections, grid, search */
+  .bank-res-sec{margin:8px 0;border:1px solid var(--border);border-radius:8px;padding:4px 10px;}
+  .bank-res-sec>summary{cursor:pointer;font-weight:700;padding:4px 0;list-style-position:inside;}
+  .bank-res-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));column-gap:14px;}
+  .bank-res-search{width:100%;margin:6px 0 2px;font-size:0.84rem;}
+  .bank-map-summary{font-size:0.78rem;color:var(--text2);margin:-4px 0 10px;line-height:1.6;}
   .match-result{margin-top:14px;padding:14px;background:var(--surface2);border-radius:8px;font-size:0.84rem;line-height:1.8;}
   .match-row{display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px solid rgba(48,54,61,.4);}
   .match-row:last-child{border-bottom:none;}
@@ -705,10 +716,10 @@ function vpLogout() {
       </div>
       <div id="bankSectionBody" style="display:none;">
       <div class="card-body">
-        <p style="font-size:0.83rem;color:var(--text2);margin-bottom:14px;">הורד קובץ Excel/CSV של תנועות מהבנק וגרור לכאן. האפליקציה תזהה מי שילם לפי עמודות שתבחר.</p>
+        <p style="font-size:0.8rem;color:var(--text2);margin-bottom:8px;">גררו קובץ Excel/CSV של תנועות מהבנק — המערכת תזהה מי שילם.</p>
 
         <!-- Drop Zone -->
-        <div class="drop-zone" id="dropZone" onclick="document.getElementById('bankFile').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
+        <div class="drop-zone dz-compact" id="dropZone" onclick="document.getElementById('bankFile').click()" ondragover="handleDragOver(event)" ondragleave="handleDragLeave(event)" ondrop="handleDrop(event)">
           <div class="dz-icon">📂</div><p>לחץ לבחירת קובץ בנק או גרור לכאן</p><small>Excel (.xlsx, .xls) או CSV</small>
         </div>
         <input type="file" id="bankFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleBankFile(event)">
@@ -721,13 +732,18 @@ function vpLogout() {
             <select id="bankTarget" onchange="onBankTargetChange()" style="width:100%;margin-top:5px;font-size:0.85rem;"></select>
             <div class="hint" id="bankTargetHint">ייבוא רגיל לחשבון הראשי — ללא שינוי.</div>
           </div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-            <strong style="font-size:0.9rem;">🗂️ מיפוי עמודות</strong>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:6px;flex-wrap:wrap;">
+            <span style="display:flex;align-items:center;gap:8px;">
+              <strong style="font-size:0.9rem;cursor:pointer;user-select:none;" onclick="toggleBankMap()">🗂️ מיפוי עמודות</strong>
+              <button type="button" class="btn btn-secondary btn-sm" id="bankMapToggle" onclick="toggleBankMap()" style="font-size:0.72rem;padding:2px 8px;" title="מבנה שמור נטען ומכווץ — הרחיבו רק כדי לשנות עמודות">▲ כווץ</button>
+            </span>
             <div style="display:flex;gap:6px;">
               <button class="btn btn-secondary btn-sm" onclick="saveBankMappingForTarget()" style="font-size:0.75rem;" title="נשמר לבניין זה בלבד — לכל בניין (ולכל חשבון נוסף) מבנה קובץ בנק משלו">💾 שמור מבנה</button>
               <button class="btn btn-primary btn-sm" onclick="saveMappingAsDefault()" style="font-size:0.75rem;" title="Save mapping and generate API key for BankSync Agent">🔗 BankSync</button>
             </div>
           </div>
+          <div id="bankMapSummary" class="bank-map-summary" style="display:none;"></div>
+          <div id="bankMapBody">
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
             <div><label style="font-size:0.8rem;">עמודת שם / תיאור</label>
               <select id="colName" style="width:100%;margin-top:3px;font-size:0.82rem;"></select></div>
@@ -751,6 +767,7 @@ function vpLogout() {
             <div style="flex:1;min-width:120px;"><label style="font-size:0.8rem;">סבילות (±₪)</label>
               <input type="number" id="bankTolerance" value="5" min="0" style="margin-top:3px;font-size:0.82rem;"></div>
           </div>
+          </div><!-- /bankMapBody -->
           <!-- Month selector for the imported file (self-contained; independent of the global current-month setting) -->
           <div style="margin-top:12px;padding:10px;border:1px solid var(--accent);border-radius:8px;background:rgba(37,211,102,0.06);">
             <label style="font-size:0.85rem;font-weight:700;color:var(--accent);">📥 חודש הקובץ לייבוא</label>
@@ -760,15 +777,16 @@ function vpLogout() {
             <div id="bankManualMonthWarn" style="display:none;margin-top:6px;font-size:0.78rem;color:#f0ad4e;line-height:1.5;"></div>
           </div>
           <button class="btn btn-accent" onclick="runBankAnalysisForTarget()" style="margin-top:12px;width:100%;">🔍 זהה משלמים</button>
-          <div style="margin-top:10px;padding:9px 11px;border-radius:8px;background:rgba(120,120,120,0.08);font-size:0.76rem;color:var(--text2);line-height:1.6;">
-            ℹ️ <strong>איך מתעדכן החוב לאחר ייבוא:</strong> הייבוא מעדכן <strong>מיד</strong> את סטטוס התשלום החודשי (שילם / חלקי / לא שילם).
+          <details id="bankDebtInfo" style="margin-top:10px;padding:7px 11px;border-radius:8px;background:rgba(120,120,120,0.08);font-size:0.76rem;color:var(--text2);line-height:1.6;">
+            <summary style="cursor:pointer;">ℹ️ <strong>איך מתעדכן החוב לאחר ייבוא</strong> · סגירת חודש ידנית</summary>
+            הייבוא מעדכן <strong>מיד</strong> את סטטוס התשלום החודשי (שילם / חלקי / לא שילם).
             <strong>החוב המצטבר</strong> (העמודה "חוב") מתעדכן <strong>אוטומטית ב-1 לכל חודש</strong>, כשהמערכת סוגרת את החודש הקודם וצוברת את מי שלא שילם.
             לכן ייבוא קובץ בנק לא משנה מיד את מספר החוב — זה תקין ומכוון.
             <div style="margin-top:8px;">
               רוצה לסגור את החודש הקודם עכשיו במקום לחכות ל-1 לחודש?
               <button class="btn btn-secondary btn-sm" onclick="closePreviousMonth()" style="margin-top:6px;">📅 סגור חודש קודם עכשיו</button>
             </div>
-          </div>
+          </details>
         </div>
 
         <div id="bankResult" style="display:none;margin-top:12px;"></div>
@@ -1995,7 +2013,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.97';
+const HTML_VERSION = '2.14.98';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -5715,6 +5733,7 @@ function processBankFile(file){
       bankFileName = file.name;
       resetDropZone();
       showMappingPanel(rows, file.name);
+      if (document.getElementById('bankMappingPanel').style.display === 'block') bankDropZoneLoaded(file.name, rows.length - 1);   // v2.14.98
     }catch(err){resetDropZone();toast('❌ שגיאה: '+err.message,'error');}
   };
   if(file.name.toLowerCase().endsWith('.csv')) reader.readAsText(file,'windows-1255');
@@ -5804,7 +5823,59 @@ function showMappingPanel(rows, fileName){
       }
     }
   })();
+  bankMapAutoState();   // v2.14.98 — saved structure → collapsed; none / broken → expanded
 }
+
+// ── v2.14.98 — compact bank import: loaded-file line + collapsible column mapping ──
+// DISPLAY only (no money, no import logic). The collapsed flag is MODULE-level
+// (never on `data` — loadData() replaces it, v2.13.20 rule).
+let bankMapCollapsed = false;
+function bankDropZoneLoaded(name, rowCount){
+  var dz = document.getElementById('dropZone'); if (!dz) return;
+  dz.innerHTML = '<div class="dz-icon">📄</div><p><strong style="unicode-bidi:plaintext;">' + esc(String(name || '')) + '</strong> · ' + (parseInt(rowCount) || 0) + ' שורות</p><small>לחצו או גררו להחלפת קובץ</small>';
+  if (dz.classList) dz.classList.add('dz-loaded');
+}
+// A saved structure exists for the CURRENT target (main = per-building localStorage,
+// extra account = the definition's bankMapping on the server).
+function bankMapHasSaved(){
+  var tpl = (typeof bankTargetTpl === 'function') ? bankTargetTpl() : null;
+  return tpl ? !!tpl.bankMapping : !!loadBankMapping();
+}
+// The three required columns point at a real column of THIS file (a saved index that
+// the file does not have leaves the select empty → the structure changed → expand).
+function bankMapRequiredOk(){
+  return ['colName','colAmount','colDate'].every(function(id){
+    var el = document.getElementById(id);
+    return !!el && el.value !== '' && el.value !== '-1' && el.value != null;
+  });
+}
+// Pure: one summary line from [{label, text}] + the amount filter.
+function bankMapSummaryText(cols, amount, tol){
+  var parts = (cols || []).filter(function(x){ return x && x.text; }).map(function(x){ return x.label + ': ' + x.text; });
+  parts.push(amount ? ('סכום לחיפוש: ' + amount + '₪ (±' + (tol || 0) + ')') : 'כל הסכומים');
+  return parts.join(' · ');
+}
+function bankMapSelText(id){
+  var el = document.getElementById(id);
+  if (!el || el.value === '' || el.value === '-1') return '';
+  var o = el.options && el.selectedIndex >= 0 ? el.options[el.selectedIndex] : null;
+  return o ? String(o.textContent || o.text || '') : '';
+}
+function setBankMapCollapsed(c){
+  bankMapCollapsed = !!c;
+  var body = document.getElementById('bankMapBody'), btn = document.getElementById('bankMapToggle'), sum = document.getElementById('bankMapSummary');
+  if (body) body.style.display = bankMapCollapsed ? 'none' : 'block';
+  if (btn) btn.textContent = bankMapCollapsed ? '▼ הרחב' : '▲ כווץ';
+  if (sum) {
+    if (bankMapCollapsed) {
+      var cols = [['שם','colName'],['סכום','colAmount'],['תאריך','colDate'],['הערות','colNote'],['אסמכתא','colRef']].map(function(p){ return { label: p[0], text: bankMapSelText(p[1]) }; });
+      sum.innerHTML = '✅ מבנה שמור: ' + esc(bankMapSummaryText(cols, (document.getElementById('bankAmount') || {}).value, (document.getElementById('bankTolerance') || {}).value));
+      sum.style.display = 'block';
+    } else { sum.style.display = 'none'; sum.innerHTML = ''; }
+  }
+}
+function toggleBankMap(){ setBankMapCollapsed(!bankMapCollapsed); }
+function bankMapAutoState(){ setBankMapCollapsed(bankMapHasSaved() && bankMapRequiredOk()); }
 
 function renderBankPreview(rows, headers){
   const preview = rows.slice(1,4);
@@ -5950,9 +6021,10 @@ function onBankTargetChange(){
   var rd = document.getElementById('bankResult'); if (rd) { rd.style.display = 'none'; rd.innerHTML = ''; }
   var tpl = bankTargetTpl();
   var hint = document.getElementById('bankTargetHint');
-  if (!tpl) { applyBankMappingToForm(loadBankMapping()); if (hint) hint.textContent = 'ייבוא רגיל לחשבון הראשי — ללא שינוי.'; return; }
+  if (!tpl) { applyBankMappingToForm(loadBankMapping()); if (hint) hint.textContent = 'ייבוא רגיל לחשבון הראשי — ללא שינוי.'; if (typeof bankMapAutoState === 'function') bankMapAutoState(); return; }
   if (tpl.bankMapping) { applyBankMappingToForm(tpl.bankMapping); if (hint) hint.textContent = 'נטען המבנה השמור של "' + (tpl.label || '') + '". התשלומים יירשמו רק לחשבון הזה.'; }
   else { applyBankMappingToForm(loadBankMapping()); if (hint) hint.textContent = 'אין עדיין מבנה שמור ל"' + (tpl.label || '') + '" — הועתק מבנה הראשי. בדקו ושמרו (💾). התשלומים יירשמו רק לחשבון הזה.'; }
+  if (typeof bankMapAutoState === 'function') bankMapAutoState();   // v2.14.98 — no saved structure for this account → expanded
 }
 async function saveBankMappingForTarget(){
   var tpl = bankTargetTpl();
@@ -7789,6 +7861,42 @@ function cancelBankImport(){
   toast('הייבוא בוטל — לא נשמר דבר (אין טביעות אצבע)','info');
 }
 
+// ── v2.14.98 — bank preview lists (display only) ──────────────────────────────
+function bankMonthLabel(mk){
+  var m = /^(\d{4})-(\d{2})$/.exec(String(mk || ''));
+  if (!m) return '';
+  var names = ['ינואר','פברואר','מרץ','אפריל','מאי','יוני','יולי','אוגוסט','ספטמבר','אוקטובר','נובמבר','דצמבר'];
+  var i = parseInt(m[2], 10) - 1;
+  return (i >= 0 && i < 12) ? names[i] + ' ' + m[1] : '';
+}
+function bankResSortByName(list, nameOf){
+  return (list || []).slice().sort(function(a, b){ return String(nameOf(a) || '').localeCompare(String(nameOf(b) || ''), 'he'); });
+}
+// One collapsible section: <details> + count + a grid of rows.
+function bankResSection(kind, title, color, rows, open, sub){
+  var n = (rows || []).length;
+  return '<details class="bank-res-sec" data-sec="' + kind + '"' + (open ? ' open' : '') + ' data-open0="' + (open ? '1' : '0') + '">'
+    + '<summary style="color:' + color + ';">' + title + ' (<span class="bank-res-cnt">' + n + '</span>)' + (sub ? ' <span style="font-weight:400;color:var(--text2);font-size:0.8rem;">· ' + sub + '</span>' : '') + '</summary>'
+    + '<div class="bank-res-grid">' + (rows || []).join('') + '</div></details>';
+}
+// Search: hide rows whose name does not contain the text; a section with hits opens;
+// an empty search restores every section's default open state.
+function bankResFilter(q){
+  var needle = String(q || '').trim().toLowerCase();
+  var secs = document.querySelectorAll('#bankResult .bank-res-sec');
+  Array.prototype.forEach.call(secs, function(sec){
+    var hits = 0, rows = sec.querySelectorAll('.match-row');
+    Array.prototype.forEach.call(rows, function(r){
+      var ok = !needle || String(r.getAttribute('data-name') || '').toLowerCase().indexOf(needle) >= 0;
+      r.style.display = ok ? '' : 'none';
+      if (ok) hits++;
+    });
+    var cnt = sec.querySelector('.bank-res-cnt');
+    if (cnt) cnt.textContent = needle ? (hits + '/' + rows.length) : String(rows.length);
+    sec.open = needle ? hits > 0 : sec.getAttribute('data-open0') === '1';
+  });
+}
+
 // Legacy tail retained (dead) intentionally removed — commit lives in commitBankImport.
 function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImportedSkips,previewMode,splitMonths){
   const rd=document.getElementById('bankResult');
@@ -7799,40 +7907,53 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
   }
   const amountDesc = filterByAmount ? ta+'₪ (±'+(parseFloat(document.getElementById('bankTolerance').value)||5)+')' : 'כל הסכומים';
   var newTxCount = matched.reduce(function(s,x){ return s + x.count; }, 0);
-  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות | חיפוש: '+amountDesc
+  var _monthLbl = bankMonthLabel((document.getElementById('bankMonth') || {}).value);   // v2.14.98
+  h+='<div style="margin-bottom:10px;font-size:0.8rem;color:var(--text2);">📄 '+fn+' | '+total+' תנועות'+(_monthLbl ? ' | 📥 חודש: <strong style="color:var(--accent);">'+_monthLbl+'</strong>' : '')+' | חיפוש: '+amountDesc
     + (alreadyImportedSkips.length ? ' | <span style="color:var(--accent);">'+newTxCount+' חדשות</span> · <span style="color:var(--text2);">'+alreadyImportedSkips.length+' כבר יובאו</span>' : '')
     + '</div>';
+  // v2.14.98 — lists as collapsible sections in a grid (a kibbutz has 150–200 members).
+  // A section opens by default only when it is short (≤ BANK_RES_OPEN_MAX rows);
+  // "כבר יובאו" is informational and always starts collapsed. A name search appears
+  // when the lists are long. DISPLAY only — same rows, same data as before.
+  var BANK_RES_OPEN_MAX = 15;   // a section longer than this starts collapsed + the search appears
+  var _byName={};
+  alreadyImportedSkips.forEach(function(s){ _byName[s.name]=(_byName[s.name]||0)+1; });
+  var _alreadyNames = Object.keys(_byName);
+  var _rowsTotal = matched.length + _alreadyNames.length + unmatched.length;
+  if(_rowsTotal > BANK_RES_OPEN_MAX){
+    h+='<input type="search" class="bank-res-search" id="bankResSearch" placeholder="🔎 חיפוש שם ברשימות ('+_rowsTotal+')" oninput="bankResFilter(this.value)">';
+  }
   if(matched.length){
-    h+='<div style="color:var(--accent);font-weight:700;margin-bottom:6px;">✅ זוהו כמשלמים ('+matched.length+'):</div>';
-    matched.forEach(function(m){
+    var _mRows = bankResSortByName(matched, function(m){ return m.tenant.name; }).map(function(m){
       const icon=m.matchType==='apt'?'🏠':m.matchType==='keyword'?'🔍':m.matchType==='phone'?'📱':'👤';
       const multiInfo=m.count>1
         ? ' <span style="background:rgba(227,179,65,.15);color:var(--warn);border-radius:4px;padding:1px 7px;font-size:0.78rem;">×'+m.count+' תשלומים</span>'
         : '';
-      h+='<div class="match-row">'
-        +'<span>👤 '+m.tenant.name+multiInfo+'</span>'
+      return '<div class="match-row" data-name="'+esc(String(m.tenant.name||''))+'">'
+        +'<span>👤 '+esc(String(m.tenant.name||''))+multiInfo+'</span>'
         +'<span style="color:var(--accent);font-weight:700;">'+m.amount.toLocaleString()+'₪ ✓ '+icon
         // v2.14.58: an earlier payment for the same month is ADDED to, not replaced.
         +(m.priorPaid>0 ? ' <span class="bank-prior-paid" title="כבר נרשם תשלום לחודש זה בקליטה קודמת — הסכום החדש מתווסף אליו" style="color:var(--text2);font-weight:400;font-size:0.8rem;">(+'+m.priorPaid.toLocaleString()+'₪ קיים = '+(Math.round((m.priorPaid+m.amount)*100)/100).toLocaleString()+'₪)</span>' : '')
         +'</span>'
         +'</div>';
     });
+    h+=bankResSection('matched', '✅ זוהו כמשלמים', 'var(--accent)', _mRows, _mRows.length <= BANK_RES_OPEN_MAX);
   }
   // v2.14.16: a re-imported row (same date+amount+name as a prior run) is NOT
   // "unmatched" — it was recognized and counted last time. Show it in its own
   // neutral section so "9 old + 3 new" reads correctly, instead of dumping those
   // tenants into "לא זוהו / לא שילם".
   if(alreadyImportedSkips.length){
-    var byName={};
-    alreadyImportedSkips.forEach(function(s){ byName[s.name]=(byName[s.name]||0)+1; });
-    h+='<div style="color:var(--text2);font-weight:700;margin:10px 0 6px;">↩️ כבר יובאו בעבר ('+alreadyImportedSkips.length+' תנועות · לא נספרו שוב):</div>';
-    Object.keys(byName).forEach(function(nm){
-      h+='<div class="match-row"><span>👤 '+nm+'</span><span style="color:var(--text2);">'+(byName[nm]>1?'×'+byName[nm]+' ':'')+'כבר נקלט</span></div>';
+    var _aRows = bankResSortByName(_alreadyNames, function(n){ return n; }).map(function(nm){
+      return '<div class="match-row" data-name="'+esc(String(nm))+'"><span>👤 '+esc(String(nm))+'</span><span style="color:var(--text2);">'+(_byName[nm]>1?'×'+_byName[nm]+' ':'')+'כבר נקלט</span></div>';
     });
+    h+=bankResSection('already', '↩️ כבר יובאו בעבר', 'var(--text2)', _aRows, false, alreadyImportedSkips.length+' תנועות · לא נספרו שוב');
   }
   if(unmatched.length){
-    h+='<div style="color:var(--warn);font-weight:700;margin:10px 0 6px;">⏳ לא זוהו ('+unmatched.length+'):</div>';
-    unmatched.forEach(function(t){h+='<div class="match-row"><span>👤 '+t.name+'</span><span style="color:var(--warn);">לא שילם</span></div>';});
+    var _uRows = bankResSortByName(unmatched, function(t){ return t.name; }).map(function(t){
+      return '<div class="match-row" data-name="'+esc(String(t.name||''))+'"><span>👤 '+esc(String(t.name||''))+'</span><span style="color:var(--warn);">לא שילם</span></div>';
+    });
+    h+=bankResSection('unmatched', '⏳ לא זוהו', 'var(--warn)', _uRows, _uRows.length <= BANK_RES_OPEN_MAX);
   }
   h+='</div>';
   if(previewMode && splitMonths && splitMonths.length>1){
@@ -7879,7 +8000,7 @@ function showBankResult(matched,unmatched,total,ta,fn,filterByAmount,alreadyImpo
   window._lastBankFileName = fn;
 }
 
-function resetDropZone(){ document.getElementById('dropZone').innerHTML='<div class="dz-icon">📂</div><p>לחץ לבחירת קובץ בנק או גרור לכאן</p><small>Excel (.xlsx, .xls) או CSV</small>'; }
+function resetDropZone(){ var dz=document.getElementById('dropZone'); dz.innerHTML='<div class="dz-icon">📂</div><p>לחץ לבחירת קובץ בנק או גרור לכאן</p><small>Excel (.xlsx, .xls) או CSV</small>'; if (dz.classList) dz.classList.remove('dz-loaded'); }
 
 function exportBankReport(){
   const matched = window._lastBankMatched;

@@ -4727,4 +4727,121 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   })()]);
 }
 
+{
+  t.section('v2.14.98 — compact bank import: drop zone, collapsible mapping, month, long lists (EXECUTED)');
+  // ── markup ──
+  t.eq('bank drop zone is compact (dz-compact)', /class="drop-zone dz-compact" id="dropZone"/.test(app), true);
+  t.eq('compact CSS: one-line padding', /\.drop-zone\.dz-compact\{padding:9px 14px;display:flex/.test(app), true);
+  const mapBody = app.slice(app.indexOf('<div id="bankMapBody">'), app.indexOf('</div><!-- /bankMapBody -->'));
+  t.eq('mapping body holds the columns, the preview and the amount filter', [mapBody.includes('id="colName"'), mapBody.includes('id="bankPreview"'), mapBody.includes('id="bankTolerance"')], [true, true, true]);
+  t.eq('📥 month selector is OUTSIDE the collapsible body (always visible)', [mapBody.includes('id="bankMonth"'), app.includes('id="bankMonth"')], [false, true]);
+  t.eq('toggle button + summary line in the mapping panel', [app.includes('id="bankMapToggle" onclick="toggleBankMap()"'), app.includes('id="bankMapSummary"')], [true, true]);
+  t.eq('debt-update explanation is a collapsed <details> (close-month button inside)', /<details id="bankDebtInfo"[\s\S]*?closePreviousMonth\(\)[\s\S]*?<\/details>/.test(app), true);
+  t.eq('file load → loaded line after the panel opens', /showMappingPanel\(rows, file\.name\);\s*if \(document\.getElementById\('bankMappingPanel'\)\.style\.display === 'block'\) bankDropZoneLoaded\(file\.name, rows\.length - 1\);/.test(app), true);
+  t.eq('showMappingPanel ends with bankMapAutoState()', /\}\)\(\);\s*bankMapAutoState\(\);[^\n]*\n\}/.test(app), true);
+  const otc = app.slice(app.indexOf('function onBankTargetChange(){'), app.indexOf('async function saveBankMappingForTarget'));
+  t.eq('target change re-evaluates the collapse (main + account paths)', (otc.match(/bankMapAutoState\(\)/g) || []).length >= 2, true);
+  t.eq('resetDropZone drops the loaded state', /function resetDropZone\(\)\{[^\n]*classList\.remove\('dz-loaded'\)/.test(app), true);
+
+  // ── mapping collapse, EXECUTED ──
+  const mkSel = (val, opts) => ({ value: val, options: opts.map(x => ({ textContent: x })), get selectedIndex() { const i = parseInt(this.value, 10); return isNaN(i) || i < 0 ? -1 : i + 1; } });
+  function mapEnv(o) {
+    const heads = ['-- לא רלוונטי --', 'תאריך ערך', 'תיאור', 'סכום', 'אסמכתא'];
+    const els = {
+      bankMapBody: { style: {} }, bankMapToggle: { textContent: '' }, bankMapSummary: { style: {}, innerHTML: '' },
+      colName: mkSel(o.colName ?? '1', heads), colAmount: mkSel(o.colAmount ?? '2', heads), colDate: mkSel(o.colDate ?? '0', heads),
+      colNote: mkSel('-1', heads), colRef: mkSel(o.colRef ?? '3', heads),
+      bankAmount: { value: o.amount || '' }, bankTolerance: { value: '5' }
+    };
+    const scope = { document: { getElementById: id => els[id] || null }, loadBankMapping: () => o.saved || null,
+      bankTargetTpl: () => o.tpl || null };
+    const F = new Function(Object.keys(scope).join(','), 'var bankMapCollapsed = false;\n' + extractFunctions(app, ['esc', 'bankMapHasSaved', 'bankMapRequiredOk', 'bankMapSummaryText', 'bankMapSelText', 'setBankMapCollapsed', 'toggleBankMap', 'bankMapAutoState'])
+      + '\n; return { bankMapAutoState, toggleBankMap, bankMapSummaryText, get c() { return bankMapCollapsed; } };').apply(null, Object.keys(scope).map(k => scope[k]));
+    return { F, els };
+  }
+  let e = mapEnv({ saved: { colName: '1' } });
+  e.F.bankMapAutoState();
+  t.eq('saved structure + valid columns → COLLAPSED (body hidden, ▼ הרחב)', [e.F.c, e.els.bankMapBody.style.display, e.els.bankMapToggle.textContent], [true, 'none', '▼ הרחב']);
+  t.eq('…summary names the chosen columns + the amount filter', [e.els.bankMapSummary.style.display, e.els.bankMapSummary.innerHTML], ['block', '✅ מבנה שמור: שם: תיאור · סכום: סכום · תאריך: תאריך ערך · אסמכתא: אסמכתא · כל הסכומים']);
+  e.F.toggleBankMap();
+  t.eq('▼ הרחב → expanded, summary hidden', [e.F.c, e.els.bankMapBody.style.display, e.els.bankMapToggle.textContent, e.els.bankMapSummary.style.display], [false, 'block', '▲ כווץ', 'none']);
+  e = mapEnv({ saved: null });
+  e.F.bankMapAutoState();
+  t.eq('no saved structure → EXPANDED', [e.F.c, e.els.bankMapBody.style.display], [false, 'block']);
+  e = mapEnv({ saved: { colName: '1' }, colDate: '' });
+  e.F.bankMapAutoState();
+  t.eq('saved structure that does not fit the file (date column missing) → EXPANDED', e.F.c, false);
+  e = mapEnv({ saved: { colName: '1' }, colAmount: '-1' });
+  e.F.bankMapAutoState();
+  t.eq('saved structure with amount "לא רלוונטי" → EXPANDED', e.F.c, false);
+  e = mapEnv({ saved: { colName: '1' }, tpl: { id: 'T1', label: 'ביטוח' } });
+  e.F.bankMapAutoState();
+  t.eq('extra account WITHOUT its own saved structure → EXPANDED (even when the main one is saved)', e.F.c, false);
+  e = mapEnv({ saved: null, tpl: { id: 'T1', bankMapping: { colName: '1' } } });
+  e.F.bankMapAutoState();
+  t.eq('extra account WITH its saved structure → COLLAPSED', e.F.c, true);
+  t.eq('summary text with an amount filter', e.F.bankMapSummaryText([{ label: 'שם', text: 'תיאור' }, { label: 'הערות', text: '' }], '250', '5'), 'שם: תיאור · סכום לחיפוש: 250₪ (±5)');
+
+  // ── drop zone loaded line, EXECUTED ──
+  {
+    const dz = { innerHTML: '', _c: [], classList: { add(x) { dz._c.push(x); } } };
+    const F = new Function('document', extractFunctions(app, ['esc', 'bankDropZoneLoaded']) + '\n; return bankDropZoneLoaded;')({ getElementById: () => dz });
+    F('<x>תנועות.xlsx', 41);
+    t.eq('loaded line: file name (escaped) + row count + replace hint', [dz.innerHTML.includes('&lt;x&gt;תנועות.xlsx'), dz.innerHTML.includes('41 שורות'), dz.innerHTML.includes('להחלפת קובץ'), dz._c], [true, true, true, ['dz-loaded']]);
+  }
+
+  // ── preview lists, EXECUTED (showBankResult with a stub DOM) ──
+  function runShow(matched, already, unmatched, month) {
+    const els = { bankResult: { innerHTML: '', style: {} }, bankTolerance: { value: '5' }, bankMonth: { value: month || '' } };
+    const scope = { document: { getElementById: id => els[id] || null }, window: {} };
+    const F = new Function(Object.keys(scope).join(','), extractFunctions(app, ['esc', 'bankMonthLabel', 'bankResSortByName', 'bankResSection', 'showBankResult']) + '\n; return showBankResult;')
+      .apply(null, Object.keys(scope).map(k => scope[k]));
+    F(matched, unmatched, 30, '', 'nov.xlsx', false, already, true, null);
+    return els.bankResult.innerHTML;
+  }
+  const mm = (name, amount) => ({ tenant: { name }, amount, count: 1, matchType: 'name', priorPaid: 0 });
+  const secOpen = (h, kind) => { const m = new RegExp('<details class="bank-res-sec" data-sec="' + kind + '"( open)?').exec(h); return m ? !!m[1] : null; };
+  // Tal's 15-apartment screen: 1 new, 14 already imported, 6 not recognized
+  const already14 = Array.from({ length: 14 }, (_, i) => ({ name: 'דייר ' + (i + 1) }));
+  let h = runShow([mm('טל', 230)], already14, ['ניר', 'אור', 'גיל', 'אלברט', 'לימור', 'ארז'].map(n => ({ name: n })), '2026-11');
+  t.eq('small building: זוהו open · כבר יובאו collapsed · לא זוהו open', [secOpen(h, 'matched'), secOpen(h, 'already'), secOpen(h, 'unmatched')], [true, false, true]);
+  t.eq('small building: no search box (21 rows > 15 → yes)', h.includes('id="bankResSearch"'), true);
+  t.eq('header shows the import month', h.includes('📥 חודש: <strong style="color:var(--accent);">נובמבר 2026</strong>'), true);
+  t.eq('counts in the section titles', [h.includes('(<span class="bank-res-cnt">1</span>)'), h.includes('(<span class="bank-res-cnt">14</span>) <span'), h.includes('(<span class="bank-res-cnt">6</span>)')], [true, true, true]);
+  t.eq('unmatched sorted by name (Hebrew)', h.indexOf('data-name="אור"') < h.indexOf('data-name="ניר"') && h.indexOf('data-name="אלברט"') < h.indexOf('data-name="גיל"'), true);
+  t.eq('confirm button still there', h.includes('onclick="commitBankImport()"'), true);
+  h = runShow([mm('טל', 230), mm('דנה', 230)], [], [{ name: 'ניר' }], '2026-10');
+  t.eq('a tiny result (3 rows): no search box, both sections open', [h.includes('id="bankResSearch"'), secOpen(h, 'matched'), secOpen(h, 'unmatched'), secOpen(h, 'already')], [false, true, true, null]);
+  // kibbutz: 160 payers, 45 not recognized
+  const big = Array.from({ length: 160 }, (_, i) => mm('חבר ' + String(1000 + i), 250));
+  h = runShow(big, [], Array.from({ length: 45 }, (_, i) => ({ name: 'ללא ' + i })), '2026-11');
+  t.eq('kibbutz (160 + 45): both long sections start COLLAPSED + search with the total', [secOpen(h, 'matched'), secOpen(h, 'unmatched'), h.includes('חיפוש שם ברשימות (205)')], [false, false, true]);
+  t.eq('every payer row is still rendered (grid), none dropped', (h.match(/class="match-row"/g) || []).length, 205);
+  t.eq('rows sit in a grid', (h.match(/class="bank-res-grid"/g) || []).length, 2);
+  h = runShow([mm('<img src=x>', 230)], [], [], '');
+  t.eq('names are escaped; no month → no month part', [h.includes('&lt;img src=x&gt;'), h.includes('<img src=x>'), h.includes('📥 חודש')], [true, false, false]);
+  const pri = Object.assign(mm('שי', 230), { priorPaid: 230, count: 2 });
+  h = runShow([pri], [], [], '2026-11');
+  t.eq('×N + "(+X₪ קיים = Y₪)" kept', [h.includes('×2 תשלומים'), h.includes('(+230₪ קיים = 460₪)')], [true, true]);
+
+  // ── search filter, EXECUTED ──
+  {
+    const mkRow = n => ({ _n: n, style: {}, getAttribute: () => n });
+    const mkSec = (names, open0) => { const rows = names.map(mkRow); const cnt = { textContent: String(names.length) };
+      return { rows, cnt, open: open0 === '1', getAttribute: a => (a === 'data-open0' ? open0 : null),
+        querySelectorAll: () => rows, querySelector: () => cnt }; };
+    const s1 = mkSec(['כהן משה', 'לוי דנה', 'כהן רות'], '0'), s2 = mkSec(['אברהם'], '1'), s3 = mkSec(['כהנא'], '0');
+    const F = new Function('document', extractFunctions(app, ['bankResFilter']) + '\n; return bankResFilter;')({ querySelectorAll: () => [s1, s2, s3] });
+    F('כהן');
+    t.eq('search: matching rows shown, others hidden', s1.rows.map(r => r.style.display), ['', 'none', '']);
+    t.eq('search: hit counts "hits/total" + sections with hits open, without hits closed', [s1.cnt.textContent, s1.open, s2.cnt.textContent, s2.open, s3.open], ['2/3', true, '0/1', false, false]);   // כהנא ≠ כהן (final nun)
+    F('');
+    t.eq('empty search restores everything + each section\'s default open state', [s1.rows.map(r => r.style.display), s1.cnt.textContent, s1.open, s2.open, s3.open], [['', '', ''], '3', false, true, false]);
+  }
+
+  // ── guide ──
+  const guide98 = readSource('public/vaadpro-guide.js');
+  t.eq('guide: compact import box (mapping collapsed, month always visible, sections + search)', [guide98.includes('id="vpg-bank-compact"'), guide98.includes('מיפוי עמודות מכווץ'), guide98.includes('מוצג תמיד, גם כשהמיפוי מכווץ'), guide98.includes('🔎 חיפוש שם')], [true, true, true, true]);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
