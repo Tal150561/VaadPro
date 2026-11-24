@@ -4844,4 +4844,52 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('guide: compact import box (mapping collapsed, month always visible, sections + search)', [guide98.includes('id="vpg-bank-compact"'), guide98.includes('מיפוי עמודות מכווץ'), guide98.includes('מוצג תמיד, גם כשהמיפוי מכווץ'), guide98.includes('🔎 חיפוש שם')], [true, true, true, true]);
 }
 
+// ════════════════════════════════════════════════════════════════
+// v2.14.99 — settings header: auto-send counts per message type (EXECUTED)
+// ════════════════════════════════════════════════════════════════
+{
+  const app99 = readSource('public/app.html'), gd99 = readSource('public/vaadpro-guide.js'), pkg99 = JSON.parse(readSource('package.json'));
+  t.section('v2.14.99 — auto-send counts in the settings header');
+  t.eq('HTML_VERSION === package.json (2.14.99)', [app99.includes("const HTML_VERSION = '" + pkg99.version + "';"), pkg99.version], [true, '2.14.99']);
+  t.eq('span #autoSendCounts sits in the "הגדרות תשלום ותזמון" header, after the pill', /id="autoSendHeaderPill"[\s\S]{0,400}id="autoSendCounts"[\s\S]{0,200}id="secPayIcon"/.test(app99), true);
+  const S = runInSandbox(extractFunctions(app99, ['autoSendCountGroups', 'autoSendCountsText']) + '\nmodule.exports={G:autoSendCountGroups,T:autoSendCountsText};', {});
+  // a regular member (shouldRemind) · a routed member (mainShouldRemind + payerSplit) · paid · suspended
+  const ten = [
+    { id: 1, shouldRemind: true },
+    { id: 2, shouldRemind: false },
+    { id: 3, shouldRemind: true, mainShouldRemind: false, payerSplit: [{ labels: ['שיפוץ לובי'], shouldRemind: true }] },
+    { id: 4, shouldRemind: true, mainShouldRemind: true, payerSplit: [{ labels: ['שיפוץ לובי'], shouldRemind: true }, { labels: ['ביטוח'], shouldRemind: false }] },
+    { id: 5, shouldRemind: true, mainShouldRemind: true, payerSplit: [{ labels: ['ביטוח', 'מים'], shouldRemind: true }] },
+  ];
+  const g = S.G(ten, 'ועד בית');
+  t.eq('groups: main counts shouldRemind (regular) / mainShouldRemind (routed) — NOT shouldRemind of a routed member', JSON.parse(JSON.stringify(g.groups)), [{ label: 'ועד בית', n: 3 }, { label: 'שיפוץ לובי', n: 2 }, { label: 'ביטוח + מים', n: 1 }]);
+  t.eq('total = Σ groups', g.total, 6);
+  t.eq('building without extra accounts → one main group', JSON.parse(JSON.stringify(S.G([{ shouldRemind: true }, { shouldRemind: false }], 'ועד בית').groups)), [{ label: 'ועד בית', n: 1 }]);
+  t.eq('all paid → main 0 shown, total 0', [S.G([{ shouldRemind: false }], 'ועד בית').total, S.G([{ shouldRemind: false }], 'ועד בית').groups.length], [0, 1]);
+  t.eq('main 0 with payer groups → main dropped', JSON.parse(JSON.stringify(S.G([{ mainShouldRemind: false, shouldRemind: true, payerSplit: [{ labels: ['פרויקט'], shouldRemind: true }] }], 'ועד בית').groups)), [{ label: 'פרויקט', n: 1 }]);
+  t.eq('no label → falls back to "ועד בית"', S.G([{ shouldRemind: true }], '').groups[0].label, 'ועד בית');
+  t.eq('kibbutz main label is used (ערבות הדדית)', S.G([{ shouldRemind: true }], 'ערבות הדדית').groups[0].label, 'ערבות הדדית');
+  const cfg = { sendDay: 25, sendHour: 11, sendMinute: 0 };
+  const before = new Date(2026, 10, 24, 9, 40), after = new Date(2026, 10, 26, 9, 0);
+  t.eq('before the send time → "ישלחו ב-25.11 · 11:00 — …"', S.T(cfg, g, before), '📨 ישלחו ב-25.11 · 11:00 — ועד בית: 3 · שיפוץ לובי: 2 · ביטוח + מים: 1');
+  t.eq('before, nobody owes → "אין למי לשלוח"', S.T(cfg, { total: 0, groups: [{ label: 'ועד בית', n: 0 }] }, before), '✅ אין למי לשלוח ב-25.11 · 11:00');
+  t.eq('after, sent this month → "נשלחו … · עדיין חייבים — …"', S.T(Object.assign({ lastAutoSend: { date: '2026-11-25T09:00:30.000Z', sent: 10 } }, cfg), g, after), '✅ נשלחו 25.11: 10 · עדיין חייבים — ועד בית: 3 · שיפוץ לובי: 2 · ביטוח + מים: 1');
+  t.eq('after, last send was LAST month → no "נשלחו"', S.T(Object.assign({ lastAutoSend: { date: '2026-10-25T09:00:30.000Z', sent: 9 } }, cfg), g, after).startsWith('עדיין חייבים — '), true);
+  t.eq('after, everyone paid → "אין חייבים"', S.T(Object.assign({ lastAutoSend: { date: '2026-11-25T09:00:30.000Z', sent: 10 } }, cfg), { total: 0, groups: [{ label: 'ועד בית', n: 0 }] }, after), '✅ נשלחו 25.11: 10 · ✅ אין חייבים');
+  t.eq('paused → "⏸ מושהה" (before or after)', [S.T(Object.assign({ autoSendEnabled: false }, cfg), g, before).startsWith('⏸ מושהה — לשליחה: ועד בית: 3'), S.T(Object.assign({ autoSendEnabled: false }, cfg), g, after).startsWith('⏸ מושהה')], [true, true]);
+  t.eq('defaults (day 1, 09:00) when the config has none', S.T({}, g, new Date(2026, 11, 1, 8, 0)).startsWith('📨 ישלחו ב-1.12 · 09:00'), true);
+  // the painter, EXECUTED: reads data.tenants/config, writes the span, mutation would show
+  {
+    const el = { textContent: '', title: '', style: {} };
+    const P = runInSandbox(extractFunctions(app99, ['autoSendCountGroups', 'autoSendCountsText', 'refreshAutoSendCounts']) + '\nmodule.exports={R:refreshAutoSendCounts};',
+      { data: { tenants: [{ shouldRemind: true }, { shouldRemind: true }], config: { sendDay: 28, sendHour: 23, sendMinute: 59 } },
+        document: { getElementById: id => (id === 'autoSendCounts' ? el : null) }, t: () => 'ועד בית' });
+    P.R();
+    t.eq('refreshAutoSendCounts paints the span from data (2 main)', /ועד בית: 2$/.test(el.textContent) && el.title.includes('אותו כלל של השרת'), true);
+  }
+  t.eq('render() and toggleAutoSend() both repaint the counts', [/updateSchedule\(\); updatePreview\(\);\n  refreshAutoSendCounts\(\);/.test(app99), /autoSendEnabled:next\}\);\n  updateSchedule\(\); refreshAutoSendCounts\(\);/.test(app99)], [true, true]);
+  t.eq('no money math in the counter (consumes flags only)', /owedNow|totalDebt|openingDebt|calcMonthBalance/.test(extractFunctions(app99, ['autoSendCountGroups', 'autoSendCountsText', 'refreshAutoSendCounts'])), false);
+  t.eq('guide: counts box (types, before/after/paused, excess not counted)', [gd99.includes('id="vpg-autosend-counts"'), gd99.includes('📨 כמה הודעות יישלחו'), gd99.includes('עדיין חייבים'), gd99.includes('נשלחות רק ידנית')], [true, true, true, true]);
+}
+
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });
