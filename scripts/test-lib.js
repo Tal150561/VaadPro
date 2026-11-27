@@ -198,11 +198,58 @@ function loadCloseExtra() {
   return mod.closeExtraAccountsUnpaid;
 }
 
+// ── v2.14.100 — month-close LOG + payments-tab view (REAL source) ──────────
+// monthCloseLogSrc(src) = the consts + every helper the 3 close paths and GET /api/data
+// use for the log, ready to prepend in a sandbox. loadMonthCloseLog() exposes them.
+const MONTH_CLOSE_FNS = ['noteMonthClose', 'mcIlParts', 'mcMonthLabel', 'mcSourceLabel', 'mcPartText', 'buildMonthCloseView', 'monthBeforeKey', 'getLabels', 't'];
+function monthCloseLogSrc(src) {
+  const srcs = MONTH_CLOSE_SRC_CONSTS.map(re => {
+    const m = src.match(re);
+    if (!m) throw new Error('test-lib: month-close const not found: ' + re);
+    return m[0];
+  });
+  return srcs.join('\n') + '\n' + extractFunctions(src, MONTH_CLOSE_FNS);
+}
+const MONTH_CLOSE_SRC_CONSTS = [/const LABEL_LANG = [^;]*;/, /const LABELS = \{[\s\S]*?\n\};\n/,
+  /const MONTH_CLOSE_SOURCES = \[[^\]]*\];/, /const MONTH_CLOSE_LOG_MAX = \d+;/];
+function loadMonthCloseLog() {
+  const src = readSource('server.js');
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const code = months + '\n' + monthCloseLogSrc(src)
+    + 'module.exports={' + MONTH_CLOSE_FNS.join(',') + '};';
+  return runInSandbox(code);
+}
+// Runs the REAL POST /api/close-previous-month body (frozen now) against one building.
+function loadCloseRoute(building, nowDate) {
+  const src = readSource('server.js');
+  const start = src.indexOf("app.post('/api/close-previous-month'");
+  if (start < 0) throw new Error('test-lib: /api/close-previous-month route not found');
+  const bodyStart = src.indexOf('=> {', start) + 4;
+  let depth = 1, i = bodyStart;
+  while (i < src.length && depth > 0) { const ch = src[i]; if (ch === '{') depth++; else if (ch === '}') depth--; i++; }
+  const handlerBody = src.slice(bodyStart, i - 1);
+  const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+  const saved = [], captured = {};
+  const code = months + '\n' + monthCloseLogSrc(src)
+    + extractFunctions(src, ['closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'pickRateFromIntervals', 'resolveTariffRate'].concat(EXTRA_AMOUNT_FNS))
+    + 'function handler(req, res) {' + handlerBody + '}\nmodule.exports = { handler };';
+  const stubs = {
+    loadTenantData: () => building,
+    saveTenantData: (id, patch) => { saved.push({ id, patch: JSON.parse(JSON.stringify(patch)) }); },
+    console: { log() {}, error() {}, warn() {} },
+    Date: nowDate ? class extends Date { constructor(...a){ super(...(a.length?a:[nowDate])); } } : Date
+  };
+  const mod = runInSandbox(code, stubs);
+  const res = { status() { return res; }, json: (o) => { captured.result = o; } };
+  mod.handler({ user: { tenantId: 'T1' }, body: {} }, res);
+  return { result: captured.result, saved, building };
+}
+
 function loadCloseMonth(building, nowDate) {
   const src = readSource('server.js');
   const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/);
   if (!months) throw new Error('test-lib: HEBREW_MONTHS not found');
-  const code = months[0] + '\n'
+  const code = months[0] + '\n' + monthCloseLogSrc(src)   // v2.14.100 — the day-1 cron stamps the log
     + extractFunctions(src, ['closeMonthUnpaidForBuilding', 'closeMonthUnpaid'])
     + 'module.exports={closeMonthUnpaid, closeMonthUnpaidForBuilding};';
   // building is mutated in place by closeMonthUnpaid via the loadTenantData ref.
@@ -678,6 +725,6 @@ function runDataSync(S, disk, posted) {
 module.exports = {
   EXTRA_AMOUNT_FNS,
   readSource, extractFunctions, runInSandbox, extractFunctionParsed, runManualImport, runDataSync,
-  loadServer, loadBankAnalyzer, loadCloseMonth, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute, loadSendOneRoute,
+  loadServer, loadBankAnalyzer, loadCloseMonth, loadMonthCloseLog, loadCloseRoute, monthCloseLogSrc, MONTH_CLOSE_FNS, loadCloseExtra, loadSentlogKeyDelete, loadResetPayments, loadResetBuildingFull, loadImportUndo, loadUndoRoute, loadApplyClosedMonth, loadApplyAmbiguous, loadDeliverySuspect, enrichTenants, portalCurrent, loadPortalRoute, loadSendOneRoute,
   extractHtmlRegion, makeRunner
 };

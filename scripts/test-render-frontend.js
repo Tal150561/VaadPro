@@ -3093,7 +3093,7 @@ t.section('v2.14.44 — settings ? buttons open the right guide sub-anchor');
   }
   const app72 = readSource('public/app.html'), gd72 = readSource('public/vaadpro-guide.js');
   t.eq('commit: a lump split no longer bypasses the answer', app72.includes('if ((doSplit || m._lumpSplit) &&'), false);
-  t.eq('HTML_VERSION is ≥ 2.14.72 (bumped every release)', /const HTML_VERSION = '2\.14\.(7[2-9]|[89]\d)';/.test(app72), true);
+  t.eq('HTML_VERSION is ≥ 2.14.72 (bumped every release)', (function () { const m = /const HTML_VERSION = '(\d+)\.(\d+)\.(\d+)';/.exec(app72); return !!m && (+m[1] * 1e6 + +m[2] * 1e3 + +m[3]) >= 2014072; })(), true);   // v2.14.100: numeric (the regex stopped at 2.14.99)
   t.eq('guide: lump-split box (open months only, Cancel = selected month)', gd72.includes('🔀 תשלום אחד שמכסה כמה חודשים') && gd72.includes('רק לחודשים שעדיין פתוחים') && gd72.includes('<strong>ביטול</strong> = לרשום את כל הסכום בחודש הנבחר'), true);
 }
 
@@ -4850,7 +4850,7 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
 {
   const app99 = readSource('public/app.html'), gd99 = readSource('public/vaadpro-guide.js'), pkg99 = JSON.parse(readSource('package.json'));
   t.section('v2.14.99 — auto-send counts in the settings header');
-  t.eq('HTML_VERSION === package.json (2.14.99)', [app99.includes("const HTML_VERSION = '" + pkg99.version + "';"), pkg99.version], [true, '2.14.99']);
+  t.eq('HTML_VERSION === package.json', app99.includes("const HTML_VERSION = '" + pkg99.version + "';"), true);   // v2.14.100: version literal dropped on purpose
   t.eq('span #autoSendCounts sits in the "הגדרות תשלום ותזמון" header, after the pill', /id="autoSendHeaderPill"[\s\S]{0,400}id="autoSendCounts"[\s\S]{0,200}id="secPayIcon"/.test(app99), true);
   const S = runInSandbox(extractFunctions(app99, ['autoSendCountGroups', 'autoSendCountsText']) + '\nmodule.exports={G:autoSendCountGroups,T:autoSendCountsText};', {});
   // a regular member (shouldRemind) · a routed member (mainShouldRemind + payerSplit) · paid · suspended
@@ -4890,6 +4890,60 @@ global.__crRuns = (global.__crRuns || []).concat([(async () => {
   t.eq('render() and toggleAutoSend() both repaint the counts', [/updateSchedule\(\); updatePreview\(\);\n  refreshAutoSendCounts\(\);/.test(app99), /autoSendEnabled:next\}\);\n  updateSchedule\(\); refreshAutoSendCounts\(\);/.test(app99)], [true, true]);
   t.eq('no money math in the counter (consumes flags only)', /owedNow|totalDebt|openingDebt|calcMonthBalance/.test(extractFunctions(app99, ['autoSendCountGroups', 'autoSendCountsText', 'refreshAutoSendCounts'])), false);
   t.eq('guide: counts box (types, before/after/paused, excess not counted)', [gd99.includes('id="vpg-autosend-counts"'), gd99.includes('📨 כמה הודעות יישלחו'), gd99.includes('עדיין חייבים'), gd99.includes('נשלחות רק ידנית')], [true, true, true, true]);
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.100 — payments tab: month-close status bar (EXECUTED; server text only)
+// ════════════════════════════════════════════════════════════════
+{
+  const appX = readSource('public/app.html'), gdX = readSource('public/vaadpro-guide.js'), pkgX = JSON.parse(readSource('package.json'));
+  t.section('v2.14.100 — month-close status bar');
+  t.eq('HTML_VERSION === package.json (2.14.100)', [appX.includes("const HTML_VERSION = '" + pkgX.version + "';"), pkgX.version], [true, '2.14.100']);
+  t.eq('card #monthCloseCard / #monthCloseBar is the FIRST card of the payments tab, hidden by default',
+    /id="tab-payments">\s*<!--[\s\S]*?-->\s*<div class="card" id="monthCloseCard" style="display:none;">\s*<div class="card-body" id="monthCloseBar"[^>]*><\/div>\s*<\/div>\s*<div class="card">\s*<!-- v2\.14\.81/.test(appX), true);
+  const escSrc = extractFunctions(appX, ['esc']);
+  const S = runInSandbox(escSrc + extractFunctions(appX, ['monthCloseBarHtml']) + '\nmodule.exports={H:monthCloseBarHtml};', {});
+  const view = { lastClosed: '2026-10',
+    lines: [{ text: '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00', tone: 'ok' }, { text: '⏳ חודש נובמבר 2026 פתוח — ייסגר אוטומטית ב-1.12.2026', tone: 'info' }],
+    history: [{ mk: '2026-10', text: '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00' }, { mk: '2026-09', text: '🔒 סגירת חודש ספטמבר 2026: ידנית · 30.9.2026 21:40' }, { mk: '2026-08', text: '🔒 סגירת חודש אוגוסט 2026: נסגר (לפני תיעוד)' }] };
+  const h = S.H(view);
+  t.eq('server lines painted verbatim, in order', [h.indexOf('אוטומטית · 1.11.2026 10:00') > -1, h.indexOf('אוטומטית · 1.11.2026 10:00') < h.indexOf('⏳ חודש נובמבר 2026 פתוח')], [true, true]);
+  t.eq('latest closed month = <summary> of a collapsed <details> with the earlier months (count without the latest)',
+    [/<details class="mc-hist"[^>]*><summary[^>]*>[\s\S]*סגירת חודש אוקטובר[\s\S]*▼ חודשים קודמים \(2\)<\/span><\/summary>/.test(h), /<details[^>]* open/.test(h)], [true, false]);
+  t.eq('history items inside the <details> (September, August), not the latest again',
+    [/<\/summary>[\s\S]*ספטמבר 2026: ידנית[\s\S]*אוגוסט 2026: נסגר \(לפני תיעוד\)[\s\S]*<\/details>/.test(h), (h.match(/סגירת חודש אוקטובר/g) || []).length], [true, 1]);
+  t.eq('tones: ok / info / warn colours', [h.includes('color:var(--text);'), h.includes('color:var(--text2);'), S.H({ lines: [{ text: 'x', tone: 'warn' }], history: [] }).includes('#f59e0b')], [true, true, true]);
+  t.eq('❓ opens the guide at payments#month-close (once)', [(h.match(/showHelp\('payments#month-close'\)/g) || []).length, h.includes('event.stopPropagation()')], [1, true]);
+  const one = S.H({ lines: [{ text: '🔒 סגירת חודש אוקטובר 2026: ידנית · 3.11.2026 19:40', tone: 'ok' }, { text: '⏳ חודש נובמבר 2026 פתוח', tone: 'info' }], history: [{ mk: '2026-10', text: 'x' }] });
+  t.eq('only one closed month → no <details>, plain lines', [one.includes('<details'), one.includes('ידנית · 3.11.2026 19:40')], [false, true]);
+  const fresh = S.H({ lines: [{ text: '⏳ חודש נובמבר 2026 פתוח — ייסגר אוטומטית ב-1.12.2026', tone: 'info' }], history: [] });
+  t.eq('nothing closed (new building / after 🧹) → just the open-month line + ❓', [fresh.includes('<details'), fresh.includes('פתוח'), fresh.includes("showHelp('payments#month-close')")], [false, true, true]);
+  t.eq('no view / empty lines (older server) → empty string', [S.H(null), S.H(undefined), S.H({ lines: [] }), S.H({})], ['', '', '', '']);
+  t.eq('server text is HTML-escaped', S.H({ lines: [{ text: '<b>x</b> & "q"', tone: 'ok' }], history: [] }).includes('&lt;b&gt;x&lt;/b&gt; &amp; &quot;q&quot;'), true);
+  // the painter, EXECUTED: shows/hides the card, repaints only on change (keeps an open <details> open)
+  {
+    const card = { style: { display: 'none' } };
+    let writes = 0; const bar = { _h: '', set innerHTML(v) { writes++; this._h = v; }, get innerHTML() { return this._h; } };
+    const env = { data: { monthCloseView: view }, document: { getElementById: id => (id === 'monthCloseCard' ? card : id === 'monthCloseBar' ? bar : null) } };
+    const appMod = appX.match(/var _monthCloseBarLast = null;[^\n]*\n/)[0];
+    const P = runInSandbox(escSrc + extractFunctions(appX, ['monthCloseBarHtml']) + appMod + extractFunctions(appX, ['refreshMonthCloseBar']) + '\nmodule.exports={R:refreshMonthCloseBar};', env);
+    P.R();
+    t.eq('refreshMonthCloseBar: card shown + bar painted', [card.style.display, bar.innerHTML.includes('סגירת חודש אוקטובר'), writes], ['', true, 1]);
+    P.R(); P.R();
+    t.eq('…the 2.5s poll with the same view does NOT rewrite the bar (open history stays open)', writes, 1);
+    env.data.monthCloseView = { lines: [{ text: '🔒 סגירת חודש נובמבר 2026: אוטומטית · 1.12.2026 10:00', tone: 'ok' }], history: [] };
+    P.R();
+    t.eq('…a new view repaints', [writes, bar.innerHTML.includes('נובמבר 2026: אוטומטית')], [2, true]);
+    env.data.monthCloseView = null; P.R();
+    t.eq('…no view → card hidden', card.style.display, 'none');
+  }
+  t.eq('render() repaints the bar next to the auto-send counts', /refreshAutoSendCounts\(\);[^\n]*\n  refreshMonthCloseBar\(\);/.test(appX), true);
+  t.eq('the guard flag is module-level, never on data', [/^var _monthCloseBarLast = null;/m.test(appX), /data\._monthClose/.test(appX)], [true, false]);
+  t.eq('no date / month math on the page (consumes server text only)', /closedMonths|monthCloseLog|getMonth\(|toLocale|new Date/.test(extractFunctions(appX, ['monthCloseBarHtml', 'refreshMonthCloseBar'])), false);
+  t.eq('guide: anchor vpg-a-month-close on the month-close heading', gdX.includes('<h3 id="vpg-a-month-close">סגירת חודש — מתי החוב באמת מתעדכן</h3>'), true);
+  t.eq('guide: status-bar box (auto / catch-up / manual / before tracking / open / warning / history / 🧹 🧨)',
+    [gdX.includes('id="vpg-month-close-bar"'), gdX.includes('אוטומטית (סגירת השלמה)'), gdX.includes('"ידנית"'), gdX.includes('נסגר (לפני תיעוד)'), gdX.includes('פתוח — ייסגר אוטומטית'), gdX.includes('עוד לא נסגר'), gdX.includes('החודשים הקודמים'), gdX.includes('מוחקים גם את היסטוריית הסגירות')],
+    [true, true, true, true, true, true, true, true]);
 }
 
 Promise.all(global.__crRuns || []).then(() => process.exit(t.done() ? 1 : 0), e => { console.error(e); process.exit(1); });

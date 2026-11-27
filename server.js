@@ -2041,6 +2041,8 @@ app.get('/api/data', authMiddleware, (req, res) => {
   // v2.14.72 — the lump-sum split wall for the manual import (app.html consumes it).
   d.splitWallMonth      = splitWallMonthKey(d.closedMonths, d.config);
   d.splitWallMonthExtra = splitWallMonthKey(d.closedMonthsExtra, d.config);
+  // v2.14.100 — payments-tab header "סגירת חודש X: אוטומטית/ידנית · <when>" (server text)
+  try { d.monthCloseView = buildMonthCloseView(d, new Date()); } catch (e) { d.monthCloseView = null; }
   // Stage 2: computed labels (orgType + overrides) so the frontend mirrors the
   // SAME LABELS + fallback as the server. orgType absent -> vaad -> existing strings.
   d.labels = getLabels(d.config);
@@ -2261,6 +2263,8 @@ app.post('/api/sentlog-key', authMiddleware, (req, res) => {
 //    dedicated fix endpoint) so the sync logic doesn't re-fire on bad input.
 app.post('/api/data', authMiddleware, (req, res) => {
   if (req.body && 'projectMigrations' in req.body) delete req.body.projectMigrations;   // v2.14.87 (P1ב) — server-owned log
+  if (req.body && 'monthCloseLog' in req.body) delete req.body.monthCloseLog;           // v2.14.100 — server-owned (written only by the 3 close paths)
+  if (req.body && 'monthCloseView' in req.body) delete req.body.monthCloseView;         // v2.14.100 — display-only, built by GET /api/data
   // v2.14.88 (P2) — the project part of combined transfers (manual import / manual mark).
   // Never persisted; checked and written inside the sentLog sync below (same save).
   // (kept on `req`, not in a local: the sync block below is also run standalone by the tests)
@@ -2804,6 +2808,7 @@ app.post('/api/reset-building-payments', authMiddleware, (req, res) => {
     // has been closed yet", symmetric main + extra.
     closedMonths: [],
     closedMonthsExtra: [],
+    monthCloseLog: {},   // v2.14.100 — no month is closed → no close stamps either
     // v2.14.53 — an undo record would point at data that no longer exists.
     lastImportUndo: null
   });
@@ -2911,6 +2916,7 @@ app.post('/api/admin/reset-building-full', superAdminMiddleware, (req, res) => {
     lastBankSyncImport: null,
     closedMonths: [],
     closedMonthsExtra: [],
+    monthCloseLog: {},              // v2.14.100
     pendingClosedMonthPayments: [],
     pendingAmbiguousMatches: [],
     lastImportUndo: null            // v2.14.53
@@ -6769,11 +6775,15 @@ app.post('/api/close-previous-month', authMiddleware, (req, res) => {
     const extra = closeExtraAccountsForBuilding(d, prevKey);
 
     if (main.changed || extra.changed) {
+      // v2.14.100 — stamp only the part this click actually closed
+      if (main.changed)  noteMonthClose(d, prevKey, 'main', 'manual');
+      if (extra.changed) noteMonthClose(d, prevKey, 'extra', 'manual');
       saveTenantData(req.user.tenantId, {
         tenants: d.tenants,
         paymentHistory: d.paymentHistory,
         closedMonths: d.closedMonths,
-        closedMonthsExtra: d.closedMonthsExtra
+        closedMonthsExtra: d.closedMonthsExtra,
+        monthCloseLog: d.monthCloseLog
       });
     }
 
@@ -7238,7 +7248,8 @@ function closeMonthUnpaid() {
       closed += n;
 
       if (changed) {
-        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths });
+        noteMonthClose(d, prevKey, 'main', 'cron');   // v2.14.100 — when + how (display only)
+        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths, monthCloseLog: d.monthCloseLog });
       }
     } catch(e) {
       console.error(`[closeMonthUnpaid:${user.tenantId}]`, e.message);
@@ -7360,12 +7371,18 @@ function catchUpMonthClose(now) {
       const patch = {};
       if (dueMain) {
         const r = closeMonthUnpaidForBuilding(d, prevKey, prevHeb);
-        if (r.changed) Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths });
+        if (r.changed) {
+          noteMonthClose(d, prevKey, 'main', 'catchup');   // v2.14.100
+          Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonths: d.closedMonths, monthCloseLog: d.monthCloseLog });
+        }
         result.main.push(user.tenantId);
       }
       if (dueExtra) {
         const r = closeExtraAccountsForBuilding(d, prevKey);
-        if (r.changed) Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra });
+        if (r.changed) {
+          noteMonthClose(d, prevKey, 'extra', 'catchup');   // v2.14.100
+          Object.assign(patch, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra, monthCloseLog: d.monthCloseLog });
+        }
         result.extra.push(user.tenantId);
       }
       if (Object.keys(patch).length) saveTenantData(user.tenantId, patch);
@@ -7377,6 +7394,92 @@ function catchUpMonthClose(now) {
     console.log(`[catchUpMonthClose] ${prevKey}: main ${result.main.length} · extra ${result.extra.length} בניינים נסגרו בהשלמה`);
   }
   return result;
+}
+
+// ── v2.14.100 — month-close LOG (when + how each month was closed) ─────────────
+// d.monthCloseLog = { 'YYYY-MM': { main?: {at, source}, extra?: {at, source} } }
+//   source: 'cron' (1st of the month) · 'catchup' (catchUpMonthClose) · 'manual' (📅 button)
+// SERVER-OWNED and DISPLAY-ONLY: written only by the 3 close paths, AFTER the protected
+// close helpers ran (closeMonthUnpaidForBuilding / closeExtraAccountsForBuilding are
+// untouched); POST /api/data drops it from the body; 🧹 / 🧨 reset it with closedMonths.
+// No money path reads it. Months closed before v2.14.100 have no entry → "לפני תיעוד".
+const MONTH_CLOSE_SOURCES = ['cron', 'catchup', 'manual'];
+const MONTH_CLOSE_LOG_MAX = 36;
+function noteMonthClose(d, mk, part, source, atIso) {
+  if (!d || !/^\d{4}-\d{2}$/.test(String(mk))) return false;
+  if (part !== 'main' && part !== 'extra') return false;
+  if (MONTH_CLOSE_SOURCES.indexOf(source) < 0) return false;
+  if (!d.monthCloseLog || typeof d.monthCloseLog !== 'object' || Array.isArray(d.monthCloseLog)) d.monthCloseLog = {};
+  const prev = d.monthCloseLog[mk];
+  const e = (prev && typeof prev === 'object' && !Array.isArray(prev)) ? prev : {};
+  // A NEW close of the month is the truth (e.g. after a reset) → overwrite that part.
+  e[part] = { at: atIso || new Date().toISOString(), source };
+  d.monthCloseLog[mk] = e;
+  const keys = Object.keys(d.monthCloseLog).sort();
+  while (keys.length > MONTH_CLOSE_LOG_MAX) delete d.monthCloseLog[keys.shift()];
+  return true;
+}
+// Israel-time parts of a Date → {y, m, day, hh, mi} (display / calendar only).
+function mcIlParts(dt) {
+  const t = dt instanceof Date ? dt : new Date(dt);
+  if (isNaN(t.getTime())) return null;
+  const o = {};
+  new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Jerusalem', year: 'numeric', month: 'numeric', day: 'numeric',
+    hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).formatToParts(t).forEach(p => { o[p.type] = p.value; });
+  return { y: +o.year, m: +o.month, day: +o.day, hh: String(o.hour).padStart(2, '0'), mi: String(o.minute).padStart(2, '0') };
+}
+function mcMonthLabel(mk) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(mk || ''));
+  return m ? (HEBREW_MONTHS[+m[2] - 1] + ' ' + m[1]) : String(mk || '');
+}
+function mcSourceLabel(src) {
+  return src === 'manual' ? 'ידנית' : src === 'catchup' ? 'אוטומטית (סגירת השלמה)' : src === 'cron' ? 'אוטומטית' : '';
+}
+// One part's text: "אוטומטית · 1.11.2026 10:00" / "נסגר (לפני תיעוד)" / null when that part is open.
+function mcPartText(closedSet, entry, mk) {
+  if (!closedSet.has(mk)) return null;
+  const p = entry && entry.at ? mcIlParts(entry.at) : null;
+  const lbl = entry ? mcSourceLabel(entry.source) : '';
+  if (!p || !lbl) return 'נסגר (לפני תיעוד)';
+  return lbl + ' · ' + p.day + '.' + p.m + '.' + p.y + ' ' + p.hh + ':' + p.mi;
+}
+// The view the payments tab shows (pure; now = a Date). Shape:
+//   { lines: [{text, tone:'ok'|'warn'|'info'}], history: [{mk, text}], lastClosed }
+// lines[0] = the latest closed month (main; + extra when it differs), then the state of
+// the previous / current calendar month. history = every closed month, newest first.
+function buildMonthCloseView(d, now) {
+  const valid = a => (Array.isArray(a) ? a : []).filter(m => /^\d{4}-\d{2}$/.test(String(m)));
+  const cm = new Set(valid(d.closedMonths)), cx = new Set(valid(d.closedMonthsExtra));
+  const log = (d.monthCloseLog && typeof d.monthCloseLog === 'object' && !Array.isArray(d.monthCloseLog)) ? d.monthCloseLog : {};
+  const hasExtra = cx.size > 0 || (d.tenants || []).some(t => Array.isArray(t && t.extraAccounts) && t.extraAccounts.length > 0);
+  const itemText = mk => {
+    const e = log[mk] || {};
+    const tm = mcPartText(cm, e.main, mk), tx = hasExtra ? mcPartText(cx, e.extra, mk) : null;
+    const head = '🔒 סגירת חודש ' + mcMonthLabel(mk) + ': ';
+    if (!hasExtra) return tm ? head + tm : null;
+    if (tm && tx && (tm === tx || (e.main && e.extra && e.main.source === e.extra.source))) return head + tm;
+    const parts = [];
+    parts.push(t(getLabels(d.config), 'mainAccount') + ' — ' + (tm || 'עוד לא נסגר'));
+    parts.push('חשבונות נוספים — ' + (tx || 'עוד לא נסגרו'));
+    return head + parts.join(' · ');
+  };
+  const all = Array.from(new Set(Array.from(cm).concat(Array.from(cx)))).sort().reverse();
+  const history = all.map(mk => ({ mk, text: itemText(mk) })).filter(h => h.text);
+  const lines = [];
+  if (history.length) lines.push({ text: history[0].text, tone: 'ok' });
+  const p = mcIlParts(now || new Date());
+  if (p) {
+    const cur = p.y + '-' + String(p.m).padStart(2, '0');
+    const prev = monthBeforeKey(cur);
+    const nm = p.m === 12 ? 1 : p.m + 1, ny = p.m === 12 ? p.y + 1 : p.y;
+    if (!cm.has(prev) && cm.size > 0) {
+      lines.push(p.day === 1
+        ? { text: '⏳ סגירת חודש ' + mcMonthLabel(prev) + ' תתבצע אוטומטית היום', tone: 'info' }
+        : { text: '⚠️ חודש ' + mcMonthLabel(prev) + ' עוד לא נסגר — ייסגר אוטומטית בסגירת השלמה, או עכשיו ידנית (📅 סגור חודש קודם)', tone: 'warn' });
+    }
+    if (!cm.has(cur)) lines.push({ text: '⏳ חודש ' + mcMonthLabel(cur) + ' פתוח — ייסגר אוטומטית ב-1.' + nm + '.' + ny, tone: 'info' });
+  }
+  return { lines, history, lastClosed: history.length ? history[0].mk : null };
 }
 
 async function runMaintenanceCron() {
@@ -12769,7 +12872,10 @@ async function runMaintenanceCronWithAccounts() {
       if (!d.paymentHistory) d.paymentHistory = {};
       const { changed, closed: n } = closeExtraAccountsForBuilding(d, prevKey);
       totalClosed += n;
-      if (changed) saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra });
+      if (changed) {
+        noteMonthClose(d, prevKey, 'extra', 'cron');   // v2.14.100
+        saveTenantData(user.tenantId, { tenants: d.tenants, paymentHistory: d.paymentHistory, closedMonthsExtra: d.closedMonthsExtra, monthCloseLog: d.monthCloseLog });
+      }
     } catch(e) {
       console.error(`[closeExtraAccounts:${user.tenantId}]`, e.message);
     }

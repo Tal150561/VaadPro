@@ -671,6 +671,12 @@ function vpLogout() {
   <!-- TAB PAYMENTS -->
   <div class="tab-panel" id="tab-payments">
 
+    <!-- v2.14.100 — month-close status: "🔒 סגירת חודש X: אוטומטית/ידנית · <when>" + the open month.
+         SERVER TEXT (GET /api/data monthCloseView); the page only paints it. -->
+    <div class="card" id="monthCloseCard" style="display:none;">
+      <div class="card-body" id="monthCloseBar" style="padding:10px 16px;font-size:0.85rem;"></div>
+    </div>
+
     <div class="card">
       <!-- v2.14.81 (ט1–ט5) — hover hints on every control, ❓ → the guide at "שליחת תזכורות",
            two labelled rows: what SENDS messages vs tools that send nothing. -->
@@ -2015,7 +2021,7 @@ let data = { tenants:[], config:{amount:300,sendDay:1,sendHour:9,sendMinute:0,ma
 // against data.serverVersion (from /api/data) in applyVersionStamp(); a mismatch
 // means the browser is serving a stale cached page, so the operator is told to
 // hard-refresh (Ctrl+Shift+R). BUMP THIS TO MATCH package.json ON EVERY app.html release.
-const HTML_VERSION = '2.14.99';
+const HTML_VERSION = '2.14.100';
 
 // v2.14.37 — paint the header version stamp and toggle the red refresh warning.
 // Called from loadData() after data arrives. serverVersion may be absent on an
@@ -3484,6 +3490,40 @@ function updateSchedule() {
       sl.innerHTML='<span style="color:var(--text3)">⏳ טרם בוצעה שליחה אוטומטית</span>';
     }
   }
+}
+
+// v2.14.100 — payments tab: when + how each month was closed (server text from GET /api/data
+// monthCloseView = {lines:[{text,tone}], history:[{mk,text}], lastClosed}). CONSUME, DO NOT COMPUTE:
+// no date/month logic here. The latest closed month is the first line; earlier closed months open
+// under it (<details>). Pure → html string; '' when there is nothing to show.
+function monthCloseBarHtml(v) {
+  if (!v || !Array.isArray(v.lines) || !v.lines.length) return '';
+  var col = function(tone) { return tone === 'warn' ? '#f59e0b' : tone === 'ok' ? 'var(--text)' : 'var(--text2)'; };
+  var line = function(l) { return '<span style="color:' + col(l && l.tone) + ';">' + esc(l && l.text) + '</span>'; };
+  var hist = Array.isArray(v.history) ? v.history.slice(1) : [];
+  var help = ' <button class="help-btn" onclick="event.preventDefault();event.stopPropagation();showHelp(\'payments#month-close\')" title="איך נסגר חודש — פתיחת המדריך" style="margin-right:6px;">?</button>';
+  var h = '';
+  v.lines.forEach(function(l, i) {
+    if (i === 0 && hist.length && l && l.tone === 'ok') {
+      h += '<details class="mc-hist" style="margin:2px 0;"><summary style="cursor:pointer;">' + line(l) + help +
+        ' <span style="color:var(--text3);font-size:0.78rem;">▼ חודשים קודמים (' + hist.length + ')</span></summary>' +
+        '<div style="margin:6px 18px 4px 0;display:grid;gap:3px;color:var(--text2);font-size:0.8rem;">' +
+        hist.map(function(x) { return '<div>' + esc(x && x.text) + '</div>'; }).join('') + '</div></details>';
+    } else {
+      h += '<div style="margin:2px 0;">' + line(l) + (i === 0 ? help : '') + '</div>';
+    }
+  });
+  return h;
+}
+var _monthCloseBarLast = null;   // module-level (never on `data`): repaint only on change → an open <details> stays open across the 2.5s poll
+function refreshMonthCloseBar() {
+  var card = document.getElementById('monthCloseCard'), bar = document.getElementById('monthCloseBar');
+  if (!card || !bar) return;
+  var html = monthCloseBarHtml(data && data.monthCloseView);
+  card.style.display = html ? '' : 'none';
+  if (html === _monthCloseBarLast) return;
+  _monthCloseBarLast = html;
+  bar.innerHTML = html;
 }
 
 // v2.14.99 — settings header: how many messages the auto-send would send NOW, per type.
@@ -5541,6 +5581,7 @@ function render() {
   if (!histView) { refreshExcessDebtCard(); }
   updateSchedule(); updatePreview();
   refreshAutoSendCounts();   // v2.14.99 — header counts (active-month server flags; also in historical view)
+  refreshMonthCloseBar();    // v2.14.100 — payments-tab month-close status (server text)
 
   // Tenants tab
   const tw=document.getElementById('tenantsWrap');

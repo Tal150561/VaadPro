@@ -3802,6 +3802,7 @@ const v2_14_64_async = async () => {
     const saved = [], backups = [];
     const code = months + '\n' + lib.extractFunctions(src, ['monthBeforeKey', 'monthCloseCatchUpDue', 'catchUpMonthClose',
       'closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'pickRateFromIntervals', 'resolveTariffRate'].concat(require('./test-lib').EXTRA_AMOUNT_FNS))
+      + lib.monthCloseLogSrc(src)   // v2.14.100 — catch-up stamps the close log
       + 'module.exports={catchUpMonthClose,monthCloseCatchUpDue,monthBeforeKey};';
     const m = lib.runInSandbox(code, {
       loadUsers: () => Object.keys(buildings).map(id => ({ tenantId: id })),
@@ -7189,6 +7190,132 @@ const v2_14_88_async = async () => {
   t.eq('a saved custom template without the new variables is unchanged', custom, 'היי אורי, 750');
   const withVars = S.planMemberMessages(dm, dm.tenants[0], { tenantDataId: 'B', month: EM, mk: MK, amount: 250, mainTmpl: '', payerTmpl: '{דירה}|{התקדמות}' }).filter(m => m.kind === 'payer')[0].msg;
   t.eq('custom template with both variables', withVars, 'דירה 6|\n📊 שיפוץ לובי: שולם ₪0 מתוך ₪2250 · נותר לתשלום ₪2250 · נותרו 3 תשלומים');
+}
+
+// ════════════════════════════════════════════════════════════════
+// v2.14.100 — month-close LOG (when + how) + the payments-tab view
+// ════════════════════════════════════════════════════════════════
+{
+  const lib = require('./test-lib');
+  const fs = require('fs'), path = require('path');
+  const src = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  const M = lib.loadMonthCloseLog();
+  const il = (y, mo, d, h, mi) => new Date(Date.UTC(y, mo - 1, d, h - 2, mi || 0));   // Israel winter time (UTC+2)
+
+  t.section('v2.14.100 — noteMonthClose (server-owned log)');
+  { const d = {};
+    t.eq('cron stamp written', [M.noteMonthClose(d, '2026-10', 'main', 'cron', '2026-11-01T08:00:12.000Z'), d.monthCloseLog['2026-10'].main], [true, { at: '2026-11-01T08:00:12.000Z', source: 'cron' }]);
+    M.noteMonthClose(d, '2026-10', 'extra', 'cron', '2026-11-01T08:05:00.000Z');
+    t.eq('extra stamp kept next to main', Object.keys(d.monthCloseLog['2026-10']).sort(), ['extra', 'main']);
+    M.noteMonthClose(d, '2026-10', 'main', 'manual', '2026-11-03T19:00:00.000Z');
+    t.eq('a NEW close overwrites that part only', [d.monthCloseLog['2026-10'].main.source, d.monthCloseLog['2026-10'].extra.source], ['manual', 'cron']);
+    t.eq('bad month / part / source refused, nothing written', [M.noteMonthClose(d, '2026-1', 'main', 'cron'), M.noteMonthClose(d, '2026-11', 'x', 'cron'), M.noteMonthClose(d, '2026-11', 'main', 'agent'), Object.keys(d.monthCloseLog)], [false, false, false, ['2026-10']]);
+    const big = {}; for (let i = 0; i < 40; i++) M.noteMonthClose(big, (2023 + Math.floor(i / 12)) + '-' + String(i % 12 + 1).padStart(2, '0'), 'main', 'cron', '2026-01-01T00:00:00.000Z');
+    t.eq('capped at 36 months (oldest dropped)', [Object.keys(big.monthCloseLog).length, Object.keys(big.monthCloseLog).sort()[0]], [36, '2023-05']);
+    const junk = { monthCloseLog: [1, 2] }; M.noteMonthClose(junk, '2026-10', 'main', 'cron', '2026-11-01T08:00:00.000Z');
+    t.eq('a non-object log is replaced', Object.keys(junk.monthCloseLog), ['2026-10']); }
+
+  t.section('v2.14.100 — buildMonthCloseView (Israel time, server text)');
+  { const base = () => ({ config: {}, tenants: [{ id: 1, name: 'א' }], closedMonths: ['2026-09', '2026-10'], closedMonthsExtra: [],
+      monthCloseLog: { '2026-10': { main: { at: '2026-11-01T08:00:12.000Z', source: 'cron' } } } });
+    const v = M.buildMonthCloseView(base(), il(2026, 11, 27, 9, 49));
+    t.eq('line 1 = latest closed month, cron, IL time (UTC 08:00 → 10:00)', v.lines[0], { text: '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00', tone: 'ok' });
+    t.eq('line 2 = the open month + next close date', v.lines[1], { text: '⏳ חודש נובמבר 2026 פתוח — ייסגר אוטומטית ב-1.12.2026', tone: 'info' });
+    t.eq('exactly 2 lines when the previous month is closed', v.lines.length, 2);
+    t.eq('history newest first; a month closed before v2.14.100 → "לפני תיעוד"', v.history, [
+      { mk: '2026-10', text: '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00' },
+      { mk: '2026-09', text: '🔒 סגירת חודש ספטמבר 2026: נסגר (לפני תיעוד)' }]);
+    t.eq('lastClosed', v.lastClosed, '2026-10');
+    const m = base(); m.monthCloseLog['2026-10'].main = { at: '2026-10-31T19:40:00.000Z', source: 'manual' };
+    t.eq('manual', M.buildMonthCloseView(m, il(2026, 11, 27, 9)).lines[0].text, '🔒 סגירת חודש אוקטובר 2026: ידנית · 31.10.2026 21:40');
+    const c = base(); c.monthCloseLog['2026-10'].main = { at: '2026-11-01T14:13:00.000Z', source: 'catchup' };
+    t.eq('catch-up', M.buildMonthCloseView(c, il(2026, 11, 27, 9)).lines[0].text, '🔒 סגירת חודש אוקטובר 2026: אוטומטית (סגירת השלמה) · 1.11.2026 16:13');
+    const s = base(); s.monthCloseLog['2026-10'].main = { at: '2026-07-01T08:00:00.000Z', source: 'cron' };
+    t.eq('summer time: UTC 08:00 → 11:00', M.buildMonthCloseView(s, il(2026, 11, 27, 9)).lines[0].text.endsWith('1.7.2026 11:00'), true);
+    // the 1st of the month, before the close ran
+    const day1 = M.buildMonthCloseView(base(), il(2026, 12, 1, 9, 0));
+    t.eq('1st of the month, previous month still open → "תתבצע אוטומטית היום"', day1.lines.map(x => x.text), [
+      '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00',
+      '⏳ סגירת חודש נובמבר 2026 תתבצע אוטומטית היום',
+      '⏳ חודש דצמבר 2026 פתוח — ייסגר אוטומטית ב-1.1.2027']);
+    const late = M.buildMonthCloseView(base(), il(2026, 12, 3, 9, 0));
+    t.eq('3rd of the month, previous still open → warning (catch-up / manual)', late.lines[1], { text: '⚠️ חודש נובמבר 2026 עוד לא נסגר — ייסגר אוטומטית בסגירת השלמה, או עכשיו ידנית (📅 סגור חודש קודם)', tone: 'warn' });
+    const fresh = M.buildMonthCloseView({ config: {}, tenants: [{ id: 1 }], closedMonths: [], closedMonthsExtra: [] }, il(2026, 11, 27, 9));
+    t.eq('new building (nothing closed, e.g. after 🧹): only the open-month line, no warning', [fresh.lines, fresh.history, fresh.lastClosed],
+      [[{ text: '⏳ חודש נובמבר 2026 פתוח — ייסגר אוטומטית ב-1.12.2026', tone: 'info' }], [], null]);
+    const stale = base(); stale.closedMonths = []; 
+    t.eq('a log entry for a month that is NOT closed is never shown (stale log)', M.buildMonthCloseView(stale, il(2026, 11, 27, 9)).history, []); }
+
+  t.section('v2.14.100 — extra accounts: one line when both closed the same way, split when they differ');
+  { const x = (extra) => ({ config: {}, tenants: [{ id: 1, extraAccounts: [{ id: 'a' }] }], closedMonths: ['2026-10'], closedMonthsExtra: extra ? ['2026-10'] : [],
+      monthCloseLog: { '2026-10': Object.assign({ main: { at: '2026-11-01T08:00:12.000Z', source: 'cron' } }, extra || {}) } });
+    t.eq('same source (08:00 / 08:05 cron) → ONE line', M.buildMonthCloseView(x({ extra: { at: '2026-11-01T08:05:00.000Z', source: 'cron' } }), il(2026, 11, 27, 9)).lines[0].text,
+      '🔒 סגירת חודש אוקטובר 2026: אוטומטית · 1.11.2026 10:00');
+    t.eq('different source → both parts named', M.buildMonthCloseView(x({ extra: { at: '2026-11-02T14:13:00.000Z', source: 'catchup' } }), il(2026, 11, 27, 9)).lines[0].text,
+      '🔒 סגירת חודש אוקטובר 2026: ועד בית — אוטומטית · 1.11.2026 10:00 · חשבונות נוספים — אוטומטית (סגירת השלמה) · 2.11.2026 16:13');
+    t.eq('extras not closed yet → said so', M.buildMonthCloseView(x(null), il(2026, 11, 27, 9)).lines[0].text,
+      '🔒 סגירת חודש אוקטובר 2026: ועד בית — אוטומטית · 1.11.2026 10:00 · חשבונות נוספים — עוד לא נסגרו');
+    const kib = x({ extra: { at: '2026-11-02T14:13:00.000Z', source: 'manual' } }); kib.config = { orgType: 'kibbutz' };
+    t.eq('kibbutz: main account label from getLabels', M.buildMonthCloseView(kib, il(2026, 11, 27, 9)).lines[0].text.includes('ערבות הדדית — '), true);
+    t.eq('a building without extra accounts never mentions them', M.buildMonthCloseView({ config: {}, tenants: [{ id: 1 }], closedMonths: ['2026-10'], closedMonthsExtra: [] }, il(2026, 11, 27, 9)).lines[0].text.includes('חשבונות נוספים'), false); }
+
+  t.section('v2.14.100 — the 3 close paths stamp the log (REAL code)');
+  const bld = (closed, closedX) => ({ config: { amount: 230 }, defaultTariffs: [{ rate: 230, startDate: '2000-01-01', endDate: null }],
+    closedMonths: closed, closedMonthsExtra: closedX, sentLog: {}, paymentHistory: {},
+    tenants: [{ id: 1, name: 'א', openingDebt: 0, customAmount: 230 }] });
+  { // day-1 cron (REAL closeMonthUnpaid)
+    const b = bld(['2026-09'], ['2026-09']);
+    const r = lib.loadCloseMonth(b, new Date('2026-11-01T08:00:30.000Z'));
+    r.run();
+    t.eq('cron: October closed + stamped "cron" with the run time', [b.closedMonths.includes('2026-10'), b.monthCloseLog['2026-10'].main], [true, { at: '2026-11-01T08:00:30.000Z', source: 'cron' }]);
+    t.eq('cron: the log is in the same save', Object.keys(r.saved[0].patch).includes('monthCloseLog'), true);
+    t.eq('cron: accrual unchanged (230 unpaid → openingDebt 230)', b.tenants[0].openingDebt, 230);
+    const before = JSON.stringify(b.monthCloseLog); r.run();
+    t.eq('cron: a second run is a no-op (no new save, stamp unchanged)', [r.saved.length, JSON.stringify(b.monthCloseLog)], [1, before]); }
+  { // manual route (REAL body)
+    const b = bld(['2026-09'], ['2026-09']); b.tenants[0].extraAccounts = [];
+    const r = lib.loadCloseRoute(b, new Date('2026-11-03T17:40:00.000Z'));
+    t.eq('manual: ok + October closed', [r.result.ok, r.result.month, b.closedMonths.includes('2026-10'), b.closedMonthsExtra.includes('2026-10')], [true, '2026-10', true, true]);
+    t.eq('manual: both parts stamped "manual"', [b.monthCloseLog['2026-10'].main.source, b.monthCloseLog['2026-10'].extra.source, b.monthCloseLog['2026-10'].main.at], ['manual', 'manual', '2026-11-03T17:40:00.000Z']);
+    t.eq('manual: the log is saved', r.saved[0].patch.monthCloseLog['2026-10'].main.source, 'manual');
+    const r2 = lib.loadCloseRoute(b, new Date('2026-11-04T10:00:00.000Z'));
+    t.eq('manual: second click = alreadyClosed, no save, stamp kept', [r2.result.alreadyClosed, r2.saved.length, b.monthCloseLog['2026-10'].main.at], [true, 0, '2026-11-03T17:40:00.000Z']);
+    const half = bld(['2026-09', '2026-10'], ['2026-09']);
+    half.monthCloseLog = { '2026-10': { main: { at: '2026-11-01T08:00:00.000Z', source: 'cron' } } };
+    lib.loadCloseRoute(half, new Date('2026-11-04T10:00:00.000Z'));
+    t.eq('manual after the cron closed main only → only the extra part stamped manual', [half.monthCloseLog['2026-10'].main.source, half.monthCloseLog['2026-10'].extra.source], ['cron', 'manual']); }
+  { // catch-up (REAL catchUpMonthClose, same harness as v2.14.66)
+    const months = src.match(/const HEBREW_MONTHS = \[[^\]]*\];/)[0];
+    const b = bld(['2026-07', '2026-08'], ['2026-07', '2026-08']); const saved = [];
+    const code = months + '\n' + lib.extractFunctions(src, ['monthCloseCatchUpDue', 'catchUpMonthClose',
+      'closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'pickRateFromIntervals', 'resolveTariffRate'].concat(lib.EXTRA_AMOUNT_FNS))
+      + lib.monthCloseLogSrc(src) + 'module.exports={catchUpMonthClose};';
+    const m = lib.runInSandbox(code, { loadUsers: () => [{ tenantId: 'B' }], loadTenantData: () => b, saveTenantData: (id, p) => saved.push(Object.keys(p).sort()),
+      createBackup() {}, console: { log() {}, error() {}, warn() {} } });
+    m.catchUpMonthClose(new Date(2026, 9, 1, 16, 13));
+    t.eq('catch-up: September stamped "catchup" (main + extra)', [b.monthCloseLog['2026-09'].main.source, b.monthCloseLog['2026-09'].extra.source], ['catchup', 'catchup']);
+    t.eq('catch-up: one save carrying the log', [saved.length, saved[0].includes('monthCloseLog')], [1, true]); }
+  t.eq('extras cron (runMaintenanceCronWithAccounts) stamps "extra"/"cron" and saves the log',
+    /closeExtraAccountsForBuilding\(d, prevKey\);\s*totalClosed \+= n;\s*if \(changed\) \{\s*noteMonthClose\(d, prevKey, 'extra', 'cron'\);[^\n]*\n\s*saveTenantData\(user\.tenantId, \{[^}]*monthCloseLog: d\.monthCloseLog \}\);/.test(src), true);
+  t.eq('protected close helpers never touch the log', ['closeMonthUnpaidForBuilding', 'closeExtraAccountsForBuilding', 'closeExtraAccountsUnpaid', 'recordPayment']
+    .every(f => !lib.extractFunctions(src, [f]).includes('monthCloseLog') && !lib.extractFunctions(src, [f]).includes('noteMonthClose')), true);
+
+  t.section('v2.14.100 — resets clear the log with closedMonths (REAL routes)');
+  { const b = bld(['2026-10'], ['2026-10']); b.monthCloseLog = { '2026-10': { main: { at: 'x', source: 'cron' } } };
+    lib.loadResetPayments(b, { dryRun: false });
+    t.eq('🧹 התחלה נקייה: log emptied together with closedMonths', [b.closedMonths, b.monthCloseLog], [[], {}]);
+    t.eq('🧹 → the view shows only the open month', M.buildMonthCloseView(b, il(2026, 11, 27, 9)).history, []);
+    const r = lib.loadCloseRoute(b, new Date('2026-11-27T08:00:00.000Z'));
+    t.eq('🧹 → a fresh manual close stamps anew', [r.result.ok, b.monthCloseLog['2026-10'].main.source], [true, 'manual']); }
+  { const b = bld(['2026-10'], ['2026-10']); b.monthCloseLog = { '2026-10': { main: { at: 'x', source: 'cron' } } };
+    lib.loadResetBuildingFull(b, { tenantId: 'T1', dryRun: false });
+    t.eq('🧨 ניקוי מלא: log emptied too', [b.closedMonths, b.monthCloseLog], [[], {}]); }
+
+  t.section('v2.14.100 — wiring: GET /api/data ships the view, POST /api/data never writes the log');
+  t.eq('GET /api/data builds monthCloseView (guarded)', src.includes("try { d.monthCloseView = buildMonthCloseView(d, new Date()); } catch (e) { d.monthCloseView = null; }"), true);
+  t.eq('POST /api/data drops monthCloseLog + monthCloseView from the body', src.includes("if (req.body && 'monthCloseLog' in req.body) delete req.body.monthCloseLog;") && src.includes("if (req.body && 'monthCloseView' in req.body) delete req.body.monthCloseView;"), true);
+  const strip = src.indexOf("if (req.body && 'monthCloseLog' in req.body)"), projStrip = src.indexOf("if (req.body && 'projectMigrations' in req.body)");
+  t.eq('…next to the projectMigrations strip (before the body is used)', strip > projStrip && strip - projStrip < 300, true);
 }
 
 (async () => { await v2_14_57_async(); await v2_14_64_async(); await v2_14_79_async(); await v2_14_85_async(); await v2_14_86_async(); await v2_14_87_async(); await v2_14_88_async(); process.exit(t.done() ? 1 : 0); })();
